@@ -14,7 +14,7 @@ from sbomify_action.logging_config import logger
 from sbomify_action.spdx3 import is_spdx3
 from sbomify_action.upload import upload_sbom
 
-from .api import get_or_create_component, list_components
+from .api import get_or_create_component, list_components, patch_component_visibility
 from .archive import extract_archive
 from .models import YoctoConfig, YoctoPipelineResult
 from .parser import discover_packages
@@ -227,6 +227,10 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
                 )
                 if was_created:
                     result.components_created += 1
+                    if config.visibility:
+                        patch_component_visibility(
+                            config.api_base_url, config.token, comp_id, config.visibility
+                        )
 
                 sbom_id = _process_single_package(pkg.name, pkg.spdx_file, comp_id, config)
 

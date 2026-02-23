@@ -108,6 +108,32 @@ def create_component(api_base_url: str, token: str, name: str) -> str:
     return str(comp_id)
 
 
+def patch_component_visibility(api_base_url: str, token: str, component_id: str, visibility: str) -> None:
+    """Set the visibility of a component.
+
+    Args:
+        api_base_url: Base URL for the sbomify API
+        token: API authentication token
+        component_id: Component ID to patch
+        visibility: One of "public", "private", "gated"
+
+    Raises:
+        APIError: If API call fails
+    """
+    url = f"{api_base_url}/api/v1/components/{component_id}"
+    headers = get_default_headers(token, content_type="application/json")
+
+    try:
+        response = requests.patch(url, headers=headers, json={"visibility": visibility}, timeout=60)
+    except requests.exceptions.ConnectionError:
+        raise APIError("Failed to connect to sbomify API")
+    except requests.exceptions.Timeout:
+        raise APIError("API request timed out")
+
+    if not response.ok:
+        logger.warning(f"Failed to set visibility for component {component_id}: [{response.status_code}]")
+
+
 def get_or_create_component(api_base_url: str, token: str, name: str, cache: dict[str, str]) -> tuple[str, bool]:
     """Get an existing component or create a new one.
 
