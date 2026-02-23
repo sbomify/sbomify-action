@@ -277,7 +277,7 @@ def _get_package_version() -> str:
 
 
 SBOMIFY_VERSION = _get_package_version()
-SBOMIFY_TOOL_NAME = "sbomify GitHub Action"
+SBOMIFY_TOOL_NAME = "sbomify action"
 SBOMIFY_VENDOR_NAME = "sbomify"
 
 
@@ -469,13 +469,15 @@ def _add_sbomify_tool_to_cyclonedx(bom: Bom, spec_version: Optional[str] = None)
             )
             # VCS - source code repository
             sbomify_service.external_references.add(
-                ExternalReference(type=ExternalReferenceType.VCS, url=XsUri("https://github.com/sbomify/github-action"))
+                ExternalReference(
+                    type=ExternalReferenceType.VCS, url=XsUri("https://github.com/sbomify/sbomify-action")
+                )
             )
             # Issue tracker - where to report bugs
             sbomify_service.external_references.add(
                 ExternalReference(
                     type=ExternalReferenceType.ISSUE_TRACKER,
-                    url=XsUri("https://github.com/sbomify/github-action/issues"),
+                    url=XsUri("https://github.com/sbomify/sbomify-action/issues"),
                 )
             )
         except Exception as e:
@@ -517,13 +519,15 @@ def _add_sbomify_tool_to_cyclonedx(bom: Bom, spec_version: Optional[str] = None)
             )
             # VCS - source code repository
             sbomify_tool.external_references.add(
-                ExternalReference(type=ExternalReferenceType.VCS, url=XsUri("https://github.com/sbomify/github-action"))
+                ExternalReference(
+                    type=ExternalReferenceType.VCS, url=XsUri("https://github.com/sbomify/sbomify-action")
+                )
             )
             # Issue tracker - where to report bugs
             sbomify_tool.external_references.add(
                 ExternalReference(
                     type=ExternalReferenceType.ISSUE_TRACKER,
-                    url=XsUri("https://github.com/sbomify/github-action/issues"),
+                    url=XsUri("https://github.com/sbomify/sbomify-action/issues"),
                 )
             )
         except Exception as e:

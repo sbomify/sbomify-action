@@ -127,15 +127,15 @@ ARG BUILD_DATE=unknown
 ARG VCS_REF=unknown
 
 # OCI Image Labels (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
-LABEL org.opencontainers.image.title="sbomify GitHub Action" \
+LABEL org.opencontainers.image.title="sbomify action" \
       org.opencontainers.image.description="Generate, enrich, and manage Software Bill of Materials (SBOM) for your projects" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${COMMIT_SHA}" \
       org.opencontainers.image.ref.name="${VCS_REF}" \
-      org.opencontainers.image.source="https://github.com/sbomify/github-action" \
+      org.opencontainers.image.source="https://github.com/sbomify/sbomify-action" \
       org.opencontainers.image.url="https://sbomify.com" \
-      org.opencontainers.image.documentation="https://github.com/sbomify/github-action#readme" \
+      org.opencontainers.image.documentation="https://github.com/sbomify/sbomify-action#readme" \
       org.opencontainers.image.vendor="sbomify" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.authors="sbomify <hello@sbomify.com>" \
@@ -146,7 +146,7 @@ LABEL com.sbomify.maintainer="sbomify <hello@sbomify.com>" \
       com.sbomify.company="sbomify" \
       com.sbomify.company.url="https://sbomify.com" \
       com.sbomify.vcs.type="git" \
-      com.sbomify.vcs.url="https://github.com/sbomify/github-action.git" \
+      com.sbomify.vcs.url="https://github.com/sbomify/sbomify-action.git" \
       com.sbomify.vcs.branch="${VCS_REF}" \
       com.sbomify.vcs.commit="${COMMIT_SHA}"
 

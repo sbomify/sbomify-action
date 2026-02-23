@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-sbomify GitHub Action is an SBOM (Software Bill of Materials) generation, enrichment, augmentation, and management tool for CI/CD pipelines. It supports CycloneDX and SPDX formats, generates SBOMs from lockfiles and Docker images, enriches them with metadata from package registries, and uploads to various destinations.
+sbomify action is an SBOM (Software Bill of Materials) generation, enrichment, augmentation, and management tool for CI/CD pipelines. It supports CycloneDX and SPDX formats, generates SBOMs from lockfiles and Docker images, enriches them with metadata from package registries, and uploads to various destinations.
 
 **Key facts:** Python 3.10+, published to PyPI as `sbomify-action`, also available as Docker image and GitHub Action.
 

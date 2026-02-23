@@ -51,6 +51,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
+        id: setup-python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -79,10 +80,10 @@ jobs:
 
       - name: Load cached venv
         id: cached-uv-dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: .venv
-          key: venv-${{ runner.os }}-${{ hashFiles('**/uv.lock') }}
+          key: venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/uv.lock') }}
 
       - name: Install dependencies
         if: steps.cached-uv-dependencies.outputs.cache-hit != 'true'
@@ -821,11 +822,11 @@ jobs:
           echo "CycloneDX version: $SPEC_VERSION"
           
           # Check tools.services (CDX 1.5+)
-          SBOMIFY_SERVICE=$(jq -r '.metadata.tools.services[]? | select(.name == "sbomify GitHub Action") | .name' augmented-sbom.cdx.json)
+          SBOMIFY_SERVICE=$(jq -r '.metadata.tools.services[]? | select(.name == "sbomify action") | .name' augmented-sbom.cdx.json)
           # Check tools.tools (CDX 1.4 legacy)
-          SBOMIFY_TOOL=$(jq -r '.metadata.tools.tools[]? | select(.name == "sbomify GitHub Action") | .name' augmented-sbom.cdx.json)
+          SBOMIFY_TOOL=$(jq -r '.metadata.tools.tools[]? | select(.name == "sbomify action") | .name' augmented-sbom.cdx.json)
           # Check tools[] directly (older CDX 1.4 format)
-          SBOMIFY_LEGACY=$(jq -r '.metadata.tools[]? | select(type == "object" and .name == "sbomify GitHub Action") | .name' augmented-sbom.cdx.json 2>/dev/null || true)
+          SBOMIFY_LEGACY=$(jq -r '.metadata.tools[]? | select(type == "object" and .name == "sbomify action") | .name' augmented-sbom.cdx.json 2>/dev/null || true)
           
           if [ -n "$SBOMIFY_SERVICE" ]; then
             echo "✅ CycloneDX sbomify tool present in tools.services (CDX 1.5+ format)"
@@ -1102,7 +1103,7 @@ jobs:
             component_id: 'XNsX40tonzvv'
             component_name: 'sbomify Action'
             lock_file: 'uv.lock'
-            output_file: 'github-action.cdx.json'
+            output_file: 'sbomify-action.cdx.json'
             product_release_id: 'Engh9j4XTTwD'
             has_product_release: true
           - component: action
@@ -1110,7 +1111,7 @@ jobs:
             component_id: 'XNsX40tonzvv'
             component_name: 'sbomify Action'
             lock_file: 'uv.lock'
-            output_file: 'github-action.spdx.json'
+            output_file: 'sbomify-action.spdx.json'
             product_release_id: 'Engh9j4XTTwD'
             has_product_release: true
           - component: javascript
@@ -1118,7 +1119,7 @@ jobs:
             component_id: 'PGyKXNbQd5eq'
             component_name: 'JavaScript Dependencies'
             lock_file: 'bun.lock'
-            output_file: 'github-action-frontend.cdx.json'
+            output_file: 'sbomify-action-frontend.cdx.json'
             product_release_id: 'Engh9j4XTTwD'
             has_product_release: true
           - component: javascript
@@ -1126,7 +1127,7 @@ jobs:
             component_id: 'PGyKXNbQd5eq'
             component_name: 'JavaScript Dependencies'
             lock_file: 'bun.lock'
-            output_file: 'github-action-frontend.spdx.json'
+            output_file: 'sbomify-action-frontend.spdx.json'
             product_release_id: 'Engh9j4XTTwD'
             has_product_release: true
     steps:
@@ -1144,7 +1145,7 @@ jobs:
         uses: ./.github/actions/determine-version
 
       - name: Generate and Upload SBOM
-        uses: sbomify/github-action@master
+        uses: sbomify/sbomify-action@master
         env:
           TOKEN: ${{ secrets.SBOMIFY_STAGE_TOKEN }}
           API_BASE_URL: 'https://stage.sbomify.com'
@@ -1189,7 +1190,7 @@ jobs:
             component_id: 'Gu9wem8mkX'
             component_name: 'sbomify Action'
             lock_file: 'uv.lock'
-            output_file: 'github-action.cdx.json'
+            output_file: 'sbomify-action.cdx.json'
             product_release_id: 'IeIn1dGJXULh'
             has_product_release: true
           - component: action
@@ -1197,7 +1198,7 @@ jobs:
             component_id: 'Gu9wem8mkX'
             component_name: 'sbomify Action'
             lock_file: 'uv.lock'
-            output_file: 'github-action.spdx.json'
+            output_file: 'sbomify-action.spdx.json'
             product_release_id: 'IeIn1dGJXULh'
             has_product_release: true
           - component: javascript
@@ -1205,7 +1206,7 @@ jobs:
             component_id: 'IxwrYSb9rGql'
             component_name: 'JavaScript Dependencies'
             lock_file: 'bun.lock'
-            output_file: 'github-action-frontend.cdx.json'
+            output_file: 'sbomify-action-frontend.cdx.json'
             product_release_id: 'IeIn1dGJXULh'
             has_product_release: true
           - component: javascript
@@ -1213,7 +1214,7 @@ jobs:
             component_id: 'IxwrYSb9rGql'
             component_name: 'JavaScript Dependencies'
             lock_file: 'bun.lock'
-            output_file: 'github-action-frontend.spdx.json'
+            output_file: 'sbomify-action-frontend.spdx.json'
             product_release_id: 'IeIn1dGJXULh'
             has_product_release: true
     steps:
@@ -1231,7 +1232,7 @@ jobs:
         uses: ./.github/actions/determine-version
 
       - name: Generate and Upload SBOM
-        uses: sbomify/github-action@master
+        uses: sbomify/sbomify-action@master
         env:
           TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
           COMPONENT_ID: ${{ matrix.component_id }}
@@ -1273,13 +1274,13 @@ jobs:
           - format: cyclonedx
             component_id: 'gco2pG10whmy'
             component_name: 'sbomify Action Container'
-            output_file: 'github-action-container.cdx.json'
+            output_file: 'sbomify-action-container.cdx.json'
             product_release_id: 'Engh9j4XTTwD'
             has_product_release: true
           - format: spdx
             component_id: 'gco2pG10whmy'
             component_name: 'sbomify Action Container'
-            output_file: 'github-action-container.spdx.json'
+            output_file: 'sbomify-action-container.spdx.json'
             product_release_id: 'Engh9j4XTTwD'
             has_product_release: true
     steps:
@@ -1300,7 +1301,7 @@ jobs:
         uses: ./.github/actions/determine-version
 
       - name: Generate and Upload SBOM
-        uses: sbomify/github-action@master
+        uses: sbomify/sbomify-action@master
         env:
           TOKEN: ${{ secrets.SBOMIFY_STAGE_TOKEN }}
           API_BASE_URL: 'https://stage.sbomify.com'
@@ -1344,13 +1345,13 @@ jobs:
           - format: cyclonedx
             component_id: 'ryD0Hcu4vq6y'
             component_name: 'sbomify Action Container'
-            output_file: 'github-action-container.cdx.json'
+            output_file: 'sbomify-action-container.cdx.json'
             product_release_id: 'IeIn1dGJXULh'
             has_product_release: true
           - format: spdx
             component_id: 'ryD0Hcu4vq6y'
             component_name: 'sbomify Action Container'
-            output_file: 'github-action-container.spdx.json'
+            output_file: 'sbomify-action-container.spdx.json'
             product_release_id: 'IeIn1dGJXULh'
             has_product_release: true
     steps:
@@ -1371,7 +1372,7 @@ jobs:
         uses: ./.github/actions/determine-version
 
       - name: Generate and Upload SBOM
-        uses: sbomify/github-action@master
+        uses: sbomify/sbomify-action@master
         env:
           TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
           COMPONENT_ID: ${{ matrix.component_id }}

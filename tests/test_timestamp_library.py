@@ -146,12 +146,12 @@ class TestToolMetadataLibraryBased(unittest.TestCase):
 
         # Verify sbomify tool was added
         tool_names = [tool.name for tool in enriched_bom.metadata.tools.tools]
-        self.assertIn("sbomify GitHub Action", tool_names)
+        self.assertIn("sbomify action", tool_names)
 
         # Find sbomify tool and check its properties
         sbomify_tool = None
         for tool in enriched_bom.metadata.tools.tools:
-            if tool.name == "sbomify GitHub Action":
+            if tool.name == "sbomify action":
                 sbomify_tool = tool
                 break
 
@@ -179,7 +179,7 @@ class TestToolMetadataLibraryBased(unittest.TestCase):
         tool_creators = [c for c in enriched_doc.creation_info.creators if c.actor_type == ActorType.TOOL]
         tool_names = [c.name for c in tool_creators]
 
-        self.assertTrue(any("sbomify GitHub Action" in name for name in tool_names))
+        self.assertTrue(any("sbomify action" in name for name in tool_names))
 
         # Original tool should still be present
         self.assertIn("original-tool", tool_names)

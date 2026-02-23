@@ -1,5 +1,5 @@
 {
-  "name": "github-action",
+  "name": "sbomify-action",
   "module": "index.ts",
   "type": "module",
   "private": true,

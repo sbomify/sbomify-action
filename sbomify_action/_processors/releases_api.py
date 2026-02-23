@@ -207,7 +207,7 @@ def create_release(api_base_url: str, token: str, product_id: str, version: str)
         "product_id": product_id,
         "version": version,
         "name": f"Release {version}",
-        "description": f"Release {version} created by sbomify-github-action",
+        "description": f"Release {version} created by sbomify-action",
     }
 
     try:
