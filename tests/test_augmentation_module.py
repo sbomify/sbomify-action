@@ -1482,10 +1482,10 @@ class TestToolMetadataVersions:
 
         # For 1.4, sbomify should be added as a Tool in tools.tools (legacy format)
         tool_names = [tool.name for tool in enriched_bom.metadata.tools.tools]
-        assert "sbomify GitHub Action" in tool_names, "sbomify should be in tools.tools for CDX 1.4"
+        assert "sbomify action" in tool_names, "sbomify should be in tools.tools for CDX 1.4"
 
         # Verify vendor is set (Tool.vendor should be string per spec)
-        sbomify_tool = next(t for t in enriched_bom.metadata.tools.tools if t.name == "sbomify GitHub Action")
+        sbomify_tool = next(t for t in enriched_bom.metadata.tools.tools if t.name == "sbomify action")
         assert sbomify_tool.vendor is not None
         assert sbomify_tool.vendor == "sbomify"
         assert isinstance(sbomify_tool.vendor, str), "Tool.vendor must be string, not OrganizationalEntity"
@@ -1506,10 +1506,10 @@ class TestToolMetadataVersions:
 
         # For 1.5+, sbomify should be added as a Service in tools.services (modern format)
         service_names = [service.name for service in enriched_bom.metadata.tools.services]
-        assert "sbomify GitHub Action" in service_names, "sbomify should be in tools.services for CDX 1.5+"
+        assert "sbomify action" in service_names, "sbomify should be in tools.services for CDX 1.5+"
 
         # Verify group is set (equivalent to vendor in legacy format)
-        sbomify_service = next(s for s in enriched_bom.metadata.tools.services if s.name == "sbomify GitHub Action")
+        sbomify_service = next(s for s in enriched_bom.metadata.tools.services if s.name == "sbomify action")
         assert sbomify_service.group is not None
         assert sbomify_service.group == "sbomify"
 
@@ -1529,10 +1529,10 @@ class TestToolMetadataVersions:
 
         # For 1.6+, sbomify should be added as a Service in tools.services (modern format)
         service_names = [service.name for service in enriched_bom.metadata.tools.services]
-        assert "sbomify GitHub Action" in service_names, "sbomify should be in tools.services for CDX 1.6+"
+        assert "sbomify action" in service_names, "sbomify should be in tools.services for CDX 1.6+"
 
         # Verify external references
-        sbomify_service = next(s for s in enriched_bom.metadata.tools.services if s.name == "sbomify GitHub Action")
+        sbomify_service = next(s for s in enriched_bom.metadata.tools.services if s.name == "sbomify action")
         assert len(sbomify_service.external_references) > 0
 
     def test_tool_metadata_avoids_duplicates(self):
@@ -1554,7 +1554,7 @@ class TestToolMetadataVersions:
 
         # For 1.6+, sbomify is in services (modern format)
         service_names = [service.name for service in enriched_bom.metadata.tools.services]
-        sbomify_count = service_names.count("sbomify GitHub Action")
+        sbomify_count = service_names.count("sbomify action")
         assert sbomify_count == 1, "Should not have duplicate sbomify services"
 
     def test_tool_metadata_normalizes_services_with_string_providers(self):
@@ -1599,7 +1599,7 @@ class TestToolMetadataVersions:
 
         # Verify sbomify was added as a service
         service_names = [s.name for s in enriched_bom.metadata.tools.services]
-        assert "sbomify GitHub Action" in service_names
+        assert "sbomify action" in service_names
 
         # Verify all components have string groups (equivalent to vendor)
         for comp in enriched_bom.metadata.tools.components:

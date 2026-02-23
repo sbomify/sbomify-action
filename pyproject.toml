@@ -38,10 +38,10 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://sbomify.com"
-Repository = "https://github.com/sbomify/github-action"
-Documentation = "https://github.com/sbomify/github-action#readme"
-"Bug Tracker" = "https://github.com/sbomify/github-action/issues"
-Changelog = "https://github.com/sbomify/github-action/releases"
+Repository = "https://github.com/sbomify/sbomify-action"
+Documentation = "https://github.com/sbomify/sbomify-action#readme"
+"Bug Tracker" = "https://github.com/sbomify/sbomify-action/issues"
+Changelog = "https://github.com/sbomify/sbomify-action/releases"
 
 [project.scripts]
 sbomify-action = "sbomify_action.cli.main:main"

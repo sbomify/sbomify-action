@@ -31,7 +31,7 @@ from sbomify_action.logging_config import logger
 from ..metadata import NormalizedMetadata
 
 # GitHub repository hosting the license databases
-GITHUB_REPO = "sbomify/github-action"
+GITHUB_REPO = "sbomify/sbomify-action"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 
 # Number of recent releases to check when looking for a database

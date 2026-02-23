@@ -23,7 +23,7 @@ class SbomifyDestination:
     """
     Destination for uploading SBOMs to the sbomify platform.
 
-    This is the primary/native destination for the sbomify GitHub Action.
+    This is the primary/native destination for the sbomify action.
     It uses the global config (token, component_id, api_base_url) that's
     also used for augmentation and other API calls.
 

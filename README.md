@@ -1,7 +1,7 @@
-# sbomify GitHub Action
+# sbomify action
 
 [![sbomified](https://sbomify.com/assets/images/logo/badge.svg)](https://app.sbomify.com/public/component/Gu9wem8mkX)
-[![CI/CD Pipeline](https://github.com/sbomify/github-action/actions/workflows/sbomify.yaml/badge.svg)](https://github.com/sbomify/github-action/actions/workflows/sbomify.yaml)
+[![CI/CD Pipeline](https://github.com/sbomify/sbomify-action/actions/workflows/sbomify.yaml/badge.svg)](https://github.com/sbomify/sbomify-action/actions/workflows/sbomify.yaml)
 [![PyPI version](https://badge.fury.io/py/sbomify-action.svg)](https://pypi.org/project/sbomify-action/)
 [![Slack](https://img.shields.io/badge/Slack-Join%20Community-4A154B?logo=slack)](https://join.slack.com/t/sbomify/shared_invite/zt-3na54pa1f-MXrFWhotmZr0YxXc8sABTw)
 
@@ -20,7 +20,7 @@ Generate, augment, enrich, and manage SBOMs in your CI/CD pipeline. Works standa
 ## Quick Start
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: requirements.txt
     OUTPUT_FILE: sbom.cdx.json
@@ -49,7 +49,7 @@ That's it! This generates a CycloneDX SBOM from your lockfile and enriches it wi
 ### Standalone (no sbomify account needed)
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: poetry.lock
     OUTPUT_FILE: sbom.cdx.json
@@ -62,7 +62,7 @@ That's it! This generates a CycloneDX SBOM from your lockfile and enriches it wi
 ### With sbomify
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
     COMPONENT_ID: your-component-id
@@ -74,7 +74,7 @@ That's it! This generates a CycloneDX SBOM from your lockfile and enriches it wi
 ### Docker Image
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     DOCKER_IMAGE: my-app:latest
     OUTPUT_FILE: sbom.cdx.json
@@ -90,7 +90,7 @@ That's it! This generates a CycloneDX SBOM from your lockfile and enriches it wi
 Add business metadata without a sbomify account using a local config file:
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: requirements.txt
     OUTPUT_FILE: sbom.cdx.json
@@ -104,7 +104,7 @@ See [Augmentation Config File](#augmentation-config-file) for the config format.
 ### Self-Hosted sbomify
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
     COMPONENT_ID: your-component-id
@@ -119,7 +119,7 @@ See [Augmentation Config File](#augmentation-config-file) for the config format.
 Generate SPDX instead of CycloneDX:
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: requirements.txt
     OUTPUT_FILE: sbom.spdx.json
@@ -133,7 +133,7 @@ Generate SPDX instead of CycloneDX:
 Create an SBOM from scratch containing only manually-specified packages—useful for vendored code, system libraries, or manual dependency declarations where no lockfile exists:
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: none
     ADDITIONAL_PACKAGES: "pkg:pypi/requests@2.31.0,pkg:deb/debian/openssl@3.0.11"
@@ -145,7 +145,7 @@ Create an SBOM from scratch containing only manually-specified packages—useful
 Or use a file for more complex package lists:
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: none
     ADDITIONAL_PACKAGES_FILE: my-packages.txt
@@ -159,7 +159,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 ### With Attestation
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: Cargo.lock
     OUTPUT_FILE: sbom.cdx.json
@@ -222,7 +222,7 @@ When uploading to Dependency Track (`UPLOAD_DESTINATIONS=dependency-track`), con
 #### Dependency Track Example
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: requirements.txt
     OUTPUT_FILE: sbom.cdx.json
@@ -239,7 +239,7 @@ When uploading to Dependency Track (`UPLOAD_DESTINATIONS=dependency-track`), con
 #### Upload to Multiple Destinations
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: requirements.txt
     OUTPUT_FILE: sbom.cdx.json
@@ -312,7 +312,7 @@ sbomify-action --token $SBOMIFY_TOKEN \
 <summary><strong>GitHub Actions example</strong></summary>
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   # Build your Yocto image first, then:
 - run: |
     sbomify-action --token ${{ secrets.SBOMIFY_TOKEN }} \
@@ -649,7 +649,7 @@ All timestamps are in UTC (ISO 8601 format with Z suffix).
 Tag your SBOMs with product releases for version tracking and release management in sbomify.
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
     COMPONENT_ID: your-component-id
@@ -701,7 +701,7 @@ pkg:deb/debian/openssl@3.0.11
 #### Custom File Location
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: requirements.txt
     ADDITIONAL_PACKAGES_FILE: .sbomify/extra-packages.txt
@@ -712,7 +712,7 @@ pkg:deb/debian/openssl@3.0.11
 For dynamic or programmatic use:
 
 ```yaml
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: requirements.txt
     ADDITIONAL_PACKAGES: "pkg:pypi/requests@2.31.0,pkg:npm/lodash@4.17.21"
@@ -732,7 +732,7 @@ Append packages across multiple steps:
     echo "pkg:deb/debian/libssl3@3.0.11" >> additional_packages.txt
 
 - name: Generate SBOM
-  uses: sbomify/github-action@master
+  uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: requirements.txt
     # No additional config needed - file is auto-detected
@@ -768,7 +768,7 @@ Use `actions/cache` before calling the sbomify action:
     path: .sbomify-cache
     key: sbomify-${{ runner.os }}
 
-- uses: sbomify/github-action@master
+- uses: sbomify/sbomify-action@master
   env:
     SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
     TRIVY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/trivy
