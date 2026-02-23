@@ -28,6 +28,7 @@ class YoctoConfig:
     dry_run: bool = False
     component_id: str | None = None
     visibility: str | None = None
+    max_packages: int | None = None
 
 
 @dataclass

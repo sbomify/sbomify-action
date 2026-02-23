@@ -2185,6 +2185,7 @@ def cli(
     default=None,
     help="Set visibility for newly created components.",
 )
+@click.option("--max-packages", type=int, default=None, hidden=True, help="[Debug/testing] Limit number of packages to process (SPDX 2.2 only).")
 @click.option("--verbose", is_flag=True, default=False, help="Enable verbose logging.")
 @click.pass_context
 def yocto_cmd(
@@ -2196,6 +2197,7 @@ def yocto_cmd(
     enrich: bool,
     dry_run: bool,
     visibility: str | None,
+    max_packages: int | None,
     verbose: bool,
 ) -> None:
     """Process Yocto/OpenEmbedded SPDX SBOMs.
@@ -2265,6 +2267,7 @@ def yocto_cmd(
         dry_run=dry_run,
         component_id=component_id,
         visibility=visibility,
+        max_packages=max_packages,
     )
 
     result = run_yocto_pipeline(config)

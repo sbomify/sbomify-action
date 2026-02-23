@@ -200,8 +200,11 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
         # Step 2: Discover packages
         console.print("[bold]Discovering packages...[/bold]")
         packages = discover_packages(extract_dir)
+        if config.max_packages and len(packages) > config.max_packages:
+            console.print(f"  Found {len(packages)} package SBOMs, limiting to {config.max_packages}")
+            packages = packages[: config.max_packages]
         result.packages_found = len(packages)
-        console.print(f"  Found {len(packages)} package SBOMs")
+        console.print(f"  Processing {len(packages)} package SBOMs")
 
         if config.dry_run:
             console.print("\n[bold yellow]DRY RUN[/bold yellow] - no API calls will be made")
