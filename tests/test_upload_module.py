@@ -1045,6 +1045,96 @@ class TestDependencyTrackErrors(unittest.TestCase):
         self.assertIn("not found", result.error_message.lower())
 
 
+class TestSbomifyGzipCompression(unittest.TestCase):
+    """Tests for gzip compression of large SBOM uploads."""
+
+    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
+    def test_small_file_not_compressed(self, mock_post):
+        """Files under GZIP_THRESHOLD are sent uncompressed."""
+        small_data = json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.6"})
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write(small_data)
+            sbom_file = f.name
+
+        try:
+            mock_response = Mock()
+            mock_response.ok = True
+            mock_response.json.return_value = {"sbom_id": "sbom-small"}
+            mock_post.return_value = mock_response
+
+            dest = SbomifyDestination(token="test-token", component_id="my-component")
+            input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
+
+            result = dest.upload(input)
+
+            self.assertTrue(result.success)
+            call_kwargs = mock_post.call_args[1]
+            # No Content-Encoding header for small files
+            self.assertNotIn("Content-Encoding", call_kwargs["headers"])
+            # Data sent is the raw bytes, not gzip
+            self.assertEqual(call_kwargs["data"], small_data.encode())
+        finally:
+            Path(sbom_file).unlink()
+
+    @patch("sbomify_action._upload.destinations.sbomify.GZIP_THRESHOLD", 100)
+    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
+    def test_large_file_compressed(self, mock_post):
+        """Files over GZIP_THRESHOLD are gzip-compressed with Content-Encoding header."""
+        import gzip
+
+        large_data = json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.6", "padding": "x" * 200})
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write(large_data)
+            sbom_file = f.name
+
+        try:
+            mock_response = Mock()
+            mock_response.ok = True
+            mock_response.json.return_value = {"sbom_id": "sbom-large"}
+            mock_post.return_value = mock_response
+
+            dest = SbomifyDestination(token="test-token", component_id="my-component")
+            input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
+
+            result = dest.upload(input)
+
+            self.assertTrue(result.success)
+            call_kwargs = mock_post.call_args[1]
+            # Content-Encoding header must be set
+            self.assertEqual(call_kwargs["headers"]["Content-Encoding"], "gzip")
+            # Data is valid gzip that decompresses to original
+            decompressed = gzip.decompress(call_kwargs["data"])
+            self.assertEqual(decompressed, large_data.encode())
+        finally:
+            Path(sbom_file).unlink()
+
+    @patch("sbomify_action._upload.destinations.sbomify.GZIP_THRESHOLD", 100)
+    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
+    def test_compressed_data_smaller_than_original(self, mock_post):
+        """Compressed upload data should be smaller than the original."""
+        # Highly repetitive data compresses well
+        large_data = json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.6", "padding": "a" * 500})
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write(large_data)
+            sbom_file = f.name
+
+        try:
+            mock_response = Mock()
+            mock_response.ok = True
+            mock_response.json.return_value = {"sbom_id": "sbom-compressed"}
+            mock_post.return_value = mock_response
+
+            dest = SbomifyDestination(token="test-token", component_id="my-component")
+            input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
+
+            dest.upload(input)
+
+            call_kwargs = mock_post.call_args[1]
+            self.assertLess(len(call_kwargs["data"]), len(large_data.encode()))
+        finally:
+            Path(sbom_file).unlink()
+
+
 class TestSbomifyTimeout(unittest.TestCase):
     """Tests for Sbomify timeout handling."""
 

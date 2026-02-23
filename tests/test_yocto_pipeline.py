@@ -237,6 +237,82 @@ class TestRunYoctoPipeline:
         # Should have stopped after 2nd package, not processed all 3
         assert mock_goc.call_count == 2
 
+    @patch("sbomify_action._yocto.pipeline.patch_component_visibility")
+    @patch("sbomify_action._yocto.pipeline.upload_sbom")
+    @patch("sbomify_action._yocto.pipeline.list_components")
+    def test_visibility_set_on_created_components(self, mock_list, mock_upload, mock_patch_vis, tmp_path):
+        archive = _make_tar_gz(tmp_path)
+        config = _make_config(archive, visibility="public")
+
+        mock_list.return_value = {"busybox": "existing-1"}  # busybox already exists
+        mock_upload.return_value = UploadResult.success_result(destination_name="sbomify", sbom_id="sbom-001")
+
+        with patch("sbomify_action._yocto.pipeline.get_or_create_component") as mock_goc:
+            # busybox: cached (not created), base-files + zlib: created
+            def goc_side_effect(url, tok, name, cache):
+                if name in cache:
+                    return cache[name], False
+                cache[name] = f"new-{name}"
+                return f"new-{name}", True
+
+            mock_goc.side_effect = goc_side_effect
+            with patch("sbomify_action._yocto.pipeline.create_release") as mock_rel:
+                mock_rel.return_value = "rel-1"
+                with patch("sbomify_action._yocto.pipeline.tag_sbom_with_release"):
+                    run_yocto_pipeline(config)
+
+        # Visibility should only be patched for newly created components (2), not cached ones (1)
+        assert mock_patch_vis.call_count == 2
+        for call in mock_patch_vis.call_args_list:
+            assert call.args[3] == "public"
+
+    @patch("sbomify_action._yocto.pipeline.patch_component_visibility")
+    @patch("sbomify_action._yocto.pipeline.upload_sbom")
+    @patch("sbomify_action._yocto.pipeline.list_components")
+    def test_visibility_not_set_when_not_configured(self, mock_list, mock_upload, mock_patch_vis, tmp_path):
+        archive = _make_tar_gz(tmp_path)
+        config = _make_config(archive)  # no visibility
+
+        mock_list.return_value = {}
+        mock_upload.return_value = UploadResult.success_result(destination_name="sbomify", sbom_id="sbom-001")
+
+        with patch("sbomify_action._yocto.pipeline.get_or_create_component") as mock_goc:
+            mock_goc.return_value = ("comp-1", True)
+            with patch("sbomify_action._yocto.pipeline.create_release") as mock_rel:
+                mock_rel.return_value = "rel-1"
+                with patch("sbomify_action._yocto.pipeline.tag_sbom_with_release"):
+                    run_yocto_pipeline(config)
+
+        mock_patch_vis.assert_not_called()
+
+    @patch("sbomify_action._yocto.pipeline.patch_component_visibility")
+    @patch("sbomify_action._yocto.pipeline.upload_sbom")
+    @patch("sbomify_action._yocto.pipeline.list_components")
+    def test_plan_limit_does_not_call_visibility_after_stop(self, mock_list, mock_upload, mock_patch_vis, tmp_path):
+        archive = _make_tar_gz(tmp_path)
+        config = _make_config(archive, visibility="public")
+
+        mock_list.return_value = {}
+        mock_upload.return_value = UploadResult.success_result(destination_name="sbomify", sbom_id="sbom-001")
+        call_count = {"n": 0}
+
+        def goc_side_effect(url, tok, name, cache):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return ("comp-1", True)
+            raise PlanLimitError("Maximum 200 components reached")
+
+        with patch("sbomify_action._yocto.pipeline.get_or_create_component") as mock_goc:
+            mock_goc.side_effect = goc_side_effect
+            with patch("sbomify_action._yocto.pipeline.create_release") as mock_rel:
+                mock_rel.return_value = "rel-1"
+                with patch("sbomify_action._yocto.pipeline.tag_sbom_with_release"):
+                    result = run_yocto_pipeline(config)
+
+        # Visibility patched only for the first successful component
+        assert mock_patch_vis.call_count == 1
+        assert result.errors == 1
+
 
 SPDX3_DATA = {
     "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
