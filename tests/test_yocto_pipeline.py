@@ -11,7 +11,7 @@ import pytest
 from sbomify_action._upload.result import UploadResult
 from sbomify_action._yocto.models import YoctoConfig, YoctoPipelineResult
 from sbomify_action._yocto.pipeline import _process_single_package, run_yocto_pipeline
-from sbomify_action.exceptions import APIError, ConfigurationError
+from sbomify_action.exceptions import APIError, ConfigurationError, PlanLimitError
 
 YOCTO_TEST_DATA = Path(__file__).parent / "test-data" / "yocto"
 API_BASE = "https://app.sbomify.com"
@@ -206,6 +206,37 @@ class TestRunYoctoPipeline:
         assert result.sboms_skipped == 3
         assert result.sboms_uploaded == 0
         assert result.errors == 0
+
+
+    @patch("sbomify_action._yocto.pipeline.upload_sbom")
+    @patch("sbomify_action._yocto.pipeline.list_components")
+    def test_plan_limit_stops_early(self, mock_list, mock_upload, tmp_path):
+        archive = _make_tar_gz(tmp_path)
+        config = _make_config(archive)
+
+        mock_list.return_value = {}
+        # First package succeeds, then plan limit hit on second
+        call_count = {"n": 0}
+
+        def goc_side_effect(url, tok, name, cache):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return ("comp-1", True)
+            raise PlanLimitError("Maximum 200 components reached")
+
+        mock_upload.return_value = UploadResult.success_result(destination_name="sbomify", sbom_id="sbom-001")
+
+        with patch("sbomify_action._yocto.pipeline.get_or_create_component") as mock_goc:
+            mock_goc.side_effect = goc_side_effect
+            with patch("sbomify_action._yocto.pipeline.create_release") as mock_rel:
+                mock_rel.return_value = "rel-1"
+                with patch("sbomify_action._yocto.pipeline.tag_sbom_with_release"):
+                    result = run_yocto_pipeline(config)
+
+        assert result.errors == 1
+        assert result.sboms_uploaded == 1
+        # Should have stopped after 2nd package, not processed all 3
+        assert mock_goc.call_count == 2
 
 
 SPDX3_DATA = {

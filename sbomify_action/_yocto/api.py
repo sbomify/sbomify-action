@@ -2,7 +2,7 @@
 
 import requests
 
-from sbomify_action.exceptions import APIError
+from sbomify_action.exceptions import APIError, PlanLimitError
 from sbomify_action.http_client import get_default_headers
 from sbomify_action.logging_config import logger
 
@@ -88,12 +88,17 @@ def create_component(api_base_url: str, token: str, name: str) -> str:
 
     if not response.ok:
         err_msg = f"Failed to create component '{name}'. [{response.status_code}]"
+        detail = ""
         try:
             detail = response.json().get("detail", "")
             if detail:
                 err_msg += f" - {detail}"
         except ValueError:
             pass
+
+        if response.status_code == 403 and "maximum" in detail.lower():
+            raise PlanLimitError(err_msg)
+
         raise APIError(err_msg)
 
     data = response.json()

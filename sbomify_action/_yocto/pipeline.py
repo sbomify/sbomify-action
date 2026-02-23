@@ -9,7 +9,7 @@ from sbomify_action._processors.releases_api import create_release, tag_sbom_wit
 from sbomify_action.augmentation import augment_sbom_from_file
 from sbomify_action.console import console
 from sbomify_action.enrichment import enrich_sbom
-from sbomify_action.exceptions import APIError, ConfigurationError
+from sbomify_action.exceptions import APIError, ConfigurationError, PlanLimitError
 from sbomify_action.logging_config import logger
 from sbomify_action.spdx3 import is_spdx3
 from sbomify_action.upload import upload_sbom
@@ -235,6 +235,17 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
                     result.sboms_uploaded += 1
                 else:
                     result.sboms_skipped += 1
+
+            except PlanLimitError as e:
+                remaining = len(packages) - i
+                result.errors += 1
+                result.error_messages.append(str(e))
+                logger.error(str(e))
+                console.print(
+                    f"\n[bold red]Plan limit reached.[/bold red] Stopping pipeline ({remaining} packages remaining).\n"
+                    "Upgrade your plan or reduce the number of components to continue."
+                )
+                break
 
             except Exception as e:
                 result.errors += 1

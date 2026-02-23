@@ -1,6 +1,7 @@
 """sbomify API destination for SBOM uploads."""
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -15,8 +16,8 @@ from ..result import UploadResult
 # Default sbomify production API
 SBOMIFY_PRODUCTION_API = "https://app.sbomify.com"
 
-# Upload timeout in seconds
-UPLOAD_TIMEOUT = 120
+# Upload timeout in seconds (overridable via SBOMIFY_UPLOAD_TIMEOUT env var)
+UPLOAD_TIMEOUT = int(os.environ.get("SBOMIFY_UPLOAD_TIMEOUT", "120"))
 
 
 class SbomifyDestination:

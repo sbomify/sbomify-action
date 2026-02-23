@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from sbomify_action._yocto.api import create_component, get_or_create_component, list_components
-from sbomify_action.exceptions import APIError
+from sbomify_action.exceptions import APIError, PlanLimitError
 
 API_BASE = "https://app.sbomify.com"
 TOKEN = "test-token"
@@ -123,6 +123,31 @@ class TestCreateComponent:
 
         with pytest.raises(APIError, match="Failed to create component"):
             create_component(API_BASE, TOKEN, "busybox")
+
+    @patch("sbomify_action._yocto.api.requests.post")
+    def test_plan_limit_raises_plan_limit_error(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.ok = False
+        mock_resp.status_code = 403
+        mock_resp.json.return_value = {
+            "detail": "You have reached the maximum 200 components allowed by your plan."
+        }
+        mock_post.return_value = mock_resp
+
+        with pytest.raises(PlanLimitError, match="maximum"):
+            create_component(API_BASE, TOKEN, "busybox")
+
+    @patch("sbomify_action._yocto.api.requests.post")
+    def test_403_without_limit_raises_api_error(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.ok = False
+        mock_resp.status_code = 403
+        mock_resp.json.return_value = {"detail": "Permission denied"}
+        mock_post.return_value = mock_resp
+
+        with pytest.raises(APIError) as exc_info:
+            create_component(API_BASE, TOKEN, "busybox")
+        assert not isinstance(exc_info.value, PlanLimitError)
 
     @patch("sbomify_action._yocto.api.requests.post")
     def test_no_id_in_response(self, mock_post):
