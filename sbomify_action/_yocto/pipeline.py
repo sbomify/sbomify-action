@@ -9,12 +9,12 @@ from sbomify_action._processors.releases_api import create_release, tag_sbom_wit
 from sbomify_action.augmentation import augment_sbom_from_file
 from sbomify_action.console import console
 from sbomify_action.enrichment import enrich_sbom
-from sbomify_action.exceptions import APIError, ConfigurationError
+from sbomify_action.exceptions import APIError, ConfigurationError, PlanLimitError
 from sbomify_action.logging_config import logger
 from sbomify_action.spdx3 import is_spdx3
 from sbomify_action.upload import upload_sbom
 
-from .api import get_or_create_component, list_components
+from .api import get_or_create_component, list_components, patch_component_visibility
 from .archive import extract_archive
 from .models import YoctoConfig, YoctoPipelineResult
 from .parser import discover_packages
@@ -200,8 +200,11 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
         # Step 2: Discover packages
         console.print("[bold]Discovering packages...[/bold]")
         packages = discover_packages(extract_dir)
+        if config.max_packages and len(packages) > config.max_packages:
+            console.print(f"  Found {len(packages)} package SBOMs, limiting to {config.max_packages}")
+            packages = packages[: config.max_packages]
         result.packages_found = len(packages)
-        console.print(f"  Found {len(packages)} package SBOMs")
+        console.print(f"  Processing {len(packages)} package SBOMs")
 
         if config.dry_run:
             console.print("\n[bold yellow]DRY RUN[/bold yellow] - no API calls will be made")
@@ -227,6 +230,8 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
                 )
                 if was_created:
                     result.components_created += 1
+                    if config.visibility:
+                        patch_component_visibility(config.api_base_url, config.token, comp_id, config.visibility)
 
                 sbom_id = _process_single_package(pkg.name, pkg.spdx_file, comp_id, config)
 
@@ -235,6 +240,17 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
                     result.sboms_uploaded += 1
                 else:
                     result.sboms_skipped += 1
+
+            except PlanLimitError as e:
+                remaining = len(packages) - i
+                result.errors += 1
+                result.error_messages.append(str(e))
+                logger.error(str(e))
+                console.print(
+                    f"\n[bold red]Plan limit reached.[/bold red] Stopping pipeline ({remaining} packages remaining).\n"
+                    "Upgrade your plan or reduce the number of components to continue."
+                )
+                break
 
             except Exception as e:
                 result.errors += 1

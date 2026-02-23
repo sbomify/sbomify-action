@@ -2179,6 +2179,19 @@ def cli(
 @click.option("--augment/--no-augment", default=False, help="Run augmentation per SBOM.")
 @click.option("--enrich/--no-enrich", default=False, help="Run enrichment per SBOM.")
 @click.option("--dry-run", is_flag=True, default=False, help="Show what would happen without API calls.")
+@click.option(
+    "--visibility",
+    type=click.Choice(["public", "private", "gated"], case_sensitive=False),
+    default=None,
+    help="Set visibility for newly created components.",
+)
+@click.option(
+    "--max-packages",
+    type=int,
+    default=None,
+    hidden=True,
+    help="[Debug/testing] Limit number of packages to process (SPDX 2.2 only).",
+)
 @click.option("--verbose", is_flag=True, default=False, help="Enable verbose logging.")
 @click.pass_context
 def yocto_cmd(
@@ -2189,6 +2202,8 @@ def yocto_cmd(
     augment: bool,
     enrich: bool,
     dry_run: bool,
+    visibility: str | None,
+    max_packages: int | None,
     verbose: bool,
 ) -> None:
     """Process Yocto/OpenEmbedded SPDX SBOMs.
@@ -2257,6 +2272,8 @@ def yocto_cmd(
         enrich=enrich,
         dry_run=dry_run,
         component_id=component_id,
+        visibility=visibility,
+        max_packages=max_packages,
     )
 
     result = run_yocto_pipeline(config)

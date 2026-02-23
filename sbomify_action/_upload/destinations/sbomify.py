@@ -1,6 +1,8 @@
 """sbomify API destination for SBOM uploads."""
 
+import gzip
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -15,8 +17,14 @@ from ..result import UploadResult
 # Default sbomify production API
 SBOMIFY_PRODUCTION_API = "https://app.sbomify.com"
 
-# Upload timeout in seconds
-UPLOAD_TIMEOUT = 120
+# Upload timeout in seconds (overridable via SBOMIFY_UPLOAD_TIMEOUT env var)
+try:
+    UPLOAD_TIMEOUT = int(os.environ.get("SBOMIFY_UPLOAD_TIMEOUT", "120"))
+except ValueError:
+    UPLOAD_TIMEOUT = 120
+
+# Compress uploads larger than this threshold (1 MB)
+GZIP_THRESHOLD = 1_000_000
 
 
 class SbomifyDestination:
@@ -91,8 +99,8 @@ class SbomifyDestination:
 
         # Read SBOM file
         try:
-            with Path(input.sbom_file).open() as f:
-                sbom_data = f.read()
+            with Path(input.sbom_file).open("rb") as f:
+                sbom_bytes = f.read()
         except FileNotFoundError:
             return UploadResult.failure_result(
                 destination_name=self.name,
@@ -111,12 +119,22 @@ class SbomifyDestination:
         format_display = "CycloneDX" if input.sbom_format == "cyclonedx" else "SPDX"
         logger.info(f"Uploading {format_display} SBOM to component: {self._component_id}")
 
+        # Gzip-compress large payloads to avoid upstream timeouts
+        upload_data: bytes = sbom_bytes
+        if len(sbom_bytes) > GZIP_THRESHOLD:
+            upload_data = gzip.compress(sbom_bytes)
+            headers["Content-Encoding"] = "gzip"
+            logger.info(
+                f"Compressed upload: {len(sbom_bytes):,} -> {len(upload_data):,} bytes "
+                f"({len(sbom_bytes) / len(upload_data):.1f}x)"
+            )
+
         # Execute the upload
         try:
             response = requests.post(
                 url,
                 headers=headers,
-                data=sbom_data,
+                data=upload_data,
                 timeout=UPLOAD_TIMEOUT,
             )
         except requests.exceptions.ConnectionError:

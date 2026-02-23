@@ -2,7 +2,7 @@
 
 import requests
 
-from sbomify_action.exceptions import APIError
+from sbomify_action.exceptions import APIError, PlanLimitError
 from sbomify_action.http_client import get_default_headers
 from sbomify_action.logging_config import logger
 
@@ -88,12 +88,17 @@ def create_component(api_base_url: str, token: str, name: str) -> str:
 
     if not response.ok:
         err_msg = f"Failed to create component '{name}'. [{response.status_code}]"
+        detail = ""
         try:
             detail = response.json().get("detail", "")
             if detail:
                 err_msg += f" - {detail}"
         except ValueError:
             pass
+
+        if response.status_code == 403 and "maximum" in detail.lower():
+            raise PlanLimitError(err_msg)
+
         raise APIError(err_msg)
 
     data = response.json()
@@ -101,6 +106,35 @@ def create_component(api_base_url: str, token: str, name: str) -> str:
     if comp_id is None:
         raise APIError(f"Invalid response when creating component '{name}': no id returned")
     return str(comp_id)
+
+
+def patch_component_visibility(api_base_url: str, token: str, component_id: str, visibility: str) -> None:
+    """Set the visibility of a component.
+
+    Non-fatal: logs a warning on failure since visibility is a best-effort
+    setting that should not block the pipeline.
+
+    Args:
+        api_base_url: Base URL for the sbomify API
+        token: API authentication token
+        component_id: Component ID to patch
+        visibility: One of "public", "private", "gated"
+
+    Raises:
+        APIError: If connection or timeout fails
+    """
+    url = f"{api_base_url}/api/v1/components/{component_id}"
+    headers = get_default_headers(token, content_type="application/json")
+
+    try:
+        response = requests.patch(url, headers=headers, json={"visibility": visibility}, timeout=60)
+    except requests.exceptions.ConnectionError:
+        raise APIError("Failed to connect to sbomify API")
+    except requests.exceptions.Timeout:
+        raise APIError("API request timed out")
+
+    if not response.ok:
+        logger.warning(f"Failed to set visibility for component {component_id}: [{response.status_code}]")
 
 
 def get_or_create_component(api_base_url: str, token: str, name: str, cache: dict[str, str]) -> tuple[str, bool]:

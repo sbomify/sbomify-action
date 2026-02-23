@@ -4,8 +4,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sbomify_action._yocto.api import create_component, get_or_create_component, list_components
-from sbomify_action.exceptions import APIError
+from sbomify_action._yocto.api import (
+    create_component,
+    get_or_create_component,
+    list_components,
+    patch_component_visibility,
+)
+from sbomify_action.exceptions import APIError, PlanLimitError
 
 API_BASE = "https://app.sbomify.com"
 TOKEN = "test-token"
@@ -125,6 +130,29 @@ class TestCreateComponent:
             create_component(API_BASE, TOKEN, "busybox")
 
     @patch("sbomify_action._yocto.api.requests.post")
+    def test_plan_limit_raises_plan_limit_error(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.ok = False
+        mock_resp.status_code = 403
+        mock_resp.json.return_value = {"detail": "You have reached the maximum 200 components allowed by your plan."}
+        mock_post.return_value = mock_resp
+
+        with pytest.raises(PlanLimitError, match="maximum"):
+            create_component(API_BASE, TOKEN, "busybox")
+
+    @patch("sbomify_action._yocto.api.requests.post")
+    def test_403_without_limit_raises_api_error(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.ok = False
+        mock_resp.status_code = 403
+        mock_resp.json.return_value = {"detail": "Permission denied"}
+        mock_post.return_value = mock_resp
+
+        with pytest.raises(APIError) as exc_info:
+            create_component(API_BASE, TOKEN, "busybox")
+        assert not isinstance(exc_info.value, PlanLimitError)
+
+    @patch("sbomify_action._yocto.api.requests.post")
     def test_no_id_in_response(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.ok = True
@@ -133,6 +161,48 @@ class TestCreateComponent:
 
         with pytest.raises(APIError, match="no id returned"):
             create_component(API_BASE, TOKEN, "busybox")
+
+
+class TestPatchComponentVisibility:
+    @patch("sbomify_action._yocto.api.requests.patch")
+    def test_success(self, mock_patch):
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_patch.return_value = mock_resp
+
+        patch_component_visibility(API_BASE, TOKEN, "comp-1", "public")
+
+        call_kwargs = mock_patch.call_args
+        assert call_kwargs.kwargs["json"] == {"visibility": "public"}
+        assert call_kwargs.kwargs["timeout"] == 60
+
+    @patch("sbomify_action._yocto.api.requests.patch")
+    def test_failure_logs_warning_no_raise(self, mock_patch):
+        mock_resp = MagicMock()
+        mock_resp.ok = False
+        mock_resp.status_code = 500
+        mock_patch.return_value = mock_resp
+
+        # Should not raise — visibility is best-effort
+        patch_component_visibility(API_BASE, TOKEN, "comp-1", "public")
+
+    @patch("sbomify_action._yocto.api.requests.patch")
+    def test_connection_error_raises(self, mock_patch):
+        import requests
+
+        mock_patch.side_effect = requests.exceptions.ConnectionError()
+
+        with pytest.raises(APIError, match="Failed to connect"):
+            patch_component_visibility(API_BASE, TOKEN, "comp-1", "public")
+
+    @patch("sbomify_action._yocto.api.requests.patch")
+    def test_timeout_error_raises(self, mock_patch):
+        import requests
+
+        mock_patch.side_effect = requests.exceptions.Timeout()
+
+        with pytest.raises(APIError, match="timed out"):
+            patch_component_visibility(API_BASE, TOKEN, "comp-1", "public")
 
 
 class TestGetOrCreateComponent:

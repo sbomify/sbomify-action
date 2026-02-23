@@ -27,6 +27,8 @@ class YoctoConfig:
     enrich: bool = False
     dry_run: bool = False
     component_id: str | None = None
+    visibility: str | None = None
+    max_packages: int | None = None
 
 
 @dataclass

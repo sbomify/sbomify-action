@@ -83,6 +83,10 @@ class APIError(SbomifyError):
     """Raised when API operations fail."""
 
 
+class PlanLimitError(APIError):
+    """Raised when an API operation fails due to plan limits (e.g., max components)."""
+
+
 class FileProcessingError(SbomifyError):
     """Raised when file operations fail."""
 
