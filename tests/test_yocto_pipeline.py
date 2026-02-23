@@ -207,7 +207,6 @@ class TestRunYoctoPipeline:
         assert result.sboms_uploaded == 0
         assert result.errors == 0
 
-
     @patch("sbomify_action._yocto.pipeline.upload_sbom")
     @patch("sbomify_action._yocto.pipeline.list_components")
     def test_plan_limit_stops_early(self, mock_list, mock_upload, tmp_path):

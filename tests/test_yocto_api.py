@@ -129,9 +129,7 @@ class TestCreateComponent:
         mock_resp = MagicMock()
         mock_resp.ok = False
         mock_resp.status_code = 403
-        mock_resp.json.return_value = {
-            "detail": "You have reached the maximum 200 components allowed by your plan."
-        }
+        mock_resp.json.return_value = {"detail": "You have reached the maximum 200 components allowed by your plan."}
         mock_post.return_value = mock_resp
 
         with pytest.raises(PlanLimitError, match="maximum"):

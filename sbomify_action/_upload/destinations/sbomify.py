@@ -18,7 +18,10 @@ from ..result import UploadResult
 SBOMIFY_PRODUCTION_API = "https://app.sbomify.com"
 
 # Upload timeout in seconds (overridable via SBOMIFY_UPLOAD_TIMEOUT env var)
-UPLOAD_TIMEOUT = int(os.environ.get("SBOMIFY_UPLOAD_TIMEOUT", "120"))
+try:
+    UPLOAD_TIMEOUT = int(os.environ.get("SBOMIFY_UPLOAD_TIMEOUT", "120"))
+except ValueError:
+    UPLOAD_TIMEOUT = 120
 
 # Compress uploads larger than this threshold (1 MB)
 GZIP_THRESHOLD = 1_000_000

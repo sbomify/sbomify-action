@@ -231,9 +231,7 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
                 if was_created:
                     result.components_created += 1
                     if config.visibility:
-                        patch_component_visibility(
-                            config.api_base_url, config.token, comp_id, config.visibility
-                        )
+                        patch_component_visibility(config.api_base_url, config.token, comp_id, config.visibility)
 
                 sbom_id = _process_single_package(pkg.name, pkg.spdx_file, comp_id, config)
 

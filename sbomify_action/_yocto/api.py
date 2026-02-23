@@ -111,6 +111,9 @@ def create_component(api_base_url: str, token: str, name: str) -> str:
 def patch_component_visibility(api_base_url: str, token: str, component_id: str, visibility: str) -> None:
     """Set the visibility of a component.
 
+    Non-fatal: logs a warning on failure since visibility is a best-effort
+    setting that should not block the pipeline.
+
     Args:
         api_base_url: Base URL for the sbomify API
         token: API authentication token
@@ -118,7 +121,7 @@ def patch_component_visibility(api_base_url: str, token: str, component_id: str,
         visibility: One of "public", "private", "gated"
 
     Raises:
-        APIError: If API call fails
+        APIError: If connection or timeout fails
     """
     url = f"{api_base_url}/api/v1/components/{component_id}"
     headers = get_default_headers(token, content_type="application/json")
