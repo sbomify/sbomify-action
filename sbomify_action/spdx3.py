@@ -610,6 +610,11 @@ def _normalize_serialized_element(elem: dict) -> None:
         if old_key in elem:
             elem[new_key] = elem.pop(old_key)
 
+    # --- other property renames (non-software) ---
+    # spdx_tools outputs "standard" but context defines "standardName"
+    if "standard" in elem:
+        elem["standardName"] = elem.pop("standard")
+
     # --- recurse into nested dicts / lists ---
     for value in elem.values():
         if isinstance(value, dict):
@@ -626,6 +631,30 @@ def _normalize_nested_dict(d: dict) -> None:
         d["type"] = d.pop("@type")
     # Recurse for deeper nesting (e.g. ExternalIdentifier inside verifiedUsing)
     for value in d.values():
+        if isinstance(value, dict):
+            _normalize_nested_dict(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _normalize_nested_dict(item)
+
+
+def _normalize_passthrough_element(elem: dict) -> None:
+    """Normalize keys on a passthrough element for output consistency.
+
+    Like :func:`_normalize_serialized_element` but only touches keys
+    (``@type`` → ``type``, ``@id`` → ``spdxId``).  ``@id`` is only
+    renamed when the value is an IRI; blank-node identifiers (``_:…``)
+    are left as ``@id`` because ``spdxId`` must be an IRI per the spec.
+    """
+    if "@type" in elem:
+        elem["type"] = elem.pop("@type")
+    if "@id" in elem:
+        id_val = elem["@id"]
+        if isinstance(id_val, str) and not id_val.startswith("_:"):
+            elem["spdxId"] = elem.pop("@id")
+    # Recurse into nested dicts (e.g. inline creationInfo, externalIdentifier)
+    for value in elem.values():
         if isinstance(value, dict):
             _normalize_nested_dict(value)
         elif isinstance(value, list):
@@ -658,9 +687,13 @@ def write_spdx3_file(
     for elem in element_list:
         _normalize_serialized_element(elem)
 
-    # Re-attach passthrough elements that were not parsed into model objects
+    # Re-attach passthrough elements that were not parsed into model objects.
+    # Normalize their keys for consistency, but preserve blank-node @id values
+    # (e.g. "_:CreationInfo0") since spdxId must be an IRI per the spec.
     passthrough = getattr(payload, "_passthrough_elements", [])
     if passthrough:
+        for elem in passthrough:
+            _normalize_passthrough_element(elem)
         element_list.extend(passthrough)
 
     complete_dict = {"@context": context_url, "@graph": element_list}

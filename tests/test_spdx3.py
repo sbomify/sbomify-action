@@ -375,7 +375,13 @@ class TestPassthroughAndTypePrefixes(unittest.TestCase):
             e for e in data["@graph"] if e.get("type", "") == "CreationInfo" and (e.get("@id") or e.get("spdxId"))
         ]
         self.assertGreaterEqual(len(ci_elements), 1, "Standalone CreationInfo element lost in roundtrip")
+        # Blank-node IDs (starting with "_:") must stay as @id, not spdxId
+        self.assertIn("@id", ci_elements[0])
+        self.assertNotIn("spdxId", ci_elements[0])
         self.assertEqual(ci_elements[0]["@id"], "_:CreationInfo0")
+        # But @type must be normalized to type
+        self.assertIn("type", ci_elements[0])
+        self.assertNotIn("@type", ci_elements[0])
 
     def test_roundtrip_element_count(self):
         """Total element count must be preserved through parse→write roundtrip."""
