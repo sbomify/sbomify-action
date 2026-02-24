@@ -1,0 +1,118 @@
+{
+  "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+  "@graph": [
+    {
+      "type": "CreationInfo",
+      "@id": "_:CreationInfo0",
+      "created": "2024-01-01T00:00:00Z",
+      "createdBy": [
+        "urn:spdx.dev:agent-oe"
+      ],
+      "createdUsing": [
+        "urn:spdx.dev:tool-test"
+      ],
+      "specVersion": "3.0.1"
+    },
+    {
+      "type": "SpdxDocument",
+      "spdxId": "urn:spdx.dev:doc-multi",
+      "name": "multi-type-document",
+      "element": [
+        "urn:spdx.dev:pkg-test",
+        "urn:spdx.dev:file-test",
+        "urn:spdx.dev:tool-test"
+      ],
+      "rootElement": [
+        "urn:spdx.dev:pkg-test"
+      ],
+      "creationInfo": "_:CreationInfo0"
+    },
+    {
+      "type": "software_Package",
+      "spdxId": "urn:spdx.dev:pkg-test",
+      "name": "test-package",
+      "software_packageVersion": "1.0.0",
+      "software_packageUrl": "pkg:pypi/test-package@1.0.0",
+      "software_downloadLocation": "https://example.com/test-package-1.0.0.tar.gz",
+      "software_homePage": "https://example.com",
+      "software_primaryPurpose": "library",
+      "software_copyrightText": "Copyright 2024 Test",
+      "creationInfo": "_:CreationInfo0"
+    },
+    {
+      "type": "software_File",
+      "spdxId": "urn:spdx.dev:file-test",
+      "name": "/usr/lib/libtest.so",
+      "software_primaryPurpose": "source",
+      "creationInfo": "_:CreationInfo0"
+    },
+    {
+      "type": "Relationship",
+      "@id": "urn:spdx.dev:rel-describes",
+      "from": "urn:spdx.dev:doc-multi",
+      "to": ["urn:spdx.dev:pkg-test"],
+      "relationshipType": "describes",
+      "creationInfo": "_:CreationInfo0"
+    },
+    {
+      "type": "Tool",
+      "@id": "urn:spdx.dev:tool-test",
+      "name": "test-tool",
+      "creationInfo": "_:CreationInfo0"
+    },
+    {
+      "type": "security_Vulnerability",
+      "spdxId": "urn:spdx.dev:vuln-CVE-2024-0001",
+      "creationInfo": "_:CreationInfo0",
+      "externalIdentifier": [
+        {
+          "type": "ExternalIdentifier",
+          "externalIdentifierType": "cve",
+          "identifier": "CVE-2024-0001",
+          "identifierLocator": [
+            "https://www.cve.org/CVERecord?id=CVE-2024-0001"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "security_VexFixedVulnAssessmentRelationship",
+      "spdxId": "urn:spdx.dev:vex-fixed-001",
+      "creationInfo": "_:CreationInfo0",
+      "from": "urn:spdx.dev:vuln-CVE-2024-0001",
+      "relationshipType": "fixedIn",
+      "to": ["urn:spdx.dev:pkg-test"],
+      "security_vexVersion": "1.0.0"
+    },
+    {
+      "type": "build_Build",
+      "spdxId": "urn:spdx.dev:build-recipe",
+      "creationInfo": "_:CreationInfo0",
+      "name": "test-package:do_create_spdx:recipe",
+      "build_buildType": "http://openembedded.org/bitbake/do_create_spdx/recipe"
+    },
+    {
+      "type": "LifecycleScopedRelationship",
+      "spdxId": "urn:spdx.dev:lifecycle-rel-001",
+      "creationInfo": "_:CreationInfo0",
+      "from": "urn:spdx.dev:build-recipe",
+      "relationshipType": "hasInput",
+      "to": ["urn:spdx.dev:file-test"]
+    },
+    {
+      "type": "simplelicensing_LicenseExpression",
+      "spdxId": "urn:spdx.dev:license-expr-001",
+      "creationInfo": "_:CreationInfo0",
+      "simplelicensing_licenseExpression": "MIT AND Apache-2.0",
+      "simplelicensing_licenseListVersion": "3.14.0"
+    },
+    {
+      "type": "software_Sbom",
+      "spdxId": "urn:spdx.dev:sbom-root",
+      "creationInfo": "_:CreationInfo0",
+      "name": "test-sbom",
+      "rootElement": ["urn:spdx.dev:pkg-test"],
+      "software_sbomType": ["build"]
+    }
+  ]
+}
