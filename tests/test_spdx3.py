@@ -307,6 +307,273 @@ class TestAdditionalPackagesIntegration(unittest.TestCase):
             os.unlink(path)
 
 
+class TestPassthroughAndTypePrefixes(unittest.TestCase):
+    """Tests for passthrough element preservation and type prefix restoration."""
+
+    def test_passthrough_preserves_unknown_types(self):
+        """Parse multi-type fixture → write → re-read → verify all types present."""
+        payload = parse_spdx3_file(str(TEST_DATA_DIR / "spdx3_multi_type.json"))
+
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            write_spdx3_file(payload, path)
+            with open(path) as f:
+                data = json.load(f)
+        finally:
+            os.unlink(path)
+
+        types_in_output = {e.get("type", "") for e in data["@graph"]}
+
+        for expected_type in [
+            "security_Vulnerability",
+            "security_VexFixedVulnAssessmentRelationship",
+            "build_Build",
+            "LifecycleScopedRelationship",
+            "simplelicensing_LicenseExpression",
+            "software_Sbom",
+        ]:
+            self.assertIn(expected_type, types_in_output, f"Missing passthrough type: {expected_type}")
+
+    def test_type_prefix_restored_on_write(self):
+        """software_Package must not become Package in output."""
+        payload = parse_spdx3_file(str(TEST_DATA_DIR / "spdx3_multi_type.json"))
+
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            write_spdx3_file(payload, path)
+            with open(path) as f:
+                data = json.load(f)
+        finally:
+            os.unlink(path)
+
+        types_in_output = {e.get("type", "") for e in data["@graph"]}
+
+        # Prefixed types must be present
+        self.assertIn("software_Package", types_in_output)
+        self.assertIn("software_File", types_in_output)
+
+        # Unprefixed model names must NOT appear as types
+        self.assertNotIn("Package", types_in_output)
+        self.assertNotIn("File", types_in_output)
+
+    def test_creation_info_passthrough(self):
+        """Standalone CreationInfo elements with @id must survive roundtrip."""
+        payload = parse_spdx3_file(str(TEST_DATA_DIR / "spdx3_multi_type.json"))
+
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            write_spdx3_file(payload, path)
+            with open(path) as f:
+                data = json.load(f)
+        finally:
+            os.unlink(path)
+
+        ci_elements = [
+            e for e in data["@graph"] if e.get("type", "") == "CreationInfo" and (e.get("@id") or e.get("spdxId"))
+        ]
+        self.assertGreaterEqual(len(ci_elements), 1, "Standalone CreationInfo element lost in roundtrip")
+        # Blank-node IDs (starting with "_:") must stay as @id, not spdxId
+        self.assertIn("@id", ci_elements[0])
+        self.assertNotIn("spdxId", ci_elements[0])
+        self.assertEqual(ci_elements[0]["@id"], "_:CreationInfo0")
+        # But @type must be normalized to type
+        self.assertIn("type", ci_elements[0])
+        self.assertNotIn("@type", ci_elements[0])
+
+    def test_roundtrip_element_count(self):
+        """Total element count must be preserved through parse→write roundtrip."""
+        with open(TEST_DATA_DIR / "spdx3_multi_type.json") as f:
+            original = json.load(f)
+        original_count = len(original["@graph"])
+
+        payload = parse_spdx3_file(str(TEST_DATA_DIR / "spdx3_multi_type.json"))
+
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            write_spdx3_file(payload, path)
+            with open(path) as f:
+                roundtripped = json.load(f)
+        finally:
+            os.unlink(path)
+
+        self.assertEqual(len(roundtripped["@graph"]), original_count)
+
+    def test_existing_minimal_roundtrip(self):
+        """Regression: spdx3_minimal.json roundtrip must preserve element count."""
+        with open(TEST_DATA_DIR / "spdx3_minimal.json") as f:
+            original = json.load(f)
+        original_count = len(original["@graph"])
+
+        payload = parse_spdx3_file(str(TEST_DATA_DIR / "spdx3_minimal.json"))
+
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            write_spdx3_file(payload, path)
+            with open(path) as f:
+                roundtripped = json.load(f)
+        finally:
+            os.unlink(path)
+
+        self.assertEqual(len(roundtripped["@graph"]), original_count)
+
+
+class TestSoftwarePrefixedProperties(unittest.TestCase):
+    """Tests for software_-prefixed property name handling (C1/C2 audit fixes)."""
+
+    def test_parser_reads_software_prefixed_package_fields(self):
+        """Parser must read software_packageVersion, software_downloadLocation, etc."""
+        payload = parse_spdx3_file(str(TEST_DATA_DIR / "spdx3_multi_type.json"))
+        pkgs = get_spdx3_packages(payload)
+        self.assertEqual(len(pkgs), 1)
+        pkg = pkgs[0]
+        self.assertEqual(pkg.package_version, "1.0.0")
+        self.assertEqual(pkg.package_url, "pkg:pypi/test-package@1.0.0")
+        self.assertEqual(pkg.download_location, "https://example.com/test-package-1.0.0.tar.gz")
+        self.assertEqual(pkg.homepage, "https://example.com")
+        self.assertEqual(pkg.copyright_text, "Copyright 2024 Test")
+
+    def test_parser_reads_software_prefixed_purpose(self):
+        """Parser must read software_primaryPurpose from both Package and File."""
+        from spdx_tools.spdx3.model.software import SoftwarePurpose
+
+        payload = parse_spdx3_file(str(TEST_DATA_DIR / "spdx3_multi_type.json"))
+
+        pkgs = get_spdx3_packages(payload)
+        self.assertEqual(pkgs[0].primary_purpose, SoftwarePurpose.LIBRARY)
+
+        from spdx_tools.spdx3.model.software.file import File as SpdxFile
+
+        files = [e for e in payload.get_full_map().values() if isinstance(e, SpdxFile)]
+        self.assertEqual(files[0].primary_purpose, SoftwarePurpose.SOURCE)
+
+    def test_parser_reads_unprefixed_package_fields(self):
+        """Parser must still read unprefixed names (spdx_tools converter output)."""
+        data = {
+            "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+            "@graph": [
+                {
+                    "type": "software_Package",
+                    "@id": "urn:spdx.dev:pkg-1",
+                    "name": "foo",
+                    "packageVersion": "2.0",
+                    "downloadLocation": "https://example.com",
+                    "packageUrl": "pkg:pypi/foo@2.0",
+                    "homepage": "https://foo.dev",
+                    "sourceInfo": "source",
+                    "copyrightText": "Copyright",
+                    "primaryPurpose": "library",
+                }
+            ],
+        }
+        payload = parse_spdx3_data(data)
+        pkg = get_spdx3_packages(payload)[0]
+        self.assertEqual(pkg.package_version, "2.0")
+        self.assertEqual(pkg.download_location, "https://example.com")
+        self.assertEqual(pkg.package_url, "pkg:pypi/foo@2.0")
+        self.assertEqual(pkg.homepage, "https://foo.dev")
+        self.assertEqual(pkg.source_info, "source")
+        self.assertEqual(pkg.copyright_text, "Copyright")
+
+    def test_writer_emits_software_prefixed_properties(self):
+        """Writer must output software_packageVersion, not packageVersion."""
+        payload = parse_spdx3_file(str(TEST_DATA_DIR / "spdx3_multi_type.json"))
+
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            write_spdx3_file(payload, path)
+            with open(path) as f:
+                data = json.load(f)
+        finally:
+            os.unlink(path)
+
+        pkg_elems = [e for e in data["@graph"] if e.get("type", "") == "software_Package"]
+        self.assertEqual(len(pkg_elems), 1)
+        pkg = pkg_elems[0]
+
+        # Must use software_-prefixed property names
+        self.assertIn("software_packageVersion", pkg)
+        self.assertIn("software_downloadLocation", pkg)
+        self.assertIn("software_packageUrl", pkg)
+        self.assertIn("software_homePage", pkg)
+        self.assertIn("software_copyrightText", pkg)
+        self.assertIn("software_primaryPurpose", pkg)
+
+        # Must NOT have unprefixed property names
+        self.assertNotIn("packageVersion", pkg)
+        self.assertNotIn("downloadLocation", pkg)
+        self.assertNotIn("packageUrl", pkg)
+        self.assertNotIn("homepage", pkg)
+
+    def test_writer_normalizes_keys(self):
+        """Writer must use 'type'/'spdxId' instead of '@type'/'@id'."""
+        payload = parse_spdx3_file(str(TEST_DATA_DIR / "spdx3_minimal.json"))
+
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            write_spdx3_file(payload, path)
+            with open(path) as f:
+                data = json.load(f)
+        finally:
+            os.unlink(path)
+
+        for elem in data["@graph"]:
+            # Serialized elements should use 'type', not '@type'
+            self.assertIn("type", elem, f"Element missing 'type': {elem.get('spdxId', 'unknown')}")
+            self.assertNotIn("@type", elem)
+            # Elements with IDs should use 'spdxId', not '@id'
+            if "spdxId" in elem or "@id" in elem:
+                self.assertIn("spdxId", elem)
+                self.assertNotIn("@id", elem)
+
+    def test_writer_normalizes_nested_types(self):
+        """Writer must normalize @type→type in nested creationInfo and Hash dicts."""
+        payload = parse_spdx3_file(str(TEST_DATA_DIR / "spdx3_minimal.json"))
+
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            write_spdx3_file(payload, path)
+            with open(path) as f:
+                data = json.load(f)
+        finally:
+            os.unlink(path)
+
+        for elem in data["@graph"]:
+            ci = elem.get("creationInfo")
+            if isinstance(ci, dict):
+                self.assertIn("type", ci, "creationInfo missing 'type'")
+                self.assertNotIn("@type", ci)
+
+    def test_roundtrip_preserves_software_fields(self):
+        """Parse (software_-prefixed) → write → re-parse must preserve all fields."""
+        payload = parse_spdx3_file(str(TEST_DATA_DIR / "spdx3_multi_type.json"))
+
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        try:
+            write_spdx3_file(payload, path)
+            payload2 = parse_spdx3_file(path)
+        finally:
+            os.unlink(path)
+
+        pkg1 = get_spdx3_packages(payload)[0]
+        pkg2 = get_spdx3_packages(payload2)[0]
+
+        self.assertEqual(pkg1.package_version, pkg2.package_version)
+        self.assertEqual(pkg1.package_url, pkg2.package_url)
+        self.assertEqual(pkg1.download_location, pkg2.download_location)
+        self.assertEqual(pkg1.homepage, pkg2.homepage)
+        self.assertEqual(pkg1.copyright_text, pkg2.copyright_text)
+        self.assertEqual(pkg1.primary_purpose, pkg2.primary_purpose)
+
+
 class TestSerializationIntegration(unittest.TestCase):
     """Tests for SPDX 3 in serialization module."""
 
