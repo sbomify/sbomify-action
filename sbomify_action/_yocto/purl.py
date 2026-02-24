@@ -48,7 +48,7 @@ def inject_yocto_purls_spdx22(spdx_file: str) -> int:
     Returns:
         Number of PURLs injected.
     """
-    with open(spdx_file) as f:
+    with open(spdx_file, encoding="utf-8") as f:
         data = json.load(f)
 
     injected = 0
@@ -74,7 +74,7 @@ def inject_yocto_purls_spdx22(spdx_file: str) -> int:
         injected += 1
 
     if injected:
-        with open(spdx_file, "w") as f:
+        with open(spdx_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
         logger.debug(f"Injected {injected} yocto PURL(s) into {spdx_file}")
 
@@ -91,7 +91,7 @@ def inject_yocto_purls_spdx3(spdx3_file: str) -> int:
     Returns:
         Number of PURLs injected.
     """
-    with open(spdx3_file) as f:
+    with open(spdx3_file, encoding="utf-8") as f:
         data = json.load(f)
 
     injected = 0
@@ -116,7 +116,7 @@ def inject_yocto_purls_spdx3(spdx3_file: str) -> int:
         injected += 1
 
     if injected:
-        with open(spdx3_file, "w") as f:
+        with open(spdx3_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
         logger.debug(f"Injected {injected} yocto PURL(s) into {spdx3_file}")
 

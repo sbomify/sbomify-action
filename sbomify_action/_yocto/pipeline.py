@@ -213,11 +213,6 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
         result.packages_found = len(packages)
         console.print(f"  Processing {len(packages)} package SBOMs")
 
-        # Inject yocto PURLs for packages that lack them
-        total_purls = sum(inject_yocto_purls_spdx22(pkg.spdx_file) for pkg in packages)
-        if total_purls:
-            console.print(f"  Injected {total_purls} yocto PURL(s)")
-
         if config.dry_run:
             console.print("\n[bold yellow]DRY RUN[/bold yellow] - no API calls will be made")
             for pkg in packages:
@@ -225,6 +220,12 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
             result.sboms_skipped = len(packages)
             _print_summary(result)
             return result
+
+        # Inject yocto PURLs for packages that lack them (after dry-run check
+        # to avoid unnecessary file I/O during dry-run)
+        total_purls = sum(inject_yocto_purls_spdx22(pkg.spdx_file) for pkg in packages)
+        if total_purls:
+            console.print(f"  Injected {total_purls} yocto PURL(s)")
 
         # Step 3: Cache existing components
         console.print("[bold]Fetching existing components...[/bold]")
