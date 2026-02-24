@@ -134,17 +134,18 @@ def _run_spdx3_pipeline(config: YoctoConfig, data: dict) -> YoctoPipelineResult:
 
     result = YoctoPipelineResult(packages_found=pkg_count)
 
-    # Inject yocto PURLs for packages that lack them
-    purls_injected = inject_yocto_purls_spdx3(config.input_path)
-    if purls_injected:
-        console.print(f"  Injected {purls_injected} yocto PURL(s)")
-
     if config.dry_run:
         console.print("\n[bold yellow]DRY RUN[/bold yellow] - no API calls will be made")
         console.print(f"  Would upload to component {config.component_id}")
         result.sboms_skipped = 1
         _print_summary(result)
         return result
+
+    # Inject yocto PURLs for packages that lack them (after dry-run check
+    # to avoid mutating the user's input file during dry-run)
+    purls_injected = inject_yocto_purls_spdx3(config.input_path)
+    if purls_injected:
+        console.print(f"  Injected {purls_injected} yocto PURL(s)")
 
     try:
         sbom_id = _process_single_package(
