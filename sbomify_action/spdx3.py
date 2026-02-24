@@ -54,6 +54,20 @@ from spdx_tools.spdx3.writer.json_ld.json_ld_converter import (
 
 from .logging_config import logger
 
+
+class Spdx3Payload(Payload):
+    """Thin wrapper around :class:`Payload` that carries passthrough elements.
+
+    Elements whose ``type`` is not handled by the parser (e.g. security,
+    build, licensing types) are stored verbatim so the writer can
+    re-attach them to the output without data loss.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.passthrough_elements: list[dict] = []
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -472,14 +486,16 @@ def _parse_relationship(elem: dict, ci_map: dict[str, CreationInfo] | None = Non
     return Relationship(**fields)
 
 
-def _parse_agent(elem: dict, cls: type, ci_map: dict[str, CreationInfo] | None = None) -> Organization | Person | Tool:
-    """Parse an Organization, Person, or Tool element."""
+def _parse_agent(
+    elem: dict, cls: type, ci_map: dict[str, CreationInfo] | None = None
+) -> Organization | Person | SoftwareAgent | Tool:
+    """Parse an Organization, Person, SoftwareAgent, or Tool element."""
     fields = _parse_common_fields(elem, ci_map)
     return cls(**fields)
 
 
-def parse_spdx3_file(file_path: str) -> Payload:
-    """Parse an SPDX 3 JSON-LD file into a :class:`Payload`.
+def parse_spdx3_file(file_path: str) -> Spdx3Payload:
+    """Parse an SPDX 3 JSON-LD file into an :class:`Spdx3Payload`.
 
     Maps ``@graph`` elements by their ``type`` (``@type``) to the
     corresponding ``spdx_tools.spdx3.model`` classes.
@@ -488,7 +504,7 @@ def parse_spdx3_file(file_path: str) -> Payload:
         file_path: Path to the SPDX 3 JSON-LD ``.json`` file.
 
     Returns:
-        Populated :class:`Payload` with all parsed elements.
+        Populated :class:`Spdx3Payload` with all parsed elements.
 
     Raises:
         FileNotFoundError: If the file doesn't exist.
@@ -505,8 +521,8 @@ def parse_spdx3_file(file_path: str) -> Payload:
     return parse_spdx3_data(data)
 
 
-def parse_spdx3_data(data: dict) -> Payload:
-    """Parse SPDX 3 JSON-LD data (already loaded) into a :class:`Payload`.
+def parse_spdx3_data(data: dict) -> Spdx3Payload:
+    """Parse SPDX 3 JSON-LD data (already loaded) into an :class:`Spdx3Payload`.
 
     Handles both ``@graph``-based documents and top-level element documents
     (where the root object itself is the element, without ``@graph``).
@@ -530,8 +546,7 @@ def parse_spdx3_data(data: dict) -> Payload:
                 ci_map[ci_id] = _parse_creation_info(elem)
 
     # Second pass: parse all other elements
-    payload = Payload()
-    passthrough: list[dict] = []
+    payload = Spdx3Payload()
 
     for elem in graph:
         if not isinstance(elem, dict):
@@ -563,17 +578,14 @@ def parse_spdx3_data(data: dict) -> Payload:
                 # elements (those with @id) so passthrough elements referencing
                 # them by IRI string survive the roundtrip.
                 if elem.get("@id") or elem.get("spdxId"):
-                    passthrough.append(elem)
+                    payload.passthrough_elements.append(elem)
             else:
                 logger.debug(f"Passing through unhandled SPDX 3 element type: {elem_type}")
-                passthrough.append(elem)
+                payload.passthrough_elements.append(elem)
         except Exception as e:
             spdx_id = elem.get("@id") or elem.get("spdxId", "unknown")
             logger.warning(f"Failed to parse SPDX 3 element {spdx_id} (type={elem_type}): {e}")
-            passthrough.append(elem)
-
-    # Attach passthrough elements so the writer can re-emit them verbatim.
-    payload._passthrough_elements = passthrough  # type: ignore[attr-defined]
+            payload.passthrough_elements.append(elem)
 
     return payload
 
@@ -690,7 +702,7 @@ def write_spdx3_file(
     # Re-attach passthrough elements that were not parsed into model objects.
     # Normalize their keys for consistency, but preserve blank-node @id values
     # (e.g. "_:CreationInfo0") since spdxId must be an IRI per the spec.
-    passthrough = getattr(payload, "_passthrough_elements", [])
+    passthrough = payload.passthrough_elements if isinstance(payload, Spdx3Payload) else []
     if passthrough:
         for elem in passthrough:
             _normalize_passthrough_element(elem)
