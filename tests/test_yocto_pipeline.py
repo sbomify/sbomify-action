@@ -119,6 +119,29 @@ class TestProcessSinglePackage:
 
 
 class TestRunYoctoPipeline:
+    @patch("sbomify_action._yocto.pipeline.inject_yocto_purls_spdx22")
+    @patch("sbomify_action._yocto.pipeline.tag_sbom_with_release")
+    @patch("sbomify_action._yocto.pipeline.create_release")
+    @patch("sbomify_action._yocto.pipeline.upload_sbom")
+    @patch("sbomify_action._yocto.pipeline.list_components")
+    def test_purl_injection_called_in_spdx22_pipeline(
+        self, mock_list, mock_upload, mock_create_release, mock_tag, mock_inject, tmp_path
+    ):
+        archive = _make_tar_gz(tmp_path)
+        config = _make_config(archive)
+
+        mock_list.return_value = {}
+        mock_upload.return_value = UploadResult.success_result(destination_name="sbomify", sbom_id="sbom-001")
+        mock_create_release.return_value = "release-001"
+        mock_inject.return_value = 1  # simulate 1 PURL injected per file
+
+        with patch("sbomify_action._yocto.pipeline.get_or_create_component") as mock_goc:
+            mock_goc.return_value = ("comp-new", True)
+            result = run_yocto_pipeline(config)
+
+        # inject_yocto_purls_spdx22 should be called once per discovered package
+        assert mock_inject.call_count == result.packages_found
+
     @patch("sbomify_action._yocto.pipeline.tag_sbom_with_release")
     @patch("sbomify_action._yocto.pipeline.create_release")
     @patch("sbomify_action._yocto.pipeline.upload_sbom")
@@ -354,6 +377,25 @@ def _write_spdx3_file(tmp_path: Path) -> str:
 
 
 class TestSpdx3Pipeline:
+    @patch("sbomify_action._yocto.pipeline.inject_yocto_purls_spdx3")
+    @patch("sbomify_action._yocto.pipeline.tag_sbom_with_release")
+    @patch("sbomify_action._yocto.pipeline.create_release")
+    @patch("sbomify_action._yocto.pipeline.upload_sbom")
+    def test_purl_injection_called_in_spdx3_pipeline(
+        self, mock_upload, mock_create_release, mock_tag, mock_inject, tmp_path
+    ):
+        spdx3_file = _write_spdx3_file(tmp_path)
+        config = _make_config(spdx3_file, component_id="comp-abc")
+
+        mock_upload.return_value = UploadResult.success_result(destination_name="sbomify", sbom_id="sbom-s3")
+        mock_create_release.return_value = "release-s3"
+        mock_inject.return_value = 2  # simulate 2 PURLs injected
+
+        result = run_yocto_pipeline(config)
+
+        mock_inject.assert_called_once_with(spdx3_file)
+        assert result.sboms_uploaded == 1
+
     @patch("sbomify_action._yocto.pipeline.tag_sbom_with_release")
     @patch("sbomify_action._yocto.pipeline.create_release")
     @patch("sbomify_action._yocto.pipeline.upload_sbom")

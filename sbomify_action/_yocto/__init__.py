@@ -5,6 +5,7 @@ from .archive import extract_archive
 from .models import YoctoConfig, YoctoPackage, YoctoPipelineResult
 from .parser import discover_packages
 from .pipeline import run_yocto_pipeline
+from .purl import generate_yocto_purl, inject_yocto_purls_spdx3, inject_yocto_purls_spdx22
 
 __all__ = [
     "YoctoConfig",
@@ -12,6 +13,9 @@ __all__ = [
     "YoctoPipelineResult",
     "extract_archive",
     "discover_packages",
+    "generate_yocto_purl",
+    "inject_yocto_purls_spdx22",
+    "inject_yocto_purls_spdx3",
     "list_components",
     "get_or_create_component",
     "run_yocto_pipeline",

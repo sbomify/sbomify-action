@@ -18,6 +18,7 @@ from .api import get_or_create_component, list_components, patch_component_visib
 from .archive import extract_archive
 from .models import YoctoConfig, YoctoPipelineResult
 from .parser import discover_packages
+from .purl import inject_yocto_purls_spdx3, inject_yocto_purls_spdx22
 
 
 def _process_single_package(
@@ -140,6 +141,12 @@ def _run_spdx3_pipeline(config: YoctoConfig, data: dict) -> YoctoPipelineResult:
         _print_summary(result)
         return result
 
+    # Inject yocto PURLs for packages that lack them (after dry-run check
+    # to avoid mutating the user's input file during dry-run)
+    purls_injected = inject_yocto_purls_spdx3(config.input_path)
+    if purls_injected:
+        console.print(f"  Injected {purls_injected} yocto PURL(s)")
+
     try:
         sbom_id = _process_single_package(
             pkg_name="spdx3-image",
@@ -213,6 +220,12 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
             result.sboms_skipped = len(packages)
             _print_summary(result)
             return result
+
+        # Inject yocto PURLs for packages that lack them (after dry-run check
+        # to avoid unnecessary file I/O during dry-run)
+        total_purls = sum(inject_yocto_purls_spdx22(pkg.spdx_file) for pkg in packages)
+        if total_purls:
+            console.print(f"  Injected {total_purls} yocto PURL(s)")
 
         # Step 3: Cache existing components
         console.print("[bold]Fetching existing components...[/bold]")
