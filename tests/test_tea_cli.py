@@ -1,11 +1,13 @@
 """Tests for the TEA CLI subcommand group."""
 
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
 from sbomify_action.cli.main import cli
+from sbomify_action.cli.tea import _select_best_format
 
 
 class TestTeaGroup(unittest.TestCase):
@@ -196,3 +198,102 @@ class TestTeaFetch(unittest.TestCase):
                 ],
             )
             assert result.exit_code != 0
+
+    @patch("sbomify_action.cli.tea._build_client")
+    def test_fetch_by_component_release_uuid(self, mock_build_client):
+        """tea fetch --component-release-uuid should fetch without discovery."""
+        from libtea.models import (
+            Artifact,
+            ArtifactFormat,
+            ArtifactType,
+            Checksum,
+            ChecksumAlgorithm,
+            Collection,
+            CollectionBelongsTo,
+        )
+
+        mock_client = MagicMock()
+        mock_build_client.return_value.__enter__ = MagicMock(return_value=mock_client)
+        mock_build_client.return_value.__exit__ = MagicMock(return_value=False)
+
+        checksums = (Checksum(algorithm_type=ChecksumAlgorithm.SHA_256, algorithm_value="abc123"),)
+        mock_client.get_component_release_collection_latest.return_value = Collection(
+            uuid="col-uuid",
+            version=1,
+            date=None,
+            belongs_to=CollectionBelongsTo.COMPONENT_RELEASE,
+            update_reason=None,
+            artifacts=[
+                Artifact(
+                    uuid="art-uuid",
+                    name="sbom",
+                    type=ArtifactType.BOM,
+                    distribution_types=None,
+                    formats=[
+                        ArtifactFormat(
+                            media_type="application/vnd.cyclonedx+json",
+                            description=None,
+                            url="https://cdn.example.com/sbom.json",
+                            signature_url=None,
+                            checksums=checksums,
+                        )
+                    ],
+                )
+            ],
+        )
+        mock_client.download_artifact.return_value = Path("/tmp/sbom.json")
+
+        with self.runner.isolated_filesystem():
+            result = self.runner.invoke(
+                cli,
+                [
+                    "tea",
+                    "fetch",
+                    "--base-url",
+                    "https://tea.example.com/v1",
+                    "--component-release-uuid",
+                    "cr-uuid-1",
+                    "-o",
+                    "sbom.json",
+                ],
+            )
+            assert result.exit_code == 0, f"Failed with: {result.output}"
+            mock_client.discover.assert_not_called()
+            mock_client.get_component_release_collection_latest.assert_called_once_with("cr-uuid-1")
+            mock_client.download_artifact.assert_called_once()
+            # Verify checksums were passed through
+            call_kwargs = mock_client.download_artifact.call_args
+            assert call_kwargs.kwargs.get("verify_checksums") == checksums
+
+
+class TestSelectBestFormat(unittest.TestCase):
+    """Test the _select_best_format helper."""
+
+    def _make_fmt(self, media_type=None, url=None):
+        return MagicMock(media_type=media_type, url=url)
+
+    def test_prefers_cyclonedx(self):
+        spdx = self._make_fmt("application/spdx+json", "https://a.com/spdx.json")
+        cdx = self._make_fmt("application/vnd.cyclonedx+json", "https://a.com/cdx.json")
+        assert _select_best_format([spdx, cdx]) is cdx
+
+    def test_prefers_spdx_over_generic(self):
+        generic = self._make_fmt("application/json", "https://a.com/generic.json")
+        spdx = self._make_fmt("application/spdx+json", "https://a.com/spdx.json")
+        assert _select_best_format([generic, spdx]) is spdx
+
+    def test_falls_back_to_url(self):
+        unknown = self._make_fmt("application/xml", "https://a.com/sbom.xml")
+        assert _select_best_format([unknown]) is unknown
+
+    def test_skips_format_without_url(self):
+        no_url = self._make_fmt("application/xml", None)
+        with_url = self._make_fmt("text/plain", "https://a.com/file")
+        assert _select_best_format([no_url, with_url]) is with_url
+
+    def test_returns_none_for_empty(self):
+        assert _select_best_format([]) is None
+
+    def test_returns_none_when_no_url(self):
+        no_url = self._make_fmt("application/xml", None)
+        assert _select_best_format([no_url]) is None

@@ -8,6 +8,10 @@ import sys
 from pathlib import Path
 
 import click
+
+# _build_client and _error are private helpers in libtea's CLI module.
+# We own libtea and intentionally couple to these; they are stable.
+# _error() is typed NoReturn and raises SystemExit(1).
 from libtea.cli import _build_client, _error
 from libtea.cli import app as tea_group
 from libtea.exceptions import TeaError
@@ -15,11 +19,11 @@ from libtea.models import ArtifactType
 
 __all__ = ["tea_group"]
 
-_BOM_MEDIA_TYPES = [
+_BOM_MEDIA_TYPES = (
     "application/vnd.cyclonedx+json",
     "application/spdx+json",
     "application/json",
-]
+)
 
 
 def _select_best_format(formats, preferred_media_types=_BOM_MEDIA_TYPES):
