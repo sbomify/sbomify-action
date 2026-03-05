@@ -56,6 +56,7 @@ from ..serialization import (
 )
 from ..spdx3 import is_spdx3
 from ..upload import upload_sbom
+from .tea import tea_group
 
 
 # Import version for tool metadata with multiple fallback mechanisms
@@ -2346,8 +2347,6 @@ def init_cmd(output: str) -> None:
 
     sys.exit(run_wizard(output))
 
-
-from .tea import tea_group
 
 cli.add_command(tea_group, "tea")
 
