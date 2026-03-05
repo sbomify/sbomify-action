@@ -640,7 +640,7 @@ def initialize_sentry() -> None:
         logger.debug("Sentry telemetry disabled via TELEMETRY environment variable")
         return
 
-    sentry_dsn = os.getenv("SENTRY_DSN", "")
+    sentry_dsn = os.getenv("SENTRY_DSN", "https://84e8d6d0a7d0872a4bba8add571a554c@sentry.vikpire.com/4")
 
     def before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
         """
