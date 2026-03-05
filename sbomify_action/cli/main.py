@@ -312,6 +312,7 @@ class Config:
                 if not isinstance(product_releases_list, list):
                     raise ConfigurationError('PRODUCT_RELEASE must be a JSON list like ["product_id:v1.2.3"]')
 
+                validated_releases = []
                 for release in product_releases_list:
                     if not isinstance(release, str) or ":" not in release:
                         raise ConfigurationError(
@@ -319,18 +320,23 @@ class Config:
                         )
 
                     product_id, version = release.split(":", 1)
+                    product_id = product_id.strip()
+                    version = version.strip()
+
                     # Validate that product_id looks like a proper ID (not empty)
-                    if not product_id.strip():
+                    if not product_id:
                         raise ConfigurationError(
                             f"Invalid product_id in PRODUCT_RELEASE: '{release}'. Product ID cannot be empty."
                         )
-                    if not version.strip():
+                    if not version:
                         raise ConfigurationError(
                             f"Invalid version in PRODUCT_RELEASE: '{release}'. Version cannot be empty."
                         )
 
-                # Store the parsed list back for later use
-                self.product_releases = product_releases_list
+                    validated_releases.append(f"{product_id}:{version}")
+
+                # Store the parsed and cleaned list back for later use
+                self.product_releases = validated_releases
                 logger.info(f"Validated product releases: {self.product_releases}")
 
             except json.JSONDecodeError as e:
@@ -633,7 +639,7 @@ def initialize_sentry() -> None:
         logger.debug("Sentry telemetry disabled via TELEMETRY environment variable")
         return
 
-    sentry_dsn = os.getenv("SENTRY_DSN", "https://84e8d6d0a7d0872a4bba8add571a554c@sentry.vikpire.com/4")
+    sentry_dsn = os.getenv("SENTRY_DSN", "")
 
     def before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
         """
@@ -2339,6 +2345,11 @@ def init_cmd(output: str) -> None:
     from sbomify_action.cli.wizard import run_wizard
 
     sys.exit(run_wizard(output))
+
+
+from .tea import tea_group
+
+cli.add_command(tea_group, "tea")
 
 
 def main() -> None:
