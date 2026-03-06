@@ -9,7 +9,6 @@ from packageurl import PackageURL
 from sbomify_action._enrichment.sources.tea import (
     PURL_TYPE_TO_TEA_DOMAIN,
     TeaSource,
-    _build_tei,
     _purl_to_search_value,
     clear_cache,
 )
@@ -52,25 +51,6 @@ class TestTeaSourceSupports(unittest.TestCase):
             for purl_type in PURL_TYPE_TO_TEA_DOMAIN:
                 purl = PackageURL(type=purl_type, name="test", version="1.0")
                 assert source.supports(purl) is True, f"Should support {purl_type}"
-
-
-class TestBuildTei(unittest.TestCase):
-    """Test TEI URN construction from PURL."""
-
-    def test_pypi_tei(self):
-        purl = PackageURL.from_string("pkg:pypi/requests@2.31.0")
-        tei = _build_tei(purl, "pypi.sbomify.com")
-        assert tei == "urn:tei:purl:pypi.sbomify.com:pkg:pypi/requests@2.31.0"
-
-    def test_namespaced_purl_tei(self):
-        purl = PackageURL.from_string("pkg:deb/ubuntu/openssl@3.0.2")
-        tei = _build_tei(purl, "ubuntu.com")
-        assert tei == "urn:tei:purl:ubuntu.com:pkg:deb/ubuntu/openssl@3.0.2"
-
-    def test_purl_without_version(self):
-        purl = PackageURL.from_string("pkg:pypi/requests")
-        tei = _build_tei(purl, "pypi.sbomify.com")
-        assert tei == "urn:tei:purl:pypi.sbomify.com:pkg:pypi/requests"
 
 
 class TestPurlToSearchValue(unittest.TestCase):
@@ -206,6 +186,26 @@ class TestTeaSourceFetch(unittest.TestCase):
         mock_client_cls.assert_called_once_with("https://tea.example.com/v1", token=None, timeout=15)
         mock_client_cls.from_well_known.assert_not_called()
 
+    @patch.dict("os.environ", {"TEA_BASE_URL": "https://tea.example.com/v1", "TEA_TOKEN": "secret"})
+    @patch("sbomify_action._enrichment.sources.tea.TeaClient", autospec=True)
+    def test_fetch_base_url_with_token(self, mock_client_cls):
+        """TEA_BASE_URL + TEA_TOKEN are passed together."""
+        from libtea.models import PaginatedProductReleaseResponse
+
+        now = datetime.now(timezone.utc)
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_client.search_product_releases.return_value = PaginatedProductReleaseResponse(
+            timestamp=now,
+            page_start_index=0,
+            page_size=1,
+            total_results=0,
+            results=(),
+        )
+
+        self.source.fetch(self.purl, self.session)
+        mock_client_cls.assert_called_once_with("https://tea.example.com/v1", token="secret", timeout=15)
+
     @patch.dict("os.environ", {}, clear=True)
     @patch("sbomify_action._enrichment.sources.tea.TeaClient", autospec=True)
     def test_fetch_no_cle(self, mock_client_cls):
@@ -299,8 +299,36 @@ class TestTeaSourceFetch(unittest.TestCase):
         self.source.fetch(self.purl, self.session)
         self.source.fetch(self.purl, self.session)
 
-        # from_well_known should only be called once (second call uses cache)
+        # from_well_known should only be called once (client is cached)
         assert mock_client_cls.from_well_known.call_count == 1
+        # search should also only be called once (metadata result is cached)
+        assert mock_client.search_product_releases.call_count == 1
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("sbomify_action._enrichment.sources.tea.TeaClient", autospec=True)
+    def test_client_reused_across_purls(self, mock_client_cls):
+        """Same domain reuses the cached TeaClient for different PURLs."""
+        from libtea.models import PaginatedProductReleaseResponse
+
+        now = datetime.now(timezone.utc)
+        mock_client = MagicMock()
+        mock_client_cls.from_well_known.return_value = mock_client
+        mock_client.search_product_releases.return_value = PaginatedProductReleaseResponse(
+            timestamp=now,
+            page_start_index=0,
+            page_size=1,
+            total_results=0,
+            results=(),
+        )
+
+        purl1 = PackageURL.from_string("pkg:pypi/requests@2.31.0")
+        purl2 = PackageURL.from_string("pkg:pypi/flask@3.0.0")
+        self.source.fetch(purl1, self.session)
+        self.source.fetch(purl2, self.session)
+
+        # Client created once, but search called twice (different PURLs)
+        assert mock_client_cls.from_well_known.call_count == 1
+        assert mock_client.search_product_releases.call_count == 2
 
     @patch.dict("os.environ", {}, clear=True)
     def test_fetch_unmapped_type_returns_none(self):

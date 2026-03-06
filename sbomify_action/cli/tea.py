@@ -30,7 +30,7 @@ def _select_best_format(formats, preferred_media_types=_BOM_MEDIA_TYPES):
     """Select the best artifact format by media type preference."""
     for preferred in preferred_media_types:
         for fmt in formats:
-            if fmt.media_type and preferred in fmt.media_type:
+            if fmt.media_type and fmt.media_type == preferred:
                 return fmt
     for fmt in formats:
         if fmt.url:

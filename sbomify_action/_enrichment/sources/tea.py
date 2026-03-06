@@ -4,8 +4,8 @@ Queries TEA servers for product metadata and CLE (Common Lifecycle Enumeration)
 data using TEI auto-discovery from PURL type.
 
 Each PURL type maps to a known TEA domain (e.g. ``pypi`` → ``pypi.sbomify.com``).
-The source builds a TEI URN, discovers the TEA server via ``.well-known/tea``,
-and fetches CLE lifecycle data.
+The source discovers the TEA server via ``.well-known/tea`` and fetches CLE
+lifecycle data.
 
 ``TEA_BASE_URL`` env var overrides auto-discovery for all PURL types.
 
@@ -36,22 +36,36 @@ PURL_TYPE_TO_TEA_DOMAIN: dict[str, str] = {
 }
 
 _cache: dict[str, NormalizedMetadata | None] = {}
+_client_cache: dict[str, TeaClient] = {}
 
 DEFAULT_TIMEOUT = 15
 
 
 def clear_cache() -> None:
-    """Clear the module-level cache."""
+    """Clear the module-level caches."""
     _cache.clear()
+    _client_cache.clear()
 
 
-def _build_tei(purl: PackageURL, domain: str) -> str:
-    """Build a TEI URN from a PURL and domain.
+def _get_client(purl_type: str) -> TeaClient | None:
+    """Get or create a cached TeaClient for the given PURL type."""
+    token = os.getenv("TEA_TOKEN")
+    base_url_override = os.getenv("TEA_BASE_URL")
 
-    Format: ``urn:tei:purl:{domain}:{purl_string}``
-    """
-    purl_str = _purl_to_search_value(purl)
-    return f"urn:tei:purl:{domain}:{purl_str}"
+    if base_url_override:
+        cache_key = f"base_url:{base_url_override}"
+        if cache_key not in _client_cache:
+            _client_cache[cache_key] = TeaClient(base_url_override, token=token, timeout=DEFAULT_TIMEOUT)
+        return _client_cache[cache_key]
+
+    domain = PURL_TYPE_TO_TEA_DOMAIN.get(purl_type)
+    if not domain:
+        return None
+
+    cache_key = f"domain:{domain}"
+    if cache_key not in _client_cache:
+        _client_cache[cache_key] = TeaClient.from_well_known(domain, token=token, timeout=DEFAULT_TIMEOUT)
+    return _client_cache[cache_key]
 
 
 def _purl_to_search_value(purl: PackageURL) -> str:
@@ -99,22 +113,11 @@ class TeaSource:
             return None
 
     def _fetch_from_tea(self, purl: PackageURL, purl_str: str) -> NormalizedMetadata | None:
-        """Build TEI, discover server, and fetch metadata."""
-        token = os.getenv("TEA_TOKEN")
-        base_url_override = os.getenv("TEA_BASE_URL")
-
+        """Discover server and fetch metadata."""
         try:
-            if base_url_override:
-                # Direct override — skip discovery
-                client = TeaClient(base_url_override, token=token, timeout=DEFAULT_TIMEOUT)
-            else:
-                # Auto-discover from PURL type
-                domain = PURL_TYPE_TO_TEA_DOMAIN.get(purl.type)
-                if not domain:
-                    return None
-                tei = _build_tei(purl, domain)
-                logger.debug(f"TEI discovery: {tei}")
-                client = TeaClient.from_well_known(domain, token=token, timeout=DEFAULT_TIMEOUT)
+            client = _get_client(purl.type)
+            if not client:
+                return None
 
             # Search for product releases matching this PURL
             response = client.search_product_releases(id_type="PURL", id_value=purl_str, page_size=1)

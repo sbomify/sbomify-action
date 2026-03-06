@@ -58,7 +58,7 @@ def create_default_registry() -> SourceRegistry:
 
     Tier 2 - Primary Aggregators (40-49):
     - DepsDevSource (40) - Google Open Source Insights
-    - TeaSource (45) - TEA server (opt-in, requires TEA_BASE_URL or TEA_DOMAIN)
+    - TeaSource (45) - TEA server (auto-discovers from PURL type, TEA_BASE_URL overrides)
     - EcosystemsSource (45) - ecosyste.ms multi-ecosystem aggregator
 
     Tier 3 - Fallback Sources (70-99):
