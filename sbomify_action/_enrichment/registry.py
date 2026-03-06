@@ -90,8 +90,14 @@ class SourceRegistry:
         result: Optional[NormalizedMetadata] = None
 
         for source in sources:
-            # Stop early if we already have all core NTIA fields
-            if result and result.description and result.licenses and result.supplier:
+            # Stop early if we already have all core NTIA fields + CLE lifecycle data
+            if (
+                result
+                and result.description
+                and result.licenses
+                and result.supplier
+                and result.cle_release_date
+            ):
                 logger.debug(f"Skipping {source.name} - already have sufficient data for {purl.name}")
                 break
 
