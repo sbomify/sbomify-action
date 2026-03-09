@@ -38,7 +38,7 @@ PURL_TYPE_TO_TEA_DOMAIN: dict[str, str] = {
 }
 
 _cache: dict[str, NormalizedMetadata | None] = {}
-_client_cache: dict[str, TeaClient] = {}
+_client_cache: dict[str, TeaClient | None] = {}
 
 DEFAULT_TIMEOUT = 15
 
@@ -98,7 +98,11 @@ def _get_client(purl_type: str) -> TeaClient | None:
 
     cache_key = f"domain:{domain}:token:{hashlib.sha256((token or '').encode()).hexdigest()[:16]}"
     if cache_key not in _client_cache:
-        _client_cache[cache_key] = TeaClient.from_well_known(domain, token=token, timeout=DEFAULT_TIMEOUT)
+        try:
+            _client_cache[cache_key] = TeaClient.from_well_known(domain, token=token, timeout=DEFAULT_TIMEOUT)
+        except Exception as exc:
+            logger.warning(f"TEA well-known discovery failed for {domain}: {exc}")
+            _client_cache[cache_key] = None
     return _client_cache[cache_key]
 
 
