@@ -41,7 +41,7 @@ _cache: dict[str, NormalizedMetadata | None] = {}
 _client_cache: dict[str, TeaClient] = {}
 _discovery_failures: dict[str, int] = {}
 
-_MAX_DISCOVERY_RETRIES = 2
+_MAX_DISCOVERY_ATTEMPTS = 2
 
 DEFAULT_TIMEOUT = 15
 
@@ -102,7 +102,7 @@ def _get_client(purl_type: str) -> TeaClient | None:
 
     cache_key = f"domain:{domain}:token:{hashlib.sha256((token or '').encode()).hexdigest()[:16]}"
     if cache_key not in _client_cache:
-        if _discovery_failures.get(cache_key, 0) >= _MAX_DISCOVERY_RETRIES:
+        if _discovery_failures.get(cache_key, 0) >= _MAX_DISCOVERY_ATTEMPTS:
             return None
         try:
             _client_cache[cache_key] = TeaClient.from_well_known(domain, token=token, timeout=DEFAULT_TIMEOUT)
@@ -110,7 +110,7 @@ def _get_client(purl_type: str) -> TeaClient | None:
             _discovery_failures[cache_key] = _discovery_failures.get(cache_key, 0) + 1
             logger.warning(
                 f"TEA well-known discovery failed for {domain} "
-                f"(attempt {_discovery_failures[cache_key]}/{_MAX_DISCOVERY_RETRIES}): {exc}"
+                f"(attempt {_discovery_failures[cache_key]}/{_MAX_DISCOVERY_ATTEMPTS}): {exc}"
             )
             return None
     return _client_cache[cache_key]

@@ -95,7 +95,9 @@ class SourceRegistry:
                 if result.cle_release_date and result.cle_eos and result.cle_eol:
                     logger.debug(f"Skipping {source.name} - already have sufficient data for {purl.name}")
                     break
-                # NTIA complete but CLE missing — only continue with lifecycle-capable sources
+                # NTIA complete but CLE missing — only continue with lifecycle-capable sources.
+                # Sources opt in by declaring `provides_cle = True` (not in the Protocol;
+                # checked via getattr so non-CLE sources need no changes).
                 if not getattr(source, "provides_cle", False):
                     logger.debug(f"Skipping {source.name} - NTIA complete, not a CLE provider for {purl.name}")
                     continue
