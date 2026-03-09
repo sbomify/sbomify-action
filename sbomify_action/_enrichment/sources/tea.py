@@ -39,6 +39,9 @@ PURL_TYPE_TO_TEA_DOMAIN: dict[str, str] = {
 
 _cache: dict[str, NormalizedMetadata | None] = {}
 _client_cache: dict[str, TeaClient | None] = {}
+_discovery_failures: dict[str, int] = {}
+
+_MAX_DISCOVERY_RETRIES = 2
 
 DEFAULT_TIMEOUT = 15
 
@@ -76,6 +79,7 @@ def clear_cache() -> None:
                 pass
     _cache.clear()
     _client_cache.clear()
+    _discovery_failures.clear()
 
 
 def _get_client(purl_type: str) -> TeaClient | None:
@@ -98,11 +102,17 @@ def _get_client(purl_type: str) -> TeaClient | None:
 
     cache_key = f"domain:{domain}:token:{hashlib.sha256((token or '').encode()).hexdigest()[:16]}"
     if cache_key not in _client_cache:
+        if _discovery_failures.get(cache_key, 0) >= _MAX_DISCOVERY_RETRIES:
+            return None
         try:
             _client_cache[cache_key] = TeaClient.from_well_known(domain, token=token, timeout=DEFAULT_TIMEOUT)
         except Exception as exc:
-            logger.warning(f"TEA well-known discovery failed for {domain}: {exc}")
-            _client_cache[cache_key] = None
+            _discovery_failures[cache_key] = _discovery_failures.get(cache_key, 0) + 1
+            logger.warning(
+                f"TEA well-known discovery failed for {domain} "
+                f"(attempt {_discovery_failures[cache_key]}/{_MAX_DISCOVERY_RETRIES}): {exc}"
+            )
+            return None
     return _client_cache[cache_key]
 
 
@@ -133,8 +143,11 @@ class TeaSource:
         return True
 
     def supports(self, purl: PackageURL) -> bool:
-        """Supported when PURL type has a known TEA domain or TEA_BASE_URL is set."""
-        return purl.type in PURL_TYPE_TO_TEA_DOMAIN or bool(os.getenv("TEA_BASE_URL"))
+        """Supported when PURL type has a known TEA domain or a safe TEA_BASE_URL is set."""
+        if purl.type in PURL_TYPE_TO_TEA_DOMAIN:
+            return True
+        base_url = os.getenv("TEA_BASE_URL")
+        return bool(base_url) and _is_safe_url(base_url)
 
     def fetch(self, purl: PackageURL, session: requests.Session) -> NormalizedMetadata | None:
         """Discover TEA server from PURL type and fetch metadata."""
