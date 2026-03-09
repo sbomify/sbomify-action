@@ -350,7 +350,7 @@ class TestTeaSourceFetch(unittest.TestCase):
 
     @patch("sbomify_action._enrichment.sources.tea.TeaClient", autospec=True)
     def test_token_change_creates_new_client(self, mock_client_cls):
-        """Changing TEA_TOKEN should create a new client, not reuse the cached one."""
+        """Different TEA_TOKEN values produce different cache keys and separate clients."""
         now = datetime.now(timezone.utc)
         mock_client1 = MagicMock()
         mock_client2 = MagicMock()
@@ -361,7 +361,6 @@ class TestTeaSourceFetch(unittest.TestCase):
 
         with patch.dict("os.environ", {"TEA_TOKEN": "token-1"}, clear=True):
             self.source.fetch(self.purl, self.session)
-        clear_cache()
 
         with patch.dict("os.environ", {"TEA_TOKEN": "token-2"}, clear=True):
             self.source.fetch(self.purl, self.session)
