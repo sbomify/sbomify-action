@@ -244,6 +244,34 @@ class TestTeaFetch(unittest.TestCase):
             assert call_kwargs.kwargs.get("verify_checksums") == checksums
 
     @patch("sbomify_action.cli.tea._build_client")
+    def test_fetch_by_product_release_uuid(self, mock_build_client):
+        """tea fetch --product-release-uuid should fetch without discovery."""
+        mock_client = _mock_client_context(mock_build_client)
+        mock_client.get_product_release_collection_latest.return_value = _make_collection(
+            CollectionBelongsTo.PRODUCT_RELEASE, [_make_bom_artifact()]
+        )
+        mock_client.download_artifact.return_value = Path("/tmp/sbom.json")
+
+        with self.runner.isolated_filesystem():
+            result = self.runner.invoke(
+                cli,
+                [
+                    "tea",
+                    "fetch",
+                    "--base-url",
+                    "https://tea.example.com/v1",
+                    "--product-release-uuid",
+                    "pr-uuid-1",
+                    "-o",
+                    "sbom.json",
+                ],
+            )
+            assert result.exit_code == 0, f"Failed with: {result.output}"
+            mock_client.discover.assert_not_called()
+            mock_client.get_product_release_collection_latest.assert_called_once_with("pr-uuid-1")
+            mock_client.download_artifact.assert_called_once()
+
+    @patch("sbomify_action.cli.tea._build_client")
     def test_fetch_tea_error(self, mock_build_client):
         """tea fetch should handle TeaError gracefully."""
         mock_client = _mock_client_context(mock_build_client)
