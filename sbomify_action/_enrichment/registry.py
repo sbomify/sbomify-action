@@ -1,6 +1,6 @@
 """Source registry for managing data source plugins."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 from packageurl import PackageURL
@@ -38,7 +38,7 @@ class SourceRegistry:
 
     def __init__(self) -> None:
         """Initialize an empty registry."""
-        self._sources: List[DataSource] = []
+        self._sources: list[DataSource] = []
 
     def register(self, source: DataSource) -> None:
         """
@@ -52,7 +52,7 @@ class SourceRegistry:
         self._sources.append(source)
         logger.debug(f"Registered data source: {source.name} (priority={source.priority})")
 
-    def get_sources_for(self, purl: PackageURL) -> List[DataSource]:
+    def get_sources_for(self, purl: PackageURL) -> list[DataSource]:
         """
         Get all applicable sources for a PURL, sorted by priority.
 
@@ -71,7 +71,7 @@ class SourceRegistry:
         purl: PackageURL,
         session: requests.Session,
         merge_results: bool = True,
-    ) -> Optional[NormalizedMetadata]:
+    ) -> NormalizedMetadata | None:
         """
         Fetch metadata using the priority chain of sources.
 
@@ -92,7 +92,7 @@ class SourceRegistry:
             logger.debug(f"No sources available for PURL type: {purl.type}")
             return None
 
-        result: Optional[NormalizedMetadata] = None
+        result: NormalizedMetadata | None = None
 
         for source in sources:
             # Stop early if we already have all core NTIA fields
@@ -124,7 +124,7 @@ class SourceRegistry:
 
         return result
 
-    def list_sources(self) -> List[Dict[str, Any]]:
+    def list_sources(self) -> list[dict[str, Any]]:
         """
         List all registered sources with their priorities.
 

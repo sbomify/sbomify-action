@@ -199,7 +199,7 @@ class TestTeaSourceFetch(unittest.TestCase):
 
         assert metadata is not None
         assert metadata.source == "tea"
-        assert metadata.supplier == "requests"
+        assert metadata.supplier is None
         assert metadata.licenses == ["Apache-2.0"]
         assert metadata.cle_release_date == now.isoformat()
         assert metadata.cle_eos == "2025-12-31T00:00:00+00:00"
@@ -267,7 +267,7 @@ class TestTeaSourceFetch(unittest.TestCase):
         metadata = self.source.fetch(self.purl, self.session)
 
         assert metadata is not None
-        assert metadata.supplier == "requests"
+        assert metadata.supplier is None
         assert metadata.cle_release_date is not None
         assert metadata.cle_eos is None
         assert metadata.cle_eol is None
