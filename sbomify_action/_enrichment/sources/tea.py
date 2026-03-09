@@ -60,7 +60,7 @@ def _is_safe_url(url: str) -> bool:
             if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified:
                 return False
         except ValueError:
-            pass  # Not an IP literal — hostname is fine
+            pass  # Not an IP literal; DNS-based SSRF (e.g. nip.io) is not checked here
         return True
     except Exception:
         return False
