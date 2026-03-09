@@ -336,7 +336,7 @@ class TestTeaSourceFetch(unittest.TestCase):
         metadata = self.source.fetch(purl, self.session)
         assert metadata is None
 
-    @patch.dict("os.environ", {"TEA_TOKEN": "secret-token"})
+    @patch.dict("os.environ", {"TEA_TOKEN": "secret-token"}, clear=True)
     @patch("sbomify_action._enrichment.sources.tea.TeaClient", autospec=True)
     def test_fetch_passes_token(self, mock_client_cls):
         """TEA_TOKEN env var is passed to client."""
