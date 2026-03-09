@@ -38,7 +38,7 @@ PURL_TYPE_TO_TEA_DOMAIN: dict[str, str] = {
 }
 
 _cache: dict[str, NormalizedMetadata | None] = {}
-_client_cache: dict[str, TeaClient | None] = {}
+_client_cache: dict[str, TeaClient] = {}
 _discovery_failures: dict[str, int] = {}
 
 _MAX_DISCOVERY_RETRIES = 2
