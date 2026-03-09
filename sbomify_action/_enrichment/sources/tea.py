@@ -14,7 +14,7 @@ Provides:
 - License information from CLE ``released`` events
 - Product name as supplier context
 
-Priority 45 (Tier 2 aggregator).
+Priority 43 (Tier 2 aggregator).
 """
 
 import ipaddress
