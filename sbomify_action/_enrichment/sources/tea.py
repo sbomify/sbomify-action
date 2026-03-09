@@ -12,11 +12,11 @@ lifecycle data.
 Provides:
 - Release date, end-of-support, end-of-life from CLE events
 - License information from CLE ``released`` events
-- Product name as supplier context
 
 Priority 43 (Tier 2 aggregator).
 """
 
+import hashlib
 import ipaddress
 import os
 from urllib.parse import urlparse
@@ -87,7 +87,7 @@ def _get_client(purl_type: str) -> TeaClient | None:
         if not _is_safe_url(base_url_override):
             logger.warning(f"TEA_BASE_URL rejected (private/internal address): {base_url_override}")
             return None
-        cache_key = f"base_url:{base_url_override}:token:{token or ''}"
+        cache_key = f"base_url:{base_url_override}:token:{hashlib.sha256((token or '').encode()).hexdigest()[:16]}"
         if cache_key not in _client_cache:
             _client_cache[cache_key] = TeaClient(base_url_override, token=token, timeout=DEFAULT_TIMEOUT)
         return _client_cache[cache_key]
@@ -96,7 +96,7 @@ def _get_client(purl_type: str) -> TeaClient | None:
     if not domain:
         return None
 
-    cache_key = f"domain:{domain}:token:{token or ''}"
+    cache_key = f"domain:{domain}:token:{hashlib.sha256((token or '').encode()).hexdigest()[:16]}"
     if cache_key not in _client_cache:
         _client_cache[cache_key] = TeaClient.from_well_known(domain, token=token, timeout=DEFAULT_TIMEOUT)
     return _client_cache[cache_key]
@@ -148,74 +148,60 @@ class TeaSource:
 
     def _fetch_from_tea(self, purl: PackageURL, purl_str: str) -> NormalizedMetadata | None:
         """Discover server and fetch metadata."""
+        client = _get_client(purl.type)
+        if not client:
+            return None
+
+        # Search for product releases matching this PURL
+        response = client.search_product_releases(id_type="PURL", id_value=purl_str, page_size=1)
+        if not response.results:
+            logger.debug(f"No TEA product releases found for: {purl_str}")
+            return None
+
+        release = response.results[0]
+        logger.debug(f"Found TEA product release: {release.product_name} {release.version} ({release.uuid})")
+
+        field_sources: dict[str, str] = {}
+
+        # Extract release date
+        cle_release_date: str | None = None
+        if release.release_date:
+            cle_release_date = release.release_date.isoformat()
+            field_sources["cle_release_date"] = self.name
+
+        # Fetch CLE lifecycle data
+        cle_eos: str | None = None
+        cle_eol: str | None = None
+        license_expr: str | None = None
         try:
-            client = _get_client(purl.type)
-            if not client:
-                return None
-
-            # Search for product releases matching this PURL
-            response = client.search_product_releases(id_type="PURL", id_value=purl_str, page_size=1)
-            if not response.results:
-                logger.debug(f"No TEA product releases found for: {purl_str}")
-                return None
-
-            release = response.results[0]
-            logger.debug(f"Found TEA product release: {release.product_name} {release.version} ({release.uuid})")
-
-            field_sources: dict[str, str] = {}
-
-            # Extract release date
-            cle_release_date: str | None = None
-            if release.release_date:
-                cle_release_date = release.release_date.isoformat()
-                field_sources["cle_release_date"] = self.name
-
-            # Extract product name as supplier
-            supplier: str | None = release.product_name
-            if supplier:
-                field_sources["supplier"] = self.name
-
-            # Fetch CLE lifecycle data
-            cle_eos: str | None = None
-            cle_eol: str | None = None
-            license_expr: str | None = None
-            try:
-                cle = client.get_product_release_cle(release.uuid)
-                for event in cle.events:
-                    if event.type == CLEEventType.END_OF_SUPPORT and not cle_eos:
-                        cle_eos = event.effective.isoformat()
-                        field_sources["cle_eos"] = self.name
-                    elif event.type == CLEEventType.END_OF_LIFE and not cle_eol:
-                        cle_eol = event.effective.isoformat()
-                        field_sources["cle_eol"] = self.name
-                    elif event.type == CLEEventType.RELEASED and event.license and not license_expr:
-                        license_expr = event.license
-                        field_sources["licenses"] = self.name
-            except TeaNotFoundError:
-                logger.debug(f"No CLE data for release {release.uuid}")
-            except TeaError as exc:
-                logger.debug(f"CLE lookup failed for {release.uuid}: {exc}")
-
-            licenses = [license_expr] if license_expr else []
-
-            metadata = NormalizedMetadata(
-                supplier=supplier,
-                licenses=licenses,
-                cle_release_date=cle_release_date,
-                cle_eos=cle_eos,
-                cle_eol=cle_eol,
-                source=self.name,
-                field_sources=field_sources,
-            )
-
-            if metadata.has_data():
-                logger.debug(f"Successfully enriched from TEA: {purl_str}")
-                return metadata
-            return None
-
+            cle = client.get_product_release_cle(release.uuid)
+            for event in cle.events:
+                if event.type == CLEEventType.END_OF_SUPPORT and not cle_eos:
+                    cle_eos = event.effective.isoformat()
+                    field_sources["cle_eos"] = self.name
+                elif event.type == CLEEventType.END_OF_LIFE and not cle_eol:
+                    cle_eol = event.effective.isoformat()
+                    field_sources["cle_eol"] = self.name
+                elif event.type == CLEEventType.RELEASED and event.license and not license_expr:
+                    license_expr = event.license
+                    field_sources["licenses"] = self.name
         except TeaNotFoundError:
-            logger.debug(f"PURL not found on TEA server: {purl_str}")
-            return None
+            logger.debug(f"No CLE data for release {release.uuid}")
         except TeaError as exc:
-            logger.warning(f"TEA server error for {purl_str}: {exc}")
-            return None
+            logger.debug(f"CLE lookup failed for {release.uuid}: {exc}")
+
+        licenses = [license_expr] if license_expr else []
+
+        metadata = NormalizedMetadata(
+            licenses=licenses,
+            cle_release_date=cle_release_date,
+            cle_eos=cle_eos,
+            cle_eol=cle_eol,
+            source=self.name,
+            field_sources=field_sources,
+        )
+
+        if metadata.has_data():
+            logger.debug(f"Successfully enriched from TEA: {purl_str}")
+            return metadata
+        return None
