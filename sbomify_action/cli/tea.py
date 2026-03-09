@@ -144,7 +144,7 @@ def fetch(
                 _error(f"Artifact '{artifact.name}' has no downloadable formats")
 
             fmt = _select_best_format(artifact.formats)
-            if not fmt or not fmt.url:
+            if not fmt:
                 _error(f"No downloadable format found for artifact '{artifact.name}'")
 
             print(f"Downloading {artifact.name} ({fmt.media_type}) ...", file=sys.stderr)
