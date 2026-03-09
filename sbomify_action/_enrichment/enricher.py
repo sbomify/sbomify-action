@@ -31,6 +31,7 @@ from .sources import (
     PURLSource,
     PyPISource,
     RepologySource,
+    TeaSource,
 )
 
 
@@ -56,6 +57,7 @@ def create_default_registry() -> SourceRegistry:
 
     Tier 2 - Primary Aggregators (40-49):
     - DepsDevSource (40) - Google Open Source Insights
+    - TeaSource (43) - TEA server (auto-discovers from PURL type, TEA_BASE_URL overrides)
     - EcosystemsSource (45) - ecosyste.ms multi-ecosystem aggregator
 
     Tier 3 - Fallback Sources (70-99):
@@ -79,6 +81,7 @@ def create_default_registry() -> SourceRegistry:
     registry.register(ConanSource())
     registry.register(DebianSource())
     registry.register(DepsDevSource())
+    registry.register(TeaSource())
     registry.register(EcosystemsSource())
     registry.register(PURLSource())
     registry.register(ClearlyDefinedSource())
@@ -264,6 +267,7 @@ def clear_all_caches() -> None:
     from .sources.pubdev import clear_cache as clear_pubdev
     from .sources.pypi import clear_cache as clear_pypi
     from .sources.repology import clear_cache as clear_repology
+    from .sources.tea import clear_cache as clear_tea
 
     clear_license_db()
     clear_lifecycle()
@@ -273,6 +277,7 @@ def clear_all_caches() -> None:
     clear_conan()
     clear_debian()
     clear_depsdev()
+    clear_tea()
     clear_ecosystems()
     clear_clearlydefined()
     clear_repology()
