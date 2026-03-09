@@ -61,7 +61,7 @@ def _select_best_format(
     default=None,
     help="Bearer token (prefer TEA_TOKEN env var to avoid shell history exposure)",
 )
-@click.option("--auth", envvar="TEA_AUTH", default=None, help="Basic auth as USER:PASSWORD")
+@click.option("--auth", envvar="TEA_AUTH", default=None, help="Basic auth as USER:PASSWORD (prefer TEA_AUTH env var to avoid shell history exposure)")
 @click.option("--timeout", type=click.FloatRange(min=0.1), default=30.0, help="Request timeout")
 @click.option("--use-http", is_flag=True, help="Use HTTP instead of HTTPS")
 @click.option("--port", type=int, default=None, help="Port for well-known resolution")

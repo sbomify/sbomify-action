@@ -62,9 +62,12 @@ class DataSource(Protocol):
         """
         Whether this source can provide CLE (Common Lifecycle Enumeration) data.
 
-        Defaults to False. Sources that supply cle_release_date, cle_eos,
-        or cle_eol should return True so the registry's early-exit logic
-        keeps querying them even after NTIA fields are satisfied.
+        Sources that supply cle_release_date, cle_eos, or cle_eol should
+        return True so the registry's early-exit logic keeps querying them
+        even after NTIA fields are satisfied.
+
+        Sources that do not implement this property are treated as False
+        by the registry via ``getattr(source, "provides_cle", False)``.
         """
         ...
 
