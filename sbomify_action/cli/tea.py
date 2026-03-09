@@ -118,6 +118,7 @@ def fetch(
                 pr_uuid = discoveries[0].product_release_uuid
                 print(f"Discovered product release: {pr_uuid}", file=sys.stderr)
 
+            collection = None
             if pr_uuid:
                 collection = client.get_product_release_collection_latest(pr_uuid)
             elif cr_uuid:
@@ -125,6 +126,7 @@ def fetch(
             else:
                 _error("Internal error: no UUID resolved")
 
+            assert collection is not None  # unreachable: _error() is NoReturn
             matching = [a for a in collection.artifacts if a.type == target_type]
             if not matching:
                 available = {a.type.value for a in collection.artifacts if a.type}
