@@ -147,7 +147,7 @@ def fetch(
             if not fmt:
                 _error(f"No downloadable format found for artifact '{artifact.name}'")
 
-            print(f"Downloading {artifact.name} ({fmt.media_type}) ...", file=sys.stderr)
+            print(f"Downloading {artifact.name} ({fmt.media_type or 'unknown'}) ...", file=sys.stderr)
 
             result_path = client.download_artifact(fmt.url, dest, verify_checksums=fmt.checksums)
             print(f"Saved to {result_path}", file=sys.stderr)
