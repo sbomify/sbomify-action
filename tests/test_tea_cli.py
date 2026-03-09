@@ -320,6 +320,12 @@ class TestSelectBestFormat(unittest.TestCase):
     def test_returns_none_for_empty(self):
         assert _select_best_format([]) is None
 
+    def test_skips_preferred_format_without_url(self):
+        """Preferred media type without URL should fall back to secondary format with URL."""
+        cdx_no_url = self._make_fmt("application/vnd.cyclonedx+json", None)
+        spdx_with_url = self._make_fmt("application/spdx+json", "https://a.com/spdx.json")
+        assert _select_best_format([cdx_no_url, spdx_with_url]) is spdx_with_url
+
     def test_returns_none_when_no_url(self):
         no_url = self._make_fmt("application/xml", None)
         assert _select_best_format([no_url]) is None
