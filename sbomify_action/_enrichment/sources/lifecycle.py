@@ -63,6 +63,10 @@ class LifecycleSource:
         return "sbomify-lifecycle-db"
 
     @property
+    def provides_cle(self) -> bool:
+        return True
+
+    @property
     def priority(self) -> int:
         # Priority 5: Very high - local data with no API calls
         return 5

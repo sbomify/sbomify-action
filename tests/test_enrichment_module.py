@@ -727,12 +727,14 @@ class TestSourceRegistry:
         non_cle_source = Mock()
         non_cle_source.name = "deps.dev"
         non_cle_source.priority = 40
+        non_cle_source.provides_cle = False
         non_cle_source.supports.return_value = True
 
         # Source 3: CLE provider (priority 43) — should still run
         cle_source = Mock()
         cle_source.name = "tea"
         cle_source.priority = 43
+        cle_source.provides_cle = True
         cle_source.supports.return_value = True
         cle_source.fetch.return_value = NormalizedMetadata(
             cle_release_date="2024-01-01", cle_eos="2025-12-31", cle_eol="2026-06-30", source="tea"

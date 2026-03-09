@@ -57,6 +57,17 @@ class DataSource(Protocol):
         """
         ...
 
+    @property
+    def provides_cle(self) -> bool:
+        """
+        Whether this source can provide CLE (Common Lifecycle Enumeration) data.
+
+        Defaults to False. Sources that supply cle_release_date, cle_eos,
+        or cle_eol should return True so the registry's early-exit logic
+        keeps querying them even after NTIA fields are satisfied.
+        """
+        ...
+
     def supports(self, purl: PackageURL) -> bool:
         """
         Check if this source can handle the given PURL type.

@@ -140,7 +140,7 @@ class TestTeaFetch(unittest.TestCase):
             ],
         )
         assert result.exit_code != 0
-        assert "Only one" in result.output or result.exit_code == 1
+        assert "Only one" in result.output
 
     @patch("sbomify_action.cli.tea._build_client")
     def test_fetch_by_tei(self, mock_build_client):

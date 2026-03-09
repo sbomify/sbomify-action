@@ -124,6 +124,10 @@ class TeaSource:
     def priority(self) -> int:
         return 43
 
+    @property
+    def provides_cle(self) -> bool:
+        return True
+
     def supports(self, purl: PackageURL) -> bool:
         """Supported when PURL type has a known TEA domain or TEA_BASE_URL is set."""
         return purl.type in PURL_TYPE_TO_TEA_DOMAIN or bool(os.getenv("TEA_BASE_URL"))
