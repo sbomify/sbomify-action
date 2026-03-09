@@ -10,6 +10,11 @@ from sbomify_action.logging_config import logger
 from .metadata import NormalizedMetadata
 from .protocol import DataSource
 
+# Sources known to provide CLE (Common Lifecycle Enumeration) data.
+# Used by the early exit logic to avoid skipping lifecycle-capable sources
+# when NTIA fields are already satisfied but CLE data is still missing.
+_CLE_PROVIDERS = frozenset({"tea", "sbomify-lifecycle-db"})
+
 
 class SourceRegistry:
     """
@@ -90,10 +95,15 @@ class SourceRegistry:
         result: Optional[NormalizedMetadata] = None
 
         for source in sources:
-            # Stop early if we already have all core NTIA fields + CLE lifecycle data
-            if result and result.description and result.licenses and result.supplier and result.cle_release_date:
-                logger.debug(f"Skipping {source.name} - already have sufficient data for {purl.name}")
-                break
+            # Stop early if we already have all core NTIA fields
+            if result and result.description and result.licenses and result.supplier:
+                if result.cle_release_date:
+                    logger.debug(f"Skipping {source.name} - already have sufficient data for {purl.name}")
+                    break
+                # NTIA complete but CLE missing — only continue with lifecycle-capable sources
+                if source.name not in _CLE_PROVIDERS:
+                    logger.debug(f"Skipping {source.name} - NTIA complete, not a CLE provider for {purl.name}")
+                    continue
 
             try:
                 metadata = source.fetch(purl, session)

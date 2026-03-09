@@ -1650,7 +1650,7 @@ requires-dist = [
     { name = "conan", specifier = ">=2.0,<3" },
     { name = "cyclonedx-bom", specifier = ">=7.2.1,<8" },
     { name = "cyclonedx-python-lib", specifier = ">=11.5.0,<12" },
-    { name = "libtea", specifier = ">=0.4.0" },
+    { name = "libtea", specifier = ">=0.4.0,<1" },
     { name = "packageurl-python", specifier = ">=0.17.6" },
     { name = "pipdeptree", specifier = ">=2.0.0" },
     { name = "questionary", specifier = ">=2.0.1,<3" },

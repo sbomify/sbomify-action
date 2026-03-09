@@ -5,9 +5,60 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
+from libtea.exceptions import TeaError
+from libtea.models import (
+    Artifact,
+    ArtifactFormat,
+    ArtifactType,
+    Checksum,
+    ChecksumAlgorithm,
+    Collection,
+    CollectionBelongsTo,
+    DiscoveryInfo,
+    TeaServerInfo,
+)
 
 from sbomify_action.cli.main import cli
 from sbomify_action.cli.tea import _select_best_format
+
+
+def _mock_client_context(mock_build_client):
+    """Set up mock_build_client as a context manager returning a MagicMock client."""
+    mock_client = MagicMock()
+    mock_build_client.return_value.__enter__ = MagicMock(return_value=mock_client)
+    mock_build_client.return_value.__exit__ = MagicMock(return_value=False)
+    return mock_client
+
+
+def _make_collection(belongs_to, artifacts):
+    """Create a Collection with defaults filled in."""
+    return Collection(
+        uuid="col-uuid",
+        version=1,
+        date=None,
+        belongs_to=belongs_to,
+        update_reason=None,
+        artifacts=artifacts,
+    )
+
+
+def _make_bom_artifact(media_type="application/vnd.cyclonedx+json", url="https://cdn.example.com/sbom.json", **kwargs):
+    """Create a BOM Artifact with a single format."""
+    return Artifact(
+        uuid="art-uuid",
+        name="sbom",
+        type=ArtifactType.BOM,
+        distribution_types=None,
+        formats=[ArtifactFormat(media_type=media_type, description=None, url=url, signature_url=None, **kwargs)],
+    )
+
+
+def _make_discovery(pr_uuid="pr-uuid-1"):
+    """Create a DiscoveryInfo."""
+    return DiscoveryInfo(
+        product_release_uuid=pr_uuid,
+        servers=[TeaServerInfo(root_url="https://tea.example.com/v1", versions=["0.3.0-beta.2"], priority=1.0)],
+    )
 
 
 class TestTeaGroup(unittest.TestCase):
@@ -63,58 +114,41 @@ class TestTeaFetch(unittest.TestCase):
         assert "fetch" in result.output.lower() or "SBOM" in result.output
 
     def test_fetch_requires_identifier(self):
-        """tea fetch should fail if no --tei or --product-release-uuid given."""
+        """tea fetch should fail with clear error if no identifier given."""
         result = self.runner.invoke(
             cli,
             ["tea", "fetch", "--base-url", "https://tea.example.com/v1", "-o", "sbom.json"],
         )
         assert result.exit_code != 0
+        assert "--tei" in result.output or "Must specify" in result.output
+
+    def test_fetch_rejects_multiple_identifiers(self):
+        """tea fetch should reject multiple identifiers."""
+        result = self.runner.invoke(
+            cli,
+            [
+                "tea",
+                "fetch",
+                "--base-url",
+                "https://tea.example.com/v1",
+                "--tei",
+                "urn:tei:test",
+                "--product-release-uuid",
+                "some-uuid",
+                "-o",
+                "sbom.json",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Only one" in result.output or result.exit_code == 1
 
     @patch("sbomify_action.cli.tea._build_client")
     def test_fetch_by_tei(self, mock_build_client):
         """tea fetch --tei should discover, find BOM, and download."""
-        from libtea.models import (
-            Artifact,
-            ArtifactFormat,
-            ArtifactType,
-            Collection,
-            CollectionBelongsTo,
-            DiscoveryInfo,
-            TeaServerInfo,
-        )
-
-        mock_client = MagicMock()
-        mock_build_client.return_value.__enter__ = MagicMock(return_value=mock_client)
-        mock_build_client.return_value.__exit__ = MagicMock(return_value=False)
-
-        mock_client.discover.return_value = [
-            DiscoveryInfo(
-                product_release_uuid="pr-uuid-1",
-                servers=[TeaServerInfo(root_url="https://tea.example.com/v1", versions=["0.3.0-beta.2"], priority=1.0)],
-            )
-        ]
-        mock_client.get_product_release_collection_latest.return_value = Collection(
-            uuid="col-uuid",
-            version=1,
-            date=None,
-            belongs_to=CollectionBelongsTo.PRODUCT_RELEASE,
-            update_reason=None,
-            artifacts=[
-                Artifact(
-                    uuid="art-uuid",
-                    name="sbom",
-                    type=ArtifactType.BOM,
-                    distribution_types=None,
-                    formats=[
-                        ArtifactFormat(
-                            media_type="application/vnd.cyclonedx+json",
-                            description=None,
-                            url="https://cdn.example.com/sbom.json",
-                            signature_url=None,
-                        )
-                    ],
-                )
-            ],
+        mock_client = _mock_client_context(mock_build_client)
+        mock_client.discover.return_value = [_make_discovery()]
+        mock_client.get_product_release_collection_latest.return_value = _make_collection(
+            CollectionBelongsTo.PRODUCT_RELEASE, [_make_bom_artifact()]
         )
         mock_client.download_artifact.return_value = "/tmp/sbom.json"
 
@@ -139,48 +173,25 @@ class TestTeaFetch(unittest.TestCase):
     @patch("sbomify_action.cli.tea._build_client")
     def test_fetch_no_bom_artifact(self, mock_build_client):
         """tea fetch should error when no BOM artifact found."""
-        from libtea.models import (
-            Artifact,
-            ArtifactFormat,
-            ArtifactType,
-            Collection,
-            CollectionBelongsTo,
-            DiscoveryInfo,
-            TeaServerInfo,
-        )
+        mock_client = _mock_client_context(mock_build_client)
+        mock_client.discover.return_value = [_make_discovery()]
 
-        mock_client = MagicMock()
-        mock_build_client.return_value.__enter__ = MagicMock(return_value=mock_client)
-        mock_build_client.return_value.__exit__ = MagicMock(return_value=False)
-
-        mock_client.discover.return_value = [
-            DiscoveryInfo(
-                product_release_uuid="pr-uuid-1",
-                servers=[TeaServerInfo(root_url="https://tea.example.com/v1", versions=["0.3.0-beta.2"], priority=1.0)],
-            )
-        ]
-        mock_client.get_product_release_collection_latest.return_value = Collection(
-            uuid="col-uuid",
-            version=1,
-            date=None,
-            belongs_to=CollectionBelongsTo.PRODUCT_RELEASE,
-            update_reason=None,
-            artifacts=[
-                Artifact(
-                    uuid="art-uuid",
-                    name="vex",
-                    type=ArtifactType.VULNERABILITIES,
-                    distribution_types=None,
-                    formats=[
-                        ArtifactFormat(
-                            media_type="application/json",
-                            description=None,
-                            url="https://cdn.example.com/vex.json",
-                            signature_url=None,
-                        )
-                    ],
+        vex_artifact = Artifact(
+            uuid="art-uuid",
+            name="vex",
+            type=ArtifactType.VULNERABILITIES,
+            distribution_types=None,
+            formats=[
+                ArtifactFormat(
+                    media_type="application/json",
+                    description=None,
+                    url="https://cdn.example.com/vex.json",
+                    signature_url=None,
                 )
             ],
+        )
+        mock_client.get_product_release_collection_latest.return_value = _make_collection(
+            CollectionBelongsTo.PRODUCT_RELEASE, [vex_artifact]
         )
 
         with self.runner.isolated_filesystem():
@@ -202,44 +213,11 @@ class TestTeaFetch(unittest.TestCase):
     @patch("sbomify_action.cli.tea._build_client")
     def test_fetch_by_component_release_uuid(self, mock_build_client):
         """tea fetch --component-release-uuid should fetch without discovery."""
-        from libtea.models import (
-            Artifact,
-            ArtifactFormat,
-            ArtifactType,
-            Checksum,
-            ChecksumAlgorithm,
-            Collection,
-            CollectionBelongsTo,
-        )
-
-        mock_client = MagicMock()
-        mock_build_client.return_value.__enter__ = MagicMock(return_value=mock_client)
-        mock_build_client.return_value.__exit__ = MagicMock(return_value=False)
+        mock_client = _mock_client_context(mock_build_client)
 
         checksums = (Checksum(algorithm_type=ChecksumAlgorithm.SHA_256, algorithm_value="abc123"),)
-        mock_client.get_component_release_collection_latest.return_value = Collection(
-            uuid="col-uuid",
-            version=1,
-            date=None,
-            belongs_to=CollectionBelongsTo.COMPONENT_RELEASE,
-            update_reason=None,
-            artifacts=[
-                Artifact(
-                    uuid="art-uuid",
-                    name="sbom",
-                    type=ArtifactType.BOM,
-                    distribution_types=None,
-                    formats=[
-                        ArtifactFormat(
-                            media_type="application/vnd.cyclonedx+json",
-                            description=None,
-                            url="https://cdn.example.com/sbom.json",
-                            signature_url=None,
-                            checksums=checksums,
-                        )
-                    ],
-                )
-            ],
+        mock_client.get_component_release_collection_latest.return_value = _make_collection(
+            CollectionBelongsTo.COMPONENT_RELEASE, [_make_bom_artifact(checksums=checksums)]
         )
         mock_client.download_artifact.return_value = Path("/tmp/sbom.json")
 
@@ -264,6 +242,54 @@ class TestTeaFetch(unittest.TestCase):
             # Verify checksums were passed through
             call_kwargs = mock_client.download_artifact.call_args
             assert call_kwargs.kwargs.get("verify_checksums") == checksums
+
+    @patch("sbomify_action.cli.tea._build_client")
+    def test_fetch_tea_error(self, mock_build_client):
+        """tea fetch should handle TeaError gracefully."""
+        mock_client = _mock_client_context(mock_build_client)
+        mock_client.discover.side_effect = TeaError("Server error")
+
+        with self.runner.isolated_filesystem():
+            result = self.runner.invoke(
+                cli,
+                [
+                    "tea",
+                    "fetch",
+                    "--base-url",
+                    "https://tea.example.com/v1",
+                    "--tei",
+                    "urn:tei:test",
+                    "-o",
+                    "sbom.json",
+                ],
+            )
+            assert result.exit_code != 0
+
+    @patch("sbomify_action.cli.tea._build_client")
+    def test_fetch_io_error(self, mock_build_client):
+        """tea fetch should handle OSError gracefully."""
+        mock_client = _mock_client_context(mock_build_client)
+        mock_client.discover.return_value = [_make_discovery()]
+        mock_client.get_product_release_collection_latest.return_value = _make_collection(
+            CollectionBelongsTo.PRODUCT_RELEASE, [_make_bom_artifact()]
+        )
+        mock_client.download_artifact.side_effect = OSError("Disk full")
+
+        with self.runner.isolated_filesystem():
+            result = self.runner.invoke(
+                cli,
+                [
+                    "tea",
+                    "fetch",
+                    "--base-url",
+                    "https://tea.example.com/v1",
+                    "--tei",
+                    "urn:tei:test",
+                    "-o",
+                    "sbom.json",
+                ],
+            )
+            assert result.exit_code != 0
 
 
 class TestSelectBestFormat(unittest.TestCase):
