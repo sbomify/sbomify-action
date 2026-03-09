@@ -31,6 +31,9 @@ def mock_tea_client(request, monkeypatch):
     if request.module.__name__.startswith("tests.test_tea_") or request.module.__name__.startswith("test_tea_"):
         yield
         return
+    from sbomify_action._enrichment.sources.tea import clear_cache as clear_tea_cache
+
+    clear_tea_cache()
     monkeypatch.delenv("TEA_BASE_URL", raising=False)
     mock_client = MagicMock()
     mock_client.search_product_releases.return_value = MagicMock(results=())
