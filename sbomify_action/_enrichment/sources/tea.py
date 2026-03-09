@@ -57,7 +57,7 @@ def _is_safe_url(url: str) -> bool:
             return False
         try:
             ip = ipaddress.ip_address(hostname)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified:
                 return False
         except ValueError:
             pass  # Not an IP literal — hostname is fine
@@ -87,7 +87,7 @@ def _get_client(purl_type: str) -> TeaClient | None:
         if not _is_safe_url(base_url_override):
             logger.warning(f"TEA_BASE_URL rejected (private/internal address): {base_url_override}")
             return None
-        cache_key = f"base_url:{base_url_override}"
+        cache_key = f"base_url:{base_url_override}:token:{token or ''}"
         if cache_key not in _client_cache:
             _client_cache[cache_key] = TeaClient(base_url_override, token=token, timeout=DEFAULT_TIMEOUT)
         return _client_cache[cache_key]
@@ -96,7 +96,7 @@ def _get_client(purl_type: str) -> TeaClient | None:
     if not domain:
         return None
 
-    cache_key = f"domain:{domain}"
+    cache_key = f"domain:{domain}:token:{token or ''}"
     if cache_key not in _client_cache:
         _client_cache[cache_key] = TeaClient.from_well_known(domain, token=token, timeout=DEFAULT_TIMEOUT)
     return _client_cache[cache_key]
