@@ -131,7 +131,10 @@ class TeaSource:
     def fetch(self, purl: PackageURL, session: requests.Session) -> NormalizedMetadata | None:
         """Discover TEA server from PURL type and fetch metadata."""
         purl_str = _purl_to_search_value(purl)
-        cache_key = f"tea:{purl_str}"
+        token = os.getenv("TEA_TOKEN") or ""
+        base_url = os.getenv("TEA_BASE_URL") or ""
+        env_hash = hashlib.sha256(f"{base_url}:{token}".encode()).hexdigest()[:16]
+        cache_key = f"tea:{purl_str}:{env_hash}"
 
         if cache_key in _cache:
             logger.debug(f"Cache hit (tea): {purl_str}")
