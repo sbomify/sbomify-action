@@ -111,6 +111,9 @@ class TestIsSafeUrl(unittest.TestCase):
         assert _is_safe_url("http://metadata.google.internal/v1") is False
         assert _is_safe_url("http://kubernetes.default.svc/v1") is False
 
+    def test_unspecified_address_rejected(self):
+        assert _is_safe_url("http://0.0.0.0/v1") is False
+
     def test_empty_url_rejected(self):
         assert _is_safe_url("") is False
 
@@ -344,6 +347,29 @@ class TestTeaSourceFetch(unittest.TestCase):
 
         self.source.fetch(self.purl, self.session)
         mock_client_cls.from_well_known.assert_called_once_with("pypi.sbomify.com", token="secret-token", timeout=15)
+
+    @patch("sbomify_action._enrichment.sources.tea.TeaClient", autospec=True)
+    def test_token_change_creates_new_client(self, mock_client_cls):
+        """Changing TEA_TOKEN should create a new client, not reuse the cached one."""
+        now = datetime.now(timezone.utc)
+        mock_client1 = MagicMock()
+        mock_client2 = MagicMock()
+        mock_client_cls.from_well_known.side_effect = [mock_client1, mock_client2]
+        empty_response = self._make_search_response(now)
+        mock_client1.search_product_releases.return_value = empty_response
+        mock_client2.search_product_releases.return_value = empty_response
+
+        with patch.dict("os.environ", {"TEA_TOKEN": "token-1"}, clear=True):
+            self.source.fetch(self.purl, self.session)
+        clear_cache()
+
+        with patch.dict("os.environ", {"TEA_TOKEN": "token-2"}, clear=True):
+            self.source.fetch(self.purl, self.session)
+
+        assert mock_client_cls.from_well_known.call_count == 2
+        calls = mock_client_cls.from_well_known.call_args_list
+        assert calls[0].kwargs["token"] == "token-1"
+        assert calls[1].kwargs["token"] == "token-2"
 
     @patch.dict("os.environ", {}, clear=True)
     @patch("sbomify_action._enrichment.sources.tea.TeaClient", autospec=True)

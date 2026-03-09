@@ -97,7 +97,7 @@ class SourceRegistry:
         for source in sources:
             # Stop early if we already have all core NTIA fields
             if result and result.description and result.licenses and result.supplier:
-                if result.cle_release_date:
+                if result.cle_release_date and result.cle_eos and result.cle_eol:
                     logger.debug(f"Skipping {source.name} - already have sufficient data for {purl.name}")
                     break
                 # NTIA complete but CLE missing — only continue with lifecycle-capable sources
