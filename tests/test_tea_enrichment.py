@@ -55,6 +55,13 @@ class TestTeaSourceSupports(unittest.TestCase):
         with patch.dict("os.environ", {"TEA_BASE_URL": "https://tea.example.com/v1"}):
             assert source.supports(purl) is True
 
+    def test_does_not_support_unsafe_base_url(self):
+        source = TeaSource()
+        purl = PackageURL.from_string("pkg:cargo/serde@1.0")
+        for unsafe_url in ["http://127.0.0.1/v1", "http://10.0.0.1/v1", "http://localhost/v1"]:
+            with patch.dict("os.environ", {"TEA_BASE_URL": unsafe_url}, clear=True):
+                assert source.supports(purl) is False, f"Should reject unsafe URL: {unsafe_url}"
+
     def test_supports_all_mapped_types(self):
         source = TeaSource()
         with patch.dict("os.environ", {}, clear=True):
