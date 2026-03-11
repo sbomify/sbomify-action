@@ -30,7 +30,7 @@ jobs:
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098 # v7
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7
         with:
           version: "${{ env.UV_VERSION }}"
 
@@ -68,7 +68,7 @@ jobs:
           echo "TRIVY_VERSION=$TRIVY_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098 # v7
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7
         with:
           version: "${{ env.UV_VERSION }}"
 
@@ -148,7 +148,7 @@ jobs:
           echo "TRIVY_VERSION=$TRIVY_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098 # v7
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7
         with:
           version: "${{ env.UV_VERSION }}"
 
@@ -423,7 +423,7 @@ jobs:
           echo "TRIVY_VERSION=$TRIVY_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098 # v7
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7
         with:
           version: "${{ env.UV_VERSION }}"
 
@@ -551,7 +551,7 @@ jobs:
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@5a095e7a2014a4212f075830d4f7277575a9d098 # v7
+        uses: astral-sh/setup-uv@6ee6290f1cbc4156c0bdd66691b2c144ef8df19a # v7
         with:
           version: "${{ env.UV_VERSION }}"
 
