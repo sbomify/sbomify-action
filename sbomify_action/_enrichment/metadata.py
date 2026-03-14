@@ -1,7 +1,7 @@
 """Normalized metadata dataclass for SBOM enrichment."""
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -69,7 +69,7 @@ class NormalizedMetadata:
         merged_sources = dict(self.field_sources)
 
         # Helper to pick value and track source
-        def pick(field_name: str, self_val, other_val, is_list: bool = False):
+        def pick(field_name: str, self_val: Any, other_val: Any, is_list: bool = False) -> Any:
             if is_list:
                 if self_val:
                     return self_val

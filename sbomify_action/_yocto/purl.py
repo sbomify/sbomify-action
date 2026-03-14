@@ -1,6 +1,7 @@
 """Yocto PURL generation and injection for SPDX 2.2 and SPDX 3 SBOMs."""
 
 import json
+from typing import Any
 
 from packageurl import PackageURL
 
@@ -26,7 +27,7 @@ def generate_yocto_purl(name: str, version: str | None = None) -> str:
     )
 
 
-def _has_yocto_purl_spdx22(package_data: dict) -> bool:
+def _has_yocto_purl_spdx22(package_data: dict[str, Any]) -> bool:
     """Check if an SPDX 2.2 package already has a ``pkg:yocto/`` external ref."""
     for ref in package_data.get("externalRefs", []):
         if (

@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 from sbomify_action.exceptions import FileProcessingError
 from sbomify_action.logging_config import logger
@@ -10,18 +11,18 @@ from sbomify_action.logging_config import logger
 from .models import YoctoPackage
 
 
-def _compute_sha256(data: dict) -> str:
+def _compute_sha256(data: dict[str, Any]) -> str:
     """Compute SHA256 of parsed JSON data with normalized content (sorted keys)."""
     normalized = json.dumps(data, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 
-def _is_spdx_22(data: dict) -> bool:
+def _is_spdx_22(data: dict[str, Any]) -> bool:
     """Check if a parsed SPDX document is version 2.2."""
     return data.get("spdxVersion") == "SPDX-2.2"
 
 
-def _is_rootfs_manifest(file_path: Path, data: dict) -> bool:
+def _is_rootfs_manifest(file_path: Path, data: dict[str, Any]) -> bool:
     """Check if an SPDX document is the rootfs manifest.
 
     The rootfs manifest is the image-level index that references all packages.
@@ -39,7 +40,7 @@ def _is_rootfs_manifest(file_path: Path, data: dict) -> bool:
     return False
 
 
-def _categorize_document(file_path: Path, data: dict) -> str:
+def _categorize_document(file_path: Path, data: dict[str, Any]) -> str:
     """Categorize an SPDX document as rootfs, recipe, runtime, or package.
 
     Returns one of: "rootfs", "recipe", "runtime", "package"
@@ -55,7 +56,7 @@ def _categorize_document(file_path: Path, data: dict) -> str:
     return "package"
 
 
-def _extract_package_info(file_path: str, data: dict) -> YoctoPackage:
+def _extract_package_info(file_path: str, data: dict[str, Any]) -> YoctoPackage:
     """Extract package info from an SPDX 2.2 document."""
     name = data.get("name", Path(file_path).stem)
     namespace = data.get("documentNamespace", "")

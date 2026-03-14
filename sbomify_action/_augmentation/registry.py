@@ -57,7 +57,7 @@ class ProviderRegistry:
         token: Optional[str] = None,
         config_path: Optional[str] = None,
         merge_results: bool = True,
-        **kwargs,
+        **kwargs: Any,
     ) -> Optional[AugmentationMetadata]:
         """
         Fetch metadata from all providers in priority order.

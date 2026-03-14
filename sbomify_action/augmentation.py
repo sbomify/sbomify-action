@@ -34,14 +34,21 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from cyclonedx.model import AttachedText, BomRef, ExternalReference, ExternalReferenceType, Property, XsUri
-from cyclonedx.model.bom import Bom, OrganizationalContact, OrganizationalEntity, Tool
+from cyclonedx.model import (  # type: ignore[attr-defined]
+    AttachedText,
+    BomRef,
+    ExternalReference,
+    ExternalReferenceType,
+    Property,
+    XsUri,
+)
+from cyclonedx.model.bom import Bom, OrganizationalContact, OrganizationalEntity, Tool  # type: ignore[attr-defined]
 from cyclonedx.model.component import Component, ComponentType
 from cyclonedx.model.license import DisjunctiveLicense, LicenseExpression
 from cyclonedx.model.lifecycle import LifecyclePhase, PredefinedLifecycle
 from cyclonedx.model.service import Service
 from packageurl import PackageURL
-from spdx_tools.spdx.model import (
+from spdx_tools.spdx.model import (  # type: ignore[attr-defined]
     Actor,
     ActorType,
     Document,
@@ -210,7 +217,7 @@ def _update_component_purl_version(component: Component, new_version: str) -> bo
                     subpath=bom_ref_purl.subpath,
                 )
                 new_bom_ref = str(new_bom_ref_purl)
-                component.bom_ref = BomRef(new_bom_ref)
+                component.bom_ref = BomRef(new_bom_ref)  # type: ignore[misc]
                 logger.debug(f"Updated component bom-ref: {old_bom_ref} -> {new_bom_ref}")
 
         return True
@@ -272,9 +279,10 @@ def _get_package_version() -> str:
             if pyproject_path.exists():
                 with open(pyproject_path, "rb") as f:
                     pyproject_data = tomllib.load(f)
-                return pyproject_data.get("project", {}).get("version", "unknown")
+                return str(pyproject_data.get("project", {}).get("version", "unknown"))
         except Exception:
-            return "unknown"
+            pass
+    return "unknown"
 
 
 SBOMIFY_VERSION = _get_package_version()
@@ -630,7 +638,7 @@ def augment_cyclonedx_sbom(
             # Create merged supplier
             bom.metadata.supplier = OrganizationalEntity(
                 name=merged_name,
-                urls=list(merged_urls),
+                urls=[XsUri(u) for u in merged_urls],
                 contacts=list(merged_contacts),
             )
         else:
@@ -664,7 +672,7 @@ def augment_cyclonedx_sbom(
             # Create backend manufacturer entity
             backend_manufacturer = OrganizationalEntity(
                 name=manufacturer_name,
-                urls=_normalize_urls_to_list(manufacturer_data.get("url")),
+                urls=[XsUri(u) for u in _normalize_urls_to_list(manufacturer_data.get("url"))],
                 contacts=[],
             )
 
@@ -998,7 +1006,7 @@ def _sanitize_license_ref_id(name: str) -> str:
     return sanitized
 
 
-def _convert_backend_licenses_to_spdx_expression(licenses: list) -> Tuple[str, List[ExtractedLicensingInfo]]:
+def _convert_backend_licenses_to_spdx_expression(licenses: list[Any]) -> Tuple[str, List[ExtractedLicensingInfo]]:
     """
     Convert backend license data to SPDX license expression and ExtractedLicensingInfo objects.
 
@@ -1134,7 +1142,7 @@ def augment_spdx_sbom(
             # Propagate supplier to lockfile packages (parity with CycloneDX)
             # Lockfile packages (e.g., requirements.txt, uv.lock) are metadata artifacts
             # that inherit supplier from the root/main package
-            if main_package.supplier:
+            if main_package.supplier and isinstance(main_package.supplier, Actor):
                 _propagate_supplier_to_lockfile_packages(document, main_package.supplier)
 
     # Apply manufacturer information
@@ -1607,8 +1615,11 @@ def _ensure_spdx_main_package_purl(document: Document, augmentation_data: dict[s
         return
 
     # Try to construct PURL from VCS info
-    vcs_url = augmentation_data.get("vcs_url")
-    vcs_commit_sha = augmentation_data.get("vcs_commit_sha")
+    vcs_url: str | None = augmentation_data.get("vcs_url")
+    vcs_commit_sha: str | None = augmentation_data.get("vcs_commit_sha")
+
+    if not vcs_url:
+        return
 
     purl = _construct_purl_from_vcs(vcs_url, vcs_commit_sha)
 
@@ -1647,19 +1658,19 @@ def augment_spdx3_sbom(
         component_name: Optional component name override
         component_version: Optional component version override
     """
-    from .spdx3 import (
+    from .spdx3 import (  # type: ignore[attr-defined]
         ExternalReference as Spdx3ExtRef,
     )
-    from .spdx3 import (
+    from .spdx3 import (  # type: ignore[attr-defined]
         ExternalReferenceType as Spdx3ExtRefType,
     )
-    from .spdx3 import (
+    from .spdx3 import (  # type: ignore[attr-defined]
         Organization as Spdx3Org,
     )
-    from .spdx3 import (
+    from .spdx3 import (  # type: ignore[attr-defined]
         Person as Spdx3Person,
     )
-    from .spdx3 import (
+    from .spdx3 import (  # type: ignore[attr-defined]
         Tool as Spdx3Tool,
     )
     from .spdx3 import (
@@ -1908,7 +1919,7 @@ def augment_sbom_from_file(
 
             # Parse as CycloneDX
             try:
-                bom = Bom.from_json(data)
+                bom = Bom.from_json(data)  # type: ignore[attr-defined]
             except Exception as e:
                 raise SBOMValidationError(f"Failed to parse CycloneDX SBOM: {e}")
             logger.info("Processing CycloneDX SBOM")

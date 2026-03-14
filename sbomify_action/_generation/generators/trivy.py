@@ -110,6 +110,7 @@ class TrivyFsGenerator:
 
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using Trivy fs command."""
+        assert input.lock_file is not None  # guaranteed by supports()
         trivy_format = TRIVY_FORMAT_MAP.get(input.output_format)
         if not trivy_format:
             return GenerationResult.failure_result(
@@ -241,6 +242,7 @@ class TrivyImageGenerator:
 
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using Trivy image command."""
+        assert input.docker_image is not None  # guaranteed by supports()
         trivy_format = TRIVY_FORMAT_MAP.get(input.output_format)
         if not trivy_format:
             return GenerationResult.failure_result(

@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 from ..models import PackageHash
 
@@ -104,7 +105,9 @@ class PackageLockParser:
 
         return name_part if name_part else None
 
-    def _parse_dependencies(self, dependencies: dict, seen: set[tuple[str, str]] | None = None) -> list[PackageHash]:
+    def _parse_dependencies(
+        self, dependencies: dict[str, Any], seen: set[tuple[str, str]] | None = None
+    ) -> list[PackageHash]:
         """Parse v1 format dependencies recursively.
 
         Deduplicates by (name, version) to avoid returning multiple hashes

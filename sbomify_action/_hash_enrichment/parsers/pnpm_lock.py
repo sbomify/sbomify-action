@@ -1,6 +1,7 @@
 """Parser for pnpm-lock.yaml files (pnpm)."""
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -66,7 +67,7 @@ class PnpmLockParser:
 
         return hashes
 
-    def _parse_packages(self, packages: dict, seen: set[tuple[str, str]] | None = None) -> list[PackageHash]:
+    def _parse_packages(self, packages: dict[str, Any], seen: set[tuple[str, str]] | None = None) -> list[PackageHash]:
         """Parse packages section.
 
         Deduplicates by (name, version) to return one hash per package@version.
@@ -114,7 +115,7 @@ class PnpmLockParser:
         return hashes
 
     def _parse_snapshots(
-        self, snapshots: dict, data: dict, seen: set[tuple[str, str]] | None = None
+        self, snapshots: dict[str, Any], data: dict[str, Any], seen: set[tuple[str, str]] | None = None
     ) -> list[PackageHash]:
         """Parse snapshots section (pnpm v9+).
 

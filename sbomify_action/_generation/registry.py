@@ -319,7 +319,7 @@ class GeneratorRegistry:
 
     def _get_available_formats(self) -> dict[str, list[str]]:
         """Get all available formats and versions from registered generators."""
-        formats: dict[str, set] = {}
+        formats: dict[str, set[str]] = {}
         for generator in self._generators:
             for fv in generator.supported_formats:
                 if fv.format not in formats:

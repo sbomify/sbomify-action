@@ -108,7 +108,9 @@ class CycloneDXPyGenerator:
 
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate a CycloneDX SBOM using cyclonedx-py."""
+        assert input.lock_file is not None  # guaranteed by supports()
         lock_file_name = input.lock_file_name
+        assert lock_file_name is not None  # guaranteed by lock_file being set
         spec_version = input.spec_version or CYCLONEDX_PY_DEFAULT
 
         # Validate version
@@ -139,6 +141,7 @@ class CycloneDXPyGenerator:
 
     def _generate_standard(self, input: GenerationInput, subcommand: str, spec_version: str) -> GenerationResult:
         """Generate SBOM for requirements.txt or Pipfile.lock."""
+        assert input.lock_file is not None  # guaranteed by caller
         cmd = [
             "cyclonedx-py",
             subcommand,
@@ -178,6 +181,7 @@ class CycloneDXPyGenerator:
     def _generate_poetry(self, input: GenerationInput, spec_version: str) -> GenerationResult:
         """Generate SBOM for poetry.lock / pyproject.toml."""
         # Poetry needs the project directory
+        assert input.lock_file is not None  # guaranteed by caller
         project_dir = str(Path(input.lock_file).parent)
         logger.info(f"Using Poetry project directory: {project_dir}")
 

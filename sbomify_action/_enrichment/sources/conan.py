@@ -21,7 +21,7 @@ _cache: Dict[str, Optional[NormalizedMetadata]] = {}
 # Cache for Conan API instance and initialization state
 _conan_api: Optional[Any] = None
 _conan_available: Optional[bool] = None
-_profiles: Optional[tuple] = None
+_profiles: Optional[tuple[Any, Any]] = None
 
 
 def clear_cache() -> None:
@@ -60,7 +60,7 @@ def _get_conan_api() -> Optional[Any]:
         return None
 
 
-def _get_profiles(api: Any) -> Optional[tuple]:
+def _get_profiles(api: Any) -> Optional[tuple[Any, Any]]:
     """Get or create Conan profiles."""
     global _profiles
 
@@ -101,7 +101,7 @@ class ConanSource:
 
     def supports(self, purl: PackageURL) -> bool:
         """Check if this source supports the given PURL."""
-        return purl.type == "conan"
+        return bool(purl.type == "conan")
 
     def fetch(self, purl: PackageURL, session: requests.Session) -> Optional[NormalizedMetadata]:
         """

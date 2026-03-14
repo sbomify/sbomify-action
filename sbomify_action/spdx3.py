@@ -18,6 +18,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from semantic_version import Version
 from spdx_tools.spdx.casing_tools import snake_case_to_camel_case as _s2c
@@ -56,7 +57,7 @@ from spdx_tools.spdx3.writer.json_ld.json_ld_converter import (
 from .logging_config import logger
 
 
-class Spdx3Payload(Payload):
+class Spdx3Payload(Payload):  # type: ignore[misc]
     """Thin wrapper around :class:`Payload` that carries passthrough elements.
 
     Elements whose ``type`` is not handled by the parser (e.g. security,
@@ -66,7 +67,7 @@ class Spdx3Payload(Payload):
 
     def __init__(self) -> None:
         super().__init__()
-        self.passthrough_elements: list[dict] = []
+        self.passthrough_elements: list[dict[str, Any]] = []
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +156,7 @@ del _e, _s2c
 # ---------------------------------------------------------------------------
 
 
-def is_spdx3(data: dict) -> bool:
+def is_spdx3(data: dict[str, Any]) -> bool:
     """Return ``True`` if *data* looks like an SPDX 3.x JSON-LD document.
 
     Checks for ``@context`` containing ``spdx.org/rdf/3``.
@@ -173,7 +174,7 @@ def is_spdx3(data: dict) -> bool:
     return False
 
 
-def extract_spdx3_version(data: dict) -> str | None:
+def extract_spdx3_version(data: dict[str, Any]) -> str | None:
     """Extract the SPDX 3 spec version from the ``@context`` URL.
 
     Returns e.g. ``"3.0.1"`` or ``None``.
@@ -199,7 +200,7 @@ def extract_spdx3_version(data: dict) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _get_sw(elem: dict, unprefixed: str, prefixed: str | None = None):
+def _get_sw(elem: dict[str, Any], unprefixed: str, prefixed: str | None = None) -> Any:
     """Return value from *elem* trying *unprefixed* then *software_*-prefixed key.
 
     Needed because the spdx_tools converter writes ``packageVersion`` while
@@ -213,7 +214,7 @@ def _get_sw(elem: dict, unprefixed: str, prefixed: str | None = None):
     return elem.get(prefixed)
 
 
-def _parse_creation_info(ci_dict: dict) -> CreationInfo:
+def _parse_creation_info(ci_dict: dict[str, Any]) -> CreationInfo:
     """Parse a nested ``creationInfo`` dict into a :class:`CreationInfo`."""
     spec_str = ci_dict.get("specVersion", "3.0.1")
     spec_version = Version(spec_str)
@@ -261,7 +262,7 @@ def _parse_creation_info(ci_dict: dict) -> CreationInfo:
     )
 
 
-def _parse_external_reference(ref_dict: dict) -> ExternalReference:
+def _parse_external_reference(ref_dict: dict[str, Any]) -> ExternalReference:
     """Parse an external reference dict."""
     # SPDX 3.0.1 schema uses "externalRefType"; accept both forms for compatibility
     ref_type_str = ref_dict.get("externalRefType") or ref_dict.get("externalReferenceType", "")
@@ -279,7 +280,7 @@ def _parse_external_reference(ref_dict: dict) -> ExternalReference:
     )
 
 
-def _parse_external_identifier(eid_dict: dict) -> ExternalIdentifier:
+def _parse_external_identifier(eid_dict: dict[str, Any]) -> ExternalIdentifier:
     """Parse an external identifier dict."""
     eid_type_str = eid_dict.get("externalIdentifierType", "")
     eid_type = _EXT_ID_TYPES.get(eid_type_str.lower(), ExternalIdentifierType.OTHER)
@@ -291,16 +292,18 @@ def _parse_external_identifier(eid_dict: dict) -> ExternalIdentifier:
     )
 
 
-def _parse_hash(h_dict: dict) -> Hash:
+def _parse_hash(h_dict: dict[str, Any]) -> Hash:
     """Parse a hash/integrity dict."""
     alg_str = h_dict.get("algorithm", "").lower()
     algorithm = _HASH_ALGORITHMS.get(alg_str, HashAlgorithm.OTHER)
     return Hash(algorithm=algorithm, hash_value=h_dict.get("hashValue", ""))
 
 
-def _parse_common_fields(elem: dict, creation_info_map: dict[str, CreationInfo] | None = None) -> dict:
+def _parse_common_fields(
+    elem: dict[str, Any], creation_info_map: dict[str, CreationInfo] | None = None
+) -> dict[str, Any]:
     """Extract fields common to all Element subclasses."""
-    result: dict = {}
+    result: dict[str, Any] = {}
 
     spdx_id = elem.get("@id") or elem.get("spdxId")
     if not spdx_id:
@@ -352,7 +355,7 @@ def _parse_common_fields(elem: dict, creation_info_map: dict[str, CreationInfo] 
     return result
 
 
-def _parse_software_artifact_fields(elem: dict, fields: dict) -> None:
+def _parse_software_artifact_fields(elem: dict[str, Any], fields: dict[str, Any]) -> None:
     """Parse fields specific to SoftwareArtifact subclasses (Package, File).
 
     Each software-profile property is looked up with both the unprefixed name
@@ -416,7 +419,7 @@ def _parse_software_artifact_fields(elem: dict, fields: dict) -> None:
         fields["standard"] = stds
 
 
-def _parse_package(elem: dict, ci_map: dict[str, CreationInfo] | None = None) -> Package:
+def _parse_package(elem: dict[str, Any], ci_map: dict[str, CreationInfo] | None = None) -> Package:
     """Parse a Package element."""
     fields = _parse_common_fields(elem, ci_map)
     _parse_software_artifact_fields(elem, fields)
@@ -441,7 +444,7 @@ def _parse_package(elem: dict, ci_map: dict[str, CreationInfo] | None = None) ->
     return Package(**fields)
 
 
-def _parse_file(elem: dict, ci_map: dict[str, CreationInfo] | None = None) -> SpdxFile:
+def _parse_file(elem: dict[str, Any], ci_map: dict[str, CreationInfo] | None = None) -> SpdxFile:
     """Parse a File element."""
     fields = _parse_common_fields(elem, ci_map)
     _parse_software_artifact_fields(elem, fields)
@@ -453,7 +456,7 @@ def _parse_file(elem: dict, ci_map: dict[str, CreationInfo] | None = None) -> Sp
     return SpdxFile(**fields)
 
 
-def _parse_spdx_document(elem: dict, ci_map: dict[str, CreationInfo] | None = None) -> SpdxDocument:
+def _parse_spdx_document(elem: dict[str, Any], ci_map: dict[str, CreationInfo] | None = None) -> SpdxDocument:
     """Parse an SpdxDocument element."""
     fields = _parse_common_fields(elem, ci_map)
 
@@ -475,7 +478,7 @@ def _parse_spdx_document(elem: dict, ci_map: dict[str, CreationInfo] | None = No
     return SpdxDocument(**fields)
 
 
-def _parse_relationship(elem: dict, ci_map: dict[str, CreationInfo] | None = None) -> Relationship:
+def _parse_relationship(elem: dict[str, Any], ci_map: dict[str, CreationInfo] | None = None) -> Relationship:
     """Parse a Relationship element."""
     fields = _parse_common_fields(elem, ci_map)
 
@@ -495,7 +498,7 @@ def _parse_relationship(elem: dict, ci_map: dict[str, CreationInfo] | None = Non
 
 
 def _parse_agent(
-    elem: dict, cls: type, ci_map: dict[str, CreationInfo] | None = None
+    elem: dict[str, Any], cls: type, ci_map: dict[str, CreationInfo] | None = None
 ) -> Organization | Person | SoftwareAgent | Tool:
     """Parse an Organization, Person, SoftwareAgent, or Tool element."""
     fields = _parse_common_fields(elem, ci_map)
@@ -529,7 +532,7 @@ def parse_spdx3_file(file_path: str) -> Spdx3Payload:
     return parse_spdx3_data(data)
 
 
-def parse_spdx3_data(data: dict) -> Spdx3Payload:
+def parse_spdx3_data(data: dict[str, Any]) -> Spdx3Payload:
     """Parse SPDX 3 JSON-LD data (already loaded) into an :class:`Spdx3Payload`.
 
     Handles both ``@graph``-based documents and top-level element documents
@@ -603,7 +606,7 @@ def parse_spdx3_data(data: dict) -> Spdx3Payload:
 # ---------------------------------------------------------------------------
 
 
-def _normalize_serialized_element(elem: dict) -> None:
+def _normalize_serialized_element(elem: dict[str, Any]) -> None:
     """Fix spdx_tools converter output to match SPDX 3.0.1 JSON-LD context.
 
     Modifies *elem* **in place**:
@@ -645,7 +648,7 @@ def _normalize_serialized_element(elem: dict) -> None:
                     _normalize_nested_dict(item)
 
 
-def _normalize_nested_dict(d: dict) -> None:
+def _normalize_nested_dict(d: dict[str, Any]) -> None:
     """Normalize ``@type`` → ``type`` in a nested dict (creationInfo, Hash, etc.)."""
     if "@type" in d:
         d["type"] = d.pop("@type")
@@ -659,7 +662,7 @@ def _normalize_nested_dict(d: dict) -> None:
                     _normalize_nested_dict(item)
 
 
-def _normalize_passthrough_element(elem: dict) -> None:
+def _normalize_passthrough_element(elem: dict[str, Any]) -> None:
     """Normalize keys on a passthrough element for output consistency.
 
     Like :func:`_normalize_serialized_element` but only touches keys

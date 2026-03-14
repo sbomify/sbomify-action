@@ -62,7 +62,7 @@ def get_qualified_name(purl: PackageURL, separator: str = ":") -> str:
     """
     if purl.namespace:
         return f"{purl.namespace}{separator}{purl.name}"
-    return purl.name
+    return str(purl.name)
 
 
 def parse_author_string(author_str: str) -> Tuple[Optional[str], Optional[str]]:

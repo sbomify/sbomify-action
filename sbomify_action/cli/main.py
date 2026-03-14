@@ -3,10 +3,11 @@ import logging
 import os
 import shutil
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, cast
 
 import click
 import sentry_sdk
@@ -92,7 +93,7 @@ def _get_package_version() -> str:
         if pyproject_path.exists():
             with open(pyproject_path, "rb") as f:
                 pyproject_data = tomllib.load(f)
-            return pyproject_data.get("project", {}).get("version", "unknown")
+            return str(pyproject_data.get("project", {}).get("version", "unknown"))
     except ImportError:
         # Python < 3.11 doesn't have tomllib
         pass
@@ -107,7 +108,7 @@ def _get_package_version() -> str:
         if pyproject_path.exists():
             with open(pyproject_path, "r") as f:
                 pyproject_data = toml.load(f)
-            return pyproject_data.get("project", {}).get("version", "unknown")
+            return str(pyproject_data.get("project", {}).get("version", "unknown"))
     except ImportError:
         pass
     except Exception:
@@ -240,7 +241,9 @@ class Config:
         # - Uploading to sbomify destination
         # - Managing releases (uses sbomify API)
         # Note: Augmentation does NOT require API - it can use sbomify.json and VCS metadata
-        uploads_to_sbomify = self.upload and "sbomify" in self.upload_destinations
+        uploads_to_sbomify = (
+            self.upload and self.upload_destinations is not None and "sbomify" in self.upload_destinations
+        )
         requires_sbomify_api = uploads_to_sbomify or self.product_releases
 
         if requires_sbomify_api:
@@ -286,7 +289,7 @@ class Config:
 
         # Validate spec_version against sbom_format
         if self.spec_version:
-            from ..generation import CYCLONEDX_VERSIONS, SPDX_VERSIONS
+            from .._generation import CYCLONEDX_VERSIONS, SPDX_VERSIONS
 
             if self.sbom_format == "cyclonedx" and self.spec_version not in CYCLONEDX_VERSIONS:
                 raise ConfigurationError(
@@ -302,7 +305,10 @@ class Config:
         if self.product_releases:
             try:
                 # Parse JSON list format like ["product_id:v1.2.3"]
-                product_releases_list = json.loads(self.product_releases)
+                if isinstance(self.product_releases, list):
+                    product_releases_list = self.product_releases
+                else:
+                    product_releases_list = json.loads(self.product_releases)
                 if not isinstance(product_releases_list, list):
                     raise ConfigurationError('PRODUCT_RELEASE must be a JSON list like ["product_id:v1.2.3"]')
 
@@ -508,7 +514,7 @@ def build_config(
         logger.info(f"Raw product release input: {product_releases}")
 
     # Log SBOM format
-    sbom_format_lower = sbom_format.lower()
+    sbom_format_lower: SBOMFormat = cast(SBOMFormat, sbom_format.lower())
     logger.info(f"SBOM format: {format_display_name(sbom_format_lower)}")
 
     # Expand paths if provided (skip expansion for "none" sentinel)
@@ -629,7 +635,7 @@ def initialize_sentry() -> None:
 
     sentry_dsn = os.getenv("SENTRY_DSN", "https://84e8d6d0a7d0872a4bba8add571a554c@sentry.vikpire.com/4")
 
-    def before_send(event, hint):
+    def before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
         """
         Filter events before sending to Sentry.
         Don't send user input validation errors - these are expected user errors.
@@ -658,7 +664,7 @@ def initialize_sentry() -> None:
         send_default_pii=True,
         traces_sample_rate=1.0,
         profiles_sample_rate=1.0,
-        before_send=before_send,
+        before_send=before_send,  # type: ignore[arg-type]
         release=f"sbomify-action@{SBOMIFY_VERSION}",
     )
 
@@ -889,7 +895,7 @@ def _detect_sbom_format_silent(file_path: str) -> str:
         raise SBOMValidationError("Neither CycloneDX nor SPDX format found in JSON file")
 
 
-def load_sbom_from_file(file_path: str) -> tuple[str, dict, object]:
+def load_sbom_from_file(file_path: str) -> tuple[str, dict[str, Any], object]:
     """
     Load SBOM from JSON file using appropriate library based on format.
 
@@ -913,7 +919,7 @@ def load_sbom_from_file(file_path: str) -> tuple[str, dict, object]:
         if sbom_json.get("bomFormat") == "CycloneDX":
             sbom_format = "cyclonedx"
             # Use cyclonedx deserializer
-            parsed_object = Bom.from_json(sbom_json)
+            parsed_object = Bom.from_json(sbom_json)  # type: ignore[attr-defined]
             logger.debug(f"Successfully loaded CycloneDX SBOM from {file_path}")
         elif sbom_json.get("spdxVersion") is not None or is_spdx3(sbom_json):
             sbom_format = "spdx"
@@ -1170,26 +1176,26 @@ def run_pipeline(config: Config) -> None:
 
                 logger.info("Discovering transitive dependencies...")
 
-                result = expand_sbom_dependencies(
+                expansion_result = expand_sbom_dependencies(
                     sbom_file=STEP_1_FILE,
                     lock_file=config.lock_file,
                 )
 
-                if result.added_count > 0:
+                if expansion_result.added_count > 0:
                     logger.info(
-                        f"Added {result.added_count} transitive dependencies (discovered {result.discovered_count} total)"
+                        f"Added {expansion_result.added_count} transitive dependencies (discovered {expansion_result.discovered_count} total)"
                     )
                     # Log discovered packages in collapsible group
                     with gha_group("Discovered Transitive Dependencies"):
-                        for dep in result.dependencies[:50]:
+                        for dep in expansion_result.dependencies[:50]:
                             parent_info = f" (via {dep.parent})" if dep.parent else ""
                             print(f"  {dep.purl}{parent_info}")
-                        if len(result.dependencies) > 50:
-                            print(f"  ... and {len(result.dependencies) - 50} more")
+                        if len(expansion_result.dependencies) > 50:
+                            print(f"  ... and {len(expansion_result.dependencies) - 50} more")
                 else:
-                    if result.discovered_count > 0:
+                    if expansion_result.discovered_count > 0:
                         logger.info(
-                            f"No new dependencies to add ({result.discovered_count} discovered were already in SBOM)"
+                            f"No new dependencies to add ({expansion_result.discovered_count} discovered were already in SBOM)"
                         )
                     else:
                         logger.info(
@@ -1326,8 +1332,7 @@ def run_pipeline(config: Config) -> None:
             f.write(content)
 
         # Clean up temporary files
-        while get_last_sbom_from_last_step():
-            temp_file = get_last_sbom_from_last_step()
+        while temp_file := get_last_sbom_from_last_step():
             Path(temp_file).unlink()
 
         logger.info(f"Final SBOM saved to: {config.output_file}")
@@ -1347,10 +1352,10 @@ def run_pipeline(config: Config) -> None:
             logger.info(f"Upload destinations: {config.upload_destinations}")
 
             failed_destinations: list[str] = []
-            for destination in config.upload_destinations:
+            for destination in config.upload_destinations or []:
                 logger.info(f"Uploading to: {destination}")
 
-                result = upload_sbom(
+                upload_result = upload_sbom(
                     sbom_file=config.output_file,
                     sbom_format=FORMAT,
                     token=config.token,
@@ -1362,27 +1367,27 @@ def run_pipeline(config: Config) -> None:
                     validate_before_upload=(FORMAT == "cyclonedx"),
                 )
 
-                if not result.success:
-                    if result.error_code == "DUPLICATE_ARTIFACT":
+                if not upload_result.success:
+                    if upload_result.error_code == "DUPLICATE_ARTIFACT":
                         logger.error(
                             f"Upload to {destination} failed with duplicate SBOM: "
                             f"component_id={config.component_id}, format={FORMAT}, "
                             f"version={config.component_version}"
                         )
                         print_duplicate_sbom_error(config.component_id, FORMAT, config.component_version)
-                    elif result.error_code == "COMPONENT_NOT_FOUND":
+                    elif upload_result.error_code == "COMPONENT_NOT_FOUND":
                         logger.error(
                             f"Upload to {destination} failed: component not found (component_id={config.component_id})"
                         )
                         print_component_not_found_error(config.component_id)
                     else:
-                        logger.error(f"Upload to {destination} failed: {result.error_message}")
+                        logger.error(f"Upload to {destination} failed: {upload_result.error_message}")
                     failed_destinations.append(destination)
                 else:
                     logger.info(f"Upload to {destination} succeeded")
                     # Store sbom_id from sbomify for release tagging
-                    if destination == "sbomify" and result.sbom_id:
-                        sbom_id = result.sbom_id
+                    if destination == "sbomify" and upload_result.sbom_id:
+                        sbom_id = upload_result.sbom_id
 
             # Fail if any upload failed
             if failed_destinations:
@@ -1409,10 +1414,17 @@ def run_pipeline(config: Config) -> None:
                 api_base_url=config.api_base_url,
                 token=config.token,
             )
+            # Normalize product_releases to list[str] | None for ProcessorInput
+            pr_list: list[str] | None = None
+            if isinstance(config.product_releases, list):
+                pr_list = config.product_releases
+            elif isinstance(config.product_releases, str):
+                pr_list = json.loads(config.product_releases)
+
             processor_input = ProcessorInput(
                 sbom_id=sbom_id,
                 sbom_file=config.output_file,
-                product_releases=config.product_releases,
+                product_releases=pr_list,
                 api_base_url=config.api_base_url,
                 token=config.token,
             )
@@ -1424,13 +1436,13 @@ def run_pipeline(config: Config) -> None:
                 results = orchestrator.process_all(processor_input)
 
                 # Log results
-                for result in results.enabled_processors:
-                    if result.success:
+                for proc_result in results.enabled_processors:
+                    if proc_result.success:
                         logger.info(
-                            f"Processor '{result.processor_name}' completed: {result.processed_items} item(s) processed"
+                            f"Processor '{proc_result.processor_name}' completed: {proc_result.processed_items} item(s) processed"
                         )
                     else:
-                        logger.error(f"Processor '{result.processor_name}' failed: {result.error_message}")
+                        logger.error(f"Processor '{proc_result.processor_name}' failed: {proc_result.error_message}")
 
                 if results.any_failures:
                     _log_step_end(6, success=False)
@@ -1504,7 +1516,7 @@ def _validate_cyclonedx_sbom(sbom_file_path: str) -> bool | None:
         return False
 
 
-def _update_spdx_json_purl_version(package_json: dict, new_version: str) -> bool:
+def _update_spdx_json_purl_version(package_json: dict[str, Any], new_version: str) -> bool:
     """
     Update the version in an SPDX package's PURL external reference in JSON format.
 
@@ -1862,7 +1874,9 @@ def _apply_sbom_purl_override(sbom_file: str, config: "Config") -> None:
 # =============================================================================
 
 
-def _make_bool_envvar_callback(envvar: str, default: bool):
+def _make_bool_envvar_callback(
+    envvar: str, default: bool
+) -> "Callable[[click.Context, click.Parameter, Optional[bool]], bool]":
     """
     Create a callback for boolean flags with environment variable fallback.
 
@@ -1881,8 +1895,8 @@ def _make_bool_envvar_callback(envvar: str, default: bool):
     def callback(ctx: click.Context, param: click.Parameter, value: Optional[bool]) -> bool:
         # Check if the flag was explicitly provided on command line
         # by looking at the source of the value
-        if ctx.get_parameter_source(param.name) == click.core.ParameterSource.COMMANDLINE:
-            return value
+        if param.name and ctx.get_parameter_source(param.name) == click.core.ParameterSource.COMMANDLINE:
+            return value if value is not None else default
 
         # Check environment variable with string-to-bool conversion
         env_value = os.getenv(envvar)

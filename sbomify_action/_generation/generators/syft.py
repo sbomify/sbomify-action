@@ -110,6 +110,7 @@ class SyftFsGenerator:
 
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using Syft scan command."""
+        assert input.lock_file is not None  # guaranteed by supports()
         # Determine format string and version
         if input.output_format == "cyclonedx":
             version = input.spec_version or SYFT_CYCLONEDX_DEFAULT
@@ -241,6 +242,7 @@ class SyftImageGenerator:
 
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using Syft scan command."""
+        assert input.docker_image is not None  # guaranteed by supports()
         # Determine format string and version
         if input.output_format == "cyclonedx":
             version = input.spec_version or SYFT_CYCLONEDX_DEFAULT

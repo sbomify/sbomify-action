@@ -16,7 +16,7 @@ Set DISABLE_VCS_AUGMENTATION=true to disable VCS enrichment.
 """
 
 import os
-from typing import Optional
+from typing import Any, Optional
 
 from sbomify_action.logging_config import logger
 
@@ -41,7 +41,7 @@ class GitHubActionsProvider:
         api_base_url: Optional[str] = None,
         token: Optional[str] = None,
         config_path: Optional[str] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Optional[AugmentationMetadata]:
         """
         Extract VCS metadata from GitHub Actions environment variables.

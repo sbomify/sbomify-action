@@ -37,7 +37,7 @@ class SbomifyApiProvider:
         api_base_url: Optional[str] = None,
         token: Optional[str] = None,
         config_path: Optional[str] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Optional[AugmentationMetadata]:
         """
         Fetch augmentation metadata from the sbomify API.
@@ -131,7 +131,8 @@ class SbomifyApiProvider:
                     pass
             raise APIError(err_msg)
 
-        return response.json()
+        result: Dict[str, Any] = response.json()
+        return result
 
     def _extract_from_contact_profile(self, data: Dict[str, Any]) -> None:
         """
@@ -313,5 +314,5 @@ class SbomifyApiProvider:
                 # Return as mailto: URI for CycloneDX externalReference compatibility
                 if not email.startswith("mailto:"):
                     return f"mailto:{email}"
-                return email
+                return str(email)
         return None

@@ -30,7 +30,7 @@ class ToolInfo:
 # Tool metadata with installation instructions (internal implementation detail)
 # This is used to provide helpful messages when tools are missing.
 # The tool list itself is built dynamically from registered generators.
-_TOOL_METADATA: dict[str, dict] = {
+_TOOL_METADATA: dict[str, dict[str, object]] = {
     "trivy": {
         "name": "Trivy",
         "description": "Comprehensive vulnerability scanner and SBOM generator",
@@ -108,12 +108,12 @@ def _get_external_tools() -> dict[str, ToolInfo]:
             # Look up metadata for this command
             metadata = _TOOL_METADATA.get(command, {})
             tools[command] = ToolInfo(
-                name=metadata.get("name", command),
+                name=str(metadata.get("name", command)),
                 command=command,
-                description=metadata.get("description", f"SBOM generator ({command})"),
-                install_instructions=metadata.get("install_instructions", f"Install {command}"),
-                homepage=metadata.get("homepage", ""),
-                required_for=metadata.get("required_for", []),
+                description=str(metadata.get("description", f"SBOM generator ({command})")),
+                install_instructions=str(metadata.get("install_instructions", f"Install {command}")),
+                homepage=str(metadata.get("homepage", "")),
+                required_for=list(metadata.get("required_for") or []),  # type: ignore[call-overload]
             )
 
     return tools

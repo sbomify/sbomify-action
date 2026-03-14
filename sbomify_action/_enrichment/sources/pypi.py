@@ -48,7 +48,7 @@ class PyPISource:
 
     def supports(self, purl: PackageURL) -> bool:
         """Check if this source supports the given PURL."""
-        return purl.type == "pypi"
+        return bool(purl.type == "pypi")
 
     def fetch(self, purl: PackageURL, session: requests.Session) -> Optional[NormalizedMetadata]:
         """

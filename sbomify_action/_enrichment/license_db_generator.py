@@ -934,7 +934,7 @@ def fetch_rpm_packages(repo_url: str) -> Iterator[RpmPackageInfo]:
                 # Use streaming decompression for files without content size in header
                 reader = dctx.stream_reader(io.BytesIO(response.content))
                 data = reader.read()
-                reader.close()
+                reader.close()  # type: ignore[no-untyped-call]
             except ImportError:
                 logger.warning("zstandard not installed, cannot decompress .zst files")
                 logger.warning("Install with: pip install zstandard")
@@ -963,7 +963,7 @@ def fetch_rpm_packages(repo_url: str) -> Iterator[RpmPackageInfo]:
                 continue
 
             name = name_elem.text or ""
-            arch = arch_elem.text if arch_elem is not None else ""
+            arch = (arch_elem.text or "") if arch_elem is not None else ""
             epoch = version_elem.get("epoch")
             version = version_elem.get("ver") or ""
             release = version_elem.get("rel") or ""
@@ -1083,7 +1083,7 @@ def generate_alpine_db(
 
     # Collect all packages first to know total count
     all_packages = []
-    seen_names: set = set()
+    seen_names: set[str] = set()
     for repo in ALPINE_REPOS:
         for pkg_info in fetch_alpine_packages(distro_version, repo):
             if pkg_info.name not in seen_names:
@@ -1162,7 +1162,7 @@ def generate_wolfi_db(
 
     # Collect all packages first to know total count
     all_packages = []
-    seen_names: set = set()
+    seen_names: set[str] = set()
     for pkg_info in fetch_wolfi_packages():
         if pkg_info.name not in seen_names:
             seen_names.add(pkg_info.name)
@@ -1246,7 +1246,7 @@ def generate_ubuntu_db(
 
     # Collect all packages first to know total count
     all_packages = []
-    seen_names: set = set()
+    seen_names: set[str] = set()
     for component in UBUNTU_COMPONENTS:
         for pocket in UBUNTU_POCKETS:
             for pkg_info in fetch_ubuntu_packages(codename, component, pocket):
@@ -1354,7 +1354,7 @@ def generate_debian_db(
 
     # Collect all packages first to know total count
     all_packages = []
-    seen_names: set = set()
+    seen_names: set[str] = set()
     for component in DEBIAN_COMPONENTS:
         for pocket in DEBIAN_POCKETS:
             for pkg_info in fetch_debian_packages(codename, component, pocket):
@@ -1502,7 +1502,7 @@ def generate_rpm_db(
     # Collect all packages first to know total count
     # Store as (pkg_info, repo_url) tuples since we need repo_url for processing
     all_packages = []
-    seen_names: set = set()
+    seen_names: set[str] = set()
     for repo_url in repos:
         for pkg_info in fetch_rpm_packages(repo_url):
             if pkg_info.name not in seen_names:

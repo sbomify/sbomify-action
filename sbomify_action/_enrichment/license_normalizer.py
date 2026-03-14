@@ -409,7 +409,7 @@ class DEP5File:
     format_url: Optional[str] = None
     licenses: Optional[Set[str]] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.licenses is None:
             self.licenses = set()
 
@@ -486,6 +486,7 @@ def parse_dep5_copyright(text: str) -> DEP5File:
             # Take first line only (rest is license text)
             license_id = license_field.split("\n")[0].strip()
             if license_id and not license_id.startswith("."):
+                assert result.licenses is not None  # guaranteed by __post_init__
                 result.licenses.add(license_id)
 
     return result
@@ -525,10 +526,10 @@ def extract_dep5_license(text: str) -> Optional[str]:
         return normalized[0]
 
     # Multiple licenses - create AND expression
-    result = " AND ".join(f"({n})" if " " in n else n for n in sorted(set(normalized)))
+    combined = " AND ".join(f"({n})" if " " in n else n for n in sorted(set(normalized)))
 
     # Final validation
-    if validate_spdx_expression(result):
-        return result
+    if validate_spdx_expression(combined):
+        return combined
 
     return None

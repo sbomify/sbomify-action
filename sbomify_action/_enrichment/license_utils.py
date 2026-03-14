@@ -302,7 +302,7 @@ def _split_license_string(license_str: str) -> list[str]:
     # Then split each part on lowercase " and " / " or " (word boundary to avoid
     # splitting words like "Standard")
     # Uppercase "AND"/"OR" are valid SPDX operators, so we leave them alone
-    result = []
+    result: list[str] = []
     for part in parts:
         sub_parts = re.split(r"\s+(?:and|or)\s+", part)
         for sp in sub_parts:
@@ -313,7 +313,7 @@ def _split_license_string(license_str: str) -> list[str]:
     return result
 
 
-def normalize_license_list(licenses: list) -> Tuple[list, dict]:
+def normalize_license_list(licenses: list[str]) -> Tuple[list[str], dict[str, str]]:
     """
     Normalize a list of license strings.
 
@@ -363,7 +363,7 @@ def normalize_license_list(licenses: list) -> Tuple[list, dict]:
     return (normalized, texts)
 
 
-def get_spdx_license_info(spdx_id: str) -> Optional[dict]:
+def get_spdx_license_info(spdx_id: str) -> Optional[dict[str, object]]:
     """
     Get information about an SPDX license ID.
 

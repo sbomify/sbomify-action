@@ -51,7 +51,7 @@ def _derive_repo_name_from_purl(purl: PackageURL) -> Optional[str]:
         # "ubuntu-24.04" → "ubuntu_24_04"
         # "fedora-40" → "fedora_40"
         repo_name = distro.replace("-", "_").replace(".", "_")
-        return repo_name
+        return str(repo_name)
 
     # Rolling release distros have fixed repo names
     if namespace in ROLLING_RELEASE_REPOS:
@@ -59,7 +59,7 @@ def _derive_repo_name_from_purl(purl: PackageURL) -> Optional[str]:
 
     # No distro qualifier and not rolling - return namespace as fallback
     # Repology will search across all versions of this distro
-    return namespace
+    return str(namespace)
 
 
 # OS package types supported by Repology
@@ -209,7 +209,7 @@ class RepologySource:
         # Extract metadata
         description = best_entry.get("summary")
         homepage = best_entry.get("www")
-        licenses = []
+        licenses: list[str] = []
         license_texts: dict[str, str] = {}
         if best_entry.get("licenses"):
             licenses, license_texts = normalize_license_list(best_entry["licenses"])

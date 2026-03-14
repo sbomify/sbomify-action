@@ -53,7 +53,7 @@ DISABLE_LOCAL_GENERATION = os.environ.get("SBOMIFY_ENABLE_LICENSE_DB_GENERATION"
 )
 
 # Supported distros and their database file patterns
-SUPPORTED_DISTROS = {
+SUPPORTED_DISTROS: Dict[str, Dict[str, Any]] = {
     "alpine": {
         "type": "apk",
         "versions": ["3.13", "3.14", "3.15", "3.16", "3.17", "3.18", "3.19", "3.20", "3.21"],
@@ -230,7 +230,7 @@ class LicenseDBSource:
             return None
 
         # Build metadata with all available fields
-        field_sources: dict = {}
+        field_sources: dict[str, str] = {}
 
         # License (required)
         licenses = [spdx]
@@ -394,33 +394,33 @@ class LicenseDBSource:
             cache_file = self._cache_dir / f"{distro}-{version}.json.gz"
             if cache_file.exists():
                 try:
-                    db = self._load_from_file(cache_file)
-                    _db_cache[cache_key] = db
+                    cached_db = self._load_from_file(cache_file)
+                    _db_cache[cache_key] = cached_db
                     logger.debug(f"Loaded license database from cache: {cache_file}")
-                    return db
+                    return cached_db
                 except Exception as e:
                     logger.warning(f"Failed to load cached database {cache_file}: {e}")
                     cache_file.unlink(missing_ok=True)
 
             # Try to download from latest GitHub Release
-            db = self._download_from_release(distro, version, session)
-            if db:
-                _db_cache[cache_key] = db
+            downloaded_db = self._download_from_release(distro, version, session)
+            if downloaded_db:
+                _db_cache[cache_key] = downloaded_db
                 # Save to local cache
                 try:
-                    self._save_to_file(cache_file, db)
+                    self._save_to_file(cache_file, downloaded_db)
                     logger.info(f"Cached license database: {cache_file}")
                 except Exception as e:
                     logger.warning(f"Failed to save database to cache: {e}")
-                return db
+                return downloaded_db
 
             # Fallback: generate locally
             if not DISABLE_LOCAL_GENERATION:
                 logger.info(f"Database not found in release, generating locally for {distro}-{version}...")
-                db = self._generate_locally(distro, version, cache_file)
-                if db:
-                    _db_cache[cache_key] = db
-                    return db
+                generated_db = self._generate_locally(distro, version, cache_file)
+                if generated_db:
+                    _db_cache[cache_key] = generated_db
+                    return generated_db
 
             logger.debug(f"No license database available for {distro}-{version}")
             return None
@@ -428,7 +428,8 @@ class LicenseDBSource:
     def _load_from_file(self, path: Path) -> Dict[str, Any]:
         """Load a gzipped JSON database from file."""
         with gzip.open(path, "rt", encoding="utf-8") as f:
-            return json.load(f)
+            result: Dict[str, Any] = json.load(f)
+            return result
 
     def _save_to_file(self, path: Path, db: Dict[str, Any]) -> None:
         """Save a database to gzipped JSON file."""
@@ -537,7 +538,8 @@ class LicenseDBSource:
 
             # Decompress and parse using BytesIO for reliability
             with gzip.GzipFile(fileobj=io.BytesIO(response.content)) as gz:
-                return json.load(gz)
+                result: Dict[str, Any] = json.load(gz)
+                return result
 
         except Exception as e:
             logger.warning(f"Failed to download license database: {e}")
@@ -597,7 +599,7 @@ class LicenseDBSource:
 
         return None
 
-    def _build_arch_agnostic_index(self, db: Dict[str, Any]) -> Dict[Tuple[str, str, str, str], list]:
+    def _build_arch_agnostic_index(self, db: Dict[str, Any]) -> Dict[Tuple[str, str, str, str], list[Any]]:
         """
         Build an index for O(1) architecture-agnostic lookups.
 
@@ -613,9 +615,10 @@ class LicenseDBSource:
             Index dict mapping (type, namespace, name, version) -> [(qualifiers, pkg_data), ...]
         """
         if "_arch_agnostic_index" in db:
-            return db["_arch_agnostic_index"]
+            idx: Dict[Tuple[str, str, str, str], list[Any]] = db["_arch_agnostic_index"]
+            return idx
 
-        index: Dict[Tuple[str, str, str, str], list] = {}
+        index: Dict[Tuple[str, str, str, str], list[Any]] = {}
         packages = db.get("packages", {})
 
         for purl_str, pkg_data in packages.items():
@@ -677,7 +680,8 @@ class LicenseDBSource:
         for db_qualifiers, pkg_data in candidates:
             if db_qualifiers == input_qualifiers:
                 logger.debug(f"Architecture-agnostic match: {purl.name} (input arch={input_arch})")
-                return pkg_data
+                result: Dict[str, Any] = pkg_data
+                return result
 
         return None
 
@@ -694,19 +698,21 @@ class LicenseDBSource:
         Returns:
             Package data dict or None
         """
-        packages = db.get("packages", {})
+        packages: Dict[str, Any] = db.get("packages", {})
 
         # First pass: look for exact name match in the data
         for purl_str, pkg_data in packages.items():
             if pkg_data.get("name") == name:
-                return pkg_data
+                result: Dict[str, Any] = pkg_data
+                return result
 
         # Second pass: try to extract name from PURL keys
         for purl_str, pkg_data in packages.items():
             try:
                 purl = PackageURL.from_string(purl_str)
                 if purl.name == name:
-                    return pkg_data
+                    result2: Dict[str, Any] = pkg_data
+                    return result2
             except Exception as e:
                 logger.debug(f"Failed to parse PURL during name lookup: {purl_str}: {e}")
                 continue
