@@ -10,10 +10,11 @@ repos:
       # Run the formatter.
       - id: ruff-format
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.19.0
+    rev: v1.19.1
     hooks:
       - id: mypy
-        args: [--config-file=pyproject.toml]
+        args: [--config-file=pyproject.toml, sbomify_action]
+        pass_filenames: false
         additional_dependencies:
           - types-requests
           - types-PyYAML
