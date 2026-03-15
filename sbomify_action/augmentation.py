@@ -357,6 +357,19 @@ def _normalize_urls_to_list(urls: Any) -> List[str]:
     return [urls]
 
 
+def _safe_xs_uris(urls: Any) -> list[XsUri]:
+    """Convert URL strings to XsUri objects, skipping invalid entries."""
+    result: list[XsUri] = []
+    for u in urls:
+        if not isinstance(u, str) or not u.strip():
+            continue
+        try:
+            result.append(XsUri(u))
+        except Exception:
+            logger.debug(f"Skipping invalid URL for XsUri: {u!r}")
+    return result
+
+
 def _is_cdx_version_at_least(spec_version: Optional[str], min_major: int, min_minor: int) -> bool:
     """Check if CycloneDX spec version meets minimum requirement.
 
@@ -638,7 +651,7 @@ def augment_cyclonedx_sbom(
             # Create merged supplier
             bom.metadata.supplier = OrganizationalEntity(
                 name=merged_name,
-                urls=[XsUri(u) for u in merged_urls],
+                urls=_safe_xs_uris(merged_urls),
                 contacts=list(merged_contacts),
             )
         else:
@@ -672,7 +685,7 @@ def augment_cyclonedx_sbom(
             # Create backend manufacturer entity
             backend_manufacturer = OrganizationalEntity(
                 name=manufacturer_name,
-                urls=[XsUri(u) for u in _normalize_urls_to_list(manufacturer_data.get("url"))],
+                urls=_safe_xs_uris(_normalize_urls_to_list(manufacturer_data.get("url"))),
                 contacts=[],
             )
 
