@@ -1060,13 +1060,13 @@ def _enrich_spdx_document_with_plugin_architecture(document: Document, enricher:
 
 def _enrich_spdx3_sbom(input_path: Path, output_path: Path, enricher: Enricher) -> None:
     """Enrich an SPDX 3 SBOM using Payload model objects."""
-    from .spdx3 import (  # type: ignore[attr-defined]
+    from .spdx3 import (
         ExternalReference as Spdx3ExtRef,
     )
-    from .spdx3 import (  # type: ignore[attr-defined]
+    from .spdx3 import (
         ExternalReferenceType as Spdx3ExtRefType,
     )
-    from .spdx3 import (  # type: ignore[attr-defined]
+    from .spdx3 import (
         Organization as Spdx3Org,
     )
     from .spdx3 import (

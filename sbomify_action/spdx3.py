@@ -56,6 +56,17 @@ from spdx_tools.spdx3.writer.json_ld.json_ld_converter import (
 
 from .logging_config import logger
 
+# Explicitly re-export spdx_tools model types used by other modules
+# (enrichment.py, augmentation.py) so mypy strict mode doesn't flag
+# them as implicit re-exports.
+__all__ = [
+    "ExternalReference",
+    "ExternalReferenceType",
+    "Organization",
+    "Person",
+    "Tool",
+]
+
 
 class Spdx3Payload(Payload):  # type: ignore[misc]
     """Thin wrapper around :class:`Payload` that carries passthrough elements.

@@ -1658,19 +1658,19 @@ def augment_spdx3_sbom(
         component_name: Optional component name override
         component_version: Optional component version override
     """
-    from .spdx3 import (  # type: ignore[attr-defined]
+    from .spdx3 import (
         ExternalReference as Spdx3ExtRef,
     )
-    from .spdx3 import (  # type: ignore[attr-defined]
+    from .spdx3 import (
         ExternalReferenceType as Spdx3ExtRefType,
     )
-    from .spdx3 import (  # type: ignore[attr-defined]
+    from .spdx3 import (
         Organization as Spdx3Org,
     )
-    from .spdx3 import (  # type: ignore[attr-defined]
+    from .spdx3 import (
         Person as Spdx3Person,
     )
-    from .spdx3 import (  # type: ignore[attr-defined]
+    from .spdx3 import (
         Tool as Spdx3Tool,
     )
     from .spdx3 import (

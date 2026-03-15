@@ -113,7 +113,7 @@ def _get_external_tools() -> dict[str, ToolInfo]:
                 description=str(metadata.get("description", f"SBOM generator ({command})")),
                 install_instructions=str(metadata.get("install_instructions", f"Install {command}")),
                 homepage=str(metadata.get("homepage", "")),
-                required_for=list(metadata.get("required_for") or []),  # type: ignore[call-overload]
+                required_for=list(rf) if isinstance(rf := metadata.get("required_for"), list) else [],
             )
 
     return tools
