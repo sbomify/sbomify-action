@@ -23,6 +23,7 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
+    "click>=8.0,<9",
     "requests>=2.32.3,<3",
     "cyclonedx-bom>=7.2.1,<8",
     "cyclonedx-python-lib>=11.5.0,<12",

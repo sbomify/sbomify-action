@@ -1615,6 +1615,7 @@ name = "sbomify-action"
 version = "0.14"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "conan" },
     { name = "cyclonedx-bom" },
     { name = "cyclonedx-python-lib" },
@@ -1645,6 +1646,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.0,<9" },
     { name = "conan", specifier = ">=2.0,<3" },
     { name = "cyclonedx-bom", specifier = ">=7.2.1,<8" },
     { name = "cyclonedx-python-lib", specifier = ">=11.5.0,<12" },
