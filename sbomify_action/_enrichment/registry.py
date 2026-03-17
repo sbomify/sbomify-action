@@ -1,6 +1,6 @@
 """Source registry for managing data source plugins."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 from packageurl import PackageURL
@@ -33,7 +33,7 @@ class SourceRegistry:
 
     def __init__(self) -> None:
         """Initialize an empty registry."""
-        self._sources: List[DataSource] = []
+        self._sources: list[DataSource] = []
 
     def register(self, source: DataSource) -> None:
         """
@@ -47,7 +47,7 @@ class SourceRegistry:
         self._sources.append(source)
         logger.debug(f"Registered data source: {source.name} (priority={source.priority})")
 
-    def get_sources_for(self, purl: PackageURL) -> List[DataSource]:
+    def get_sources_for(self, purl: PackageURL) -> list[DataSource]:
         """
         Get all applicable sources for a PURL, sorted by priority.
 
@@ -66,7 +66,7 @@ class SourceRegistry:
         purl: PackageURL,
         session: requests.Session,
         merge_results: bool = True,
-    ) -> Optional[NormalizedMetadata]:
+    ) -> NormalizedMetadata | None:
         """
         Fetch metadata using the priority chain of sources.
 
@@ -87,13 +87,22 @@ class SourceRegistry:
             logger.debug(f"No sources available for PURL type: {purl.type}")
             return None
 
-        result: Optional[NormalizedMetadata] = None
+        result: NormalizedMetadata | None = None
 
         for source in sources:
-            # Stop early if we already have all core NTIA fields
+            # Two-phase early exit: (1) if NTIA + all CLE fields are filled, stop entirely;
+            # (2) if only NTIA is filled but CLE is missing, skip non-CLE sources and
+            # continue only with lifecycle-capable sources (those declaring provides_cle=True).
             if result and result.description and result.licenses and result.supplier:
-                logger.debug(f"Skipping {source.name} - already have sufficient data for {purl.name}")
-                break
+                if result.cle_release_date and result.cle_eos and result.cle_eol:
+                    logger.debug(f"Skipping {source.name} - already have sufficient data for {purl.name}")
+                    break
+                # NTIA complete but CLE missing — only continue with lifecycle-capable sources.
+                # Sources opt in by declaring `provides_cle = True` (not in the Protocol;
+                # checked via getattr so non-CLE sources need no changes).
+                if not getattr(source, "provides_cle", False):
+                    logger.debug(f"Skipping {source.name} - NTIA complete, not a CLE provider for {purl.name}")
+                    continue
 
             try:
                 metadata = source.fetch(purl, session)
@@ -114,7 +123,7 @@ class SourceRegistry:
 
         return result
 
-    def list_sources(self) -> List[Dict[str, Any]]:
+    def list_sources(self) -> list[dict[str, Any]]:
         """
         List all registered sources with their priorities.
 
