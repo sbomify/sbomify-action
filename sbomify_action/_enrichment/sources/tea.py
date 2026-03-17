@@ -53,6 +53,8 @@ def _is_safe_url(url: str) -> bool:
     """Check that a URL does not point to private/internal addresses."""
     try:
         parsed = urlparse(url)
+        if (parsed.scheme or "").lower() not in ("http", "https"):
+            return False
         hostname = parsed.hostname
         if not hostname:
             return False
@@ -67,6 +69,18 @@ def _is_safe_url(url: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def _redact_url(url: str) -> str:
+    """Return scheme://hostname:port only, stripping credentials, path, and query."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port else ""
+        scheme = f"{parsed.scheme}://" if parsed.scheme else ""
+        return f"{scheme}{hostname}{port}" if hostname else "<invalid>"
+    except Exception:
+        return "<invalid>"
 
 
 def clear_cache() -> None:
@@ -89,7 +103,7 @@ def _get_client(purl_type: str) -> TeaClient | None:
 
     if base_url_override:
         if not _is_safe_url(base_url_override):
-            logger.warning(f"TEA_BASE_URL rejected (private/internal address): {base_url_override}")
+            logger.warning(f"TEA_BASE_URL rejected (private/internal address): {_redact_url(base_url_override)}")
             return None
         cache_key = f"base_url:{base_url_override}:token:{hashlib.sha256((token or '').encode()).hexdigest()[:16]}"
         if cache_key not in _client_cache:

@@ -127,6 +127,11 @@ class TestIsSafeUrl(unittest.TestCase):
     def test_no_hostname_rejected(self):
         assert _is_safe_url("file:///etc/passwd") is False
 
+    def test_non_http_scheme_rejected(self):
+        assert _is_safe_url("ftp://tea.example.com/v1") is False
+        assert _is_safe_url("gopher://tea.example.com/v1") is False
+        assert _is_safe_url("javascript://tea.example.com") is False
+
 
 class TestTeaSourceFetch(unittest.TestCase):
     """Test fetch behavior with mocked TeaClient."""
