@@ -42,7 +42,7 @@ def _select_best_format(
     return None
 
 
-@tea_group.command()
+@tea_group.command()  # type: ignore[untyped-decorator]
 @click.option("--tei", default=None, help="TEI URN to discover and fetch SBOM for")
 @click.option("--product-release-uuid", default=None, help="Product release UUID to fetch from")
 @click.option("--component-release-uuid", default=None, help="Component release UUID to fetch from")
@@ -72,20 +72,20 @@ def _select_best_format(
 @click.option("--port", type=int, default=None, help="Port for well-known resolution")
 @click.option("--allow-private-ips", is_flag=True, help="Allow private IPs (WARNING: weakens SSRF protections)")
 def fetch(
-    tei,
-    product_release_uuid,
-    component_release_uuid,
-    artifact_type,
-    output_path,
-    base_url,
-    domain,
-    token,
-    auth,
-    timeout,
-    use_http,
-    port,
-    allow_private_ips,
-):
+    tei: str | None,
+    product_release_uuid: str | None,
+    component_release_uuid: str | None,
+    artifact_type: str,
+    output_path: str,
+    base_url: str | None,
+    domain: str | None,
+    token: str | None,
+    auth: str | None,
+    timeout: float,
+    use_http: bool,
+    port: int | None,
+    allow_private_ips: bool,
+) -> None:
     """Fetch an SBOM from a TEA server in one step.
 
     Combines discovery, collection lookup, artifact selection, and download.
@@ -146,10 +146,14 @@ def fetch(
             fmt = _select_best_format(artifact.formats)
             if not fmt:
                 _error(f"No downloadable format found for artifact '{artifact.name}'")
+                return  # unreachable: _error is NoReturn, but helps mypy narrow fmt
 
             print(f"Downloading {artifact.name} ({fmt.media_type or 'unknown'}) ...", file=sys.stderr)
 
-            result_path = client.download_artifact(fmt.url, dest, verify_checksums=fmt.checksums)
+            assert fmt.url is not None  # guaranteed by _select_best_format
+            result_path = client.download_artifact(
+                fmt.url, dest, verify_checksums=list(fmt.checksums) if fmt.checksums else None
+            )
             print(f"Saved to {result_path}", file=sys.stderr)
 
     except TeaError as exc:

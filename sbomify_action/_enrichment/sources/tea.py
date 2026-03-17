@@ -118,7 +118,7 @@ def _get_client(purl_type: str) -> TeaClient | None:
 
 def _purl_to_search_value(purl: PackageURL) -> str:
     """Convert a PackageURL to a canonical string (no qualifiers/subpath)."""
-    return PackageURL(type=purl.type, namespace=purl.namespace, name=purl.name, version=purl.version).to_string()
+    return str(PackageURL(type=purl.type, namespace=purl.namespace, name=purl.name, version=purl.version).to_string())
 
 
 class TeaSource:
@@ -147,7 +147,7 @@ class TeaSource:
         if purl.type in PURL_TYPE_TO_TEA_DOMAIN:
             return True
         base_url = os.getenv("TEA_BASE_URL")
-        return bool(base_url) and _is_safe_url(base_url)
+        return bool(base_url) and _is_safe_url(str(base_url))
 
     def fetch(self, purl: PackageURL, session: requests.Session) -> NormalizedMetadata | None:
         """Discover TEA server from PURL type and fetch metadata."""

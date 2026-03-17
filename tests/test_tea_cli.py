@@ -241,7 +241,7 @@ class TestTeaFetch(unittest.TestCase):
             mock_client.download_artifact.assert_called_once()
             # Verify checksums were passed through
             call_kwargs = mock_client.download_artifact.call_args
-            assert call_kwargs.kwargs.get("verify_checksums") == checksums
+            assert call_kwargs.kwargs.get("verify_checksums") == list(checksums)
 
     @patch("sbomify_action.cli.tea._build_client")
     def test_fetch_by_product_release_uuid(self, mock_build_client):
