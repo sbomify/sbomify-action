@@ -42,7 +42,7 @@ Security and lifecycle fields (CRA compliance):
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from sbomify_action.logging_config import logger
 
@@ -70,7 +70,7 @@ class JsonConfigProvider:
         api_base_url: Optional[str] = None,
         token: Optional[str] = None,
         config_path: Optional[str] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Optional[AugmentationMetadata]:
         """
         Fetch augmentation metadata from a JSON config file.

@@ -30,11 +30,12 @@ def setup_logging(level: str = "INFO", structured: bool = False, use_rich: bool 
 
     logger.setLevel(getattr(logging, level.upper()))
 
+    handler: logging.Handler
     if structured:
         # Structured JSON logging for production/parsing
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(getattr(logging, level.upper()))
-        formatter = StructuredFormatter()
+        formatter: logging.Formatter = StructuredFormatter()
         handler.setFormatter(formatter)
     elif use_rich:
         # Rich handler for beautiful output

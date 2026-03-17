@@ -8,7 +8,8 @@ References:
     Schema Crosswalk: https://sbomify.com/compliance/schema-crosswalk/
 """
 
-from typing import Dict, List, Optional
+from types import TracebackType
+from typing import Any, Dict, List, Optional
 
 import requests
 from packageurl import PackageURL
@@ -140,7 +141,12 @@ class Enricher:
         """Context manager entry."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Context manager exit."""
         self.close()
 
@@ -192,7 +198,7 @@ class Enricher:
 
         return results
 
-    def get_enrichment_stats(self, metadata_map: Dict[str, Optional[NormalizedMetadata]]) -> Dict[str, int]:
+    def get_enrichment_stats(self, metadata_map: Dict[str, Optional[NormalizedMetadata]]) -> Dict[str, Any]:
         """
         Calculate enrichment statistics from a metadata map.
 
@@ -202,7 +208,8 @@ class Enricher:
         Returns:
             Dictionary with enrichment statistics
         """
-        stats = {
+        sources: Dict[str, int] = {}
+        stats: Dict[str, Any] = {
             "total": len(metadata_map),
             "enriched": 0,
             "descriptions": 0,
@@ -210,7 +217,7 @@ class Enricher:
             "suppliers": 0,
             "homepages": 0,
             "repositories": 0,
-            "sources": {},
+            "sources": sources,
         }
 
         for metadata in metadata_map.values():
@@ -230,7 +237,7 @@ class Enricher:
                 # Track sources
                 for source in metadata.source.split(", "):
                     if source:
-                        stats["sources"][source] = stats["sources"].get(source, 0) + 1
+                        sources[source] = sources.get(source, 0) + 1
 
         return stats
 

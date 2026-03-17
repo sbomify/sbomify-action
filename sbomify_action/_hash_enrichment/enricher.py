@@ -311,7 +311,7 @@ def enrich_sbom_with_hashes(
     # Detect format and enrich
     if sbom_data.get("bomFormat") == "CycloneDX":
         # CycloneDX format
-        bom = Bom.from_json(sbom_data)
+        bom = Bom.from_json(sbom_data)  # type: ignore[attr-defined]
         stats = enricher.enrich_cyclonedx(bom, lock_path, overwrite_existing)
 
         # Serialize back

@@ -1,6 +1,7 @@
 """Parser for uv.lock files (Python uv package manager)."""
 
 from pathlib import Path
+from typing import Any
 
 import tomllib
 
@@ -81,7 +82,7 @@ class UvLockParser:
 
         return hashes
 
-    def _select_best_wheel_hash(self, wheels: list) -> str | None:
+    def _select_best_wheel_hash(self, wheels: list[dict[str, Any]]) -> str | None:
         """Select the best wheel hash from available wheels.
 
         Prefers universal wheels (py3-none-any) over platform-specific ones.

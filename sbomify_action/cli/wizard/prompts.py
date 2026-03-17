@@ -1,6 +1,6 @@
 """Styled prompt wrappers for the sbomify.json wizard."""
 
-from typing import Callable
+from collections.abc import Callable, Sequence
 
 import questionary
 from questionary import Choice, Style
@@ -95,12 +95,12 @@ def ask_text(
         if allow_back:
             raise GoBack()
         return ""
-    return result
+    return str(result)
 
 
 def ask_select(
     question: str,
-    choices: list[str | Choice],
+    choices: Sequence[str | Choice],
     default: str | None = None,
     instruction: str | None = None,
     allow_back: bool = False,
@@ -122,7 +122,7 @@ def ask_select(
     """
     result = questionary.select(
         question,
-        choices=choices,
+        choices=list(choices),
         default=default,
         instruction=instruction or "(arrows to move, Enter to select, Esc to go back)",
         style=WIZARD_STYLE,
@@ -130,7 +130,7 @@ def ask_select(
 
     if result is None and allow_back:
         raise GoBack()
-    return result
+    return str(result) if result is not None else None
 
 
 def ask_confirm(question: str, default: bool = True, allow_back: bool = True) -> bool:
@@ -157,7 +157,7 @@ def ask_confirm(question: str, default: bool = True, allow_back: bool = True) ->
         if allow_back:
             raise GoBack()
         return default
-    return result
+    return bool(result)
 
 
 def ask_autocomplete(
@@ -192,7 +192,7 @@ def ask_autocomplete(
         if allow_back:
             raise GoBack()
         return ""
-    return result
+    return str(result)
 
 
 def print_success(message: str) -> None:

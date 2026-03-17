@@ -46,6 +46,10 @@ jobs:
         run: |
             uv run ruff format --check sbomify_action tests
 
+      - name: Run mypy type checker
+        run: |
+            uv run mypy sbomify_action
+
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest

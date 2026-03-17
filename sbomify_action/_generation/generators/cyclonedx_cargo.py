@@ -117,6 +117,7 @@ class CycloneDXCargoGenerator:
     def _generate(self, input: GenerationInput, spec_version: str) -> GenerationResult:
         """Generate SBOM for Cargo.lock."""
         # cargo-cyclonedx needs to run from the project directory containing Cargo.lock
+        assert input.lock_file is not None  # guaranteed by supports()
         lock_file_path = Path(input.lock_file)
         project_dir = lock_file_path.parent.resolve()
 

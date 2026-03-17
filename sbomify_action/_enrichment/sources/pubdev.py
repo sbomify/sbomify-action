@@ -48,7 +48,7 @@ class PubDevSource:
 
     def supports(self, purl: PackageURL) -> bool:
         """Check if this source supports the given PURL."""
-        return purl.type == "pub"
+        return bool(purl.type == "pub")
 
     def fetch(self, purl: PackageURL, session: requests.Session) -> Optional[NormalizedMetadata]:
         """

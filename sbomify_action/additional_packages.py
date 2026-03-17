@@ -21,7 +21,7 @@ from cyclonedx.model import Property
 from cyclonedx.model.bom import Bom
 from cyclonedx.model.component import Component, ComponentType
 from packageurl import PackageURL
-from spdx_tools.spdx.model import (
+from spdx_tools.spdx.model import (  # type: ignore[attr-defined]
     Actor,
     ActorType,
     CreationInfo,
@@ -563,7 +563,7 @@ def inject_additional_packages(sbom_file: str) -> int:
             return 0
 
         try:
-            bom = Bom.from_json(data)
+            bom = Bom.from_json(data)  # type: ignore[attr-defined]
         except Exception as e:
             logger.error(f"Failed to parse CycloneDX SBOM: {e}")
             return 0
@@ -581,7 +581,8 @@ def inject_additional_packages(sbom_file: str) -> int:
 
     # Handle SPDX 3
     elif is_spdx3(data):
-        injected = inject_packages_into_spdx3(str(sbom_path), purls)
+        purl_objects = [p for purl_str in purls if (p := parse_purl(purl_str)) is not None]
+        injected = inject_packages_into_spdx3(str(sbom_path), purl_objects)
 
         if injected > 0:
             logger.info(f"Injected {injected} additional package(s) into SPDX 3 SBOM")

@@ -2,6 +2,7 @@
 
 import json
 import shutil
+from typing import Any
 
 from rich.table import Table
 
@@ -102,7 +103,7 @@ def _print_summary(result: YoctoPipelineResult) -> None:
     console.print(table)
 
 
-def _detect_spdx3(input_path: str) -> dict | None:
+def _detect_spdx3(input_path: str) -> dict[str, Any] | None:
     """If *input_path* is an SPDX 3 JSON-LD file, return parsed data; else None."""
     if not input_path.endswith((".json", ".spdx.json")):
         return None
@@ -122,7 +123,7 @@ def _detect_spdx3(input_path: str) -> dict | None:
     return None
 
 
-def _run_spdx3_pipeline(config: YoctoConfig, data: dict) -> YoctoPipelineResult:
+def _run_spdx3_pipeline(config: YoctoConfig, data: dict[str, Any]) -> YoctoPipelineResult:
     """Single-file SPDX 3 pipeline: augment, enrich, upload, release-tag."""
     if not config.component_id:
         raise ConfigurationError(

@@ -18,7 +18,7 @@ from .models import DiscoveredDependency, ExpansionResult, normalize_python_pack
 from .registry import ExpanderRegistry
 
 
-def _count_sbom_packages(sbom_data: dict) -> int:
+def _count_sbom_packages(sbom_data: dict[str, Any]) -> int:
     """Count packages in any SBOM format (CycloneDX, SPDX 2.x, SPDX 3)."""
     if sbom_data.get("bomFormat") == "CycloneDX":
         return len(sbom_data.get("components") or [])
@@ -147,7 +147,7 @@ class DependencyEnricher:
         source: str,
     ) -> ExpansionResult:
         """Add discovered dependencies to CycloneDX SBOM."""
-        bom = Bom.from_json(sbom_data)
+        bom = Bom.from_json(sbom_data)  # type: ignore[attr-defined]
         original_count = len(bom.components) if bom.components else 0
 
         # Ensure components collection is initialized in case Bom.from_json

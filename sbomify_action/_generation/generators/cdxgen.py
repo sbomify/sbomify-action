@@ -128,6 +128,7 @@ class CdxgenFsGenerator:
 
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using cdxgen command."""
+        assert input.lock_file is not None  # guaranteed by supports()
         version = input.spec_version or CDXGEN_CYCLONEDX_DEFAULT
 
         # Get the directory containing the lock file - we'll cd into it
@@ -138,7 +139,9 @@ class CdxgenFsGenerator:
         output_file_abs = str(Path(input.output_file).resolve())
 
         # Detect ecosystem and map to cdxgen type
-        ecosystem = get_lock_file_ecosystem(input.lock_file_name)
+        lock_file_name = input.lock_file_name
+        assert lock_file_name is not None  # guaranteed by supports()
+        ecosystem = get_lock_file_ecosystem(lock_file_name)
         cdxgen_type = CDXGEN_TYPE_MAP.get(ecosystem) if ecosystem else None
 
         # Install Java/Maven on-demand for Java/Scala ecosystems
@@ -272,6 +275,7 @@ class CdxgenImageGenerator:
 
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using cdxgen command for Docker images."""
+        assert input.docker_image is not None  # guaranteed by supports()
         version = input.spec_version or CDXGEN_CYCLONEDX_DEFAULT
 
         cmd = [

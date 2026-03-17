@@ -20,7 +20,7 @@ Usage:
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import jsonschema
 from referencing import Registry, Resource
@@ -53,7 +53,7 @@ SPDX_SCHEMAS = {
 }
 
 # Cache for loaded schemas
-_schema_cache: dict[str, dict] = {}
+_schema_cache: dict[str, dict[str, Any]] = {}
 
 # Cache for the schema registry (built lazily)
 _registry_cache: Registry | None = None
@@ -141,7 +141,7 @@ class ValidationResult:
         )
 
 
-def _load_schema(schema_path: Path) -> dict | None:
+def _load_schema(schema_path: Path) -> dict[str, Any] | None:
     """Load a JSON schema from disk with caching."""
     cache_key = str(schema_path)
     if cache_key in _schema_cache:
@@ -152,12 +152,12 @@ def _load_schema(schema_path: Path) -> dict | None:
         return None
 
     with open(schema_path) as f:
-        schema = json.load(f)
+        schema: dict[str, Any] = json.load(f)
         _schema_cache[cache_key] = schema
         return schema
 
 
-def get_schema_for_format(sbom_format: SBOMFormat, spec_version: str) -> dict | None:
+def get_schema_for_format(sbom_format: SBOMFormat, spec_version: str) -> dict[str, Any] | None:
     """
     Get the JSON schema for a specific format and version.
 
@@ -182,7 +182,7 @@ def get_schema_for_format(sbom_format: SBOMFormat, spec_version: str) -> dict | 
 
 
 def validate_sbom_data(
-    sbom_data: dict,
+    sbom_data: dict[str, Any],
     sbom_format: SBOMFormat,
     spec_version: str,
 ) -> ValidationResult:
@@ -281,7 +281,7 @@ def validate_sbom_file(
     return validate_sbom_data(sbom_data, sbom_format, spec_version)
 
 
-def detect_sbom_format_and_version(sbom_data: dict) -> tuple[SBOMFormat | None, str | None]:
+def detect_sbom_format_and_version(sbom_data: dict[str, Any]) -> tuple[SBOMFormat | None, str | None]:
     """
     Detect the format and version of an SBOM from its data.
 

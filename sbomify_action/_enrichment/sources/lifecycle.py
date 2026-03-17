@@ -23,6 +23,7 @@ from sbomify_action.logging_config import logger
 
 from ..lifecycle_data import (
     PACKAGE_LIFECYCLE,
+    LifecycleDates,
     PackageLifecycleEntry,
     extract_version_cycle,
 )
@@ -130,7 +131,7 @@ class LifecycleSource:
 
         return self._build_metadata(lifecycle_dates, f"{purl.name} {cycle}")
 
-    def _build_metadata(self, lifecycle_dates: Dict, context: str) -> Optional[NormalizedMetadata]:
+    def _build_metadata(self, lifecycle_dates: "LifecycleDates", context: str) -> Optional[NormalizedMetadata]:
         """Build NormalizedMetadata from lifecycle dates."""
         cle_eos = lifecycle_dates.get("end_of_support")
         cle_eol = lifecycle_dates.get("end_of_life")

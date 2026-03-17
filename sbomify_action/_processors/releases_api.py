@@ -253,7 +253,7 @@ def create_release(api_base_url: str, token: str, product_id: str, version: str)
     if data is not None:
         release_id = data.get("id")
         if release_id is not None:
-            return release_id
+            return str(release_id)
     raise APIError("Invalid response format when creating release")
 
 

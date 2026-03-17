@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from ...logging_config import logger
 from ...tool_checks import check_tool_available
@@ -194,7 +195,7 @@ class PipdeptreeExpander:
 
         return name, None
 
-    def _run_pipdeptree(self, packages: str | None = None) -> list[dict] | None:
+    def _run_pipdeptree(self, packages: str | None = None) -> list[dict[str, Any]] | None:
         """Run pipdeptree and return JSON tree.
 
         Args:
@@ -215,7 +216,8 @@ class PipdeptreeExpander:
             if result.returncode != 0:
                 logger.warning(f"pipdeptree failed: {result.stderr}")
                 return None
-            return json.loads(result.stdout)
+            parsed: list[dict[str, Any]] = json.loads(result.stdout)
+            return parsed
         except subprocess.TimeoutExpired:
             logger.warning("pipdeptree timed out")
             return None
@@ -228,7 +230,7 @@ class PipdeptreeExpander:
 
     def _collect_transitives(
         self,
-        pkg: dict,
+        pkg: dict[str, Any],
         direct_names: set[str],
         discovered: list[DiscoveredDependency],
         seen_package_versions: set[str],

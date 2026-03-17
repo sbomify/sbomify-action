@@ -295,7 +295,7 @@ def run_command(
     capture_output: bool = True,
     cwd: str | None = None,
     docker_image: str | None = None,
-) -> subprocess.CompletedProcess:
+) -> subprocess.CompletedProcess[str]:
     """
     Run a command and handle common error cases.
 
@@ -326,7 +326,7 @@ def run_command(
     start_time = time.time()
     stop_progress = threading.Event()
 
-    def log_progress():
+    def log_progress() -> None:
         """Log progress periodically while command is running."""
         timeout_minutes = timeout // 60
         while not stop_progress.wait(PROGRESS_INTERVAL):

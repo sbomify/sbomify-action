@@ -1,6 +1,6 @@
 """Generator orchestrator and factory functions."""
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from sbomify_action.logging_config import logger
 
@@ -145,12 +145,12 @@ class GeneratorOrchestrator:
         logger.info(
             f"Generating SBOM: format={input.output_format}, "
             f"version={input.spec_version or 'default'}, "
-            f"{'docker_image=' + input.docker_image if input.is_docker_image else 'lock_file=' + str(input.lock_file)}"
+            f"{'docker_image=' + str(input.docker_image) if input.is_docker_image else 'lock_file=' + str(input.lock_file)}"
         )
 
         return self._registry.generate(input)
 
-    def get_available_generators(self, input: GenerationInput) -> List[Dict]:
+    def get_available_generators(self, input: GenerationInput) -> List[Dict[str, Any]]:
         """
         Get information about generators that could handle an input.
 
@@ -177,7 +177,7 @@ class GeneratorOrchestrator:
             for g in generators
         ]
 
-    def list_all_generators(self) -> List[Dict]:
+    def list_all_generators(self) -> List[Dict[str, Any]]:
         """
         List all registered generators.
 

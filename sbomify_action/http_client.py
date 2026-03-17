@@ -19,15 +19,16 @@ def _get_package_version() -> str:
             if pyproject_path.exists():
                 with open(pyproject_path, "rb") as f:
                     pyproject_data = tomllib.load(f)
-                return pyproject_data.get("project", {}).get("version", "unknown")
+                return str(pyproject_data.get("project", {}).get("version", "unknown"))
         except Exception:
-            return "unknown"
+            pass
+    return "unknown"
 
 
 USER_AGENT = f"sbomify-action/{_get_package_version()} (hello@sbomify.com)"
 
 
-def get_default_headers(token: Optional[str] = None, content_type: Optional[str] = None) -> dict:
+def get_default_headers(token: Optional[str] = None, content_type: Optional[str] = None) -> dict[str, str]:
     """
     Get default HTTP headers with user agent.
 

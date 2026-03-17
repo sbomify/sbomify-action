@@ -9,14 +9,14 @@ import hashlib
 import json
 import re
 import warnings
-from typing import TYPE_CHECKING, Dict, Optional, Type
+from typing import TYPE_CHECKING, Any, Optional
 
 from cyclonedx.model.bom import Bom
 
 if TYPE_CHECKING:
     from cyclonedx.model.component import Component
 from packageurl import PackageURL
-from spdx_tools.spdx.model import Document
+from spdx_tools.spdx.model import Document  # type: ignore[attr-defined]
 
 from .console import get_transformation_tracker
 from .logging_config import logger
@@ -26,7 +26,7 @@ from .logging_config import logger
 # ============================================================================
 
 # Lazy imports to avoid loading all versions upfront
-_CYCLONEDX_OUTPUTTERS: Dict[str, Optional[Type]] = {
+_CYCLONEDX_OUTPUTTERS: dict[str, type[Any] | None] = {
     "1.3": None,  # JsonV1Dot3
     "1.4": None,  # JsonV1Dot4
     "1.5": None,  # JsonV1Dot5
@@ -40,7 +40,7 @@ _CYCLONEDX_OUTPUTTERS: Dict[str, Optional[Type]] = {
 DEFAULT_CYCLONEDX_VERSION = "1.6"
 
 
-def _get_cyclonedx_outputter(spec_version: str) -> Type:
+def _get_cyclonedx_outputter(spec_version: str) -> type[Any]:
     """
     Get the appropriate CycloneDX outputter class for a given spec version.
 
@@ -280,7 +280,7 @@ def _sanitize_component_purl(comp: "Component", comp_type: str) -> tuple[int, in
 
     # First, try to normalize
     normalized_str, was_normalized = normalize_purl(purl_str)
-    if was_normalized:
+    if was_normalized and normalized_str is not None:
         try:
             comp.purl = PackageURL.from_string(normalized_str)
             purl_str = normalized_str
@@ -507,7 +507,7 @@ def sanitize_dependency_graph(bom: Bom) -> int:
     Returns:
         Number of stub components added
     """
-    from cyclonedx.model import BomRef
+    from cyclonedx.model import BomRef  # type: ignore[attr-defined]
     from cyclonedx.model.component import Component, ComponentType
 
     # Collect all known BomRef values
@@ -603,7 +603,7 @@ def link_root_dependencies(bom: Bom) -> int:
         Number of dependencies linked to root (0 if root already has dependencies
         or no root component exists)
     """
-    from cyclonedx.model import BomRef
+    from cyclonedx.model import BomRef  # type: ignore[attr-defined]
     from cyclonedx.model.dependency import Dependency
 
     # Check if root component exists
@@ -763,7 +763,7 @@ def _fix_purl_encoding_bugs_in_json(json_str: str) -> str:
 
     # Fix double @@ in PURLs (e.g., before version separator)
     # This regex targets @@ within PURL strings to avoid affecting other JSON content
-    def fix_double_at(match: re.Match) -> str:
+    def fix_double_at(match: re.Match[str]) -> str:
         purl = match.group(0)
         return _DOUBLE_AT_PATTERN.sub("@", purl)
 
@@ -803,7 +803,7 @@ def detect_spdx_version(document: Document) -> str:
         version_str = document.creation_info.spdx_version
         # Extract version number from "SPDX-2.3" format
         if version_str and version_str.startswith("SPDX-"):
-            return version_str.replace("SPDX-", "")
+            return str(version_str.replace("SPDX-", ""))
 
     logger.debug(f"Could not detect SPDX version, defaulting to {DEFAULT_SPDX_VERSION}")
     return DEFAULT_SPDX_VERSION
@@ -872,7 +872,7 @@ def _is_valid_spdx_license_id(license_id: str) -> bool:
     return validate_spdx_expression(license_id)
 
 
-def sanitize_cyclonedx_licenses(data: dict) -> int:
+def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
     """
     Sanitize CycloneDX license data by fixing invalid license IDs and expressions.
 
@@ -892,7 +892,7 @@ def sanitize_cyclonedx_licenses(data: dict) -> int:
     sanitized_count = 0
     tracker = get_transformation_tracker()
 
-    def _sanitize_license_choices(license_choices: list, component: str | None = None) -> int:
+    def _sanitize_license_choices(license_choices: list[Any], component: str | None = None) -> int:
         """Process a list of licenseChoice objects."""
         count = 0
         for choice in license_choices:
@@ -1039,7 +1039,7 @@ def _sanitize_spdx_license_expression(expression: str) -> tuple[str, bool]:
             return f"LicenseRef-{hash_val}", True
 
 
-def sanitize_spdx_licenses(data: dict) -> int:
+def sanitize_spdx_licenses(data: dict[str, Any]) -> int:
     """
     Sanitize SPDX license data by converting invalid license IDs to LicenseRef format.
 
@@ -1055,7 +1055,7 @@ def sanitize_spdx_licenses(data: dict) -> int:
     sanitized_count = 0
     tracker = get_transformation_tracker()
 
-    def _sanitize_license_field(obj: dict, field: str, component: str | None = None) -> int:
+    def _sanitize_license_field(obj: dict[str, Any], field: str, component: str | None = None) -> int:
         """Sanitize a single license field."""
         value = obj.get(field)
         if not value or not isinstance(value, str):
@@ -1069,7 +1069,7 @@ def sanitize_spdx_licenses(data: dict) -> int:
             return 1
         return 0
 
-    def _sanitize_license_list(obj: dict, field: str, component: str | None = None) -> int:
+    def _sanitize_license_list(obj: dict[str, Any], field: str, component: str | None = None) -> int:
         """Sanitize a list of license strings."""
         values = obj.get(field)
         if not values or not isinstance(values, list):

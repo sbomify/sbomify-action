@@ -60,7 +60,7 @@ from cyclonedx.model.bom import Bom
 from cyclonedx.model.component import Component, ComponentType
 from cyclonedx.model.contact import OrganizationalEntity
 from cyclonedx.model.license import LicenseExpression
-from spdx_tools.spdx.model import (
+from spdx_tools.spdx.model import (  # type: ignore[attr-defined]
     Actor,
     ActorType,
     Document,
@@ -409,7 +409,7 @@ def _apply_metadata_to_cyclonedx_component(
     # Licenses (sanitized)
     has_licenses = component.licenses is not None and len(component.licenses) > 0
     if not has_licenses and metadata.licenses:
-        sanitized_licenses = [sanitize_license(lic) for lic in metadata.licenses if sanitize_license(lic)]
+        sanitized_licenses: list[str] = [s for lic in metadata.licenses if (s := sanitize_license(lic)) is not None]
         if sanitized_licenses:
             if len(sanitized_licenses) == 1:
                 license_expression = sanitized_licenses[0]
@@ -492,7 +492,7 @@ def _apply_metadata_to_cyclonedx_component(
     return added_fields
 
 
-def _is_spdx_license_empty(license_value) -> bool:
+def _is_spdx_license_empty(license_value: object) -> bool:
     """Check if an SPDX license field is empty or NOASSERTION."""
     if license_value is None:
         return True
@@ -545,7 +545,7 @@ def _apply_metadata_to_spdx_package(
 
     # Licenses (sanitized) - use helper to avoid boolean evaluation of LicenseExpression
     if _is_spdx_license_empty(package.license_declared) and metadata.licenses:
-        sanitized_licenses = [sanitize_license(lic) for lic in metadata.licenses if sanitize_license(lic)]
+        sanitized_licenses: list[str] = [s for lic in metadata.licenses if (s := sanitize_license(lic)) is not None]
         if sanitized_licenses:
             if len(sanitized_licenses) == 1:
                 license_expression = sanitized_licenses[0]
@@ -688,17 +688,17 @@ def _enrich_os_component(component: Component) -> List[str]:
                 component.properties.add(Property(name=name, value=value))
                 return True
 
-            if lifecycle.get("release_date"):
-                if _add_cle_property("cdx:lifecycle:milestone:generalAvailability", lifecycle["release_date"]):
-                    added_fields.append(f"cdx:lifecycle:milestone:generalAvailability ({lifecycle['release_date']})")
+            if release_date := lifecycle.get("release_date"):
+                if _add_cle_property("cdx:lifecycle:milestone:generalAvailability", release_date):
+                    added_fields.append(f"cdx:lifecycle:milestone:generalAvailability ({release_date})")
 
-            if lifecycle.get("end_of_support"):
-                if _add_cle_property("cdx:lifecycle:milestone:endOfSupport", lifecycle["end_of_support"]):
-                    added_fields.append(f"cdx:lifecycle:milestone:endOfSupport ({lifecycle['end_of_support']})")
+            if end_of_support := lifecycle.get("end_of_support"):
+                if _add_cle_property("cdx:lifecycle:milestone:endOfSupport", end_of_support):
+                    added_fields.append(f"cdx:lifecycle:milestone:endOfSupport ({end_of_support})")
 
-            if lifecycle.get("end_of_life"):
-                if _add_cle_property("cdx:lifecycle:milestone:endOfLife", lifecycle["end_of_life"]):
-                    added_fields.append(f"cdx:lifecycle:milestone:endOfLife ({lifecycle['end_of_life']})")
+            if end_of_life := lifecycle.get("end_of_life"):
+                if _add_cle_property("cdx:lifecycle:milestone:endOfLife", end_of_life):
+                    added_fields.append(f"cdx:lifecycle:milestone:endOfLife ({end_of_life})")
 
     return added_fields
 
@@ -869,7 +869,7 @@ def _enrich_spdx_os_packages(document: Document) -> Dict[str, int]:
         return stats
 
     # Get lifecycle data
-    lifecycle = get_distro_lifecycle(os_name, os_version)
+    lifecycle = get_distro_lifecycle(os_name, os_version or "")
     if not lifecycle:
         logger.debug(f"No lifecycle data found for {os_name} {os_version}")
         return stats
@@ -902,7 +902,7 @@ def _enrich_spdx_os_packages(document: Document) -> Dict[str, int]:
     return stats
 
 
-def _enrich_cyclonedx_bom_with_plugin_architecture(bom: Bom, enricher: Enricher) -> Dict[str, int]:
+def _enrich_cyclonedx_bom_with_plugin_architecture(bom: Bom, enricher: Enricher) -> Dict[str, Any]:
     """
     Enrich CycloneDX BOM using the plugin architecture.
 
@@ -913,7 +913,8 @@ def _enrich_cyclonedx_bom_with_plugin_architecture(bom: Bom, enricher: Enricher)
     Returns:
         Enrichment statistics
     """
-    stats = {
+    sources: Dict[str, int] = {}
+    stats: Dict[str, Any] = {
         "components_enriched": 0,
         "descriptions_added": 0,
         "licenses_added": 0,
@@ -923,7 +924,7 @@ def _enrich_cyclonedx_bom_with_plugin_architecture(bom: Bom, enricher: Enricher)
         "distributions_added": 0,
         "issue_trackers_added": 0,
         "os_components_enriched": 0,
-        "sources": {},
+        "sources": sources,
     }
 
     total_components = len(bom.components)
@@ -933,7 +934,7 @@ def _enrich_cyclonedx_bom_with_plugin_architecture(bom: Bom, enricher: Enricher)
         # Log progress at intervals (CI-friendly, no progress bars)
         if idx > 0 and idx % progress_interval == 0:
             logger.info(f"  Processed {idx}/{total_components} components...")
-        added_fields = []
+        added_fields: list[str] = []
         enrichment_source = None
         purl_str = str(component.purl) if component.purl else None
 
@@ -944,8 +945,8 @@ def _enrich_cyclonedx_bom_with_plugin_architecture(bom: Bom, enricher: Enricher)
                 enrichment_source = "purl"
                 stats["os_components_enriched"] += 1
                 stats["components_enriched"] += 1
-                for field in added_fields:
-                    if "publisher" in field:
+                for field_name in added_fields:
+                    if "publisher" in field_name:
                         stats["publishers_added"] += 1
                 _add_enrichment_source_property(component, enrichment_source)
             continue
@@ -959,32 +960,32 @@ def _enrich_cyclonedx_bom_with_plugin_architecture(bom: Bom, enricher: Enricher)
                 if added_fields:
                     enrichment_source = metadata.source
                     # Track by primary source
-                    stats["sources"][primary_source] = stats["sources"].get(primary_source, 0) + 1
+                    sources[primary_source] = sources.get(primary_source, 0) + 1
 
         if added_fields:
             stats["components_enriched"] += 1
             if enrichment_source:
                 _add_enrichment_source_property(component, enrichment_source.split(", ")[0])
-            for field in added_fields:
-                if "description" in field:
+            for field_name in added_fields:
+                if "description" in field_name:
                     stats["descriptions_added"] += 1
-                elif "licenses" in field:
+                elif "licenses" in field_name:
                     stats["licenses_added"] += 1
-                elif "publisher" in field:
+                elif "publisher" in field_name:
                     stats["publishers_added"] += 1
-                elif "homepage" in field or "tracker" in field:
+                elif "homepage" in field_name or "tracker" in field_name:
                     stats["homepages_added"] += 1
-                elif "repository" in field:
+                elif "repository" in field_name:
                     stats["repositories_added"] += 1
-                elif "distribution" in field:
+                elif "distribution" in field_name:
                     stats["distributions_added"] += 1
-                elif "issue-tracker" in field:
+                elif "issue-tracker" in field_name:
                     stats["issue_trackers_added"] += 1
 
     return stats
 
 
-def _enrich_spdx_document_with_plugin_architecture(document: Document, enricher: Enricher) -> Dict[str, int]:
+def _enrich_spdx_document_with_plugin_architecture(document: Document, enricher: Enricher) -> Dict[str, Any]:
     """
     Enrich SPDX document using the plugin architecture.
 
@@ -995,7 +996,8 @@ def _enrich_spdx_document_with_plugin_architecture(document: Document, enricher:
     Returns:
         Enrichment statistics
     """
-    stats = {
+    sources: Dict[str, int] = {}
+    stats: Dict[str, Any] = {
         "components_enriched": 0,
         "descriptions_added": 0,
         "licenses_added": 0,
@@ -1004,7 +1006,7 @@ def _enrich_spdx_document_with_plugin_architecture(document: Document, enricher:
         "suppliers_added": 0,
         "source_info_added": 0,
         "external_refs_added": 0,
-        "sources": {},
+        "sources": sources,
     }
 
     total_packages = len(document.packages)
@@ -1014,7 +1016,7 @@ def _enrich_spdx_document_with_plugin_architecture(document: Document, enricher:
         # Log progress at intervals (CI-friendly, no progress bars)
         if idx > 0 and idx % progress_interval == 0:
             logger.info(f"  Processed {idx}/{total_packages} packages...")
-        added_fields = []
+        added_fields: list[str] = []
         enrichment_source = None
 
         # Find PURL in external references
@@ -1031,26 +1033,26 @@ def _enrich_spdx_document_with_plugin_architecture(document: Document, enricher:
                 added_fields = _apply_metadata_to_spdx_package(package, metadata, source=primary_source)
                 if added_fields:
                     enrichment_source = metadata.source
-                    stats["sources"][primary_source] = stats["sources"].get(primary_source, 0) + 1
+                    sources[primary_source] = sources.get(primary_source, 0) + 1
 
         if added_fields:
             stats["components_enriched"] += 1
             if enrichment_source:
                 _add_enrichment_source_comment(package, enrichment_source.split(", ")[0])
-            for field in added_fields:
-                if "description" in field:
+            for field_name in added_fields:
+                if "description" in field_name:
                     stats["descriptions_added"] += 1
-                elif "license_declared" in field or "license_comment" in field:
+                elif "license_declared" in field_name or "license_comment" in field_name:
                     stats["licenses_added"] += 1
-                elif "homepage" in field:
+                elif "homepage" in field_name:
                     stats["homepages_added"] += 1
-                elif "originator" in field:
+                elif "originator" in field_name:
                     stats["originators_added"] += 1
-                elif "supplier" in field:
+                elif "supplier" in field_name:
                     stats["suppliers_added"] += 1
-                elif "sourceInfo" in field:
+                elif "sourceInfo" in field_name:
                     stats["source_info_added"] += 1
-                elif "externalRef" in field:
+                elif "externalRef" in field_name:
                     stats["external_refs_added"] += 1
 
     return stats
@@ -1092,14 +1094,15 @@ def _enrich_spdx3_sbom(input_path: Path, output_path: Path, enricher: Enricher) 
 
     logger.info(f"Found {len(packages)} packages to enrich")
 
-    stats = {
+    spdx3_sources: Dict[str, int] = {}
+    stats: Dict[str, Any] = {
         "components_enriched": 0,
         "descriptions_added": 0,
         "licenses_added": 0,
         "homepages_added": 0,
         "suppliers_added": 0,
         "external_refs_added": 0,
-        "sources": {},
+        "sources": spdx3_sources,
     }
 
     doc = get_spdx3_document(payload)
@@ -1193,17 +1196,17 @@ def _enrich_spdx3_sbom(input_path: Path, output_path: Path, enricher: Enricher) 
 
         if added_fields:
             stats["components_enriched"] += 1
-            stats["sources"][primary_source] = stats["sources"].get(primary_source, 0) + 1
-            for field in added_fields:
-                if "description" in field:
+            spdx3_sources[primary_source] = spdx3_sources.get(primary_source, 0) + 1
+            for field_name in added_fields:
+                if "description" in field_name:
                     stats["descriptions_added"] += 1
-                elif "license" in field:
+                elif "license" in field_name:
                     stats["licenses_added"] += 1
-                elif "homepage" in field:
+                elif "homepage" in field_name:
                     stats["homepages_added"] += 1
-                elif "supplier" in field:
+                elif "supplier" in field_name:
                     stats["suppliers_added"] += 1
-                elif "externalRef" in field:
+                elif "externalRef" in field_name:
                     stats["external_refs_added"] += 1
 
     # Print summary
@@ -1329,7 +1332,7 @@ def _enrich_cyclonedx_sbom(data: Dict[str, Any], input_path: Path, output_path: 
 
     # Parse BOM
     try:
-        bom = Bom.from_json(data)
+        bom = Bom.from_json(data)  # type: ignore[attr-defined]
     except Exception as e:
         raise SBOMValidationError(f"Failed to parse CycloneDX SBOM: {e}")
 
@@ -1426,14 +1429,14 @@ def _enrich_spdx_sbom(input_path: Path, output_path: Path, enricher: Enricher) -
         raise Exception(f"Failed to write enriched SBOM: {e}")
 
 
-def _log_cyclonedx_enrichment_summary(stats: Dict[str, int], total_components: int) -> None:
+def _log_cyclonedx_enrichment_summary(stats: Dict[str, Any], total_components: int) -> None:
     """Log enrichment summary for CycloneDX using Rich table."""
     from .console import print_enrichment_summary
 
     print_enrichment_summary(stats, total_components)
 
 
-def _log_spdx_enrichment_summary(stats: Dict[str, int], total_packages: int) -> None:
+def _log_spdx_enrichment_summary(stats: Dict[str, Any], total_packages: int) -> None:
     """Log enrichment summary for SPDX using Rich table."""
     from .console import print_enrichment_summary
 

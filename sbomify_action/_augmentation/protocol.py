@@ -1,6 +1,6 @@
 """AugmentationProvider protocol for SBOM augmentation plugins."""
 
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 
 from .metadata import AugmentationMetadata
 
@@ -56,7 +56,7 @@ class AugmentationProvider(Protocol):
         api_base_url: Optional[str] = None,
         token: Optional[str] = None,
         config_path: Optional[str] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Optional[AugmentationMetadata]:
         """
         Fetch augmentation metadata from this provider.

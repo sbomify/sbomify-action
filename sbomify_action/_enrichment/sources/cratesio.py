@@ -47,7 +47,7 @@ class CratesIOSource:
 
     def supports(self, purl: PackageURL) -> bool:
         """Check if this source supports the given PURL."""
-        return purl.type == "cargo"
+        return bool(purl.type == "cargo")
 
     def fetch(self, purl: PackageURL, session: requests.Session) -> Optional[NormalizedMetadata]:
         """
@@ -136,7 +136,7 @@ class CratesIOSource:
 
         # License - only available in version-specific endpoint
         raw_license = version_data.get("license")
-        licenses = []
+        licenses: list[str] = []
         license_texts: Dict[str, str] = {}
         if raw_license:
             # crates.io licenses are already in SPDX format (e.g., "MIT OR Apache-2.0")

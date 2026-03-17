@@ -55,7 +55,7 @@ class DebianSource:
             return False
         if not purl.namespace:
             return False
-        return purl.namespace.lower() == "debian"
+        return bool(purl.namespace.lower() == "debian")
 
     def fetch(self, purl: PackageURL, session: requests.Session) -> Optional[NormalizedMetadata]:
         """
