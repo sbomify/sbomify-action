@@ -86,8 +86,8 @@ def _is_safe_url(url: str) -> bool:
 
 
 def _is_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """Return True if the IP address is public (not private/loopback/link-local/etc)."""
-    return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified)
+    """Return True if the IP address is globally routable unicast."""
+    return ip.is_global
 
 
 def _redact_url(url: str) -> str:
@@ -151,6 +151,7 @@ def _get_client(purl_type: str) -> TeaClient | None:
 
 def _purl_to_search_value(purl: PackageURL) -> str:
     """Convert a PackageURL to a canonical string (no qualifiers/subpath)."""
+    # str() needed: packageurl lacks type stubs, to_string() returns Any
     return str(PackageURL(type=purl.type, namespace=purl.namespace, name=purl.name, version=purl.version).to_string())
 
 
