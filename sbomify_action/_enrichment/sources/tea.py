@@ -50,7 +50,10 @@ _BLOCKED_HOSTNAMES = frozenset({"localhost", "metadata.google.internal", "kubern
 
 
 def _is_safe_url(url: str) -> bool:
-    """Check that a URL does not point to private/internal addresses."""
+    """Check that a URL does not point to private/internal addresses.
+
+    Validates scheme, blocked hostnames, IP literals, and DNS-resolved addresses.
+    """
     try:
         parsed = urlparse(url)
         if (parsed.scheme or "").lower() not in ("http", "https"):
@@ -60,15 +63,31 @@ def _is_safe_url(url: str) -> bool:
             return False
         if hostname.lower() in _BLOCKED_HOSTNAMES:
             return False
+        # Check IP literals directly
         try:
             ip = ipaddress.ip_address(hostname)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified:
-                return False
+            return _is_public_ip(ip)
         except ValueError:
-            pass  # Not an IP literal; DNS-based SSRF (e.g. nip.io) is not checked here
+            pass  # Not an IP literal — resolve via DNS below
+        # Resolve hostname and check all resulting addresses
+        import socket
+
+        try:
+            addrinfo = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+            for _family, _type, _proto, _canonname, sockaddr in addrinfo:
+                ip = ipaddress.ip_address(sockaddr[0])
+                if not _is_public_ip(ip):
+                    return False
+        except socket.gaierror:
+            return False  # Unresolvable hostname is not safe
         return True
     except Exception:
         return False
+
+
+def _is_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True if the IP address is public (not private/loopback/link-local/etc)."""
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified)
 
 
 def _redact_url(url: str) -> str:

@@ -2,6 +2,7 @@
 
 import unittest
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from libtea.exceptions import TeaConnectionError, TeaNotFoundError
@@ -22,6 +23,13 @@ from sbomify_action._enrichment.sources.tea import (
     _purl_to_search_value,
     clear_cache,
 )
+
+
+def _fake_public_getaddrinfo(*args: Any, **kwargs: Any) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+    """Return a fake public IP for DNS resolution in tests."""
+    import socket
+
+    return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 0))]
 
 
 class TestTeaSourceProperties(unittest.TestCase):
@@ -49,7 +57,8 @@ class TestTeaSourceSupports(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True):
             assert source.supports(purl) is False
 
-    def test_supports_any_type_with_base_url_override(self):
+    @patch("socket.getaddrinfo", side_effect=_fake_public_getaddrinfo)
+    def test_supports_any_type_with_base_url_override(self, _mock_dns: Any) -> None:
         source = TeaSource()
         purl = PackageURL.from_string("pkg:cargo/serde@1.0")
         with patch.dict("os.environ", {"TEA_BASE_URL": "https://tea.example.com/v1"}):
@@ -97,7 +106,8 @@ class TestPurlToSearchValue(unittest.TestCase):
 class TestIsSafeUrl(unittest.TestCase):
     """Test SSRF validation for TEA_BASE_URL."""
 
-    def test_public_url_allowed(self):
+    @patch("socket.getaddrinfo", side_effect=_fake_public_getaddrinfo)
+    def test_public_url_allowed(self, _mock_dns: Any) -> None:
         assert _is_safe_url("https://tea.example.com/v1") is True
 
     def test_private_ip_rejected(self):
@@ -126,6 +136,14 @@ class TestIsSafeUrl(unittest.TestCase):
 
     def test_no_hostname_rejected(self):
         assert _is_safe_url("file:///etc/passwd") is False
+
+    def test_dns_resolving_to_private_ip_rejected(self) -> None:
+        """Hostnames that resolve to private IPs (e.g. nip.io) should be rejected."""
+        import socket
+
+        private_addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.1", 0))]
+        with patch("socket.getaddrinfo", return_value=private_addrinfo):
+            assert _is_safe_url("https://10-0-0-1.nip.io/v1") is False
 
     def test_non_http_scheme_rejected(self):
         assert _is_safe_url("ftp://tea.example.com/v1") is False
@@ -224,8 +242,9 @@ class TestTeaSourceFetch(unittest.TestCase):
         self.session.assert_not_called()
 
     @patch.dict("os.environ", {"TEA_BASE_URL": "https://tea.example.com/v1"})
+    @patch("socket.getaddrinfo", side_effect=_fake_public_getaddrinfo)
     @patch("sbomify_action._enrichment.sources.tea.TeaClient", autospec=True)
-    def test_fetch_base_url_override(self, mock_client_cls):
+    def test_fetch_base_url_override(self, mock_client_cls: Any, _mock_dns: Any) -> None:
         """TEA_BASE_URL overrides auto-discovery."""
         now = datetime.now(timezone.utc)
         mock_client = MagicMock()
@@ -241,8 +260,9 @@ class TestTeaSourceFetch(unittest.TestCase):
         mock_client_cls.from_well_known.assert_not_called()
 
     @patch.dict("os.environ", {"TEA_BASE_URL": "https://tea.example.com/v1", "TEA_TOKEN": "secret"})
+    @patch("socket.getaddrinfo", side_effect=_fake_public_getaddrinfo)
     @patch("sbomify_action._enrichment.sources.tea.TeaClient", autospec=True)
-    def test_fetch_base_url_with_token(self, mock_client_cls):
+    def test_fetch_base_url_with_token(self, mock_client_cls: Any, _mock_dns: Any) -> None:
         """TEA_BASE_URL + TEA_TOKEN are passed together."""
         now = datetime.now(timezone.utc)
         mock_client = MagicMock()

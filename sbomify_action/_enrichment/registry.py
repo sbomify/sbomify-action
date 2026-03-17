@@ -90,7 +90,9 @@ class SourceRegistry:
         result: NormalizedMetadata | None = None
 
         for source in sources:
-            # Stop early if we already have all core NTIA fields
+            # Two-phase early exit: (1) if NTIA + all CLE fields are filled, stop entirely;
+            # (2) if only NTIA is filled but CLE is missing, skip non-CLE sources and
+            # continue only with lifecycle-capable sources (those declaring provides_cle=True).
             if result and result.description and result.licenses and result.supplier:
                 if result.cle_release_date and result.cle_eos and result.cle_eol:
                     logger.debug(f"Skipping {source.name} - already have sufficient data for {purl.name}")
