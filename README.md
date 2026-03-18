@@ -1,4 +1,9 @@
-# sbomify action
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sbomify-logo-dark.svg" />
+    <img src="docs/assets/sbomify-logo.svg" alt="sbomify action" width="400" />
+  </picture>
+</p>
 
 [![sbomified](https://sbomify.com/assets/images/logo/badge.svg)](https://app.sbomify.com/public/component/Gu9wem8mkX)
 [![CI/CD Pipeline](https://github.com/sbomify/sbomify-action/actions/workflows/sbomify.yaml/badge.svg)](https://github.com/sbomify/sbomify-action/actions/workflows/sbomify.yaml)
