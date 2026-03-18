@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/sbomify-logo.svg" alt="sbomify" width="400" />
+</p>
+
 # sbomify action
 
 [![sbomified](https://sbomify.com/assets/images/logo/badge.svg)](https://app.sbomify.com/public/component/Gu9wem8mkX)
