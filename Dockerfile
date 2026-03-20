@@ -10,9 +10,9 @@ WORKDIR /tmp
 
 # Define tool versions
 ENV BOMCTL_VERSION=0.4.3 \
-    TRIVY_VERSION=0.69.2 \
-    SYFT_VERSION=1.42.1 \
-    CARGO_CYCLONEDX_VERSION=0.5.7
+    TRIVY_VERSION=0.69.3 \
+    SYFT_VERSION=1.42.3 \
+    CARGO_CYCLONEDX_VERSION=0.5.9
 
 RUN apt-get update && \
     apt-get install -y curl unzip
@@ -73,7 +73,7 @@ RUN bun install --frozen-lockfile
 FROM rust:1-slim AS rust-builder
 
 ARG TARGETARCH
-ARG CARGO_CYCLONEDX_VERSION=0.5.7
+ARG CARGO_CYCLONEDX_VERSION=0.5.9
 
 RUN apt-get update && apt-get install -y curl xz-utils && \
     if [ "${TARGETARCH}" = "amd64" ]; then \
