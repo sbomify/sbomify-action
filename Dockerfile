@@ -1,18 +1,24 @@
 ARG UV_VERSION=0.10.8
 ARG BUN_VERSION=1.3.10
 
+# Define tool versions
+ARG BOMCTL_VERSION=0.4.3
+ARG TRIVY_VERSION=0.69.3
+ARG SYFT_VERSION=1.42.3
+ARG CARGO_CYCLONEDX_VERSION=0.5.9
+
 FROM python:3.13-slim-trixie AS fetcher
 
 # Use Docker's automatic platform detection
 ARG TARGETARCH
 
+# Re-declare global ARGs needed in this stage
+ARG TRIVY_VERSION
+ARG BOMCTL_VERSION
+ARG SYFT_VERSION
+
 WORKDIR /tmp
 
-# Define tool versions
-ENV BOMCTL_VERSION=0.4.3 \
-    TRIVY_VERSION=0.69.3 \
-    SYFT_VERSION=1.42.3 \
-    CARGO_CYCLONEDX_VERSION=0.5.9
 
 RUN apt-get update && \
     apt-get install -y curl unzip
@@ -73,7 +79,7 @@ RUN bun install --frozen-lockfile
 FROM rust:1-slim AS rust-builder
 
 ARG TARGETARCH
-ARG CARGO_CYCLONEDX_VERSION=0.5.9
+ARG CARGO_CYCLONEDX_VERSION
 
 RUN apt-get update && apt-get install -y curl xz-utils && \
     if [ "${TARGETARCH}" = "amd64" ]; then \
