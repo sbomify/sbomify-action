@@ -1001,7 +1001,7 @@ sbomify attempts to populate these fields for each component:
 - **CycloneDX**: 1.3, 1.4, 1.5, 1.6, 1.7 (JSON)
 - **SPDX**: 2.2, 2.3, 3.0.1 (JSON / JSON-LD)
 
-> 📖 See [docs/adr/0001-plugin-architecture.md](docs/adr/0001-plugin-architecture.md) for architecture details.
+> 📖 See [docs/adr/0002-plugin-architecture.md](docs/adr/0002-plugin-architecture.md) for architecture details.
 
 ## Links
 

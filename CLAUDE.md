@@ -26,7 +26,7 @@ uv run pytest
 
 ## Architecture
 
-The project uses a **Protocol + Registry + Factory** pattern across four main subsystems (see `docs/adr/0001-plugin-architecture.md`).
+The project uses a **Protocol + Registry + Factory** pattern across four main subsystems (see `docs/adr/0002-plugin-architecture.md`).
 
 ### Protocol Interface
 
