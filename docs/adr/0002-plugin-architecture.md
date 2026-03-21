@@ -1,4 +1,6 @@
-# ADR-0001: Plugin Architecture for Extensibility
+# 2. Plugin Architecture for Extensibility
+
+Date: 2025-01-16
 
 ## Status
 
