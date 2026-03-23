@@ -66,9 +66,12 @@ def create_default_registry() -> SourceRegistry:
     - ClearlyDefinedSource (75) - license and attribution data
     - RepologySource (90) - cross-distro metadata (rate-limited)
 
-    Sources are queried sequentially in priority order. If a source returns
-    all required NTIA fields (description, licenses, supplier), subsequent
-    sources are skipped.
+    Sources are queried sequentially in priority order with two-phase early exit:
+    1. If NTIA fields (description, licenses, supplier) AND all CLE fields
+       (release_date, eos, eol) are filled, remaining sources are skipped.
+    2. If only NTIA fields are filled but CLE is missing, non-CLE sources
+       are skipped while lifecycle-capable sources (provides_cle=True)
+       continue to run.
 
     Returns:
         Configured SourceRegistry
