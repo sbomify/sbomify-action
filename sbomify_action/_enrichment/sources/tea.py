@@ -133,7 +133,9 @@ def _get_client(purl_type: str) -> TeaClient | None:
     base_url_override = os.getenv("TEA_BASE_URL")
 
     if base_url_override:
-        cache_key = f"base_url:{base_url_override}:token:{hashlib.sha256((token or '').encode()).hexdigest()[:16]}"
+        url_hash = hashlib.sha256(base_url_override.encode()).hexdigest()[:16]
+        token_hash = hashlib.sha256((token or "").encode()).hexdigest()[:16]
+        cache_key = f"base_url:{url_hash}:token:{token_hash}"
         if cache_key not in _client_cache:
             if not _is_safe_url(base_url_override):
                 logger.warning(f"TEA_BASE_URL rejected (private/internal address): {_redact_url(base_url_override)}")
