@@ -161,9 +161,12 @@ def fetch(
                 _error(f"No downloadable format found for artifact '{artifact.name}'")
                 return  # unreachable: _error is NoReturn, but helps mypy narrow fmt
 
+            if not fmt.url:
+                _error(f"Selected format for artifact '{artifact.name}' has no download URL")
+                return  # unreachable: _error is NoReturn, but helps mypy narrow fmt.url
+
             print(f"Downloading {artifact.name} ({fmt.media_type or 'unknown'}) ...", file=sys.stderr)
 
-            assert fmt.url is not None  # guaranteed by _select_best_format
             result_path = client.download_artifact(
                 fmt.url, dest, verify_checksums=list(fmt.checksums) if fmt.checksums else None
             )
