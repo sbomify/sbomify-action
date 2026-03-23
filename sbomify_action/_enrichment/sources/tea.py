@@ -40,6 +40,7 @@ PURL_TYPE_TO_TEA_DOMAIN: dict[str, str] = {
 _cache: dict[str, NormalizedMetadata | None] = {}
 _client_cache: dict[str, TeaClient] = {}
 _discovery_failures: dict[str, int] = {}
+_url_safety_cache: dict[str, bool] = {}
 
 _MAX_DISCOVERY_ATTEMPTS = 2
 
@@ -50,10 +51,20 @@ _BLOCKED_HOSTNAMES = frozenset({"localhost", "metadata.google.internal", "kubern
 
 
 def _is_safe_url(url: str) -> bool:
-    """Check that a URL does not point to private/internal addresses.
+    """Check that a URL does not point to private/internal addresses (cached).
 
     Validates scheme, blocked hostnames, IP literals, and DNS-resolved addresses.
+    Results are cached per URL to avoid repeated DNS resolution.
     """
+    if url in _url_safety_cache:
+        return _url_safety_cache[url]
+    result = _check_url_safety(url)
+    _url_safety_cache[url] = result
+    return result
+
+
+def _check_url_safety(url: str) -> bool:
+    """Perform the actual URL safety check (uncached)."""
     try:
         parsed = urlparse(url)
         if (parsed.scheme or "").lower() not in ("http", "https"):
@@ -113,6 +124,7 @@ def clear_cache() -> None:
     _cache.clear()
     _client_cache.clear()
     _discovery_failures.clear()
+    _url_safety_cache.clear()
 
 
 def _get_client(purl_type: str) -> TeaClient | None:
