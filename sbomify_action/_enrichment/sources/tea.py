@@ -121,11 +121,11 @@ def _get_client(purl_type: str) -> TeaClient | None:
     base_url_override = os.getenv("TEA_BASE_URL")
 
     if base_url_override:
-        if not _is_safe_url(base_url_override):
-            logger.warning(f"TEA_BASE_URL rejected (private/internal address): {_redact_url(base_url_override)}")
-            return None
         cache_key = f"base_url:{base_url_override}:token:{hashlib.sha256((token or '').encode()).hexdigest()[:16]}"
         if cache_key not in _client_cache:
+            if not _is_safe_url(base_url_override):
+                logger.warning(f"TEA_BASE_URL rejected (private/internal address): {_redact_url(base_url_override)}")
+                return None
             _client_cache[cache_key] = TeaClient(base_url_override, token=token, timeout=DEFAULT_TIMEOUT)
         return _client_cache[cache_key]
 
@@ -178,10 +178,12 @@ class TeaSource:
 
     def supports(self, purl: PackageURL) -> bool:
         """Supported when PURL type has a known TEA domain or a safe TEA_BASE_URL is set."""
-        if purl.type in PURL_TYPE_TO_TEA_DOMAIN:
-            return True
         base_url = os.getenv("TEA_BASE_URL")
-        return bool(base_url) and _is_safe_url(str(base_url))
+        if base_url:
+            # If an override is present but unsafe, treat TEA as unsupported
+            # to avoid wasted calls and log spam.
+            return _is_safe_url(str(base_url))
+        return purl.type in PURL_TYPE_TO_TEA_DOMAIN
 
     def fetch(self, purl: PackageURL, session: requests.Session) -> NormalizedMetadata | None:
         """Discover TEA server from PURL type and fetch metadata."""

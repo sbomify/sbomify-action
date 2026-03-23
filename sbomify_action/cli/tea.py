@@ -7,16 +7,29 @@ command that combines discovery + collection lookup + artifact download.
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import click
-
-# _build_client and _error are private helpers in libtea's CLI module.
-# We own libtea and intentionally couple to these; they are stable.
-# _error() is typed NoReturn and raises SystemExit(1).
-from libtea.cli import _build_client, _error
+import libtea.cli as _libtea_cli
 from libtea.cli import app as tea_group
 from libtea.exceptions import TeaError
 from libtea.models import ArtifactFormat, ArtifactType
+
+# Bind private helpers via the module to avoid hard-failing imports if a
+# future libtea version removes them. We own libtea and these are stable,
+# but this provides a clear error message if the API changes.
+try:
+    _build_client = _libtea_cli._build_client  # type: ignore[attr-defined]
+    _error = _libtea_cli._error  # type: ignore[attr-defined]
+except AttributeError as _exc:
+    _compat_err = str(_exc)
+
+    def _error(message: str) -> None:  # type: ignore[misc]
+        raise SystemExit(f"Incompatible libtea version: {_compat_err}. {message}")
+
+    def _build_client(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
+        _error("Required helper _build_client is missing from libtea.cli.")
+
 
 __all__ = ["tea_group"]
 
