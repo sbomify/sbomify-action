@@ -241,7 +241,7 @@ class TestTeaSourceFetch(unittest.TestCase):
         # Session is intentionally unused (libtea manages its own HTTP transport)
         self.session.assert_not_called()
 
-    @patch.dict("os.environ", {"TEA_BASE_URL": "https://tea.example.com/v1"})
+    @patch.dict("os.environ", {"TEA_BASE_URL": "https://tea.example.com/v1"}, clear=True)
     @patch("socket.getaddrinfo", side_effect=_fake_public_getaddrinfo)
     @patch("sbomify_action._enrichment.sources.tea.TeaClient", autospec=True)
     def test_fetch_base_url_override(self, mock_client_cls: Any, _mock_dns: Any) -> None:
@@ -259,7 +259,7 @@ class TestTeaSourceFetch(unittest.TestCase):
         mock_client_cls.assert_called_once_with("https://tea.example.com/v1", token=None, timeout=15)
         mock_client_cls.from_well_known.assert_not_called()
 
-    @patch.dict("os.environ", {"TEA_BASE_URL": "https://tea.example.com/v1", "TEA_TOKEN": "secret"})
+    @patch.dict("os.environ", {"TEA_BASE_URL": "https://tea.example.com/v1", "TEA_TOKEN": "secret"}, clear=True)
     @patch("socket.getaddrinfo", side_effect=_fake_public_getaddrinfo)
     @patch("sbomify_action._enrichment.sources.tea.TeaClient", autospec=True)
     def test_fetch_base_url_with_token(self, mock_client_cls: Any, _mock_dns: Any) -> None:

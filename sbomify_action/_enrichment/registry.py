@@ -70,9 +70,12 @@ class SourceRegistry:
         """
         Fetch metadata using the priority chain of sources.
 
-        Tries sources in priority order, stopping early when we have
-        sufficient data (description, licenses, supplier). Only continues
-        to lower-priority sources if critical fields are missing.
+        Tries sources in priority order with two-phase early exit:
+        1. If NTIA fields (description, licenses, supplier) AND all CLE
+           fields (release_date, eos, eol) are filled, stop entirely.
+        2. If only NTIA fields are filled but CLE is missing, skip
+           non-CLE sources and continue only with lifecycle-capable
+           sources (those declaring ``provides_cle = True``).
 
         Args:
             purl: Parsed PackageURL object
