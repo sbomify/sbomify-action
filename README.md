@@ -188,7 +188,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
     UPLOAD: false
 ```
 
-> **Note:** GitHub Actions `defaults.run.working-directory` does not apply to Docker container actions. You must set `WORKING_DIR` explicitly.
+> **Note:** The workflow-level `working-directory` setting does not affect this action. Use `WORKING_DIR` instead.
 
 </details>
 
