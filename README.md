@@ -188,7 +188,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
     UPLOAD: false
 ```
 
-> **Note:** The workflow-level `working-directory` setting does not affect this action. Use `WORKING_DIR` instead.
+> **Note:** The workflow-level `working-directory` setting does not affect this action. Use the `working-dir` input (or set `WORKING_DIR` directly) instead.
 
 </details>
 

@@ -2117,7 +2117,7 @@ def _parse_upload_destinations_callback(
     "--working-dir",
     envvar="WORKING_DIR",
     default=None,
-    help="Working directory (relative to repo root or absolute). [env: WORKING_DIR]",
+    help="Working directory (absolute, or relative to cwd locally / GITHUB_WORKSPACE in GHA). [env: WORKING_DIR]",
 )
 @click.option(
     "-v",
@@ -2182,10 +2182,6 @@ def cli(
       # Create sbomify.json configuration interactively
       sbomify-action init
     """
-    # If a subcommand was invoked, don't run the default pipeline
-    if ctx.invoked_subcommand is not None:
-        return
-
     # Configure logging level early so all messages respect --verbose/--quiet
     if verbose and quiet:
         raise click.UsageError("Cannot use both --verbose and --quiet")
@@ -2196,11 +2192,15 @@ def cli(
     elif quiet:
         logger.setLevel(logging.WARNING)
 
-    # Change working directory early, before any file resolution
+    # Change working directory early, before any file resolution (applies to subcommands too)
     if working_dir:
         resolved = resolve_working_dir(working_dir)
         logger.info(f"Changing working directory to '{resolved}'")
         os.chdir(resolved)
+
+    # If a subcommand was invoked, don't run the default pipeline
+    if ctx.invoked_subcommand is not None:
+        return
 
     # Show help with banner if no input source is provided
     if not any([sbom_file, docker_image, lock_file]):
