@@ -127,7 +127,6 @@ class TestWorkingDirCliWiring:
         subdir.mkdir()
         runner = CliRunner()
         env = {"WORKING_DIR": str(subdir), "GITHUB_ACTIONS": "", "GITHUB_WORKSPACE": ""}
-        with patch.dict(os.environ, env, clear=False), \
-             patch("sbomify_action.cli.main.os.chdir") as mock_chdir:
+        with patch.dict(os.environ, env, clear=False), patch("sbomify_action.cli.main.os.chdir") as mock_chdir:
             runner.invoke(cli, [])
             mock_chdir.assert_called_once_with(subdir.resolve())
