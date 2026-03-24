@@ -763,8 +763,10 @@ def _in_github_actions() -> bool:
 
 
 def _github_workspace() -> Path:
-    """Return the GitHub Actions workspace path."""
-    return Path(os.environ.get("GITHUB_WORKSPACE", "/github/workspace"))
+    """Return the GitHub Actions workspace path as an absolute, resolved Path."""
+    raw = os.environ.get("GITHUB_WORKSPACE") or "/github/workspace"
+    workspace = Path(raw)
+    return workspace.resolve()
 
 
 def resolve_working_dir(working_dir: str) -> Path:

@@ -180,15 +180,16 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 
 ```yaml
 - uses: sbomify/sbomify-action@master
+  with:
+    working-dir: packages/my-app
   env:
-    WORKING_DIR: packages/my-app
     LOCK_FILE: package-lock.json
     OUTPUT_FILE: sbom.cdx.json
     ENRICH: true
     UPLOAD: false
 ```
 
-> **Note:** The workflow-level `working-directory` setting does not affect this action. Use the `working-dir` input (or set `WORKING_DIR` directly) instead.
+> **Note:** The workflow-level `working-directory` setting does not affect this action. Use the `working-dir` input instead.
 
 </details>
 
