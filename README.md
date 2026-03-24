@@ -218,7 +218,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `DISABLE_VCS_AUGMENTATION` | No       | Set to `true` to disable auto-detection of VCS info from CI environment          |
 | `SBOMIFY_CACHE_DIR`        | No       | Directory for sbomify license database cache                                     |
 | `TRIVY_CACHE_DIR`          | No       | Directory for Trivy cache                                                        |
-| `WORKING_DIR`              | No       | Working directory, relative to repo root or absolute (monorepo support)          |
+| `WORKING_DIR`              | No       | Working directory (relative to cwd or `$GITHUB_WORKSPACE` in GHA; monorepo)     |
 | `SYFT_CACHE_DIR`           | No       | Directory for Syft cache                                                         |
 
 † **One** of `LOCK_FILE`, `SBOM_FILE`, or `DOCKER_IMAGE` is required (pick one)

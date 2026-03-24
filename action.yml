@@ -4,7 +4,7 @@ description: 'A GitHub Action to upload an SBOM CycloneDX or SPDX to sbomify'
 author: 'sbomify'
 inputs:
   working-dir:
-    description: 'Working directory, relative to repo root or absolute (must be under /github/workspace). Example: packages/my-app'
+    description: 'Working directory, relative to repo root or absolute (must be under $GITHUB_WORKSPACE). Example: packages/my-app'
     required: false
     default: ''
   component-purl:
