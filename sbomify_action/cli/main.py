@@ -798,13 +798,13 @@ def resolve_working_dir(working_dir: str) -> Path:
         resolved = (base / path).resolve()
 
     # In GitHub Actions runtime, enforce the resolved path is under the workspace
-    if in_gha and not resolved.is_relative_to(workspace.resolve()):
+    if in_gha and not resolved.is_relative_to(workspace):
         raise click.BadParameter(
             f"Working directory '{resolved}' must be under {workspace} when running in GitHub Actions."
         )
 
     if not resolved.is_dir():
-        raise click.BadParameter(f"Working directory '{resolved}' does not exist.")
+        raise click.BadParameter(f"Working directory '{resolved}' does not exist or is not a directory.")
 
     return resolved
 
