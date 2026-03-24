@@ -757,6 +757,47 @@ def initialize_sentry() -> None:
         logger.debug("Skipping CI context for Sentry (not running in a recognized CI/CD platform)")
 
 
+GITHUB_WORKSPACE = Path("/github/workspace")
+
+
+def resolve_working_dir(working_dir: str) -> Path:
+    """Resolve a working directory path for use with os.chdir().
+
+    Supports both relative and absolute paths. When running inside GitHub Actions
+    (detected by /github/workspace existing), absolute paths are validated to be
+    under the workspace to prevent escaping the mounted repository.
+
+    Args:
+        working_dir: The working directory path to resolve.
+
+    Returns:
+        Resolved absolute Path.
+
+    Raises:
+        click.BadParameter: If the path is outside the allowed prefix or doesn't exist.
+    """
+    path = Path(working_dir)
+
+    if path.is_absolute():
+        resolved = path.resolve()
+    else:
+        # Relative path — resolve against /github/workspace if available,
+        # otherwise against cwd (for local/non-GHA use)
+        base = GITHUB_WORKSPACE if GITHUB_WORKSPACE.is_dir() else Path.cwd()
+        resolved = (base / path).resolve()
+
+    # In GitHub Actions runtime, enforce the resolved path is under the workspace
+    if GITHUB_WORKSPACE.is_dir() and not resolved.is_relative_to(GITHUB_WORKSPACE.resolve()):
+        raise click.BadParameter(
+            f"Working directory '{resolved}' must be under {GITHUB_WORKSPACE} when running in GitHub Actions."
+        )
+
+    if not resolved.is_dir():
+        raise click.BadParameter(f"Working directory '{resolved}' does not exist.")
+
+    return resolved
+
+
 def path_expansion(path: str) -> str:
     """
     Takes a path/file and returns an absolute path.
@@ -2064,6 +2105,12 @@ def _parse_upload_destinations_callback(
     help="Enable/disable error telemetry (Sentry).",
 )
 @click.option(
+    "--working-dir",
+    envvar="WORKING_DIR",
+    default=None,
+    help="Working directory (relative to repo root or absolute). [env: WORKING_DIR]",
+)
+@click.option(
     "-v",
     "--verbose",
     is_flag=True,
@@ -2099,6 +2146,7 @@ def cli(
     api_base_url: str,
     sbom_format: str,
     spec_version: Optional[str],
+    working_dir: str | None,
     telemetry: bool,
     verbose: bool,
     quiet: bool,
@@ -2128,6 +2176,12 @@ def cli(
     # If a subcommand was invoked, don't run the default pipeline
     if ctx.invoked_subcommand is not None:
         return
+
+    # Change working directory early, before any file resolution
+    if working_dir:
+        resolved = resolve_working_dir(working_dir)
+        logger.info(f"Changing working directory to '{resolved}'")
+        os.chdir(resolved)
 
     # Show help with banner if no input source is provided
     if not any([sbom_file, docker_image, lock_file]):
