@@ -789,13 +789,16 @@ def resolve_working_dir(working_dir: str) -> Path:
     in_gha = _in_github_actions()
     workspace = _github_workspace()
 
-    if path.is_absolute():
-        resolved = path.resolve()
-    else:
-        # Relative path — resolve against workspace if in GHA,
-        # otherwise against cwd (for local/non-GHA use)
-        base = workspace if in_gha else Path.cwd()
-        resolved = (base / path).resolve()
+    try:
+        if path.is_absolute():
+            resolved = path.resolve()
+        else:
+            # Relative path — resolve against workspace if in GHA,
+            # otherwise against cwd (for local/non-GHA use)
+            base = workspace if in_gha else Path.cwd()
+            resolved = (base / path).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise click.BadParameter(f"Unable to resolve working directory '{working_dir}': {exc}") from exc
 
     # In GitHub Actions runtime, enforce the resolved path is under the workspace
     if in_gha and not resolved.is_relative_to(workspace):
