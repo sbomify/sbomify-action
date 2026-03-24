@@ -759,7 +759,8 @@ def initialize_sentry() -> None:
 
 def _in_github_actions() -> bool:
     """Return True when running inside GitHub Actions."""
-    return os.environ.get("GITHUB_ACTIONS") == "true"
+    value = os.environ.get("GITHUB_ACTIONS")
+    return value is not None and value.lower() in {"true", "1"}
 
 
 def _github_workspace() -> Path:
@@ -2202,6 +2203,13 @@ def cli(
         resolved = resolve_working_dir(working_dir)
         logger.info(f"Changing working directory to '{resolved}'")
         os.chdir(resolved)
+        # Verify cwd is still under workspace after chdir (TOCTOU mitigation)
+        if _in_github_actions():
+            cwd = Path.cwd().resolve()
+            workspace = _github_workspace()
+            if not cwd.is_relative_to(workspace):
+                logger.error(f"Working directory '{cwd}' escaped workspace '{workspace}' after chdir. Aborting.")
+                ctx.exit(1)
 
     # If a subcommand was invoked, don't run the default pipeline
     if ctx.invoked_subcommand is not None:

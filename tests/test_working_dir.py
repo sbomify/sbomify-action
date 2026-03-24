@@ -89,7 +89,10 @@ class TestResolveWorkingDir:
         outside = tmp_path / "outside"
         outside.mkdir()
         link = workspace / "sneaky-link"
-        link.symlink_to(outside)
+        try:
+            link.symlink_to(outside)
+        except OSError:
+            pytest.skip("Symlinks not supported on this platform")
         with _in_gha(workspace):
             with pytest.raises(click.BadParameter, match="must be under"):
                 resolve_working_dir(str(link))
@@ -118,7 +121,8 @@ class TestWorkingDirCliWiring:
         runner = CliRunner()
         with _not_in_gha(), patch("sbomify_action.cli.main.os.chdir") as mock_chdir:
             # Invoke without input sources — cli shows help and exits, but chdir runs first
-            runner.invoke(cli, ["--working-dir", str(subdir)])
+            result = runner.invoke(cli, ["--working-dir", str(subdir)])
+            assert result.exit_code == 0
             mock_chdir.assert_called_once_with(subdir.resolve())
 
     def test_cli_working_dir_via_env_var(self, tmp_path):
@@ -128,5 +132,6 @@ class TestWorkingDirCliWiring:
         runner = CliRunner()
         env = {"WORKING_DIR": str(subdir), "GITHUB_ACTIONS": "", "GITHUB_WORKSPACE": ""}
         with patch.dict(os.environ, env, clear=False), patch("sbomify_action.cli.main.os.chdir") as mock_chdir:
-            runner.invoke(cli, [])
+            result = runner.invoke(cli, [])
+            assert result.exit_code == 0
             mock_chdir.assert_called_once_with(subdir.resolve())
