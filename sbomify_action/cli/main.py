@@ -786,6 +786,13 @@ def resolve_working_dir(working_dir: str) -> Path:
     Raises:
         click.BadParameter: If the path is outside the allowed prefix or doesn't exist.
     """
+    # Guard against missing value (e.g., --working-dir --lock-file ...)
+    if working_dir.startswith("-"):
+        raise click.BadParameter(
+            f"Invalid working directory '{working_dir}' — this looks like a CLI flag. "
+            "Did you forget to provide a directory path?"
+        )
+
     path = Path(working_dir)
     in_gha = _in_github_actions()
     workspace = _github_workspace()

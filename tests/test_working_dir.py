@@ -97,6 +97,12 @@ class TestResolveWorkingDir:
             with pytest.raises(click.BadParameter, match="must be under"):
                 resolve_working_dir(str(link))
 
+    def test_flag_like_value_rejected(self):
+        """Value starting with '-' is rejected as likely missing argument."""
+        with _not_in_gha():
+            with pytest.raises(click.BadParameter, match="looks like a CLI flag"):
+                resolve_working_dir("--lock-file")
+
     def test_chdir_integration(self, tmp_path):
         """Verify os.chdir works with the resolved path."""
         subdir = tmp_path / "sub"
