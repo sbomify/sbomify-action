@@ -73,11 +73,10 @@ class TestToolStatus(unittest.TestCase):
 class TestExternalTools(unittest.TestCase):
     """Tests for get_external_tools function."""
 
-    def test_external_tools_contains_trivy(self):
-        """Test external tools contains trivy."""
+    def test_external_tools_does_not_contain_trivy(self):
+        """Test external tools does not contain trivy (temporarily disabled)."""
         external_tools = get_external_tools()
-        self.assertIn("trivy", external_tools)
-        self.assertEqual(external_tools["trivy"].command, "trivy")
+        self.assertNotIn("trivy", external_tools)
 
     def test_external_tools_contains_syft(self):
         """Test external tools contains syft."""
@@ -148,7 +147,7 @@ class TestCheckAllTools(unittest.TestCase):
         """Test checking all tools when all are available."""
         mock_check.return_value = (True, "/usr/local/bin/tool")
         results = check_all_tools()
-        self.assertIn("trivy", results)
+        self.assertNotIn("trivy", results)  # Trivy temporarily disabled
         self.assertIn("syft", results)
         self.assertIn("cdxgen", results)
         self.assertIn("cyclonedx-py", results)
@@ -172,11 +171,11 @@ class TestGetAvailableTools(unittest.TestCase):
     def test_get_available_tools(self, mock_check_all):
         """Test getting list of available tools."""
         mock_check_all.return_value = {
-            "trivy": ToolStatus(name="trivy", available=True, path="/usr/bin/trivy"),
-            "syft": ToolStatus(name="syft", available=False),
+            "syft": ToolStatus(name="syft", available=True, path="/usr/bin/syft"),
+            "cdxgen": ToolStatus(name="cdxgen", available=False),
         }
         available = get_available_tools()
-        self.assertEqual(available, ["trivy"])
+        self.assertEqual(available, ["syft"])
 
 
 class TestGetMissingTools(unittest.TestCase):
@@ -186,11 +185,11 @@ class TestGetMissingTools(unittest.TestCase):
     def test_get_missing_tools(self, mock_check_all):
         """Test getting list of missing tools."""
         mock_check_all.return_value = {
-            "trivy": ToolStatus(name="trivy", available=True, path="/usr/bin/trivy"),
-            "syft": ToolStatus(name="syft", available=False),
+            "syft": ToolStatus(name="syft", available=True, path="/usr/bin/syft"),
+            "cdxgen": ToolStatus(name="cdxgen", available=False),
         }
         missing = get_missing_tools()
-        self.assertEqual(missing, ["syft"])
+        self.assertEqual(missing, ["cdxgen"])
 
 
 class TestLogToolStatus(unittest.TestCase):
@@ -202,16 +201,16 @@ class TestLogToolStatus(unittest.TestCase):
         """Test logging when some tools are available."""
         external_tools = get_external_tools()
         mock_check_all.return_value = {
-            "trivy": ToolStatus(
-                name="Trivy",
-                available=True,
-                path="/usr/bin/trivy",
-                info=external_tools["trivy"],
-            ),
             "syft": ToolStatus(
                 name="Syft",
-                available=False,
+                available=True,
+                path="/usr/bin/syft",
                 info=external_tools["syft"],
+            ),
+            "cdxgen": ToolStatus(
+                name="cdxgen",
+                available=False,
+                info=external_tools["cdxgen"],
             ),
         }
         log_tool_status(verbose=False)
@@ -224,10 +223,10 @@ class TestLogToolStatus(unittest.TestCase):
         """Test verbose logging with install instructions."""
         external_tools = get_external_tools()
         mock_check_all.return_value = {
-            "trivy": ToolStatus(
-                name="Trivy",
+            "syft": ToolStatus(
+                name="Syft",
                 available=False,
-                info=external_tools["trivy"],
+                info=external_tools["syft"],
             ),
         }
         log_tool_status(verbose=True)
@@ -240,14 +239,14 @@ class TestGetToolInstallMessage(unittest.TestCase):
 
     def test_get_install_message_single_tool(self):
         """Test install message for single tool."""
-        message = get_tool_install_message(["trivy"])
-        self.assertIn("Trivy", message)
-        self.assertIn("brew install trivy", message)
+        message = get_tool_install_message(["syft"])
+        self.assertIn("Syft", message)
+        self.assertIn("brew install syft", message)
 
     def test_get_install_message_multiple_tools(self):
         """Test install message for multiple tools."""
-        message = get_tool_install_message(["trivy", "syft"])
-        self.assertIn("Trivy", message)
+        message = get_tool_install_message(["syft", "cdxgen"])
+        self.assertIn("Syft", message)
         self.assertIn("Syft", message)
 
     def test_get_install_message_unknown_tool(self):
@@ -263,21 +262,18 @@ class TestCheckToolForInput(unittest.TestCase):
     def test_check_tool_for_docker_image(self, mock_check_all):
         """Test checking tools for Docker image input."""
         mock_check_all.return_value = {
-            "trivy": ToolStatus(name="trivy", available=True),
-            "syft": ToolStatus(name="syft", available=False),
+            "syft": ToolStatus(name="syft", available=True),
             "cdxgen": ToolStatus(name="cdxgen", available=False),
             "cyclonedx-py": ToolStatus(name="cyclonedx-py", available=True),
         }
         available, missing = check_tool_for_input("docker_image")
-        self.assertIn("trivy", available)
-        self.assertIn("syft", missing)
+        self.assertIn("syft", available)
         self.assertIn("cdxgen", missing)
 
     @patch("sbomify_action.tool_checks.check_all_tools")
     def test_check_tool_for_python_lockfile(self, mock_check_all):
         """Test checking tools for Python lock file."""
         mock_check_all.return_value = {
-            "trivy": ToolStatus(name="trivy", available=False),
             "syft": ToolStatus(name="syft", available=False),
             "cdxgen": ToolStatus(name="cdxgen", available=False),
             "cyclonedx-py": ToolStatus(name="cyclonedx-py", available=True),
@@ -289,13 +285,11 @@ class TestCheckToolForInput(unittest.TestCase):
     def test_check_tool_for_java_lockfile(self, mock_check_all):
         """Test checking tools for Java lock file (cdxgen preferred)."""
         mock_check_all.return_value = {
-            "trivy": ToolStatus(name="trivy", available=True),
             "syft": ToolStatus(name="syft", available=True),
             "cdxgen": ToolStatus(name="cdxgen", available=False),
             "cyclonedx-py": ToolStatus(name="cyclonedx-py", available=True),
         }
         available, missing = check_tool_for_input("lock_file", "pom.xml")
-        self.assertIn("trivy", available)
         self.assertIn("syft", available)
         self.assertIn("cdxgen", missing)
 
@@ -303,7 +297,6 @@ class TestCheckToolForInput(unittest.TestCase):
     def test_check_tool_for_dart_lockfile(self, mock_check_all):
         """Test checking tools for Dart lock file."""
         mock_check_all.return_value = {
-            "trivy": ToolStatus(name="trivy", available=False),
             "syft": ToolStatus(name="syft", available=True),
             "cdxgen": ToolStatus(name="cdxgen", available=False),
             "cyclonedx-py": ToolStatus(name="cyclonedx-py", available=False),
@@ -316,7 +309,6 @@ class TestCheckToolForInput(unittest.TestCase):
     def test_check_tool_for_terraform_lockfile(self, mock_check_all):
         """Test checking tools for Terraform lock file (only syft)."""
         mock_check_all.return_value = {
-            "trivy": ToolStatus(name="trivy", available=False),
             "syft": ToolStatus(name="syft", available=True),
             "cdxgen": ToolStatus(name="cdxgen", available=False),
             "cyclonedx-py": ToolStatus(name="cyclonedx-py", available=False),
@@ -340,10 +332,9 @@ class TestFormatNoToolsError(unittest.TestCase):
     @patch("sbomify_action.tool_checks.check_tool_for_input")
     def test_format_error_docker_image(self, mock_check):
         """Test error message for Docker image with no tools."""
-        mock_check.return_value = ([], ["trivy", "syft", "cdxgen"])
+        mock_check.return_value = ([], ["syft", "cdxgen"])
         error = format_no_tools_error("docker_image")
         self.assertIn("Docker images", error)
-        self.assertIn("Trivy", error)
         self.assertIn("Syft", error)
         self.assertIn("cdxgen", error)
         self.assertIn("sbomifyhub/sbomify-action", error)
@@ -351,7 +342,7 @@ class TestFormatNoToolsError(unittest.TestCase):
     @patch("sbomify_action.tool_checks.check_tool_for_input")
     def test_format_error_lock_file(self, mock_check):
         """Test error message for lock file with no tools."""
-        mock_check.return_value = ([], ["cyclonedx-py", "cdxgen", "trivy", "syft"])
+        mock_check.return_value = ([], ["cyclonedx-py", "cdxgen", "syft"])
         error = format_no_tools_error("lock_file", "requirements.txt")
         self.assertIn("requirements.txt", error)
         self.assertIn("cyclonedx-py", error)
@@ -359,14 +350,14 @@ class TestFormatNoToolsError(unittest.TestCase):
     @patch("sbomify_action.tool_checks.check_tool_for_input")
     def test_format_error_with_available_tools(self, mock_check):
         """Test error message when tools are actually available."""
-        mock_check.return_value = (["trivy"], [])
+        mock_check.return_value = (["syft"], [])
         error = format_no_tools_error("docker_image")
         self.assertIn("Tools available but generation failed", error)
 
     @patch("sbomify_action.tool_checks.check_tool_for_input")
     def test_format_error_lock_file_without_filename(self, mock_check):
         """Test error message for lock_file input without filename."""
-        mock_check.return_value = ([], ["trivy", "syft"])
+        mock_check.return_value = ([], ["syft", "cdxgen"])
         error = format_no_tools_error("lock_file", None)
         self.assertIn("this input", error)
 
@@ -378,14 +369,12 @@ class TestCheckToolForInputEdgeCases(unittest.TestCase):
     def test_check_tool_for_general_lockfile(self, mock_check_all):
         """Test checking tools for a general/unknown lock file type."""
         mock_check_all.return_value = {
-            "trivy": ToolStatus(name="trivy", available=True),
             "syft": ToolStatus(name="syft", available=False),
             "cdxgen": ToolStatus(name="cdxgen", available=True),
             "cyclonedx-py": ToolStatus(name="cyclonedx-py", available=False),
         }
         # Use a generic lock file that's not specifically handled
         available, missing = check_tool_for_input("lock_file", "some-other.lock")
-        self.assertIn("trivy", available)
         self.assertIn("cdxgen", available)
         self.assertIn("syft", missing)
 
@@ -393,15 +382,13 @@ class TestCheckToolForInputEdgeCases(unittest.TestCase):
     def test_check_tool_for_unknown_input_type(self, mock_check_all):
         """Test checking tools for an unknown input type."""
         mock_check_all.return_value = {
-            "trivy": ToolStatus(name="trivy", available=True),
-            "syft": ToolStatus(name="syft", available=False),
+            "syft": ToolStatus(name="syft", available=True),
             "cdxgen": ToolStatus(name="cdxgen", available=False),
             "cyclonedx-py": ToolStatus(name="cyclonedx-py", available=False),
         }
-        # Use an unknown input type - should default to trivy, syft, cdxgen
+        # Use an unknown input type - should default to syft, cdxgen
         available, missing = check_tool_for_input("unknown_type")
-        self.assertIn("trivy", available)
-        self.assertIn("syft", missing)
+        self.assertIn("syft", available)
         self.assertIn("cdxgen", missing)
 
 
