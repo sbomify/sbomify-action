@@ -3,6 +3,10 @@ name: 'sbomify'
 description: 'A GitHub Action to upload an SBOM CycloneDX or SPDX to sbomify'
 author: 'sbomify'
 inputs:
+  working-dir:
+    description: 'Working directory, relative to repo root or absolute (must be under $GITHUB_WORKSPACE). Example: packages/my-app'
+    required: false
+    default: ''
   component-purl:
     description: 'Override the component PURL in the SBOM (e.g., pkg:npm/@scope/name@1.0.0)'
     required: false
@@ -11,6 +15,7 @@ runs:
   # Bump/pin this to release
   image: 'docker://sbomifyhub/sbomify-action:latest'
   env:
+    WORKING_DIR: ${{ inputs['working-dir'] }}
     COMPONENT_PURL: ${{ inputs['component-purl'] }}
 branding:
   icon: 'upload-cloud'

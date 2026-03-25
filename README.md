@@ -176,6 +176,21 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
     subject-path: sbom.cdx.json
 ```
 
+### Monorepo (Working Directory)
+
+```yaml
+- uses: sbomify/sbomify-action@master
+  with:
+    working-dir: packages/my-app
+  env:
+    LOCK_FILE: package-lock.json
+    OUTPUT_FILE: sbom.cdx.json
+    ENRICH: true
+    UPLOAD: false
+```
+
+> **Note:** The workflow-level `working-directory` setting does not affect this action. Prefer using the `with: working-dir:` input (which sets the underlying `WORKING_DIR` env var) instead of relying on `WORKING_DIR` directly.
+
 </details>
 
 ## Configuration
@@ -203,6 +218,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `DISABLE_VCS_AUGMENTATION` | No       | Set to `true` to disable auto-detection of VCS info from CI environment          |
 | `SBOMIFY_CACHE_DIR`        | No       | Directory for sbomify license database cache                                     |
 | `TRIVY_CACHE_DIR`          | No       | Directory for Trivy cache                                                        |
+| `WORKING_DIR`              | No       | Working directory (relative to cwd or `$GITHUB_WORKSPACE` in GHA; monorepo)      |
 | `SYFT_CACHE_DIR`           | No       | Directory for Syft cache                                                         |
 
 † **One** of `LOCK_FILE`, `SBOM_FILE`, or `DOCKER_IMAGE` is required (pick one)
