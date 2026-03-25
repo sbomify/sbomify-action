@@ -682,8 +682,9 @@ class TestCreateDefaultRegistry(unittest.TestCase):
         self.assertIn("cyclonedx-py", names)
         self.assertIn("cdxgen-fs", names)
         self.assertIn("cdxgen-image", names)
-        self.assertIn("trivy-fs", names)
-        self.assertIn("trivy-image", names)
+        # Trivy is temporarily disabled due to security vulnerabilities
+        self.assertNotIn("trivy-fs", names)
+        self.assertNotIn("trivy-image", names)
         self.assertIn("syft-fs", names)
         self.assertIn("syft-image", names)
 

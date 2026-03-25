@@ -9,8 +9,8 @@ DOCKERFILE="${SCRIPT_DIR}/../Dockerfile"
 # The validation below catches empty matches anyway
 VERSION_REGEX='[0-9.]*'
 
-# Extract version from Dockerfile ENV declaration
-# Usage: extract_version "TRIVY" "/path/to/Dockerfile"
+# Extract version from Dockerfile ARG declaration
+# Usage: extract_version "SYFT" "/path/to/Dockerfile"
 extract_version() {
   local name="$1"
   local dockerfile="$2"
@@ -22,17 +22,11 @@ if [ ! -f "$DOCKERFILE" ]; then
   exit 1
 fi
 
-TRIVY_VERSION=$(extract_version "TRIVY" "$DOCKERFILE")
 BOMCTL_VERSION=$(extract_version "BOMCTL" "$DOCKERFILE")
 SYFT_VERSION=$(extract_version "SYFT" "$DOCKERFILE")
 CARGO_CYCLONEDX_VERSION=$(extract_version "CARGO_CYCLONEDX" "$DOCKERFILE")
 UV_VERSION=$(extract_version "UV" "$DOCKERFILE")
 BUN_VERSION=$(extract_version "BUN" "$DOCKERFILE")
-
-if [ -z "$TRIVY_VERSION" ]; then
-  echo "ERROR: Could not extract TRIVY_VERSION from Dockerfile" >&2
-  exit 1
-fi
 
 if [ -z "$BOMCTL_VERSION" ]; then
   echo "ERROR: Could not extract BOMCTL_VERSION from Dockerfile" >&2
@@ -60,7 +54,6 @@ if [ -z "$BUN_VERSION" ]; then
 fi
 
 # Export for sourcing
-export TRIVY_VERSION
 export BOMCTL_VERSION
 export SYFT_VERSION
 export CARGO_CYCLONEDX_VERSION
@@ -69,7 +62,6 @@ export BUN_VERSION
 
 # When executed directly (not sourced), output PURLs
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  echo "pkg:golang/github.com/aquasecurity/trivy@v${TRIVY_VERSION}"
   echo "pkg:golang/github.com/bomctl/bomctl@v${BOMCTL_VERSION}"
   echo "pkg:golang/github.com/anchore/syft@v${SYFT_VERSION}"
   echo "pkg:cargo/cargo-cyclonedx@${CARGO_CYCLONEDX_VERSION}"
