@@ -133,6 +133,7 @@ jobs:
         run: |
           source ./scripts/generate_additional_packages.sh
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
+          echo "SYFT_VERSION=$SYFT_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
@@ -141,6 +142,18 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked --dev
+
+      - name: Install Syft
+        run: |
+          curl -sL -o syft_${SYFT_VERSION}_linux_amd64.tar.gz \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          curl -sL -o syft_checksum.txt \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt"
+          grep "syft_${SYFT_VERSION}_linux_amd64.tar.gz" syft_checksum.txt | sha256sum -c -
+          tar xvfz syft_${SYFT_VERSION}_linux_amd64.tar.gz
+          chmod +x syft
+          sudo mv syft /usr/local/bin
+          rm -f syft_${SYFT_VERSION}_linux_amd64.tar.gz syft_checksum.txt
 
       - name: Generate and enrich Alpine SBOM (CycloneDX)
         run: |
@@ -395,6 +408,7 @@ jobs:
         run: |
           source ./scripts/generate_additional_packages.sh
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
+          echo "SYFT_VERSION=$SYFT_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
@@ -403,6 +417,18 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked --dev
+
+      - name: Install Syft
+        run: |
+          curl -sL -o syft_${SYFT_VERSION}_linux_amd64.tar.gz \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          curl -sL -o syft_checksum.txt \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt"
+          grep "syft_${SYFT_VERSION}_linux_amd64.tar.gz" syft_checksum.txt | sha256sum -c -
+          tar xvfz syft_${SYFT_VERSION}_linux_amd64.tar.gz
+          chmod +x syft
+          sudo mv syft /usr/local/bin
+          rm -f syft_${SYFT_VERSION}_linux_amd64.tar.gz syft_checksum.txt
 
       - name: Generate and enrich Debian SBOM (CycloneDX)
         run: |
