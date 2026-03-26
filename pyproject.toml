@@ -1,6 +1,6 @@
 [project]
 name = "sbomify-action"
-version = "0.14"
+version = "26.1.0"
 description = "Generate, augment, enrich, and manage SBOMs in your CI/CD pipeline"
 authors = [{ name = "sbomify", email = "hello@sbomify.com" }]
 requires-python = ">=3.11"
