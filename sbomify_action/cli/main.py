@@ -757,6 +757,69 @@ def initialize_sentry() -> None:
         logger.debug("Skipping CI context for Sentry (not running in a recognized CI/CD platform)")
 
 
+def _in_github_actions() -> bool:
+    """Return True when running inside GitHub Actions."""
+    value = os.environ.get("GITHUB_ACTIONS")
+    return value is not None and value.lower() in {"true", "1"}
+
+
+def _github_workspace() -> Path:
+    """Return the GitHub Actions workspace path as an absolute, resolved Path."""
+    raw = os.environ.get("GITHUB_WORKSPACE") or "/github/workspace"
+    workspace = Path(raw)
+    return workspace.resolve()
+
+
+def resolve_working_dir(working_dir: str) -> Path:
+    """Resolve a working directory path for use with os.chdir().
+
+    Supports both relative and absolute paths. When running inside GitHub Actions
+    (detected via the GITHUB_ACTIONS env var), the resolved path is validated to
+    be under the workspace to prevent escaping the mounted repository.
+
+    Args:
+        working_dir: The working directory path to resolve.
+
+    Returns:
+        Resolved absolute Path.
+
+    Raises:
+        click.BadParameter: If the path is outside the allowed prefix or doesn't exist.
+    """
+    # Guard against missing value (e.g., --working-dir --lock-file ...)
+    if working_dir.startswith("-"):
+        raise click.BadParameter(
+            f"Invalid working directory '{working_dir}' — this looks like a CLI flag. "
+            "Did you forget to provide a directory path?"
+        )
+
+    path = Path(working_dir)
+    in_gha = _in_github_actions()
+    workspace = _github_workspace()
+
+    try:
+        if path.is_absolute():
+            resolved = path.resolve()
+        else:
+            # Relative path — resolve against workspace if in GHA,
+            # otherwise against cwd (for local/non-GHA use)
+            base = workspace if in_gha else Path.cwd()
+            resolved = (base / path).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise click.BadParameter(f"Unable to resolve working directory '{working_dir}': {exc}") from exc
+
+    # In GitHub Actions runtime, enforce the resolved path is under the workspace
+    if in_gha and not resolved.is_relative_to(workspace):
+        raise click.BadParameter(
+            f"Working directory '{resolved}' must be under {workspace} when running in GitHub Actions."
+        )
+
+    if not resolved.is_dir():
+        raise click.BadParameter(f"Working directory '{resolved}' does not exist or is not a directory.")
+
+    return resolved
+
+
 def path_expansion(path: str) -> str:
     """
     Takes a path/file and returns an absolute path.
@@ -2064,6 +2127,12 @@ def _parse_upload_destinations_callback(
     help="Enable/disable error telemetry (Sentry).",
 )
 @click.option(
+    "--working-dir",
+    envvar="WORKING_DIR",
+    default=None,
+    help="Working directory (absolute, or relative to cwd locally / GITHUB_WORKSPACE in GHA). [env: WORKING_DIR]",
+)
+@click.option(
     "-v",
     "--verbose",
     is_flag=True,
@@ -2099,6 +2168,7 @@ def cli(
     api_base_url: str,
     sbom_format: str,
     spec_version: Optional[str],
+    working_dir: str | None,
     telemetry: bool,
     verbose: bool,
     quiet: bool,
@@ -2125,6 +2195,29 @@ def cli(
       # Create sbomify.json configuration interactively
       sbomify-action init
     """
+    # Configure logging level early so all messages respect --verbose/--quiet
+    if verbose and quiet:
+        raise click.UsageError("Cannot use both --verbose and --quiet")
+
+    if verbose:
+        logger.setLevel(logging.DEBUG)
+        logger.debug("Verbose logging enabled")
+    elif quiet:
+        logger.setLevel(logging.WARNING)
+
+    # Change working directory early, before any file resolution (applies to subcommands too)
+    if working_dir:
+        resolved = resolve_working_dir(working_dir)
+        logger.info(f"Changing working directory to '{resolved}'")
+        os.chdir(resolved)
+        # Verify cwd is still under workspace after chdir (TOCTOU mitigation)
+        if _in_github_actions():
+            cwd = Path.cwd().resolve()
+            workspace = _github_workspace()
+            if not cwd.is_relative_to(workspace):
+                logger.error(f"Working directory '{cwd}' escaped workspace '{workspace}' after chdir. Aborting.")
+                ctx.exit(1)
+
     # If a subcommand was invoked, don't run the default pipeline
     if ctx.invoked_subcommand is not None:
         return
@@ -2144,16 +2237,6 @@ def cli(
         print_banner()
         click.echo(ctx.get_help())
         ctx.exit(0)
-
-    # Configure logging level
-    if verbose and quiet:
-        raise click.UsageError("Cannot use both --verbose and --quiet")
-
-    if verbose:
-        logger.setLevel(logging.DEBUG)
-        logger.debug("Verbose logging enabled")
-    elif quiet:
-        logger.setLevel(logging.WARNING)
 
     # Reset audit trail for this run
     reset_audit_trail()
