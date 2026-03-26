@@ -339,15 +339,16 @@ jobs:
         run: |
           echo "=== Verifying Enrichment Adds Publisher (CycloneDX) ==="
           
-          # Enrichment should add publisher to components from package registries
+          # Enrichment should add publisher to library components from package registries
           # This is critical for NTIA "Supplier Name" compliance at component level
-          TOTAL_COMPONENTS=$(jq '.components | length' alpine-enriched.cdx.json)
-          COMPONENTS_WITH_PUBLISHER=$(jq '[.components[] | select(.publisher != null and .publisher != "")] | length' alpine-enriched.cdx.json)
-          
-          echo "Total components: $TOTAL_COMPONENTS"
-          echo "Components with publisher: $COMPONENTS_WITH_PUBLISHER"
-          
-          # At least 50% of components should have publisher after enrichment
+          # Only count library components (Syft also generates file/OS components without publisher)
+          TOTAL_COMPONENTS=$(jq '[.components[] | select(.type == "library")] | length' alpine-enriched.cdx.json)
+          COMPONENTS_WITH_PUBLISHER=$(jq '[.components[] | select(.type == "library" and .publisher != null and .publisher != "")] | length' alpine-enriched.cdx.json)
+
+          echo "Total library components: $TOTAL_COMPONENTS"
+          echo "Library components with publisher: $COMPONENTS_WITH_PUBLISHER"
+
+          # At least 50% of library components should have publisher after enrichment
           MIN_EXPECTED=$((TOTAL_COMPONENTS / 2))
           if [ "$COMPONENTS_WITH_PUBLISHER" -ge "$MIN_EXPECTED" ]; then
             echo "✅ Enrichment added publisher to $COMPONENTS_WITH_PUBLISHER/$TOTAL_COMPONENTS components"
