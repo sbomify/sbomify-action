@@ -11,8 +11,6 @@ from .generators import (
     CycloneDXPyGenerator,
     SyftFsGenerator,
     SyftImageGenerator,
-    TrivyFsGenerator,
-    TrivyImageGenerator,
 )
 from .protocol import GenerationInput
 from .registry import GeneratorRegistry
@@ -42,7 +40,7 @@ def create_default_registry() -> GeneratorRegistry:
       - Input: Container images
       - Output: CycloneDX 1.4-1.7 (no SPDX support)
 
-    Priority 30 - Generic Multi-Ecosystem (Trivy):
+    Priority 30 - Generic Multi-Ecosystem (Trivy) [TEMPORARILY DISABLED]:
     - TrivyFsGenerator: Filesystem/lock file scanning
       - Input: Python, JavaScript, Java/Gradle, Go, Rust, Ruby, C++, PHP, .NET
                (NOT Dart, Swift, Elixir, Scala, Terraform)
@@ -50,6 +48,7 @@ def create_default_registry() -> GeneratorRegistry:
     - TrivyImageGenerator: Docker image scanning
       - Input: Container images
       - Output: CycloneDX 1.6, SPDX 2.3
+    NOTE: Trivy is temporarily disabled due to recurring security vulnerabilities.
 
     Priority 35 - Generic Multi-Ecosystem (Syft):
     - SyftFsGenerator: Filesystem/lock file scanning
@@ -76,9 +75,13 @@ def create_default_registry() -> GeneratorRegistry:
     registry.register(CdxgenFsGenerator())
     registry.register(CdxgenImageGenerator())
 
-    # Priority 30: Trivy generators (fixed versions, but wide ecosystem support)
-    registry.register(TrivyFsGenerator())
-    registry.register(TrivyImageGenerator())
+    # Priority 30: Trivy generators - TEMPORARILY DISABLED due to recurring
+    # security vulnerabilities in Trivy. To re-enable, reintroduce the
+    # TrivyFsGenerator/TrivyImageGenerator imports at the top of this module,
+    # uncomment the two lines below, and restore Trivy installation in the
+    # Dockerfile and CI workflow.
+    # registry.register(TrivyFsGenerator())
+    # registry.register(TrivyImageGenerator())
 
     # Priority 35: Syft generators (version selection, wide ecosystem support)
     registry.register(SyftFsGenerator())

@@ -69,27 +69,11 @@ jobs:
         run: |
           source ./scripts/generate_additional_packages.sh
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
-          echo "TRIVY_VERSION=$TRIVY_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "${{ env.UV_VERSION }}"
-
-      - name: Install Trivy
-        run: |
-          echo "Installing Trivy version: $TRIVY_VERSION"
-          curl -sL \
-            -o trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
-          curl -sL \
-            -o trivy_checksum.txt \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt"
-          grep "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" trivy_checksum.txt | sha256sum -c -
-          tar xvfz trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz
-          chmod +x trivy
-          sudo mv trivy /usr/local/bin
-          rm -f trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz trivy_checksum.txt
 
       - name: Load cached venv
         id: cached-uv-dependencies
@@ -149,7 +133,7 @@ jobs:
         run: |
           source ./scripts/generate_additional_packages.sh
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
-          echo "TRIVY_VERSION=$TRIVY_VERSION" >> "$GITHUB_ENV"
+          echo "SYFT_VERSION=$SYFT_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
@@ -159,17 +143,17 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --dev
 
-      - name: Install Trivy
+      - name: Install Syft
         run: |
-          curl -sL -o trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
-          curl -sL -o trivy_checksum.txt \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt"
-          grep "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" trivy_checksum.txt | sha256sum -c -
-          tar xvfz trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz
-          chmod +x trivy
-          sudo mv trivy /usr/local/bin
-          rm -f trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz trivy_checksum.txt
+          curl -sL -o syft_${SYFT_VERSION}_linux_amd64.tar.gz \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          curl -sL -o syft_checksum.txt \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt"
+          grep "syft_${SYFT_VERSION}_linux_amd64.tar.gz" syft_checksum.txt | sha256sum -c -
+          tar xvfz syft_${SYFT_VERSION}_linux_amd64.tar.gz
+          chmod +x syft
+          sudo mv syft /usr/local/bin
+          rm -f syft_${SYFT_VERSION}_linux_amd64.tar.gz syft_checksum.txt
 
       - name: Generate and enrich Alpine SBOM (CycloneDX)
         run: |
@@ -210,19 +194,25 @@ jobs:
             exit 1
           fi
           
-          # Count components with licenses
-          TOTAL_COMPONENTS=$(jq '.components | length' alpine-enriched.cdx.json)
-          COMPONENTS_WITH_LICENSES=$(jq '[.components[] | select(.licenses != null and (.licenses | length) > 0)] | length' alpine-enriched.cdx.json)
-          
-          echo "Total components: $TOTAL_COMPONENTS"
-          echo "Components with licenses: $COMPONENTS_WITH_LICENSES"
-          
-          # At least 50% of Alpine packages should have licenses from our DB
+          # Count library components with licenses (Syft also generates "file" and
+          # "operating-system" components that won't have license data from the DB)
+          TOTAL_COMPONENTS=$(jq '[.components[] | select(.type == "library")] | length' alpine-enriched.cdx.json)
+          COMPONENTS_WITH_LICENSES=$(jq '[.components[] | select(.type == "library" and .licenses != null and (.licenses | length) > 0)] | length' alpine-enriched.cdx.json)
+
+          echo "Total library components: $TOTAL_COMPONENTS"
+          echo "Library components with licenses: $COMPONENTS_WITH_LICENSES"
+
+          if [ "$TOTAL_COMPONENTS" -le 0 ]; then
+            echo "❌ No library components found in CycloneDX SBOM; cannot verify license enrichment"
+            exit 1
+          fi
+
+          # At least 50% of Alpine library packages should have licenses from our DB
           MIN_EXPECTED=$((TOTAL_COMPONENTS / 2))
           if [ "$COMPONENTS_WITH_LICENSES" -ge "$MIN_EXPECTED" ]; then
-            echo "✅ CycloneDX license enrichment rate is acceptable ($COMPONENTS_WITH_LICENSES >= $MIN_EXPECTED)"
+            echo "✅ CycloneDX license enrichment rate is acceptable ($COMPONENTS_WITH_LICENSES/$TOTAL_COMPONENTS >= 50%)"
           else
-            echo "❌ CycloneDX license enrichment rate too low ($COMPONENTS_WITH_LICENSES < $MIN_EXPECTED)"
+            echo "❌ CycloneDX license enrichment rate too low ($COMPONENTS_WITH_LICENSES/$TOTAL_COMPONENTS < 50%)"
             exit 1
           fi
           
@@ -354,15 +344,21 @@ jobs:
         run: |
           echo "=== Verifying Enrichment Adds Publisher (CycloneDX) ==="
           
-          # Enrichment should add publisher to components from package registries
+          # Enrichment should add publisher to library components from package registries
           # This is critical for NTIA "Supplier Name" compliance at component level
-          TOTAL_COMPONENTS=$(jq '.components | length' alpine-enriched.cdx.json)
-          COMPONENTS_WITH_PUBLISHER=$(jq '[.components[] | select(.publisher != null and .publisher != "")] | length' alpine-enriched.cdx.json)
-          
-          echo "Total components: $TOTAL_COMPONENTS"
-          echo "Components with publisher: $COMPONENTS_WITH_PUBLISHER"
-          
-          # At least 50% of components should have publisher after enrichment
+          # Only count library components (Syft also generates file/OS components without publisher)
+          TOTAL_COMPONENTS=$(jq '[.components[] | select(.type == "library")] | length' alpine-enriched.cdx.json)
+          COMPONENTS_WITH_PUBLISHER=$(jq '[.components[] | select(.type == "library" and .publisher != null and .publisher != "")] | length' alpine-enriched.cdx.json)
+
+          echo "Total library components: $TOTAL_COMPONENTS"
+          echo "Library components with publisher: $COMPONENTS_WITH_PUBLISHER"
+
+          if [ "$TOTAL_COMPONENTS" -le 0 ]; then
+            echo "❌ No library components found in CycloneDX SBOM; cannot verify publisher enrichment"
+            exit 1
+          fi
+
+          # At least 50% of library components should have publisher after enrichment
           MIN_EXPECTED=$((TOTAL_COMPONENTS / 2))
           if [ "$COMPONENTS_WITH_PUBLISHER" -ge "$MIN_EXPECTED" ]; then
             echo "✅ Enrichment added publisher to $COMPONENTS_WITH_PUBLISHER/$TOTAL_COMPONENTS components"
@@ -424,7 +420,7 @@ jobs:
         run: |
           source ./scripts/generate_additional_packages.sh
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
-          echo "TRIVY_VERSION=$TRIVY_VERSION" >> "$GITHUB_ENV"
+          echo "SYFT_VERSION=$SYFT_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
@@ -434,17 +430,17 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --dev
 
-      - name: Install Trivy
+      - name: Install Syft
         run: |
-          curl -sL -o trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
-          curl -sL -o trivy_checksum.txt \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt"
-          grep "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" trivy_checksum.txt | sha256sum -c -
-          tar xvfz trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz
-          chmod +x trivy
-          sudo mv trivy /usr/local/bin
-          rm -f trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz trivy_checksum.txt
+          curl -sL -o syft_${SYFT_VERSION}_linux_amd64.tar.gz \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          curl -sL -o syft_checksum.txt \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt"
+          grep "syft_${SYFT_VERSION}_linux_amd64.tar.gz" syft_checksum.txt | sha256sum -c -
+          tar xvfz syft_${SYFT_VERSION}_linux_amd64.tar.gz
+          chmod +x syft
+          sudo mv syft /usr/local/bin
+          rm -f syft_${SYFT_VERSION}_linux_amd64.tar.gz syft_checksum.txt
 
       - name: Generate and enrich Debian SBOM (CycloneDX)
         run: |
@@ -1221,7 +1217,7 @@ jobs:
           UPLOAD: true
           OUTPUT_FILE: ${{ matrix.output_file }}
           SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
-          TRIVY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/trivy
+
           SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
 
       - name: Attest SBOM
@@ -1307,7 +1303,7 @@ jobs:
           UPLOAD: true
           OUTPUT_FILE: ${{ matrix.output_file }}
           SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
-          TRIVY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/trivy
+
           SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
 
       - name: Attest SBOM
@@ -1378,7 +1374,7 @@ jobs:
           UPLOAD: true
           OUTPUT_FILE: ${{ matrix.output_file }}
           SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
-          TRIVY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/trivy
+
           SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
 
       - name: Attest SBOM
@@ -1448,7 +1444,7 @@ jobs:
           UPLOAD: true
           OUTPUT_FILE: ${{ matrix.output_file }}
           SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
-          TRIVY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/trivy
+
           SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
 
       - name: Attest SBOM

@@ -673,8 +673,8 @@ class TestSyftFsGenerator(unittest.TestCase):
 class TestCreateDefaultRegistry(unittest.TestCase):
     """Tests for create_default_registry factory."""
 
-    def test_creates_registry_with_all_generators(self):
-        """Test that default registry has all expected generators."""
+    def test_creates_registry_with_enabled_generators(self):
+        """Test that default registry has all enabled generators (Trivy temporarily disabled)."""
         registry = create_default_registry()
         generators = registry.list_generators()
 
@@ -682,8 +682,9 @@ class TestCreateDefaultRegistry(unittest.TestCase):
         self.assertIn("cyclonedx-py", names)
         self.assertIn("cdxgen-fs", names)
         self.assertIn("cdxgen-image", names)
-        self.assertIn("trivy-fs", names)
-        self.assertIn("trivy-image", names)
+        # Trivy is temporarily disabled due to security vulnerabilities
+        self.assertNotIn("trivy-fs", names)
+        self.assertNotIn("trivy-image", names)
         self.assertIn("syft-fs", names)
         self.assertIn("syft-image", names)
 

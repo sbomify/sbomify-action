@@ -3,7 +3,6 @@ ARG BUN_VERSION=1.3.10
 
 # Define tool versions
 ARG BOMCTL_VERSION=0.4.3
-ARG TRIVY_VERSION=0.69.3
 ARG SYFT_VERSION=1.42.3
 ARG CARGO_CYCLONEDX_VERSION=0.5.9
 
@@ -13,7 +12,6 @@ FROM python:3.13-slim-trixie AS fetcher
 ARG TARGETARCH
 
 # Re-declare global ARGs needed in this stage
-ARG TRIVY_VERSION
 ARG BOMCTL_VERSION
 ARG SYFT_VERSION
 
@@ -23,23 +21,7 @@ WORKDIR /tmp
 RUN apt-get update && \
     apt-get install -y curl unzip
 
-# Install Trivy (uses Linux-64bit / Linux-ARM64 naming)
-RUN TRIVY_ARCH=$(case ${TARGETARCH} in \
-        amd64) echo "64bit" ;; \
-        arm64) echo "ARM64" ;; \
-        *) echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac) && \
-    curl -sL \
-        -o trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz \
-        "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" && \
-    curl -sL \
-        -o trivy_checksum.txt \
-        "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt" && \
-    sha256sum --ignore-missing -c trivy_checksum.txt && \
-    tar xvfz trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz && \
-    chmod +x /tmp/trivy && \
-    mv trivy /usr/local/bin && \
-    rm -rf /tmp/*
+# NOTE: Trivy installation removed - temporarily disabled due to security vulnerabilities
 
 # Install bomctl (uses linux_amd64 / linux_arm64 naming)
 RUN curl -sL \
@@ -165,7 +147,6 @@ LABEL com.sbomify.maintainer="sbomify <hello@sbomify.com>" \
 # This reduces the base image size by ~330MB for non-Java workloads
 
 # Copy tools from fetcher
-COPY --from=fetcher /usr/local/bin/trivy /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/bomctl /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/syft /usr/local/bin/
 # cargo-cyclonedx: pre-built for amd64, compiled for arm64

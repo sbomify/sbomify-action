@@ -18,7 +18,9 @@ Watch our FOSDEM 2026 talk for a real-world crash course on generating CRA-ready
 
 Generate, augment, enrich, and manage SBOMs in your CI/CD pipeline. Works standalone or with [sbomify](https://sbomify.com).
 
-**Recommended**: Use the GitHub Action or Docker image—they include all SBOM generators (Trivy, Syft, cdxgen) pre-installed. For other CI platforms, see [examples below](#other-cicd-platforms). A [pip package](#pip-advanced) is also available for advanced use cases.
+**Recommended**: Use the GitHub Action or Docker image—they include the recommended SBOM generators pre-installed (Syft, cdxgen, cyclonedx-py, cargo-cyclonedx, and more). For other CI platforms, see [examples below](#other-cicd-platforms). A [pip package](#pip-advanced) is also available for advanced use cases.
+
+> **Note**: Trivy support is temporarily disabled due to recurring security vulnerabilities. Syft and cdxgen cover all supported ecosystems.
 
 **Why generate SBOMs in CI/CD?** Generating SBOMs at build time enables cryptographic signing and attestation, creating a verifiable chain of trust from source to artifact. Learn more about the [SBOM lifecycle](https://sbomify.com/features/generate-collaborate-analyze/).
 
@@ -217,7 +219,6 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `ADDITIONAL_PACKAGES`      | No       | Inline PURLs to inject (comma or newline separated)                              |
 | `DISABLE_VCS_AUGMENTATION` | No       | Set to `true` to disable auto-detection of VCS info from CI environment          |
 | `SBOMIFY_CACHE_DIR`        | No       | Directory for sbomify license database cache                                     |
-| `TRIVY_CACHE_DIR`          | No       | Directory for Trivy cache                                                        |
 | `WORKING_DIR`              | No       | Working directory (relative to cwd or `$GITHUB_WORKSPACE` in GHA; monorepo)      |
 | `SYFT_CACHE_DIR`           | No       | Directory for Syft cache                                                         |
 
@@ -773,7 +774,6 @@ Use `LOCK_FILE=none` (or `SBOM_FILE=none`) to create an SBOM containing only add
 The sbomify action caches data internally to speed up runs:
 
 - **License databases** (~20-50MB) - Pre-computed metadata for Linux distro packages
-- **Trivy cache** - SBOM generation metadata and package databases
 - **Syft cache** - Package metadata for SBOM generation
 
 To persist caches across CI runs, configure your CI platform's caching mechanism.
@@ -792,7 +792,6 @@ Use `actions/cache` before calling the sbomify action:
 - uses: sbomify/sbomify-action@master
   env:
     SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
-    TRIVY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/trivy
     SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
     LOCK_FILE: requirements.txt
     ENRICH: true
@@ -817,7 +816,6 @@ generate-sbom:
       - .sbomify-cache/
   variables:
     SBOMIFY_CACHE_DIR: "${CI_PROJECT_DIR}/.sbomify-cache/sbomify"
-    TRIVY_CACHE_DIR: "${CI_PROJECT_DIR}/.sbomify-cache/trivy"
     SYFT_CACHE_DIR: "${CI_PROJECT_DIR}/.sbomify-cache/syft"
     LOCK_FILE: poetry.lock
     OUTPUT_FILE: sbom.cdx.json
@@ -839,7 +837,6 @@ pipelines:
           - pipe: docker://sbomifyhub/sbomify-action:latest
             variables:
               SBOMIFY_CACHE_DIR: "${BITBUCKET_CLONE_DIR}/.sbomify-cache/sbomify"
-              TRIVY_CACHE_DIR: "${BITBUCKET_CLONE_DIR}/.sbomify-cache/trivy"
               SYFT_CACHE_DIR: "${BITBUCKET_CLONE_DIR}/.sbomify-cache/syft"
               LOCK_FILE: poetry.lock
               OUTPUT_FILE: sbom.cdx.json
@@ -862,7 +859,6 @@ docker run --rm \
   -v sbomify-cache:/cache \
   -w /github/workspace \
   -e SBOMIFY_CACHE_DIR=/cache/sbomify \
-  -e TRIVY_CACHE_DIR=/cache/trivy \
   -e SYFT_CACHE_DIR=/cache/syft \
   -e LOCK_FILE=/github/workspace/requirements.txt \
   -e OUTPUT_FILE=/github/workspace/sbom.cdx.json \
@@ -901,7 +897,7 @@ export ENRICH=true
 sbomify-action
 ```
 
-**Note**: SBOM generation requires external tools (trivy, syft, or cdxgen) to be installed separately. The Docker image includes all tools pre-installed, which is why it's the recommended approach.
+**Note**: SBOM generation requires external tools (syft or cdxgen) to be installed separately. The Docker image includes all tools pre-installed, which is why it's the recommended approach.
 
 </details>
 
@@ -919,7 +915,7 @@ Generators are tried in priority order. Native tools (optimized for specific eco
 | 10       | **cyclonedx-py**    | Python only                                                                                                    | CycloneDX 1.0–1.7               |
 | 10       | **cargo-cyclonedx** | Rust only                                                                                                      | CycloneDX 1.4–1.6               |
 | 20       | **cdxgen**          | Python, JavaScript, **Java/Gradle**, Go, Rust, Ruby, Dart, C++, PHP, .NET, Swift, Elixir, Scala, Docker images | CycloneDX 1.4–1.7               |
-| 30       | **Trivy**           | Python, JavaScript, Java/Gradle, Go, Rust, Ruby, C++, PHP, .NET, Docker images                                 | CycloneDX 1.6, SPDX 2.3         |
+| ~~30~~   | ~~**Trivy**~~       | ~~Temporarily disabled due to security vulnerabilities~~                                                        | ~~CycloneDX 1.6, SPDX 2.3~~     |
 | 35       | **Syft**            | Python, JavaScript, Go, Rust, Ruby, Dart, C++, PHP, .NET, Swift, Elixir, Terraform, Docker images              | CycloneDX 1.2–1.6, SPDX 2.2–2.3 |
 
 #### How It Works
@@ -927,9 +923,9 @@ Generators are tried in priority order. Native tools (optimized for specific eco
 1. **Python lockfiles** → cyclonedx-py (native, most accurate for Python)
 2. **Rust lockfiles** (Cargo.lock) → cargo-cyclonedx (native, most accurate for Rust)
 3. **Java lockfiles** (pom.xml, build.gradle, gradle.lockfile) → cdxgen (best Java support)
-4. **Dart lockfiles** (pubspec.lock) → cdxgen or Syft (Trivy doesn't support Dart)
-5. **Other lockfiles** (package-lock.json, go.mod, etc.) → cdxgen (then Trivy, then Syft as fallbacks)
-6. **Docker images** → cdxgen (then Trivy, then Syft as fallbacks)
+4. **Dart lockfiles** (pubspec.lock) → cdxgen or Syft
+5. **Other lockfiles** (package-lock.json, go.mod, etc.) → cdxgen (then Syft as fallback)
+6. **Docker images** → cdxgen (then Syft as fallback)
 
 If the primary generator fails or doesn't support the input, the next one in priority order is tried automatically.
 
@@ -938,7 +934,7 @@ If the primary generator fails or doesn't support the input, the next one in pri
 Control the output format with the `SBOM_FORMAT` environment variable:
 
 - **CycloneDX** (`SBOM_FORMAT=cyclonedx`): Default format. Uses the latest version supported by the selected generator.
-- **SPDX** (`SBOM_FORMAT=spdx`): Uses Trivy (2.3) or Syft (2.2/2.3) depending on availability.
+- **SPDX** (`SBOM_FORMAT=spdx`): Uses Syft (2.2/2.3).
 
 Generated SBOMs are validated against their JSON schemas before output.
 
@@ -949,22 +945,21 @@ When installed via pip, sbomify-action requires external SBOM generators. The Do
 | Tool             | Install Command                                                                                 | Notes                                                                                                                          |
 | ---------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | **cyclonedx-py** | `pip install cyclonedx-bom`                                                                     | Native Python generator; `cyclonedx-py` is the CLI command provided by the `cyclonedx-bom` package (installed as a dependency) |
-| **Trivy**        | [Installation guide](https://aquasecurity.github.io/trivy/latest/getting-started/installation/) | macOS: `brew install trivy`                                                                                                    |
 | **Syft**         | [Installation guide](https://github.com/anchore/syft#installation)                              | macOS: `brew install syft`                                                                                                     |
 | **cdxgen**       | `npm install -g @cyclonedx/cdxgen`                                                              | Requires Node.js/Bun                                                                                                           |
 
-**Minimum requirement**: At least one generator must be installed for SBOM generation. For Python projects, `cyclonedx-bom` (which provides the `cyclonedx-py` command) is installed as a dependency when you install sbomify-action via pip. For other ecosystems or Docker images, install `trivy`, `syft`, or `cdxgen`.
+**Minimum requirement**: At least one generator must be installed for SBOM generation. For Python projects, `cyclonedx-bom` (which provides the `cyclonedx-py` command) is installed as a dependency when you install sbomify-action via pip. For other ecosystems or Docker images, install `syft` or `cdxgen`.
 
 </details>
 
 <details>
 <summary><strong>SBOM quality improvement</strong> (what enrichment adds, before/after example)</summary>
 
-SBOM generators like Trivy and Syft focus on dependency detection—they produce name, version, and PURL, but typically leave metadata fields empty. sbomify queries package registries to fill in these gaps, improving license compliance and supply chain visibility.
+SBOM generators like Syft and cdxgen focus on dependency detection—they produce name, version, and PURL, but typically leave metadata fields empty. sbomify queries package registries to fill in these gaps, improving license compliance and supply chain visibility.
 
 #### What's Typically Missing
 
-Scanners detect packages but don't fetch metadata. Here's what a typical Trivy component looks like:
+Scanners detect packages but don't fetch metadata. Here's what a typical scanner component looks like:
 
 ```json
 {

@@ -31,18 +31,20 @@ class ToolInfo:
 # This is used to provide helpful messages when tools are missing.
 # The tool list itself is built dynamically from registered generators.
 _TOOL_METADATA: dict[str, dict[str, object]] = {
-    "trivy": {
-        "name": "Trivy",
-        "description": "Comprehensive vulnerability scanner and SBOM generator",
-        "install_instructions": (
-            "Install via package manager:\n"
-            "  - macOS: brew install trivy\n"
-            "  - Linux: See https://aquasecurity.github.io/trivy/latest/getting-started/installation/\n"
-            "  - Docker: docker pull aquasec/trivy"
-        ),
-        "homepage": "https://trivy.dev",
-        "required_for": ["Docker images", "Many lockfile types"],
-    },
+    # NOTE: Trivy temporarily disabled due to recurring security vulnerabilities.
+    # To re-enable, uncomment the entry below and restore Trivy in generator.py.
+    # "trivy": {
+    #     "name": "Trivy",
+    #     "description": "Comprehensive vulnerability scanner and SBOM generator",
+    #     "install_instructions": (
+    #         "Install via package manager:\n"
+    #         "  - macOS: brew install trivy\n"
+    #         "  - Linux: See https://aquasecurity.github.io/trivy/latest/getting-started/installation/\n"
+    #         "  - Docker: docker pull aquasec/trivy"
+    #     ),
+    #     "homepage": "https://trivy.dev",
+    #     "required_for": ["Docker images", "Many lockfile types"],
+    # },
     "syft": {
         "name": "Syft",
         "description": "SBOM generator with broad ecosystem support",
@@ -258,33 +260,36 @@ def check_tool_for_input(input_type: str, lock_file: Optional[str] = None) -> tu
 
     # Map input types to tools that can handle them
     if input_type == "docker_image":
-        relevant_tools = ["trivy", "syft", "cdxgen"]
+        relevant_tools = ["syft", "cdxgen"]
     elif input_type == "lock_file" and lock_file:
         # Determine which tools can handle this lock file
         filename = lock_file.split("/")[-1] if "/" in lock_file else lock_file
-        if filename in ("requirements.txt", "poetry.lock", "pyproject.toml", "Pipfile.lock", "uv.lock"):
+        if filename == "uv.lock":
+            # uv.lock is a Python-related lockfile, but cyclonedx-py does not support it
+            relevant_tools = ["cdxgen", "syft"]
+        elif filename in ("requirements.txt", "poetry.lock", "pyproject.toml", "Pipfile.lock"):
             # Python files - cyclonedx-py is native, others can also handle
-            relevant_tools = ["cyclonedx-py", "cdxgen", "trivy", "syft"]
+            relevant_tools = ["cyclonedx-py", "cdxgen", "syft"]
         elif filename in ("pom.xml", "build.gradle", "build.gradle.kts", "gradle.lockfile"):
             # Java - cdxgen is best
-            relevant_tools = ["cdxgen", "trivy", "syft"]
+            relevant_tools = ["cdxgen", "syft"]
         elif filename == "Cargo.lock":
             # Rust - cargo-cyclonedx is native, others can also handle
-            relevant_tools = ["cargo-cyclonedx", "cdxgen", "trivy", "syft"]
+            relevant_tools = ["cargo-cyclonedx", "cdxgen", "syft"]
         elif filename == "pubspec.lock":
-            # Dart - cdxgen and syft support it, trivy doesn't
+            # Dart - cdxgen and syft support it
             relevant_tools = ["cdxgen", "syft"]
         elif filename == ".terraform.lock.hcl":
             # Terraform - only syft
             relevant_tools = ["syft"]
         else:
             # General lockfiles
-            relevant_tools = ["cdxgen", "trivy", "syft"]
+            relevant_tools = ["cdxgen", "syft"]
     elif input_type == "sbom_file":
         # No external tools needed for existing SBOMs
         return ([], [])
     else:
-        relevant_tools = ["trivy", "syft", "cdxgen"]
+        relevant_tools = ["syft", "cdxgen"]
 
     available = [t for t in relevant_tools if statuses.get(t, ToolStatus(t, False)).available]
     missing = [t for t in relevant_tools if not statuses.get(t, ToolStatus(t, False)).available]
