@@ -18,7 +18,7 @@ Watch our FOSDEM 2026 talk for a real-world crash course on generating CRA-ready
 
 Generate, augment, enrich, and manage SBOMs in your CI/CD pipeline. Works standalone or with [sbomify](https://sbomify.com).
 
-**Recommended**: Use the GitHub Action or Docker image—they include all SBOM generators (Syft, cdxgen) pre-installed. For other CI platforms, see [examples below](#other-cicd-platforms). A [pip package](#pip-advanced) is also available for advanced use cases.
+**Recommended**: Use the GitHub Action or Docker image—they include the recommended SBOM generators pre-installed (Syft, cdxgen, cyclonedx-py, cargo-cyclonedx, and more). For other CI platforms, see [examples below](#other-cicd-platforms). A [pip package](#pip-advanced) is also available for advanced use cases.
 
 > **Note**: Trivy support is temporarily disabled due to recurring security vulnerabilities. Syft and cdxgen cover all supported ecosystems.
 

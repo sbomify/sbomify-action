@@ -673,8 +673,8 @@ class TestSyftFsGenerator(unittest.TestCase):
 class TestCreateDefaultRegistry(unittest.TestCase):
     """Tests for create_default_registry factory."""
 
-    def test_creates_registry_with_all_generators(self):
-        """Test that default registry has all expected generators."""
+    def test_creates_registry_with_enabled_generators(self):
+        """Test that default registry has all enabled generators (Trivy temporarily disabled)."""
         registry = create_default_registry()
         generators = registry.list_generators()
 

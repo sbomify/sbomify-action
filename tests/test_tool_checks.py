@@ -247,7 +247,7 @@ class TestGetToolInstallMessage(unittest.TestCase):
         """Test install message for multiple tools."""
         message = get_tool_install_message(["syft", "cdxgen"])
         self.assertIn("Syft", message)
-        self.assertIn("Syft", message)
+        self.assertIn("cdxgen", message)
 
     def test_get_install_message_unknown_tool(self):
         """Test install message ignores unknown tools."""

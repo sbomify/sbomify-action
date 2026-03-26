@@ -76,8 +76,10 @@ def create_default_registry() -> GeneratorRegistry:
     registry.register(CdxgenImageGenerator())
 
     # Priority 30: Trivy generators - TEMPORARILY DISABLED due to recurring
-    # security vulnerabilities in Trivy. To re-enable, uncomment the two lines
-    # below and restore Trivy installation in Dockerfile and CI workflow.
+    # security vulnerabilities in Trivy. To re-enable, reintroduce the
+    # TrivyFsGenerator/TrivyImageGenerator imports at the top of this module,
+    # uncomment the two lines below, and restore Trivy installation in the
+    # Dockerfile and CI workflow.
     # registry.register(TrivyFsGenerator())
     # registry.register(TrivyImageGenerator())
 

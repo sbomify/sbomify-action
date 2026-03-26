@@ -264,7 +264,10 @@ def check_tool_for_input(input_type: str, lock_file: Optional[str] = None) -> tu
     elif input_type == "lock_file" and lock_file:
         # Determine which tools can handle this lock file
         filename = lock_file.split("/")[-1] if "/" in lock_file else lock_file
-        if filename in ("requirements.txt", "poetry.lock", "pyproject.toml", "Pipfile.lock", "uv.lock"):
+        if filename == "uv.lock":
+            # uv.lock is a Python-related lockfile, but cyclonedx-py does not support it
+            relevant_tools = ["cdxgen", "syft"]
+        elif filename in ("requirements.txt", "poetry.lock", "pyproject.toml", "Pipfile.lock"):
             # Python files - cyclonedx-py is native, others can also handle
             relevant_tools = ["cyclonedx-py", "cdxgen", "syft"]
         elif filename in ("pom.xml", "build.gradle", "build.gradle.kts", "gradle.lockfile"):

@@ -194,19 +194,20 @@ jobs:
             exit 1
           fi
           
-          # Count components with licenses
-          TOTAL_COMPONENTS=$(jq '.components | length' alpine-enriched.cdx.json)
-          COMPONENTS_WITH_LICENSES=$(jq '[.components[] | select(.licenses != null and (.licenses | length) > 0)] | length' alpine-enriched.cdx.json)
-          
-          echo "Total components: $TOTAL_COMPONENTS"
-          echo "Components with licenses: $COMPONENTS_WITH_LICENSES"
-          
-          # At least 50% of Alpine packages should have licenses from our DB
+          # Count library components with licenses (Syft also generates "file" and
+          # "operating-system" components that won't have license data from the DB)
+          TOTAL_COMPONENTS=$(jq '[.components[] | select(.type == "library")] | length' alpine-enriched.cdx.json)
+          COMPONENTS_WITH_LICENSES=$(jq '[.components[] | select(.type == "library" and .licenses != null and (.licenses | length) > 0)] | length' alpine-enriched.cdx.json)
+
+          echo "Total library components: $TOTAL_COMPONENTS"
+          echo "Library components with licenses: $COMPONENTS_WITH_LICENSES"
+
+          # At least 50% of Alpine library packages should have licenses from our DB
           MIN_EXPECTED=$((TOTAL_COMPONENTS / 2))
           if [ "$COMPONENTS_WITH_LICENSES" -ge "$MIN_EXPECTED" ]; then
-            echo "✅ CycloneDX license enrichment rate is acceptable ($COMPONENTS_WITH_LICENSES >= $MIN_EXPECTED)"
+            echo "✅ CycloneDX license enrichment rate is acceptable ($COMPONENTS_WITH_LICENSES/$TOTAL_COMPONENTS >= 50%)"
           else
-            echo "❌ CycloneDX license enrichment rate too low ($COMPONENTS_WITH_LICENSES < $MIN_EXPECTED)"
+            echo "❌ CycloneDX license enrichment rate too low ($COMPONENTS_WITH_LICENSES/$TOTAL_COMPONENTS < 50%)"
             exit 1
           fi
           

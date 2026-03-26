@@ -9,8 +9,8 @@ DOCKERFILE="${SCRIPT_DIR}/../Dockerfile"
 # The validation below catches empty matches anyway
 VERSION_REGEX='[0-9.]*'
 
-# Extract version from Dockerfile ARG declaration
-# Usage: extract_version "SYFT" "/path/to/Dockerfile"
+# Extract version from a Dockerfile ${NAME}_VERSION= assignment (e.g., ARG or ENV)
+# Usage: extract_version "TOOL_NAME" "/path/to/Dockerfile"
 extract_version() {
   local name="$1"
   local dockerfile="$2"
