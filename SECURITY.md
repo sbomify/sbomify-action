@@ -34,7 +34,7 @@ This security policy covers:
 
 When using sbomify-action in your workflows:
 
-1. **Pin the action to a specific commit SHA** (e.g., `sbomify/sbomify-action@b67da9dc77fba8b8a1107b427b746e99f92fdcb2`) rather than `@master`
+1. **Pin the action to a specific commit SHA** (e.g., `sbomify/sbomify-action@<full-commit-sha>`, using the full 40-character commit SHA) rather than `@master`
 2. **Use minimum required permissions** in your workflow `permissions:` block
 3. **Store API tokens as GitHub secrets** — never hardcode them in workflow files
 4. **Review SBOM outputs** before uploading to ensure no sensitive information is included
