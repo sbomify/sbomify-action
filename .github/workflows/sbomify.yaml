@@ -202,6 +202,11 @@ jobs:
           echo "Total library components: $TOTAL_COMPONENTS"
           echo "Library components with licenses: $COMPONENTS_WITH_LICENSES"
 
+          if [ "$TOTAL_COMPONENTS" -le 0 ]; then
+            echo "❌ No library components found in CycloneDX SBOM; cannot verify license enrichment"
+            exit 1
+          fi
+
           # At least 50% of Alpine library packages should have licenses from our DB
           MIN_EXPECTED=$((TOTAL_COMPONENTS / 2))
           if [ "$COMPONENTS_WITH_LICENSES" -ge "$MIN_EXPECTED" ]; then
@@ -347,6 +352,11 @@ jobs:
 
           echo "Total library components: $TOTAL_COMPONENTS"
           echo "Library components with publisher: $COMPONENTS_WITH_PUBLISHER"
+
+          if [ "$TOTAL_COMPONENTS" -le 0 ]; then
+            echo "❌ No library components found in CycloneDX SBOM; cannot verify publisher enrichment"
+            exit 1
+          fi
 
           # At least 50% of library components should have publisher after enrichment
           MIN_EXPECTED=$((TOTAL_COMPONENTS / 2))
