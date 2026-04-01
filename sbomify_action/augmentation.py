@@ -36,7 +36,6 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from cyclonedx.model import (  # type: ignore[attr-defined]
     AttachedText,
-    BomRef,
     ExternalReference,
     ExternalReferenceType,
     Property,
@@ -217,7 +216,7 @@ def _update_component_purl_version(component: Component, new_version: str) -> bo
                     subpath=bom_ref_purl.subpath,
                 )
                 new_bom_ref = str(new_bom_ref_purl)
-                component.bom_ref = BomRef(new_bom_ref)  # type: ignore[misc]
+                component.bom_ref.value = new_bom_ref
                 logger.debug(f"Updated component bom-ref: {old_bom_ref} -> {new_bom_ref}")
 
         return True
