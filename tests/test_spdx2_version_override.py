@@ -7,6 +7,7 @@ documentDescribes, not blindly packages[0].
 import json
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from sbomify_action.cli.main import _apply_sbom_version_override
@@ -48,12 +49,15 @@ class TestSpdx2VersionOverride(unittest.TestCase):
             f.flush()
             path = f.name
 
-        config = MagicMock()
-        config.component_version = new_version
-        _apply_sbom_version_override(path, config)
+        try:
+            config = MagicMock()
+            config.component_version = new_version
+            _apply_sbom_version_override(path, config)
 
-        with open(path) as f:
-            return json.load(f)
+            with open(path) as f:
+                return json.load(f)
+        finally:
+            Path(path).unlink(missing_ok=True)
 
     def test_version_applied_to_document_describes_root(self):
         """Version override should target the documentDescribes root, not packages[0]."""

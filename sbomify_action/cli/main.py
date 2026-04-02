@@ -1695,9 +1695,9 @@ def _apply_sbom_version_override(sbom_file: str, config: "Config") -> None:
                             if pkg.get("SPDXID") == described_refs[0]:
                                 main_package = pkg
                                 break
-                    if not main_package:
+                    if main_package is None:
                         main_package = original_json["packages"][0]  # fallback
-                if main_package:
+                if main_package is not None:
                     old_version = main_package.get("versionInfo")
                     main_package["versionInfo"] = config.component_version
                     # Also update PURL in externalRefs if present
