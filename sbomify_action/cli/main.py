@@ -1710,9 +1710,18 @@ def _apply_sbom_version_override(sbom_file: str, config: "Config") -> None:
                 else:
                     logger.warning("SPDX 3 SBOM has no root package - cannot set version override")
             else:
-                # SPDX 2.x - apply version override to packages[0].versionInfo in JSON
+                # SPDX 2.x - find root package via documentDescribes, not packages[0]
+                main_package = None
                 if "packages" in original_json and original_json["packages"]:
-                    main_package = original_json["packages"][0]
+                    described_refs = original_json.get("documentDescribes")
+                    if isinstance(described_refs, list) and described_refs and isinstance(described_refs[0], str):
+                        for pkg in original_json["packages"]:
+                            if pkg.get("SPDXID") == described_refs[0]:
+                                main_package = pkg
+                                break
+                    if main_package is None:
+                        main_package = original_json["packages"][0]  # fallback
+                if main_package is not None:
                     old_version = main_package.get("versionInfo")
                     main_package["versionInfo"] = config.component_version
                     # Also update PURL in externalRefs if present
