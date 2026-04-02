@@ -1665,9 +1665,18 @@ def _apply_sbom_version_override(sbom_file: str, config: "Config") -> None:
                         else None
                     )
                     if old_bom_ref and new_bom_ref and old_bom_ref != new_bom_ref:
-                        for dep in parsed_object.dependencies:
-                            if dep.ref.value == old_bom_ref:
-                                dep.ref.value = new_bom_ref
+
+                        def _update_dep_refs(deps: Any) -> None:
+                            for dep in deps:
+                                dep_ref = getattr(dep, "ref", None)
+                                if dep_ref is not None and getattr(dep_ref, "value", None) == old_bom_ref:
+                                    dep_ref.value = new_bom_ref
+                                nested = getattr(dep, "dependencies", None)
+                                if nested:
+                                    _update_dep_refs(nested)
+
+                        if parsed_object.dependencies:
+                            _update_dep_refs(parsed_object.dependencies)
                 else:
                     # Create component if it doesn't exist
                     component_name = original_json.get("metadata", {}).get("component", {}).get("name", "unknown")
