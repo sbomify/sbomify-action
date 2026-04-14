@@ -2665,3 +2665,93 @@ class TestLicenseDBSourceArchAgnostic:
         assert "arch" not in qualifiers
         assert "distro" in qualifiers
         assert qualifiers["distro"] == "debian-12"
+
+
+class TestBSIEnrichmentFields:
+    """Tests for BSI TR-03183-2 enrichment: manufacturer + filename."""
+
+    def test_manufacturer_set_with_email(self):
+        """Manufacturer should be set when maintainer has name + email."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(
+            maintainer_name="Django Software Foundation",
+            maintainer_email="foundation@djangoproject.com",
+        )
+
+        added = _apply_metadata_to_cyclonedx_component(component, metadata)
+
+        assert "manufacturer" in added
+        assert component.manufacturer is not None
+        assert component.manufacturer.name == "Django Software Foundation"
+        contacts = list(component.manufacturer.contacts)
+        assert len(contacts) == 1
+        assert contacts[0].email == "foundation@djangoproject.com"
+
+    def test_manufacturer_not_set_without_email(self):
+        """Manufacturer should NOT be set without email (BSI needs contact info)."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(maintainer_name="Django Foundation")
+
+        added = _apply_metadata_to_cyclonedx_component(component, metadata)
+
+        assert "manufacturer" not in added
+        assert component.manufacturer is None
+
+    def test_filename_property_added(self):
+        """BSI filename property should be added from distribution_filename."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(distribution_filename="Django-5.1-py3-none-any.whl")
+
+        added = _apply_metadata_to_cyclonedx_component(component, metadata)
+
+        assert "filename" in added
+        filenames = [p for p in component.properties if p.name == "bsi:component:filename"]
+        assert len(filenames) == 1
+        assert filenames[0].value == "Django-5.1-py3-none-any.whl"
+
+    def test_filename_not_duplicated(self):
+        """Filename should not be added twice across enrichment runs."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(distribution_filename="Django-5.1-py3-none-any.whl")
+
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        _apply_metadata_to_cyclonedx_component(component, metadata)  # second run
+
+        filenames = [p for p in component.properties if p.name == "bsi:component:filename"]
+        assert len(filenames) == 1
+
+
+class TestNormalizedMetadataDistributionFilename:
+    """Tests for distribution_filename in NormalizedMetadata."""
+
+    def test_has_data_with_distribution_filename(self):
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+
+        meta = NormalizedMetadata(distribution_filename="pkg-1.0.whl")
+        assert meta.has_data() is True
+
+    def test_has_data_with_maintainer_email(self):
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+
+        meta = NormalizedMetadata(maintainer_email="dev@example.com")
+        assert meta.has_data() is True
+
+    def test_merge_preserves_distribution_filename(self):
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+
+        a = NormalizedMetadata(distribution_filename="a.whl", source="src-a")
+        b = NormalizedMetadata(distribution_filename="b.whl", source="src-b")
+        merged = a.merge(b)
+        assert merged.distribution_filename == "a.whl"  # first takes precedence
