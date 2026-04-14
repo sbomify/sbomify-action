@@ -788,15 +788,22 @@ def _add_compositions_if_missing(json_str: str) -> str:
     except _json.JSONDecodeError:
         return json_str
 
+    if not isinstance(data, dict):
+        return json_str
+
     if data.get("compositions"):
         return json_str  # already has compositions
 
+    # Only add for CycloneDX 1.5+ (compositions introduced in 1.3,
+    # but widely supported from 1.5+)
+    spec_version = data.get("specVersion", "")
+    if spec_version and spec_version < "1.5":
+        return json_str
+
     # Add a top-level composition indicating dependency completeness.
-    # Uses "assemblies" with the main component's bom-ref (if available)
-    # to scope which component the completeness applies to.
-    metadata = data.get("metadata", {})
-    main_component = metadata.get("component", {})
-    main_ref = main_component.get("bom-ref")
+    metadata = data.get("metadata") or {}
+    main_component = metadata.get("component") or {}
+    main_ref = main_component.get("bom-ref") if isinstance(main_component, dict) else None
 
     composition: dict[str, Any] = {"aggregate": "incomplete"}
     if main_ref:
@@ -804,7 +811,7 @@ def _add_compositions_if_missing(json_str: str) -> str:
 
     data["compositions"] = [composition]
 
-    return _json.dumps(data, indent=2)
+    return _json.dumps(data, indent=2, ensure_ascii=False)
 
 
 # ============================================================================
