@@ -134,6 +134,8 @@ class NormalizedMetadata:
             or self.issue_tracker_url
             or self.download_url
             or self.maintainer_name
+            or self.maintainer_email
+            or self.distribution_filename
             or self.cle_eos
             or self.cle_eol
         )

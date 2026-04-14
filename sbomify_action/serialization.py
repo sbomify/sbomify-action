@@ -791,16 +791,18 @@ def _add_compositions_if_missing(json_str: str) -> str:
     if data.get("compositions"):
         return json_str  # already has compositions
 
-    # Get the main component ref to scope the composition
-    main_ref = None
+    # Add a top-level composition indicating dependency completeness.
+    # Uses "assemblies" with the main component's bom-ref (if available)
+    # to scope which component the completeness applies to.
     metadata = data.get("metadata", {})
     main_component = metadata.get("component", {})
-    main_ref = main_component.get("bom-ref") or main_component.get("purl")
+    main_ref = main_component.get("bom-ref")
 
+    composition: dict[str, Any] = {"aggregate": "incomplete"}
     if main_ref:
-        data["compositions"] = [{"aggregate": "incomplete", "assemblies": [main_ref]}]
-    else:
-        data["compositions"] = [{"aggregate": "not_specified"}]
+        composition["assemblies"] = [main_ref]
+
+    data["compositions"] = [composition]
 
     return _json.dumps(data, indent=2)
 

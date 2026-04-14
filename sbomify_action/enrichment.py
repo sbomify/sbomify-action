@@ -434,15 +434,13 @@ def _apply_metadata_to_cyclonedx_component(
 
     # Manufacturer - component creator with email for BSI TR-03183-2 compliance.
     # Uses maintainer_name + maintainer_email from PyPI author/author_email fields.
-    if not component.manufacturer and metadata.maintainer_name:
+    # Only set if we have a valid email — BSI requires contact info, not just a name.
+    if not component.manufacturer and metadata.maintainer_name and metadata.maintainer_email:
         sanitized_name = sanitize_supplier(metadata.maintainer_name)
-        if sanitized_name:
-            contacts = set()
-            if metadata.maintainer_email:
-                sanitized_email = sanitize_email(metadata.maintainer_email)
-                if sanitized_email:
-                    contacts.add(OrganizationalContact(name=sanitized_name, email=sanitized_email))
-            component.manufacturer = OrganizationalEntity(name=sanitized_name, contacts=contacts)
+        sanitized_email = sanitize_email(metadata.maintainer_email) if metadata.maintainer_email else None
+        if sanitized_name and sanitized_email:
+            contact = OrganizationalContact(name=sanitized_name, email=sanitized_email)
+            component.manufacturer = OrganizationalEntity(name=sanitized_name, contacts=[contact])
             added_fields.append("manufacturer")
 
     # Supplier - use supplier (distribution platform like PyPI, npm, etc.)

@@ -192,6 +192,8 @@ class PyPISource:
             field_sources["documentation_url"] = self.name
         if issue_tracker_url:
             field_sources["issue_tracker_url"] = self.name
+        if distribution_filename:
+            field_sources["distribution_filename"] = self.name
 
         return NormalizedMetadata(
             description=info.get("summary"),
