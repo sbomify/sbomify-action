@@ -42,6 +42,9 @@ class NormalizedMetadata:
     maintainer_name: Optional[str] = None
     maintainer_email: Optional[str] = None
 
+    # Distribution info (BSI TR-03183-2 compliance)
+    distribution_filename: Optional[str] = None
+
     # CLE (Common Lifecycle Enumeration) fields - ECMA-428
     # Used for distro-level lifecycle dates applied to all packages from that distro
     cle_eos: Optional[str] = None  # End of Support date (ISO 8601)
@@ -105,6 +108,10 @@ class NormalizedMetadata:
             # Maintainer info
             maintainer_name=pick("maintainer_name", self.maintainer_name, other.maintainer_name),
             maintainer_email=pick("maintainer_email", self.maintainer_email, other.maintainer_email),
+            # Distribution info
+            distribution_filename=pick(
+                "distribution_filename", self.distribution_filename, other.distribution_filename
+            ),
             # CLE fields
             cle_eos=pick("cle_eos", self.cle_eos, other.cle_eos),
             cle_eol=pick("cle_eol", self.cle_eol, other.cle_eol),

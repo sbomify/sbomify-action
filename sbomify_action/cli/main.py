@@ -50,6 +50,7 @@ from ..generation import (
 )
 from ..logging_config import logger
 from ..serialization import (
+    _add_compositions_if_missing,
     _fix_purl_encoding_bugs_in_json,
     sanitize_spdx_licenses,
     serialize_cyclonedx_bom,
@@ -1390,6 +1391,7 @@ def run_pipeline(config: Config) -> None:
         # Detect format and fix any PURL encoding bugs in CycloneDX
         if '"bomFormat"' in content and '"CycloneDX"' in content:
             content = _fix_purl_encoding_bugs_in_json(content)
+            content = _add_compositions_if_missing(content)
 
         with open(config.output_file, "w") as f:
             f.write(content)

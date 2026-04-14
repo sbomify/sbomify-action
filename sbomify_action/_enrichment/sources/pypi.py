@@ -162,6 +162,18 @@ class PyPISource:
             elif "homepage" in key_lower and not homepage:
                 homepage = url_value
 
+        # Extract distribution filename from release files (BSI TR-03183-2)
+        # Prefer wheel (.whl) over sdist (.tar.gz)
+        distribution_filename = None
+        urls = data.get("urls", [])
+        for dist in urls:
+            fn = dist.get("filename", "")
+            if fn.endswith(".whl"):
+                distribution_filename = fn
+                break
+            elif fn and not distribution_filename:
+                distribution_filename = fn
+
         logger.debug(f"Successfully fetched PyPI metadata for: {package_name}")
 
         # Build field_sources for attribution
@@ -193,6 +205,7 @@ class PyPISource:
             issue_tracker_url=issue_tracker_url,
             maintainer_name=maintainer_name,
             maintainer_email=maintainer_email,
+            distribution_filename=distribution_filename,
             source=self.name,
             field_sources=field_sources,
         )

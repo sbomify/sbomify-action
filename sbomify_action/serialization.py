@@ -773,6 +773,38 @@ def _fix_purl_encoding_bugs_in_json(json_str: str) -> str:
     return result
 
 
+def _add_compositions_if_missing(json_str: str) -> str:
+    """Add CycloneDX compositions with completeness indicator if missing.
+
+    BSI TR-03183-2 §5.2.2 requires dependencies with a completeness indicator.
+    The CycloneDX library (v10.x) doesn't support compositions yet, so we
+    inject it as JSON post-processing. Sets aggregate to "incomplete" (safe
+    default — lockfile-based SBOMs may not capture all transitive deps).
+    """
+    import json as _json
+
+    try:
+        data = _json.loads(json_str)
+    except _json.JSONDecodeError:
+        return json_str
+
+    if data.get("compositions"):
+        return json_str  # already has compositions
+
+    # Get the main component ref to scope the composition
+    main_ref = None
+    metadata = data.get("metadata", {})
+    main_component = metadata.get("component", {})
+    main_ref = main_component.get("bom-ref") or main_component.get("purl")
+
+    if main_ref:
+        data["compositions"] = [{"aggregate": "incomplete", "assemblies": [main_ref]}]
+    else:
+        data["compositions"] = [{"aggregate": "not_specified"}]
+
+    return _json.dumps(data, indent=2)
+
+
 # ============================================================================
 # SPDX Version Management
 # ============================================================================

@@ -58,7 +58,7 @@ from typing import Any, Dict, List, Tuple
 from cyclonedx.model import ExternalReference, ExternalReferenceType, Property, XsUri
 from cyclonedx.model.bom import Bom
 from cyclonedx.model.component import Component, ComponentType
-from cyclonedx.model.contact import OrganizationalEntity
+from cyclonedx.model.contact import OrganizationalContact, OrganizationalEntity
 from cyclonedx.model.license import LicenseExpression
 from spdx_tools.spdx.model import (  # type: ignore[attr-defined]
     Actor,
@@ -425,6 +425,25 @@ def _apply_metadata_to_cyclonedx_component(
         if sanitized_publisher:
             component.publisher = sanitized_publisher
             added_fields.append("publisher")
+
+    # Distribution filename (BSI TR-03183-2 §5.2.2 "Filename" requirement)
+    if metadata.distribution_filename:
+        filename_prop = Property(name="bsi:component:filename", value=metadata.distribution_filename)
+        component.properties.add(filename_prop)
+        added_fields.append("filename")
+
+    # Manufacturer - component creator with email for BSI TR-03183-2 compliance.
+    # Uses maintainer_name + maintainer_email from PyPI author/author_email fields.
+    if not component.manufacturer and metadata.maintainer_name:
+        sanitized_name = sanitize_supplier(metadata.maintainer_name)
+        if sanitized_name:
+            contacts = set()
+            if metadata.maintainer_email:
+                sanitized_email = sanitize_email(metadata.maintainer_email)
+                if sanitized_email:
+                    contacts.add(OrganizationalContact(name=sanitized_name, email=sanitized_email))
+            component.manufacturer = OrganizationalEntity(name=sanitized_name, contacts=contacts)
+            added_fields.append("manufacturer")
 
     # Supplier - use supplier (distribution platform like PyPI, npm, etc.)
     if not component.supplier and metadata.supplier:
