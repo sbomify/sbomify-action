@@ -797,8 +797,13 @@ def _add_compositions_if_missing(json_str: str) -> str:
     # Only add for CycloneDX 1.5+ (compositions introduced in 1.3,
     # but widely supported from 1.5+)
     spec_version = data.get("specVersion", "")
-    if spec_version and spec_version < "1.5":
-        return json_str
+    if spec_version:
+        try:
+            major, minor = (int(x) for x in spec_version.split(".")[:2])
+            if (major, minor) < (1, 5):
+                return json_str
+        except (ValueError, TypeError):
+            pass  # unparseable version — proceed anyway
 
     # Add a top-level composition indicating dependency completeness.
     metadata = data.get("metadata") or {}

@@ -428,11 +428,11 @@ def _apply_metadata_to_cyclonedx_component(
 
     # Distribution filename (BSI TR-03183-2 §5.2.2 "Filename" requirement)
     if metadata.distribution_filename:
-        # Only add if not already present (avoid duplicates across enrichment runs)
-        existing_filenames = {p.value for p in component.properties if p.name == "bsi:component:filename"}
-        if metadata.distribution_filename not in existing_filenames:
-            sanitized_fn = metadata.distribution_filename.strip()
-            if sanitized_fn:
+        sanitized_fn = metadata.distribution_filename.strip()
+        if sanitized_fn:
+            # Only add if not already present (avoid duplicates across enrichment runs)
+            existing_filenames = {p.value for p in component.properties if p.name == "bsi:component:filename"}
+            if sanitized_fn not in existing_filenames:
                 filename_prop = Property(name="bsi:component:filename", value=sanitized_fn)
                 component.properties.add(filename_prop)
                 added_fields.append("filename")
