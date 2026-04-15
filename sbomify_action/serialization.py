@@ -899,6 +899,23 @@ def get_supported_spdx_versions() -> list[str]:
 # ============================================================================
 
 
+def _is_compound_expression(license_str: str) -> bool:
+    """Check if a license string is a compound SPDX expression (contains OR/AND).
+
+    Uses the license-expression library to parse and count symbols, which
+    correctly handles WITH clauses (not compound) vs OR/AND (compound).
+    """
+    try:
+        from license_expression import ExpressionError, get_spdx_licensing
+
+        licensing = get_spdx_licensing()
+        parsed = licensing.parse(license_str, validate=False)
+        return len(parsed.symbols) > 1
+    except (ExpressionError, Exception):
+        # Fallback to string check if parsing fails
+        return " OR " in license_str or " AND " in license_str
+
+
 def _is_valid_spdx_license_id(license_id: str) -> bool:
     """
     Check if a string is a valid SPDX license ID using the license-expression library.
@@ -951,7 +968,7 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
                 license_id = license_obj.get("id")
                 if license_id:
                     # Compound expressions (containing OR/AND) belong in expression, not id
-                    if " OR " in license_id or " AND " in license_id:
+                    if _is_compound_expression(license_id):
                         logger.debug(f"Moving compound expression from license.id to expression: {license_id}")
                         del license_obj["id"]
                         # Remove the license wrapper — expression is a peer of license, not nested

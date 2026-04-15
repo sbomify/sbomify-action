@@ -17,6 +17,7 @@ from sbomify_action.serialization import (
     link_root_dependencies,
     normalize_purl,
     restore_spdx_document_describes,
+    sanitize_cyclonedx_licenses,
     sanitize_dependency_graph,
     sanitize_purls,
     sanitize_spdx_json_file,
@@ -2031,3 +2032,109 @@ class TestAddCompositionsIfMissing:
         from sbomify_action.serialization import _add_compositions_if_missing
 
         assert _add_compositions_if_missing("not json") == "not json"
+
+
+class TestSanitizeCycloneDXLicenses:
+    """Tests for sanitize_cyclonedx_licenses — compound expression handling."""
+
+    def test_compound_or_expression_moved_from_id_to_expression(self):
+        """A compound OR expression in license.id should move to expression field."""
+        data = {
+            "components": [
+                {
+                    "name": "certifi",
+                    "licenses": [{"license": {"id": "GPL-2.0-only OR MPL-2.0"}}],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        licenses = data["components"][0]["licenses"]
+        assert len(licenses) == 1
+        assert "license" not in licenses[0]
+        assert licenses[0]["expression"] == "GPL-2.0-only OR MPL-2.0"
+
+    def test_compound_and_expression_moved_from_id_to_expression(self):
+        """A compound AND expression in license.id should move to expression field."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [{"license": {"id": "MIT AND Apache-2.0"}}],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert data["components"][0]["licenses"][0]["expression"] == "MIT AND Apache-2.0"
+
+    def test_single_license_id_not_moved(self):
+        """A single valid SPDX ID should stay in license.id."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [{"license": {"id": "MIT"}}],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 0
+        assert data["components"][0]["licenses"][0]["license"]["id"] == "MIT"
+
+    def test_with_clause_not_treated_as_compound(self):
+        """A WITH clause is not compound — should stay in license.id."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [{"license": {"id": "Apache-2.0 WITH LLVM-exception"}}],
+                }
+            ]
+        }
+        sanitize_cyclonedx_licenses(data)
+        # WITH is a single license, not compound — should not be moved
+        assert data["components"][0]["licenses"][0]["license"]["id"] == "Apache-2.0 WITH LLVM-exception"
+
+    def test_invalid_license_id_moved_to_name(self):
+        """An invalid (non-SPDX) license ID should move to license.name."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [{"license": {"id": "Some Custom License"}}],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        license_obj = data["components"][0]["licenses"][0]["license"]
+        assert "id" not in license_obj
+        assert license_obj["name"] == "Some Custom License"
+
+    def test_metadata_licenses_also_sanitized(self):
+        """Compound expressions in metadata.licenses should also be fixed."""
+        data = {
+            "metadata": {
+                "licenses": [{"license": {"id": "GPL-2.0-only OR MIT"}}],
+            },
+            "components": [],
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert data["metadata"]["licenses"][0]["expression"] == "GPL-2.0-only OR MIT"
+
+    def test_three_way_or_expression(self):
+        """Real-world case from issue #211: certifi with three-way OR."""
+        data = {
+            "components": [
+                {
+                    "name": "certifi",
+                    "licenses": [{"license": {"id": "GPL-2.0-only OR GPL-2.0-or-later OR MPL-2.0"}}],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert data["components"][0]["licenses"][0]["expression"] == "GPL-2.0-only OR GPL-2.0-or-later OR MPL-2.0"
+        assert "license" not in data["components"][0]["licenses"][0]
