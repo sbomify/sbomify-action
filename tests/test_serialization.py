@@ -2175,3 +2175,125 @@ class TestSanitizeCycloneDXLicenses:
         # Existing expression is preserved, compound license.id is discarded
         assert data["components"][0]["licenses"][0]["expression"] == "MIT"
         assert "license" not in data["components"][0]["licenses"][0]
+
+    def test_mixed_metadata_licenses_consolidated(self):
+        """Mixed license/expression in metadata.licenses should be consolidated."""
+        data = {
+            "metadata": {
+                "licenses": [
+                    {"license": {"id": "MIT"}},
+                    {"license": {"id": "GPL-2.0-only OR Apache-2.0"}},
+                ],
+            },
+            "components": [],
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count >= 2
+        licenses = data["metadata"]["licenses"]
+        assert len(licenses) == 1
+        assert "expression" in licenses[0]
+        assert "MIT" in licenses[0]["expression"]
+        assert "GPL-2.0-only" in licenses[0]["expression"]
+
+    def test_nested_compound_with_parentheses(self):
+        """Nested compound like (MIT OR BSD) AND Apache should move to expression."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [{"license": {"id": "(MIT OR BSD-2-Clause) AND Apache-2.0"}}],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert data["components"][0]["licenses"][0]["expression"] == "(MIT OR BSD-2-Clause) AND Apache-2.0"
+
+    def test_mixed_valid_and_compound_consolidated(self):
+        """Component with valid ID + compound expression should consolidate."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [
+                        {"license": {"id": "MIT"}},
+                        {"license": {"id": "GPL-2.0-only OR LGPL-2.1-only"}},
+                    ],
+                }
+            ]
+        }
+        sanitize_cyclonedx_licenses(data)
+        licenses = data["components"][0]["licenses"]
+        assert len(licenses) == 1
+        assert "expression" in licenses[0]
+        assert "MIT" in licenses[0]["expression"]
+        assert "GPL-2.0-only" in licenses[0]["expression"]
+
+    def test_mixed_valid_compound_and_invalid_consolidated(self):
+        """Three-way mix: valid ID + compound + invalid should all consolidate."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [
+                        {"license": {"id": "MIT"}},
+                        {"license": {"id": "GPL-3.0-only OR LGPL-3.0-only"}},
+                        {"license": {"id": "Custom License XYZ"}},
+                    ],
+                }
+            ]
+        }
+        sanitize_cyclonedx_licenses(data)
+        licenses = data["components"][0]["licenses"]
+        assert len(licenses) == 1
+        assert "expression" in licenses[0]
+
+    def test_multiple_valid_ids_not_consolidated(self):
+        """Multiple valid single IDs should NOT be consolidated (no mixing)."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [
+                        {"license": {"id": "MIT"}},
+                        {"license": {"id": "Apache-2.0"}},
+                    ],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 0
+        licenses = data["components"][0]["licenses"]
+        assert len(licenses) == 2
+        assert licenses[0]["license"]["id"] == "MIT"
+        assert licenses[1]["license"]["id"] == "Apache-2.0"
+
+    def test_already_expression_not_modified(self):
+        """An existing expression field should pass through unchanged."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [{"expression": "MIT OR Apache-2.0"}],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 0
+        assert data["components"][0]["licenses"][0]["expression"] == "MIT OR Apache-2.0"
+
+    def test_long_license_id_not_treated_as_compound(self):
+        """License IDs exceeding 1024 chars should not be parsed for compound detection."""
+        long_id = "MIT OR " + "A" * 1020
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [{"license": {"id": long_id}}],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        # Should be treated as invalid ID (moved to name), not compound
+        assert count == 1
+        assert "name" in data["components"][0]["licenses"][0]["license"]

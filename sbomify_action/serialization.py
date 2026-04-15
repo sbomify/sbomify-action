@@ -1066,6 +1066,7 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
     metadata = data.get("metadata", {})
     if "licenses" in metadata:
         sanitized_count += _sanitize_license_choices(metadata["licenses"], component="metadata")
+        sanitized_count += _consolidate_mixed_license_types(metadata["licenses"], component="metadata")
 
     # Process component licenses
     components = data.get("components", [])
