@@ -907,22 +907,22 @@ def get_supported_spdx_versions() -> list[str]:
 # License Sanitization
 # ============================================================================
 
-_COMPOUND_OPERATOR_RE = re.compile(r"\b(?:AND|OR)\b")
-
 
 def _is_compound_expression(license_str: str) -> bool:
-    """Check if a license string is a compound SPDX expression using AND/OR.
+    """Check if a license string is a compound SPDX expression (OR/AND).
 
-    Uses the license-expression library to confirm the string parses as an SPDX
-    expression, then checks for explicit boolean operators. WITH clauses
-    (e.g. ``Apache-2.0 WITH LLVM-exception``) are a single license+exception
-    and are NOT compound — they can stay in ``license.id``.
+    Uses the license-expression library's parsed AST to detect compound
+    expressions. Returns True only for OR/AND nodes. WITH clauses and
+    single IDs return False. Unparseable strings return False — they'll
+    be caught by _is_valid_spdx_license_id and moved to license.name.
     """
+    from license_expression import AND, OR
+
     try:
-        _spdx_licensing_singleton().parse(license_str, validate=False)
+        parsed = _spdx_licensing_singleton().parse(license_str, validate=False)
+        return isinstance(parsed, (OR, AND))
     except ExpressionError:
-        pass  # Unparseable — still check regex below
-    return bool(_COMPOUND_OPERATOR_RE.search(license_str))
+        return False
 
 
 def _is_valid_spdx_license_id(license_id: str) -> bool:
