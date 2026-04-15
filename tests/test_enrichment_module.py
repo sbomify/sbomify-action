@@ -2755,3 +2755,56 @@ class TestNormalizedMetadataDistributionFilename:
         b = NormalizedMetadata(distribution_filename="b.whl", source="src-b")
         merged = a.merge(b)
         assert merged.distribution_filename == "a.whl"  # first takes precedence
+
+
+class TestRootComponentPURL:
+    """Tests for root component PURL fallback in augment_cyclonedx_sbom."""
+
+    def test_root_gets_purl_when_missing(self):
+        """Root component without PURL should get pkg:generic/<name>@<version>."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="My App", version="1.0.0", type=ComponentType.APPLICATION)
+
+        augment_cyclonedx_sbom(bom, {}, component_name="My App", component_version="1.0.0")
+
+        assert bom.metadata.component.purl is not None
+        purl_str = str(bom.metadata.component.purl)
+        assert "pkg:generic/my-app" in purl_str
+        assert "1.0.0" in purl_str
+
+    def test_path_name_sanitized(self):
+        """File path names should be sanitized to valid PURL names."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="/home/user/project/uv.lock", version="1.0", type=ComponentType.APPLICATION
+        )
+
+        augment_cyclonedx_sbom(bom, {}, component_name="Lithium Python Stack", component_version="1.0")
+
+        purl_str = str(bom.metadata.component.purl)
+        assert "pkg:generic/lithium-python-stack" in purl_str
+        # No slashes in the PURL name
+        name_part = purl_str.split("pkg:generic/")[1].split("@")[0]
+        assert "/" not in name_part
+
+    def test_existing_purl_not_overwritten(self):
+        """Root component with existing PURL should not be overwritten."""
+        from packageurl import PackageURL
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="My App",
+            version="1.0.0",
+            type=ComponentType.APPLICATION,
+            purl=PackageURL(type="pypi", name="my-app", version="1.0.0"),
+        )
+
+        augment_cyclonedx_sbom(bom, {}, component_version="1.0.0")
+
+        assert str(bom.metadata.component.purl) == "pkg:pypi/my-app@1.0.0"
