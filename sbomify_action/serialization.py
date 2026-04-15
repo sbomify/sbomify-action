@@ -148,7 +148,7 @@ def _extract_component_info_from_purl(
 # Regex patterns for PURL encoding bug fixes
 # These fix common encoding issues from various SBOM generators
 _DOUBLE_ENCODED_AT_PATTERN = re.compile(r"(%40){2,}")  # %40%40... → %40
-_DOUBLE_AT_PATTERN = re.compile(r"@@+")  # @@... → @
+_DOUBLE_AT_PATTERN = re.compile(r"@@+")  # @@... → @  (used inside re.sub callback)
 
 # Package types that require a version in the PURL
 # These ecosystems always have versioned packages in standard usage
@@ -907,22 +907,23 @@ def get_supported_spdx_versions() -> list[str]:
 # License Sanitization
 # ============================================================================
 
-_COMPOUND_OPERATOR_RE = re.compile(r"\b(?:AND|OR)\b")
-
 
 def _is_compound_expression(license_str: str) -> bool:
     """Check if a license string is a compound SPDX expression using AND/OR.
 
-    Uses the license-expression library to confirm the string parses as an SPDX
-    expression, then checks for explicit boolean operators. WITH clauses
-    (e.g. ``Apache-2.0 WITH LLVM-exception``) are a single license+exception
-    and are NOT compound — they can stay in ``license.id``.
+    Uses the license-expression library's parsed AST to detect compound
+    expressions. The parsed object's type is ``OR`` or ``AND`` for compound
+    expressions, ``LicenseSymbol`` for single IDs, and
+    ``LicenseWithExceptionSymbol`` for WITH clauses — no regex needed.
     """
+    from license_expression import AND, OR
+
     try:
-        _spdx_licensing_singleton().parse(license_str, validate=False)
+        parsed = _spdx_licensing_singleton().parse(license_str, validate=False)
+        return isinstance(parsed, (OR, AND))
     except ExpressionError:
-        pass  # Unparseable — still check regex below
-    return bool(_COMPOUND_OPERATOR_RE.search(license_str))
+        # Unparseable — fall back to simple string check
+        return " OR " in license_str or " AND " in license_str
 
 
 def _is_valid_spdx_license_id(license_id: str) -> bool:
@@ -1043,8 +1044,12 @@ _MAX_LICENSE_REF_LENGTH = 76
 
 def _to_license_ref(key: str) -> str:
     """Convert an arbitrary string to a valid LicenseRef-* identifier."""
-    sanitized_id = re.sub(r"[^a-zA-Z0-9.\-]", "-", key)
-    sanitized_id = re.sub(r"-+", "-", sanitized_id).strip("-")
+    _ALLOWED = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")
+    sanitized_id = "".join(c if c in _ALLOWED else "-" for c in key)
+    # Collapse consecutive dashes
+    while "--" in sanitized_id:
+        sanitized_id = sanitized_id.replace("--", "-")
+    sanitized_id = sanitized_id.strip("-")
     if sanitized_id:
         return f"LicenseRef-{sanitized_id}"
     return "LicenseRef-unknown"
