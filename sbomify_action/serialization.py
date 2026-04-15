@@ -907,6 +907,8 @@ def get_supported_spdx_versions() -> list[str]:
 # License Sanitization
 # ============================================================================
 
+_COMPOUND_OPERATOR_RE = re.compile(r"\b(?:AND|OR)\b")
+
 
 def _is_compound_expression(license_str: str) -> bool:
     """Check if a license string is a compound SPDX expression using AND/OR.
@@ -918,10 +920,9 @@ def _is_compound_expression(license_str: str) -> bool:
     """
     try:
         _spdx_licensing_singleton().parse(license_str, validate=False)
-        return bool(re.search(r"\b(?:AND|OR)\b", license_str))
     except ExpressionError:
-        # Unparseable — fall back to regex only
-        return bool(re.search(r"\b(?:AND|OR)\b", license_str))
+        pass  # Unparseable — still check regex below
+    return bool(_COMPOUND_OPERATOR_RE.search(license_str))
 
 
 def _is_valid_spdx_license_id(license_id: str) -> bool:
