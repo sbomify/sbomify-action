@@ -12,6 +12,7 @@ import warnings
 from typing import TYPE_CHECKING, Any, Optional
 
 from cyclonedx.model.bom import Bom
+from license_expression import ExpressionError, get_spdx_licensing
 
 if TYPE_CHECKING:
     from cyclonedx.model.component import Component
@@ -20,6 +21,17 @@ from spdx_tools.spdx.model import Document  # type: ignore[attr-defined]
 
 from .console import get_transformation_tracker
 from .logging_config import logger
+
+_spdx_licensing_instance: Any = None
+
+
+def _spdx_licensing_singleton() -> Any:
+    """Return a cached SPDX licensing instance (singleton)."""
+    global _spdx_licensing_instance  # noqa: PLW0603
+    if _spdx_licensing_instance is None:
+        _spdx_licensing_instance = get_spdx_licensing()
+    return _spdx_licensing_instance
+
 
 # ============================================================================
 # CycloneDX Version Management
@@ -900,20 +912,21 @@ def get_supported_spdx_versions() -> list[str]:
 
 
 def _is_compound_expression(license_str: str) -> bool:
-    """Check if a license string is a compound SPDX expression (contains OR/AND).
+    """Check if a license string is a compound SPDX expression (OR/AND/WITH).
 
-    Uses the license-expression library to parse and count symbols, which
-    correctly handles WITH clauses (not compound) vs OR/AND (compound).
+    Uses the license-expression library to parse and count symbols. Returns True
+    if it contains OR or AND operators (more than one symbol). WITH clauses
+    (e.g. ``Apache-2.0 WITH LLVM-exception``) are a single license+exception
+    and are NOT compound — they can stay in ``license.id``.
+
+    The licensing singleton is cached at module level for performance.
     """
     try:
-        from license_expression import ExpressionError, get_spdx_licensing
-
-        licensing = get_spdx_licensing()
-        parsed = licensing.parse(license_str, validate=False)
+        parsed = _spdx_licensing_singleton().parse(license_str, validate=False)
         return len(parsed.symbols) > 1
-    except (ExpressionError, Exception):
-        # Fallback to string check if parsing fails
-        return " OR " in license_str or " AND " in license_str
+    except (ExpressionError, ImportError):
+        # Fallback to regex check if parsing fails or library is unavailable
+        return bool(re.search(r"\b(?:AND|OR)\b", license_str))
 
 
 def _is_valid_spdx_license_id(license_id: str) -> bool:
@@ -970,9 +983,8 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
                     # Compound expressions (containing OR/AND) belong in expression, not id
                     if _is_compound_expression(license_id):
                         logger.debug(f"Moving compound expression from license.id to expression: {license_id}")
-                        del license_obj["id"]
                         # Remove the license wrapper — expression is a peer of license, not nested
-                        choice.pop("license")
+                        choice.pop("license", None)
                         choice["expression"] = license_id
                         tracker.record_license_sanitized(license_id, f"expression:{license_id}", component=component)
                         count += 1
@@ -1016,7 +1028,7 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
             sanitized_count += _sanitize_license_choices(service["licenses"], component=svc_name)
 
     if sanitized_count > 0:
-        logger.info(f"Sanitized {sanitized_count} invalid license ID(s) to license name(s)")
+        logger.info(f"Sanitized {sanitized_count} license issue(s) (invalid IDs and/or compound expressions)")
 
     return sanitized_count
 

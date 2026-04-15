@@ -2082,8 +2082,8 @@ class TestSanitizeCycloneDXLicenses:
         assert count == 0
         assert data["components"][0]["licenses"][0]["license"]["id"] == "MIT"
 
-    def test_with_clause_not_treated_as_compound(self):
-        """A WITH clause is not compound — should stay in license.id."""
+    def test_with_clause_stays_in_license_id(self):
+        """A WITH clause is a single license+exception, not compound — stays in license.id."""
         data = {
             "components": [
                 {
@@ -2092,8 +2092,8 @@ class TestSanitizeCycloneDXLicenses:
                 }
             ]
         }
-        sanitize_cyclonedx_licenses(data)
-        # WITH is a single license, not compound — should not be moved
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 0
         assert data["components"][0]["licenses"][0]["license"]["id"] == "Apache-2.0 WITH LLVM-exception"
 
     def test_invalid_license_id_moved_to_name(self):
@@ -2138,3 +2138,18 @@ class TestSanitizeCycloneDXLicenses:
         assert count == 1
         assert data["components"][0]["licenses"][0]["expression"] == "GPL-2.0-only OR GPL-2.0-or-later OR MPL-2.0"
         assert "license" not in data["components"][0]["licenses"][0]
+
+    def test_services_licenses_also_sanitized(self):
+        """Compound expressions in services[*].licenses should also be fixed."""
+        data = {
+            "components": [],
+            "services": [
+                {
+                    "name": "my-service",
+                    "licenses": [{"license": {"id": "MIT OR Apache-2.0"}}],
+                }
+            ],
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert data["services"][0]["licenses"][0]["expression"] == "MIT OR Apache-2.0"
