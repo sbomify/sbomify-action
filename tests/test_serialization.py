@@ -1972,3 +1972,62 @@ class TestRestoreSpdxDocumentDescribes:
         assert count == 0
         # File should not be rewritten
         assert spdx_file.read_text() == original
+
+
+class TestAddCompositionsIfMissing:
+    """Tests for _add_compositions_if_missing post-processing."""
+
+    def test_adds_compositions_when_missing(self):
+        """Compositions should be injected with aggregate=incomplete."""
+        from sbomify_action.serialization import _add_compositions_if_missing
+
+        sbom = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "metadata": {"component": {"name": "app", "bom-ref": "app-ref"}},
+            "components": [],
+        }
+        result = json.loads(_add_compositions_if_missing(json.dumps(sbom)))
+        assert result["compositions"] == [{"aggregate": "incomplete", "assemblies": ["app-ref"]}]
+
+    def test_preserves_existing_compositions(self):
+        """Should not overwrite existing compositions."""
+        from sbomify_action.serialization import _add_compositions_if_missing
+
+        sbom = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "compositions": [{"aggregate": "complete"}],
+        }
+        result = json.loads(_add_compositions_if_missing(json.dumps(sbom)))
+        assert result["compositions"] == [{"aggregate": "complete"}]
+
+    def test_skips_old_cyclonedx_versions(self):
+        """Should not add compositions for CycloneDX < 1.5."""
+        from sbomify_action.serialization import _add_compositions_if_missing
+
+        sbom = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.4",
+            "metadata": {"component": {"name": "app"}},
+        }
+        result = json.loads(_add_compositions_if_missing(json.dumps(sbom)))
+        assert "compositions" not in result
+
+    def test_no_bom_ref_omits_assemblies(self):
+        """Without bom-ref, composition has no assemblies."""
+        from sbomify_action.serialization import _add_compositions_if_missing
+
+        sbom = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "metadata": {"component": {"name": "app"}},
+        }
+        result = json.loads(_add_compositions_if_missing(json.dumps(sbom)))
+        assert result["compositions"] == [{"aggregate": "incomplete"}]
+
+    def test_invalid_json_returns_unchanged(self):
+        """Invalid JSON should be returned as-is."""
+        from sbomify_action.serialization import _add_compositions_if_missing
+
+        assert _add_compositions_if_missing("not json") == "not json"

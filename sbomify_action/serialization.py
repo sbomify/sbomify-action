@@ -773,6 +773,52 @@ def _fix_purl_encoding_bugs_in_json(json_str: str) -> str:
     return result
 
 
+def _add_compositions_if_missing(json_str: str) -> str:
+    """Add CycloneDX compositions with completeness indicator if missing.
+
+    BSI TR-03183-2 §5.2.2 requires dependencies with a completeness indicator.
+    The CycloneDX library (v10.x) doesn't support compositions yet, so we
+    inject it as JSON post-processing. Sets aggregate to "incomplete" (safe
+    default — lockfile-based SBOMs may not capture all transitive deps).
+    """
+    import json as _json
+
+    try:
+        data = _json.loads(json_str)
+    except _json.JSONDecodeError:
+        return json_str
+
+    if not isinstance(data, dict):
+        return json_str
+
+    if data.get("compositions"):
+        return json_str  # already has compositions
+
+    # Only add for CycloneDX 1.5+ (compositions introduced in 1.3,
+    # but widely supported from 1.5+)
+    spec_version = data.get("specVersion", "")
+    if spec_version:
+        try:
+            major, minor = (int(x) for x in spec_version.split(".")[:2])
+            if (major, minor) < (1, 5):
+                return json_str
+        except (ValueError, TypeError):
+            pass  # unparseable version — proceed anyway
+
+    # Add a top-level composition indicating dependency completeness.
+    metadata = data.get("metadata") or {}
+    main_component = metadata.get("component") or {}
+    main_ref = main_component.get("bom-ref") if isinstance(main_component, dict) else None
+
+    composition: dict[str, Any] = {"aggregate": "incomplete"}
+    if main_ref:
+        composition["assemblies"] = [main_ref]
+
+    data["compositions"] = [composition]
+
+    return _json.dumps(data, indent=2, ensure_ascii=False)
+
+
 # ============================================================================
 # SPDX Version Management
 # ============================================================================

@@ -58,7 +58,7 @@ from typing import Any, Dict, List, Tuple
 from cyclonedx.model import ExternalReference, ExternalReferenceType, Property, XsUri
 from cyclonedx.model.bom import Bom
 from cyclonedx.model.component import Component, ComponentType
-from cyclonedx.model.contact import OrganizationalEntity
+from cyclonedx.model.contact import OrganizationalContact, OrganizationalEntity
 from cyclonedx.model.license import LicenseExpression
 from spdx_tools.spdx.model import (  # type: ignore[attr-defined]
     Actor,
@@ -425,6 +425,28 @@ def _apply_metadata_to_cyclonedx_component(
         if sanitized_publisher:
             component.publisher = sanitized_publisher
             added_fields.append("publisher")
+
+    # Distribution filename (BSI TR-03183-2 §5.2.2 "Filename" requirement)
+    if metadata.distribution_filename:
+        sanitized_fn = metadata.distribution_filename.strip()
+        if sanitized_fn:
+            # Only add if not already present (avoid duplicates across enrichment runs)
+            existing_filenames = {p.value for p in component.properties if p.name == "bsi:component:filename"}
+            if sanitized_fn not in existing_filenames:
+                filename_prop = Property(name="bsi:component:filename", value=sanitized_fn)
+                component.properties.add(filename_prop)
+                added_fields.append("filename")
+
+    # Manufacturer - component creator with email for BSI TR-03183-2 compliance.
+    # Uses maintainer_name + maintainer_email from PyPI author/author_email fields.
+    # Only set if we have a valid email — BSI requires contact info, not just a name.
+    if not component.manufacturer and metadata.maintainer_name and metadata.maintainer_email:
+        sanitized_name = sanitize_supplier(metadata.maintainer_name)
+        sanitized_email = sanitize_email(metadata.maintainer_email) if metadata.maintainer_email else None
+        if sanitized_name and sanitized_email:
+            contact = OrganizationalContact(name=sanitized_name, email=sanitized_email)
+            component.manufacturer = OrganizationalEntity(name=sanitized_name, contacts=[contact])
+            added_fields.append("manufacturer")
 
     # Supplier - use supplier (distribution platform like PyPI, npm, etc.)
     if not component.supplier and metadata.supplier:
