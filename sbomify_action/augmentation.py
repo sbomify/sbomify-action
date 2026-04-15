@@ -820,6 +820,7 @@ def augment_cyclonedx_sbom(
             try:
                 comp.purl = PackageURL(type="generic", name=safe_name, version=comp.version or None)
                 logger.info(f"Set root component PURL: {comp.purl}")
+                audit_trail.record_augmentation("purl", str(comp.purl), source="generic-fallback")
             except Exception as e:
                 logger.debug(f"Failed to create PURL for root component '{safe_name}': {e}")
 
@@ -1656,23 +1657,30 @@ def _ensure_spdx_main_package_purl(document: Document, augmentation_data: dict[s
     vcs_url: str | None = augmentation_data.get("vcs_url")
     vcs_commit_sha: str | None = augmentation_data.get("vcs_commit_sha")
 
+    purl = None
+    purl_source = "generic-fallback"
+
     if vcs_url:
         purl = _construct_purl_from_vcs(vcs_url, vcs_commit_sha)
-    else:
-        # Fallback: create a generic PURL from the package name/version
-        # so NTIA unique-identifiers passes even without VCS context.
+        if purl:
+            purl_source = "vcs"
+
+    # Fallback: create a generic PURL if VCS didn't produce one
+    if not purl:
         safe_name = _sanitize_name_for_purl(main_package.name or "")
         if safe_name:
             try:
                 purl = str(PackageURL(type="generic", name=safe_name, version=main_package.version or None))
             except Exception:
                 purl = None
-        else:
-            purl = None
 
     if purl:
+        # Use PACKAGE_MANAGER for generic PURLs, OTHER for VCS-based
+        category = (
+            ExternalPackageRefCategory.OTHER if purl_source == "vcs" else ExternalPackageRefCategory.PACKAGE_MANAGER
+        )
         ext_ref = ExternalPackageRef(
-            category=ExternalPackageRefCategory.OTHER,
+            category=category,
             reference_type="purl",
             locator=purl,
             comment="Package URL for unique identification (NTIA Minimum Elements)",
@@ -1681,7 +1689,6 @@ def _ensure_spdx_main_package_purl(document: Document, augmentation_data: dict[s
 
         # Record to audit trail
         audit_trail = get_audit_trail()
-        purl_source = "vcs" if vcs_url else "generic-fallback"
         audit_trail.record_augmentation("purl", purl, source=purl_source)
         logger.info(f"Added PURL to SPDX main package: {purl}")
 
