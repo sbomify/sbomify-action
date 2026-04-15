@@ -2082,8 +2082,8 @@ class TestSanitizeCycloneDXLicenses:
         assert count == 0
         assert data["components"][0]["licenses"][0]["license"]["id"] == "MIT"
 
-    def test_with_clause_stays_in_license_id(self):
-        """A WITH clause is a single license+exception, not compound — stays in license.id."""
+    def test_with_clause_moved_to_expression(self):
+        """A WITH clause is an expression, not a bare ID — should move to expression."""
         data = {
             "components": [
                 {
@@ -2093,8 +2093,9 @@ class TestSanitizeCycloneDXLicenses:
             ]
         }
         count = sanitize_cyclonedx_licenses(data)
-        assert count == 0
-        assert data["components"][0]["licenses"][0]["license"]["id"] == "Apache-2.0 WITH LLVM-exception"
+        assert count == 1
+        assert data["components"][0]["licenses"][0]["expression"] == "Apache-2.0 WITH LLVM-exception"
+        assert "license" not in data["components"][0]["licenses"][0]
 
     def test_invalid_license_id_moved_to_name(self):
         """An invalid (non-SPDX) license ID should move to license.name."""
