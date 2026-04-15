@@ -13,7 +13,7 @@ import warnings
 from typing import TYPE_CHECKING, Any, Optional
 
 from cyclonedx.model.bom import Bom
-from license_expression import ExpressionError, get_spdx_licensing
+from license_expression import ExpressionError, Licensing, get_spdx_licensing
 
 if TYPE_CHECKING:
     from cyclonedx.model.component import Component
@@ -25,7 +25,7 @@ from .logging_config import logger
 
 
 @functools.lru_cache(maxsize=1)
-def _spdx_licensing_singleton() -> Any:
+def _spdx_licensing_singleton() -> Licensing:
     """Return a cached SPDX licensing instance (singleton)."""
     return get_spdx_licensing()
 
@@ -922,6 +922,10 @@ def _is_compound_expression(license_str: str) -> bool:
     if not license_str or len(license_str) > 1024:
         return False
 
+    # Cheap pre-check: skip parser for simple IDs without operators
+    if " OR " not in license_str and " AND " not in license_str and " WITH " not in license_str:
+        return False
+
     from license_expression import AND, OR, LicenseWithExceptionSymbol
 
     try:
@@ -989,12 +993,16 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
         for choice in license_choices:
             if not isinstance(choice, dict):
                 continue
-            if "expression" in choice:
-                parts.append(choice["expression"])
+            expr = choice.get("expression")
+            if isinstance(expr, str) and expr:
+                # Wrap in parens if it contains AND to preserve precedence in OR join
+                parts.append(f"({expr})" if " AND " in expr else expr)
             elif "license" in choice:
                 lic = choice["license"]
                 if isinstance(lic, dict):
-                    parts.append(lic.get("id") or lic.get("name", "NOASSERTION"))
+                    part = lic.get("id") or lic.get("name")
+                    if isinstance(part, str) and part:
+                        parts.append(part)
 
         if not parts:
             return 0
@@ -1041,7 +1049,7 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
                                 existing_expr,
                             )
                         count += 1
-                        continue  # skip expression sanitization for this choice
+                        # Fall through to expression sanitization below
                     elif not _is_valid_spdx_license_id(license_id):
                         # Move invalid id to name
                         logger.debug(f"Sanitizing invalid license ID: {license_id} -> name")
