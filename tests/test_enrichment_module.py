@@ -2783,10 +2783,11 @@ class TestRootComponentPURL:
             name="/home/user/project/uv.lock", version="1.0", type=ComponentType.APPLICATION
         )
 
-        augment_cyclonedx_sbom(bom, {}, component_name="Lithium Python Stack", component_version="1.0")
+        # Don't pass component_name so the path name is used for PURL
+        augment_cyclonedx_sbom(bom, {})
 
         purl_str = str(bom.metadata.component.purl)
-        assert "pkg:generic/lithium-python-stack" in purl_str
+        assert "pkg:generic/uv.lock" in purl_str
         # No slashes in the PURL name
         name_part = purl_str.split("pkg:generic/")[1].split("@")[0]
         assert "/" not in name_part

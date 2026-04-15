@@ -2251,9 +2251,12 @@ class TestPurlVersionUpdate:
             component_version="2.0.0",
         )
 
-        # Verify version is updated and no PURL is added
+        # Verify version is updated and a generic PURL fallback is set
         assert enriched_bom.metadata.component.version == "2.0.0"
-        assert enriched_bom.metadata.component.purl is None
+        assert enriched_bom.metadata.component.purl is not None
+        purl_str = str(enriched_bom.metadata.component.purl)
+        assert "pkg:generic/test-app" in purl_str
+        assert "2.0.0" in purl_str
 
 
 class TestSpdxJsonPurlVersionUpdate:

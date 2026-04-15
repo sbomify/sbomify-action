@@ -159,6 +159,18 @@ def _propagate_supplier_to_lockfile_packages(document: Document, supplier: Actor
         logger.info(f"Propagated supplier to {propagated_count} lockfile package(s)")
 
 
+def _sanitize_name_for_purl(name: str) -> str | None:
+    """Sanitize a component name for use as a PURL name.
+
+    Extracts basename from file paths, lowercases, replaces invalid chars.
+    Returns None if the result is empty.
+    """
+    if "/" in name or "\\" in name:
+        name = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    safe = re.sub(r"[^a-z0-9._-]", "-", name.lower()).strip("-")
+    return safe or None
+
+
 def _update_component_purl_version(component: Component, new_version: str) -> bool:
     """
     Update the version in a CycloneDX component's PURL and bom-ref if present.
@@ -803,17 +815,13 @@ def augment_cyclonedx_sbom(
     # cyclonedx-py creates root components from lockfile paths without PURLs.
     if hasattr(bom.metadata, "component") and bom.metadata.component and not bom.metadata.component.purl:
         comp = bom.metadata.component
-        name = comp.name or ""
-        # Sanitize: extract basename from file paths, lowercase, replace special chars
-        if "/" in name or "\\" in name:
-            name = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-        safe_name = re.sub(r"[^a-z0-9._-]", "-", name.lower()).strip("-") or "unknown"
-        purl_version = comp.version or "0.0.0"
-        try:
-            comp.purl = PackageURL(type="generic", name=safe_name, version=purl_version)
-            logger.info(f"Set root component PURL: {comp.purl}")
-        except Exception as e:
-            logger.debug(f"Failed to create PURL for root component '{safe_name}': {e}")
+        safe_name = _sanitize_name_for_purl(comp.name or "")
+        if safe_name:
+            try:
+                comp.purl = PackageURL(type="generic", name=safe_name, version=comp.version or None)
+                logger.info(f"Set root component PURL: {comp.purl}")
+            except Exception as e:
+                logger.debug(f"Failed to create PURL for root component '{safe_name}': {e}")
 
     # Add lifecycle phase if present (CISA 2025 Generation Context requirement)
     # See: https://sbomify.com/compliance/cisa-minimum-elements/
@@ -1653,14 +1661,10 @@ def _ensure_spdx_main_package_purl(document: Document, augmentation_data: dict[s
     else:
         # Fallback: create a generic PURL from the package name/version
         # so NTIA unique-identifiers passes even without VCS context.
-        name = main_package.name or ""
-        if "/" in name or "\\" in name:
-            name = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-        safe_name = re.sub(r"[^a-z0-9._-]", "-", name.lower()).strip("-") if name else None
-        version = main_package.version if main_package.version else None
+        safe_name = _sanitize_name_for_purl(main_package.name or "")
         if safe_name:
             try:
-                purl = str(PackageURL(type="generic", name=safe_name, version=version))
+                purl = str(PackageURL(type="generic", name=safe_name, version=main_package.version or None))
             except Exception:
                 purl = None
         else:
@@ -1677,7 +1681,8 @@ def _ensure_spdx_main_package_purl(document: Document, augmentation_data: dict[s
 
         # Record to audit trail
         audit_trail = get_audit_trail()
-        audit_trail.record_augmentation("purl", purl, source="vcs")
+        purl_source = "vcs" if vcs_url else "generic-fallback"
+        audit_trail.record_augmentation("purl", purl, source=purl_source)
         logger.info(f"Added PURL to SPDX main package: {purl}")
 
 
