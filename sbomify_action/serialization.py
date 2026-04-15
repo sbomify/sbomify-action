@@ -949,13 +949,23 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
             license_obj = choice.get("license")
             if isinstance(license_obj, dict):
                 license_id = license_obj.get("id")
-                if license_id and not _is_valid_spdx_license_id(license_id):
-                    # Move id to name
-                    logger.debug(f"Sanitizing invalid license ID: {license_id} -> name")
-                    del license_obj["id"]
-                    license_obj["name"] = license_id
-                    tracker.record_license_sanitized(license_id, f"name:{license_id}", component=component)
-                    count += 1
+                if license_id:
+                    # Compound expressions (containing OR/AND) belong in expression, not id
+                    if " OR " in license_id or " AND " in license_id:
+                        logger.debug(f"Moving compound expression from license.id to expression: {license_id}")
+                        del license_obj["id"]
+                        # Remove the license wrapper — expression is a peer of license, not nested
+                        choice.pop("license")
+                        choice["expression"] = license_id
+                        tracker.record_license_sanitized(license_id, f"expression:{license_id}", component=component)
+                        count += 1
+                    elif not _is_valid_spdx_license_id(license_id):
+                        # Move invalid id to name
+                        logger.debug(f"Sanitizing invalid license ID: {license_id} -> name")
+                        del license_obj["id"]
+                        license_obj["name"] = license_id
+                        tracker.record_license_sanitized(license_id, f"name:{license_id}", component=component)
+                        count += 1
 
             # Handle expression field
             expression = choice.get("expression")
