@@ -31,6 +31,7 @@ Version support:
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -790,12 +791,29 @@ def augment_cyclonedx_sbom(
                 )
             # Always update PURL to repair possible version/PURL mismatch
             _update_component_purl_version(bom.metadata.component, component_version)
+
         else:
             # Create component if it doesn't exist
             bom.metadata.component = Component(
                 name=component_name or "unknown", type=ComponentType.APPLICATION, version=component_version
             )
             logger.info(f"Set component version from configuration: '{component_version}'")
+
+    # Ensure root component has a PURL for NTIA unique-identifiers compliance.
+    # cyclonedx-py creates root components from lockfile paths without PURLs.
+    if hasattr(bom.metadata, "component") and bom.metadata.component and not bom.metadata.component.purl:
+        comp = bom.metadata.component
+        name = comp.name or ""
+        # Sanitize: extract basename from file paths, lowercase, replace special chars
+        if "/" in name or "\\" in name:
+            name = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        safe_name = re.sub(r"[^a-z0-9._-]", "-", name.lower()).strip("-") or "unknown"
+        purl_version = comp.version or "0.0.0"
+        try:
+            comp.purl = PackageURL(type="generic", name=safe_name, version=purl_version)
+            logger.info(f"Set root component PURL: {comp.purl}")
+        except Exception as e:
+            logger.debug(f"Failed to create PURL for root component '{safe_name}': {e}")
 
     # Add lifecycle phase if present (CISA 2025 Generation Context requirement)
     # See: https://sbomify.com/compliance/cisa-minimum-elements/
@@ -1630,14 +1648,25 @@ def _ensure_spdx_main_package_purl(document: Document, augmentation_data: dict[s
     vcs_url: str | None = augmentation_data.get("vcs_url")
     vcs_commit_sha: str | None = augmentation_data.get("vcs_commit_sha")
 
-    if not vcs_url:
-        return
-
-    purl = _construct_purl_from_vcs(vcs_url, vcs_commit_sha)
+    if vcs_url:
+        purl = _construct_purl_from_vcs(vcs_url, vcs_commit_sha)
+    else:
+        # Fallback: create a generic PURL from the package name/version
+        # so NTIA unique-identifiers passes even without VCS context.
+        name = main_package.name or ""
+        if "/" in name or "\\" in name:
+            name = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        safe_name = re.sub(r"[^a-z0-9._-]", "-", name.lower()).strip("-") if name else None
+        version = main_package.version if main_package.version else None
+        if safe_name:
+            try:
+                purl = str(PackageURL(type="generic", name=safe_name, version=version))
+            except Exception:
+                purl = None
+        else:
+            purl = None
 
     if purl:
-        # VCS-based PURLs (github, gitlab, bitbucket) use OTHER category
-        # since they're not traditional package managers
         ext_ref = ExternalPackageRef(
             category=ExternalPackageRefCategory.OTHER,
             reference_type="purl",
