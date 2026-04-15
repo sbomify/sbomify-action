@@ -2153,3 +2153,24 @@ class TestSanitizeCycloneDXLicenses:
         count = sanitize_cyclonedx_licenses(data)
         assert count == 1
         assert data["services"][0]["licenses"][0]["expression"] == "MIT OR Apache-2.0"
+
+    def test_dual_field_preserves_existing_expression(self):
+        """When both license.id (compound) and expression exist, keep existing expression."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [
+                        {
+                            "license": {"id": "GPL-3.0-only OR AGPL-3.0-only"},
+                            "expression": "MIT",
+                        }
+                    ],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        # Existing expression is preserved, compound license.id is discarded
+        assert data["components"][0]["licenses"][0]["expression"] == "MIT"
+        assert "license" not in data["components"][0]["licenses"][0]

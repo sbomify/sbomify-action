@@ -916,6 +916,9 @@ def _is_compound_expression(license_str: str) -> bool:
     single IDs return False. Unparseable strings return False — they'll
     be caught by _is_valid_spdx_license_id and moved to license.name.
     """
+    if not license_str or len(license_str) > 1024:
+        return False
+
     from license_expression import AND, OR
 
     try:
@@ -948,12 +951,14 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
     """
     Sanitize CycloneDX license data by fixing invalid license IDs and expressions.
 
-    This handles two cases:
-    1. Invalid license.id values: moved to license.name field
-    2. Invalid expression values: invalid IDs replaced with LicenseRef-* format
+    This handles three cases:
+    1. Compound expressions in license.id (OR/AND): moved to expression field
+    2. Invalid license.id values: moved to license.name field
+    3. Invalid expression values: invalid IDs replaced with LicenseRef-* format
 
-    Some SBOM generators incorrectly put non-SPDX license strings in the
-    license.id field, which causes schema validation failures.
+    Some SBOM generators incorrectly put compound SPDX expressions or
+    non-SPDX license strings in the license.id field, which causes
+    schema validation failures.
 
     Args:
         data: CycloneDX SBOM data as a dict (modified in place)
@@ -983,15 +988,19 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
                         choice.pop("license", None)
                         if not existing_expr:
                             choice["expression"] = license_id
-                            logger.debug(f"Moving compound expression from license.id to expression: {license_id}")
+                            logger.debug("Moving compound expression from license.id to expression: %r", license_id)
                             tracker.record_license_sanitized(
                                 license_id, f"expression:{license_id}", component=component
                             )
                         else:
-                            logger.debug(
-                                f"Removed compound license.id={license_id}, kept existing expression={existing_expr}"
+                            logger.warning(
+                                "Both license.id=%r (compound) and expression=%r present "
+                                "in same licenseChoice — discarding license.id",
+                                license_id,
+                                existing_expr,
                             )
                         count += 1
+                        continue  # skip expression sanitization for this choice
                     elif not _is_valid_spdx_license_id(license_id):
                         # Move invalid id to name
                         logger.debug(f"Sanitizing invalid license ID: {license_id} -> name")
