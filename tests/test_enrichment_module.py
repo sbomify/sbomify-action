@@ -2983,3 +2983,265 @@ class TestRootComponentPURL:
         assert bom.metadata.component.purl is not None
         purl_str = str(bom.metadata.component.purl)
         assert purl_str == "pkg:generic/my-app" or purl_str.startswith("pkg:generic/my-app")
+
+
+class TestSanitizeNameForPurl:
+    """Direct unit tests for _sanitize_name_for_purl helper."""
+
+    @pytest.mark.parametrize(
+        "input_name,expected",
+        [
+            # Simple names
+            ("myapp", "myapp"),
+            ("MyApp", "myapp"),
+            ("UPPER", "upper"),
+            # Dots and dashes
+            ("my-app", "my-app"),
+            ("my.app", "my.app"),
+            ("my_app", "my_app"),
+            ("name.with.many.dots", "name.with.many.dots"),
+            # Path stripping — Unix
+            ("/home/user/project", "project"),
+            ("/a/b/c/d", "d"),
+            ("./relative", "relative"),
+            ("../parent", "parent"),
+            # Path stripping — Windows
+            (r"C:\Users\dev\app", "app"),
+            (r"D:\project", "project"),
+            (r"\\server\share\file.lock", "file.lock"),
+            # Mixed separators
+            ("unix/path\\to/file", "file"),
+            # npm scoped — scope preserved
+            ("@scope/pkg", "scope-pkg"),
+            ("@my-org/my-pkg", "my-org-my-pkg"),
+            ("@TypeScript/types", "typescript-types"),
+            # Single @ without / is not a scope
+            ("@notascope", "notascope"),
+            # Lockfile names
+            ("uv.lock", "uv.lock"),
+            ("Cargo.lock", "cargo.lock"),
+            ("package-lock.json", "package-lock.json"),
+            # Special chars collapsed to single dash
+            ("a!b", "a-b"),
+            ("a!!!b", "a-b"),
+            ("a!@#$b", "a-b"),
+            ("a   b", "a-b"),  # spaces collapsed
+            ("a\tb", "a-b"),  # tabs
+            # Leading/trailing dashes stripped
+            ("-leading", "leading"),
+            ("trailing-", "trailing"),
+            ("--both--", "both"),
+            # Unicode — non-ASCII stripped
+            ("café", "caf"),
+            ("日本", None),  # all stripped → None
+            # Edge cases
+            ("", None),
+            (" ", None),
+            ("!!!", None),
+            ("-", None),
+            ("---", None),
+            (".", "."),  # single dot is valid
+            ("..", ".."),  # double dot (path traversal) survives but is harmless in PURL
+        ],
+    )
+    def test_sanitize_name(self, input_name, expected):
+        from sbomify_action.augmentation import _sanitize_name_for_purl
+
+        assert _sanitize_name_for_purl(input_name) == expected
+
+
+class TestRootComponentPURLAdvanced:
+    """Advanced edge cases for root component PURL."""
+
+    def test_no_metadata_component_no_crash(self):
+        """BOM without metadata.component should not crash."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        # No metadata.component set
+        augment_cyclonedx_sbom(bom, {})
+        # Should not crash
+
+    def test_oci_container_purl_preserved(self):
+        """Container SBOMs with pkg:oci PURLs must never be overwritten."""
+        from packageurl import PackageURL
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="almalinux",
+            version="8",
+            type=ComponentType.CONTAINER,
+            purl=PackageURL.from_string("pkg:oci/almalinux@sha256:abc123"),
+        )
+        augment_cyclonedx_sbom(bom, {})
+        assert "pkg:oci/" in str(bom.metadata.component.purl)
+
+    def test_maven_purl_preserved(self):
+        """Existing Maven PURLs must not be overwritten."""
+        from packageurl import PackageURL
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="my-app",
+            version="1.0.0",
+            type=ComponentType.APPLICATION,
+            purl=PackageURL(type="maven", namespace="com.example", name="my-app", version="1.0.0"),
+        )
+        augment_cyclonedx_sbom(bom, {})
+        assert str(bom.metadata.component.purl).startswith("pkg:maven/")
+
+    def test_deb_purl_preserved(self):
+        """Existing deb PURLs must not be overwritten."""
+        from packageurl import PackageURL
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="bash",
+            version="5.2",
+            type=ComponentType.APPLICATION,
+            purl=PackageURL(type="deb", namespace="debian", name="bash", version="5.2"),
+        )
+        augment_cyclonedx_sbom(bom, {})
+        assert str(bom.metadata.component.purl).startswith("pkg:deb/")
+
+    def test_generic_purl_still_overwritten_if_no_version_match(self):
+        """Components with PURLs (even generic) should keep their PURL."""
+        from packageurl import PackageURL
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="myapp",
+            version="1.0.0",
+            type=ComponentType.APPLICATION,
+            purl=PackageURL(type="generic", name="myapp", version="1.0.0"),
+        )
+        augment_cyclonedx_sbom(bom, {}, component_version="1.0.0")
+        # PURL already set → not changed
+        assert str(bom.metadata.component.purl) == "pkg:generic/myapp@1.0.0"
+
+    def test_very_long_name_sanitized(self):
+        """Long names should still produce a valid PURL."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        long_name = "a" * 500
+        bom = Bom()
+        bom.metadata.component = Component(name=long_name, version="1.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+        assert bom.metadata.component.purl is not None
+        assert len(str(bom.metadata.component.purl)) > 0
+
+    def test_name_with_percent_encoded_chars(self):
+        """URL-encoded chars in name should be handled."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="my%20app", version="1.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+        # % is not valid in PURL name → becomes dash
+        purl_str = str(bom.metadata.component.purl)
+        assert "%" not in purl_str.split("pkg:generic/")[1].split("@")[0]
+
+    def test_name_with_query_string_chars(self):
+        """Query string characters should be sanitized."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="app?foo=bar", version="1.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+        purl_str = str(bom.metadata.component.purl)
+        name_part = purl_str.split("pkg:generic/")[1].split("@")[0]
+        assert "?" not in name_part
+        assert "=" not in name_part
+
+    def test_name_with_colon(self):
+        """Colons (used in container refs) should be sanitized."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="debian:12", version="", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+        purl_str = str(bom.metadata.component.purl)
+        name_part = (
+            purl_str.split("pkg:generic/")[1].split("@")[0]
+            if "@" in purl_str.split("pkg:generic/")[1]
+            else purl_str.split("pkg:generic/")[1]
+        )
+        assert ":" not in name_part
+
+    def test_version_with_special_chars_preserved(self):
+        """Version strings can contain characters that PURL accepts."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="app", version="1.0.0-alpha+build.1", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+        assert bom.metadata.component.purl is not None
+        assert bom.metadata.component.purl.name == "app"
+        assert bom.metadata.component.purl.version == "1.0.0-alpha+build.1"
+
+    @pytest.mark.parametrize(
+        "component_type",
+        [
+            ComponentType.APPLICATION,
+            ComponentType.LIBRARY,
+            ComponentType.FRAMEWORK,
+            ComponentType.OPERATING_SYSTEM,
+            ComponentType.DEVICE,
+            ComponentType.FIRMWARE,
+            ComponentType.FILE,
+        ],
+    )
+    def test_works_for_any_component_type(self, component_type):
+        """Root PURL should be added regardless of component type."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="my-app", version="1.0", type=component_type)
+        augment_cyclonedx_sbom(bom, {})
+        assert bom.metadata.component.purl is not None
+
+
+class TestRootComponentPURLEndToEnd:
+    """End-to-end tests simulating real SBOM generator outputs."""
+
+    @pytest.mark.parametrize(
+        "generator,root_name,expected_purl_prefix",
+        [
+            # cyclonedx-py
+            ("cyclonedx-py", "./requirements.txt", "pkg:generic/requirements.txt"),
+            ("cyclonedx-py", "requirements.txt", "pkg:generic/requirements.txt"),
+            ("cyclonedx-py", "Pipfile.lock", "pkg:generic/pipfile.lock"),
+            ("cyclonedx-py", "poetry.lock", "pkg:generic/poetry.lock"),
+            ("cyclonedx-py", "pyproject.toml", "pkg:generic/pyproject.toml"),
+            # cdxgen (varied inputs)
+            ("cdxgen", "my-npm-app", "pkg:generic/my-npm-app"),
+            ("cdxgen", "com.example.MyApp", "pkg:generic/com.example.myapp"),
+            ("cdxgen", "go.mod", "pkg:generic/go.mod"),
+            # cargo-cyclonedx
+            ("cargo-cdx", "my-rust-crate", "pkg:generic/my-rust-crate"),
+            ("cargo-cdx", "crates-rust_lib", "pkg:generic/crates-rust_lib"),
+            # syft (container or path-based)
+            ("syft", "/srv/app/go.mod", "pkg:generic/go.mod"),
+            ("syft", "alpine-container", "pkg:generic/alpine-container"),
+            # trivy (lockfile scanning)
+            ("trivy", "poetry.lock", "pkg:generic/poetry.lock"),
+        ],
+    )
+    def test_generator_root_produces_valid_purl(self, generator, root_name, expected_purl_prefix):
+        """Each generator's typical root component name should produce a valid PURL."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name=root_name, version="1.0.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+        assert bom.metadata.component.purl is not None
+        purl_str = str(bom.metadata.component.purl)
+        assert expected_purl_prefix in purl_str, f"Generator {generator}: got {purl_str}"
