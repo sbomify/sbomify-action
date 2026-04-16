@@ -5,6 +5,7 @@ This module provides centralized serialization functions for both CycloneDX and 
 formats, supporting multiple versions and making it easy to add new versions in the future.
 """
 
+import functools
 import hashlib
 import json
 import re
@@ -12,6 +13,7 @@ import warnings
 from typing import TYPE_CHECKING, Any, Optional
 
 from cyclonedx.model.bom import Bom
+from license_expression import ExpressionError, Licensing, get_spdx_licensing
 
 if TYPE_CHECKING:
     from cyclonedx.model.component import Component
@@ -20,6 +22,13 @@ from spdx_tools.spdx.model import Document  # type: ignore[attr-defined]
 
 from .console import get_transformation_tracker
 from .logging_config import logger
+
+
+@functools.lru_cache(maxsize=1)
+def _spdx_licensing_singleton() -> Licensing:
+    """Return a cached SPDX licensing instance (singleton)."""
+    return get_spdx_licensing()
+
 
 # ============================================================================
 # CycloneDX Version Management
@@ -899,6 +908,33 @@ def get_supported_spdx_versions() -> list[str]:
 # ============================================================================
 
 
+def _is_compound_expression(license_str: str) -> bool:
+    """Check if a license string is an SPDX expression (not a bare license ID).
+
+    Uses the license-expression library's parsed AST. Returns True for any
+    expression that is not a single license identifier — including OR, AND,
+    and WITH clauses. CycloneDX license.id only accepts bare SPDX IDs;
+    anything else belongs in the expression field.
+
+    Unparseable strings return False — they'll be caught by
+    _is_valid_spdx_license_id and moved to license.name.
+    """
+    if not license_str or len(license_str) > 1024:
+        return False
+
+    # Cheap pre-check: skip parser for simple IDs without operators
+    if " OR " not in license_str and " AND " not in license_str and " WITH " not in license_str:
+        return False
+
+    from license_expression import AND, OR, LicenseWithExceptionSymbol
+
+    try:
+        parsed = _spdx_licensing_singleton().parse(license_str, validate=False)
+        return isinstance(parsed, (OR, AND, LicenseWithExceptionSymbol))
+    except ExpressionError:
+        return False
+
+
 def _is_valid_spdx_license_id(license_id: str) -> bool:
     """
     Check if a string is a valid SPDX license ID using the license-expression library.
@@ -922,12 +958,14 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
     """
     Sanitize CycloneDX license data by fixing invalid license IDs and expressions.
 
-    This handles two cases:
-    1. Invalid license.id values: moved to license.name field
-    2. Invalid expression values: invalid IDs replaced with LicenseRef-* format
+    This handles three cases:
+    1. Compound expressions in license.id (OR/AND): moved to expression field
+    2. Invalid license.id values: moved to license.name field
+    3. Invalid expression values: invalid IDs replaced with LicenseRef-* format
 
-    Some SBOM generators incorrectly put non-SPDX license strings in the
-    license.id field, which causes schema validation failures.
+    Some SBOM generators incorrectly put compound SPDX expressions or
+    non-SPDX license strings in the license.id field, which causes
+    schema validation failures.
 
     Args:
         data: CycloneDX SBOM data as a dict (modified in place)
@@ -937,6 +975,48 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
     """
     sanitized_count = 0
     tracker = get_transformation_tracker()
+
+    def _consolidate_mixed_license_types(license_choices: list[Any], component: str | None = None) -> int:
+        """Consolidate mixed license/expression entries into a single expression.
+
+        cyclonedx-python-lib cannot serialize a component that has both
+        LicenseExpression and DisjunctiveLicense objects. When sanitization
+        produces a mix, consolidate all entries into one OR expression.
+        """
+        has_expression = any("expression" in c for c in license_choices if isinstance(c, dict))
+        has_license = any("license" in c for c in license_choices if isinstance(c, dict))
+        if not (has_expression and has_license):
+            return 0
+
+        # Collect all license identifiers and expressions
+        parts: list[str] = []
+        for choice in license_choices:
+            if not isinstance(choice, dict):
+                continue
+            expr = choice.get("expression")
+            if isinstance(expr, str) and expr:
+                # Wrap in parens if it contains AND to preserve precedence in OR join
+                parts.append(f"({expr})" if " AND " in expr else expr)
+            elif "license" in choice:
+                lic = choice["license"]
+                if isinstance(lic, dict):
+                    part = lic.get("id") or lic.get("name")
+                    if isinstance(part, str) and part:
+                        parts.append(part)
+
+        if not parts:
+            return 0
+
+        # Replace all entries with a single expression
+        combined = " OR ".join(parts)
+        license_choices.clear()
+        license_choices.append({"expression": combined})
+        logger.debug(
+            "Consolidated mixed license/expression entries into single expression for %s: %r",
+            component or "unknown",
+            combined,
+        )
+        return 1
 
     def _sanitize_license_choices(license_choices: list[Any], component: str | None = None) -> int:
         """Process a list of licenseChoice objects."""
@@ -949,13 +1029,34 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
             license_obj = choice.get("license")
             if isinstance(license_obj, dict):
                 license_id = license_obj.get("id")
-                if license_id and not _is_valid_spdx_license_id(license_id):
-                    # Move id to name
-                    logger.debug(f"Sanitizing invalid license ID: {license_id} -> name")
-                    del license_obj["id"]
-                    license_obj["name"] = license_id
-                    tracker.record_license_sanitized(license_id, f"name:{license_id}", component=component)
-                    count += 1
+                if license_id:
+                    # Compound expressions (containing OR/AND) belong in expression, not id
+                    if _is_compound_expression(license_id):
+                        # Remove the license wrapper — expression is a peer of license, not nested
+                        existing_expr = choice.get("expression")
+                        choice.pop("license", None)
+                        if not existing_expr:
+                            choice["expression"] = license_id
+                            logger.debug("Moving compound expression from license.id to expression: %r", license_id)
+                            tracker.record_license_sanitized(
+                                license_id, f"expression:{license_id}", component=component
+                            )
+                        else:
+                            logger.warning(
+                                "Both license.id=%r (compound) and expression=%r present "
+                                "in same licenseChoice — discarding license.id",
+                                license_id,
+                                existing_expr,
+                            )
+                        count += 1
+                        # Fall through to expression sanitization below
+                    elif not _is_valid_spdx_license_id(license_id):
+                        # Move invalid id to name
+                        logger.debug(f"Sanitizing invalid license ID: {license_id} -> name")
+                        del license_obj["id"]
+                        license_obj["name"] = license_id
+                        tracker.record_license_sanitized(license_id, f"name:{license_id}", component=component)
+                        count += 1
 
             # Handle expression field
             expression = choice.get("expression")
@@ -973,6 +1074,7 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
     metadata = data.get("metadata", {})
     if "licenses" in metadata:
         sanitized_count += _sanitize_license_choices(metadata["licenses"], component="metadata")
+        sanitized_count += _consolidate_mixed_license_types(metadata["licenses"], component="metadata")
 
     # Process component licenses
     components = data.get("components", [])
@@ -980,6 +1082,7 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
         comp_name = component.get("name")
         if "licenses" in component:
             sanitized_count += _sanitize_license_choices(component["licenses"], component=comp_name)
+            sanitized_count += _consolidate_mixed_license_types(component["licenses"], component=comp_name)
 
     # Process service licenses (if present)
     services = data.get("services", [])
@@ -987,9 +1090,10 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
         svc_name = service.get("name")
         if "licenses" in service:
             sanitized_count += _sanitize_license_choices(service["licenses"], component=svc_name)
+            sanitized_count += _consolidate_mixed_license_types(service["licenses"], component=svc_name)
 
     if sanitized_count > 0:
-        logger.info(f"Sanitized {sanitized_count} invalid license ID(s) to license name(s)")
+        logger.info(f"Sanitized {sanitized_count} license issue(s) (invalid IDs and/or compound expressions)")
 
     return sanitized_count
 
