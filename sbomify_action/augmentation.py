@@ -177,11 +177,8 @@ def _sanitize_name_for_purl(name: str) -> str | None:
     is_scoped_name = name.startswith("@") and name.count("/") == 1 and "\\" not in name
     if not is_scoped_name and ("/" in name or "\\" in name):
         name = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-    safe = re.sub(r"[^a-z0-9._-]", "-", name.lower()).strip("-")
-    # Collapse consecutive dashes that result from stripping multiple
-    # invalid chars in a row (e.g. "weird!@#$%name" -> "weird-----name" -> "weird-name").
-    while "--" in safe:
-        safe = safe.replace("--", "-")
+    # Replace invalid chars with dashes, then collapse runs of dashes to one.
+    safe = re.sub(r"[^a-z0-9._-]+", "-", name.lower()).strip("-")
     return safe or None
 
 
