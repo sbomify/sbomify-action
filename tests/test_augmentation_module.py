@@ -3474,7 +3474,9 @@ class TestRootComponentPURLNoOrphans:
         )
         bom.components.add(dep_component)
         # Root depends on requests
-        bom.dependencies.add(Dependency(ref=root_ref, dependencies=[Dependency(ref=dep_ref)]))
+        root_dep = Dependency(ref=root_ref)
+        root_dep.dependencies.add(Dependency(ref=dep_ref))
+        bom.dependencies.add(root_dep)
 
         augment_cyclonedx_sbom(bom, {})
 
@@ -3545,9 +3547,15 @@ class TestRootComponentPURLNoOrphans:
         bom.components.add(Component(name="b", version="1.0", type=ComponentType.LIBRARY, bom_ref=b_ref))
         bom.components.add(Component(name="c", version="1.0", type=ComponentType.LIBRARY, bom_ref=c_ref))
         # root -> a -> b -> c
-        bom.dependencies.add(Dependency(ref=root_ref, dependencies=[Dependency(ref=a_ref)]))
-        bom.dependencies.add(Dependency(ref=a_ref, dependencies=[Dependency(ref=b_ref)]))
-        bom.dependencies.add(Dependency(ref=b_ref, dependencies=[Dependency(ref=c_ref)]))
+        root_dep = Dependency(ref=root_ref)
+        root_dep.dependencies.add(Dependency(ref=a_ref))
+        bom.dependencies.add(root_dep)
+        a_dep = Dependency(ref=a_ref)
+        a_dep.dependencies.add(Dependency(ref=b_ref))
+        bom.dependencies.add(a_dep)
+        b_dep = Dependency(ref=b_ref)
+        b_dep.dependencies.add(Dependency(ref=c_ref))
+        bom.dependencies.add(b_dep)
 
         augment_cyclonedx_sbom(bom, {})
 
