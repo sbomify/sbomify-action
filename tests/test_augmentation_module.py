@@ -3581,3 +3581,133 @@ class TestRootComponentPURLNoOrphans:
         augment_cyclonedx_sbom(bom, {})
 
         assert len(bom.services) == original_service_count
+
+
+class TestSpdxGenericFallbackPURL:
+    """Tests for SPDX generic fallback PURL (issue coverage).
+
+    When no VCS URL is available or _construct_purl_from_vcs returns None,
+    _ensure_spdx_main_package_purl should fall back to pkg:generic/<name>@<version>
+    with ExternalPackageRefCategory.PACKAGE_MANAGER (vs OTHER for VCS-derived).
+    """
+
+    def _make_document(self, pkg_name: str = "my-app", pkg_version: str = "1.0.0"):
+        """Create a minimal SPDX document with a single main package."""
+        from spdx_tools.spdx.model import (
+            CreationInfo,
+            Document,
+            Package,
+        )
+
+        doc = Document(
+            creation_info=CreationInfo(
+                spdx_version="SPDX-2.3",
+                spdx_id="SPDXRef-DOCUMENT",
+                name="test-document",
+                document_namespace="https://example.com/test",
+                creators=[Actor(actor_type=ActorType.TOOL, name="test-tool")],
+                created=__import__("datetime").datetime(2026, 1, 1),
+            )
+        )
+        doc.packages = [
+            Package(
+                spdx_id="SPDXRef-Package",
+                name=pkg_name,
+                version=pkg_version,
+                download_location="NOASSERTION",
+            )
+        ]
+        return doc
+
+    def test_generic_fallback_when_no_vcs_url(self):
+        """Missing VCS URL should produce pkg:generic/ PURL with PACKAGE_MANAGER category."""
+        from spdx_tools.spdx.model import ExternalPackageRefCategory
+
+        from sbomify_action.augmentation import _ensure_spdx_main_package_purl
+
+        doc = self._make_document("my-app", "1.0.0")
+        _ensure_spdx_main_package_purl(doc, {})
+
+        ext_refs = doc.packages[0].external_references
+        purl_refs = [r for r in ext_refs if r.reference_type == "purl"]
+        assert len(purl_refs) == 1
+        assert purl_refs[0].locator == "pkg:generic/my-app@1.0.0"
+        assert purl_refs[0].category == ExternalPackageRefCategory.PACKAGE_MANAGER
+
+    def test_generic_fallback_when_vcs_url_unparseable(self):
+        """Unparseable VCS URL should fall through to generic fallback."""
+        from spdx_tools.spdx.model import ExternalPackageRefCategory
+
+        from sbomify_action.augmentation import _ensure_spdx_main_package_purl
+
+        doc = self._make_document("my-app", "2.0.0")
+        # Non-github/gitlab/bitbucket URL — _construct_purl_from_vcs returns None
+        _ensure_spdx_main_package_purl(doc, {"vcs_url": "https://example.com/not-a-vcs"})
+
+        ext_refs = doc.packages[0].external_references
+        purl_refs = [r for r in ext_refs if r.reference_type == "purl"]
+        assert len(purl_refs) == 1
+        assert purl_refs[0].locator == "pkg:generic/my-app@2.0.0"
+        assert purl_refs[0].category == ExternalPackageRefCategory.PACKAGE_MANAGER
+
+    def test_vcs_purl_uses_other_category(self):
+        """VCS-derived PURL should use ExternalPackageRefCategory.OTHER."""
+        from spdx_tools.spdx.model import ExternalPackageRefCategory
+
+        from sbomify_action.augmentation import _ensure_spdx_main_package_purl
+
+        doc = self._make_document("my-app", "1.0.0")
+        _ensure_spdx_main_package_purl(
+            doc,
+            {
+                "vcs_url": "https://github.com/example/my-app",
+                "vcs_commit_sha": "abc123def456",
+            },
+        )
+
+        ext_refs = doc.packages[0].external_references
+        purl_refs = [r for r in ext_refs if r.reference_type == "purl"]
+        assert len(purl_refs) == 1
+        assert "pkg:github/example/my-app" in purl_refs[0].locator
+        assert purl_refs[0].category == ExternalPackageRefCategory.OTHER
+
+    def test_existing_purl_not_overwritten(self):
+        """Package with existing PURL externalRef should not get another one."""
+        from spdx_tools.spdx.model import ExternalPackageRef, ExternalPackageRefCategory
+
+        from sbomify_action.augmentation import _ensure_spdx_main_package_purl
+
+        doc = self._make_document("my-app", "1.0.0")
+        existing_ref = ExternalPackageRef(
+            category=ExternalPackageRefCategory.PACKAGE_MANAGER,
+            reference_type="purl",
+            locator="pkg:pypi/my-app@1.0.0",
+        )
+        doc.packages[0].external_references = [existing_ref]
+
+        _ensure_spdx_main_package_purl(doc, {})
+
+        purl_refs = [r for r in doc.packages[0].external_references if r.reference_type == "purl"]
+        assert len(purl_refs) == 1
+        assert purl_refs[0].locator == "pkg:pypi/my-app@1.0.0"
+
+    def test_no_packages_no_crash(self):
+        """Document with no packages should not crash."""
+        from sbomify_action.augmentation import _ensure_spdx_main_package_purl
+
+        doc = self._make_document()
+        doc.packages = []
+
+        _ensure_spdx_main_package_purl(doc, {})  # Should not raise
+
+    def test_unsanitizable_name_no_purl_added(self):
+        """Package with unsanitizable name should not get a generic PURL."""
+        from sbomify_action.augmentation import _ensure_spdx_main_package_purl
+
+        doc = self._make_document("!!!", "1.0.0")
+
+        _ensure_spdx_main_package_purl(doc, {})
+
+        purl_refs = [r for r in doc.packages[0].external_references if r.reference_type == "purl"]
+        # Name is all invalid chars → sanitizer returns None → no PURL added
+        assert len(purl_refs) == 0

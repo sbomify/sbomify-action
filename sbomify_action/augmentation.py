@@ -1025,8 +1025,6 @@ def _sanitize_license_ref_id(name: str) -> str:
     Raises:
         ValueError: If name cannot be sanitized to valid identifier
     """
-    import re
-
     if not name or not name.strip():
         raise ValueError("License name cannot be empty")
 
