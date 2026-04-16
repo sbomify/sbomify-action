@@ -3245,3 +3245,156 @@ class TestRootComponentPURLEndToEnd:
         assert bom.metadata.component.purl is not None
         purl_str = str(bom.metadata.component.purl)
         assert expected_purl_prefix in purl_str, f"Generator {generator}: got {purl_str}"
+
+
+class TestRootComponentPURLNoOrphans:
+    """Verify that adding root component PURL does not create dependency graph orphans.
+
+    Addresses @vpetersson's review concern: "Be careful with orphans when you
+    alter the root component. You might need to reconstruct the tree."
+
+    Our fallback only sets component.purl (never touches bom_ref), so the
+    dependency graph (which references bom_ref values) should remain intact.
+    """
+
+    def test_bom_ref_unchanged_by_purl_addition(self):
+        """Setting the root PURL must not modify its bom_ref."""
+        from cyclonedx.model.bom_ref import BomRef
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        original_bom_ref = "root-app-original-ref"
+        bom.metadata.component = Component(
+            name="my-app",
+            version="1.0.0",
+            type=ComponentType.APPLICATION,
+            bom_ref=BomRef(original_bom_ref),
+        )
+        augment_cyclonedx_sbom(bom, {})
+
+        assert bom.metadata.component.purl is not None
+        # bom_ref must be untouched
+        assert bom.metadata.component.bom_ref.value == original_bom_ref
+
+    def test_dependency_graph_intact_after_purl_addition(self):
+        """Adding root PURL must not orphan any dependencies."""
+        from cyclonedx.model.bom_ref import BomRef
+        from cyclonedx.model.dependency import Dependency
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        root_ref = BomRef("root-ref")
+        dep_ref = BomRef("pkg:pypi/requests@2.31.0")
+        bom.metadata.component = Component(
+            name="my-app", version="1.0", type=ComponentType.APPLICATION, bom_ref=root_ref
+        )
+        # Add a component that's depended on
+        dep_component = Component(
+            name="requests",
+            version="2.31.0",
+            type=ComponentType.LIBRARY,
+            bom_ref=dep_ref,
+        )
+        bom.components.add(dep_component)
+        # Root depends on requests
+        bom.dependencies.add(Dependency(ref=root_ref, dependencies=[Dependency(ref=dep_ref)]))
+
+        augment_cyclonedx_sbom(bom, {})
+
+        # Root PURL was added
+        assert bom.metadata.component.purl is not None
+        # Dependency graph references are still intact
+        dep_refs = {d.ref.value for d in bom.dependencies}
+        assert root_ref.value in dep_refs or any(d.ref.value == root_ref.value for d in bom.dependencies)
+
+    def test_components_list_unchanged_by_purl_addition(self):
+        """Adding root PURL must not add/remove/modify any components."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="my-app", version="1.0", type=ComponentType.APPLICATION)
+        dep1 = Component(name="dep1", version="1.0", type=ComponentType.LIBRARY)
+        dep2 = Component(name="dep2", version="2.0", type=ComponentType.LIBRARY)
+        bom.components.add(dep1)
+        bom.components.add(dep2)
+        original_count = len(bom.components)
+        original_names = {c.name for c in bom.components}
+
+        augment_cyclonedx_sbom(bom, {})
+
+        assert len(bom.components) == original_count
+        assert {c.name for c in bom.components} == original_names
+
+    def test_purl_addition_does_not_affect_existing_component_purls(self):
+        """Adding root PURL must not modify other components' PURLs."""
+        from packageurl import PackageURL
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="my-app", version="1.0", type=ComponentType.APPLICATION)
+        dep = Component(
+            name="requests",
+            version="2.31.0",
+            type=ComponentType.LIBRARY,
+            purl=PackageURL(type="pypi", name="requests", version="2.31.0"),
+        )
+        bom.components.add(dep)
+        original_dep_purl = str(dep.purl)
+
+        augment_cyclonedx_sbom(bom, {})
+
+        dep_in_bom = next(c for c in bom.components if c.name == "requests")
+        assert str(dep_in_bom.purl) == original_dep_purl
+
+    def test_purl_addition_with_complex_dependency_tree(self):
+        """Complex nested dependency tree must remain valid after root PURL addition."""
+        from cyclonedx.model.bom_ref import BomRef
+        from cyclonedx.model.dependency import Dependency
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+        from sbomify_action.serialization import serialize_cyclonedx_bom
+
+        bom = Bom()
+        root_ref = BomRef("root")
+        a_ref = BomRef("pkg:pypi/a@1.0")
+        b_ref = BomRef("pkg:pypi/b@1.0")
+        c_ref = BomRef("pkg:pypi/c@1.0")
+
+        bom.metadata.component = Component(
+            name="my-app", version="1.0", type=ComponentType.APPLICATION, bom_ref=root_ref
+        )
+        bom.components.add(Component(name="a", version="1.0", type=ComponentType.LIBRARY, bom_ref=a_ref))
+        bom.components.add(Component(name="b", version="1.0", type=ComponentType.LIBRARY, bom_ref=b_ref))
+        bom.components.add(Component(name="c", version="1.0", type=ComponentType.LIBRARY, bom_ref=c_ref))
+        # root -> a -> b -> c
+        bom.dependencies.add(Dependency(ref=root_ref, dependencies=[Dependency(ref=a_ref)]))
+        bom.dependencies.add(Dependency(ref=a_ref, dependencies=[Dependency(ref=b_ref)]))
+        bom.dependencies.add(Dependency(ref=b_ref, dependencies=[Dependency(ref=c_ref)]))
+
+        augment_cyclonedx_sbom(bom, {})
+
+        # Should serialize successfully (would fail if dependency graph is broken)
+        result = serialize_cyclonedx_bom(bom, "1.5")
+        data = json.loads(result)
+        assert "components" in data
+        assert len(data["components"]) == 3
+        # Root has PURL now
+        assert data["metadata"]["component"].get("purl", "").startswith("pkg:generic/")
+
+    def test_preserves_services_section(self):
+        """SBOMs with services should not lose the services section."""
+        from cyclonedx.model.service import Service
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="my-app", version="1.0", type=ComponentType.APPLICATION)
+        bom.services.add(Service(name="my-service", version="1.0"))
+        original_service_count = len(bom.services)
+
+        augment_cyclonedx_sbom(bom, {})
+
+        assert len(bom.services) == original_service_count
