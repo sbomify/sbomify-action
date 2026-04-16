@@ -1639,10 +1639,12 @@ def _ensure_spdx_main_package_purl(document: Document, augmentation_data: dict[s
     Ensure the SPDX main package has a PURL for NTIA compliance.
 
     NTIA Minimum Elements require a unique identifier (PURL) for the main component.
-    This function checks if one exists and constructs one from VCS info if possible.
+    This function checks if one exists and constructs one using two strategies:
+    1. From VCS info (github/gitlab/bitbucket) — category: OTHER
+    2. Generic fallback from sanitized package name — category: PACKAGE_MANAGER
 
     The PURL is added as an externalRef with:
-    - category: OTHER (VCS-based PURLs like github/gitlab/bitbucket)
+    - category: OTHER (VCS-based) or PACKAGE_MANAGER (generic fallback)
     - referenceType: purl
     - locator: the PURL string
 
@@ -1685,7 +1687,8 @@ def _ensure_spdx_main_package_purl(document: Document, augmentation_data: dict[s
         if safe_name:
             try:
                 purl = str(PackageURL(type="generic", name=safe_name, version=main_package.version or None))
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to construct generic PURL for SPDX package '{safe_name}': {e}")
                 purl = None
 
     if purl:

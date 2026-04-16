@@ -3110,8 +3110,8 @@ class TestRootComponentPURLAdvanced:
         augment_cyclonedx_sbom(bom, {})
         assert str(bom.metadata.component.purl).startswith("pkg:deb/")
 
-    def test_generic_purl_still_overwritten_if_no_version_match(self):
-        """Components with PURLs (even generic) should keep their PURL."""
+    def test_existing_generic_purl_preserved(self):
+        """Components with an existing generic PURL should keep it (no overwrite)."""
         from packageurl import PackageURL
 
         from sbomify_action.augmentation import augment_cyclonedx_sbom
