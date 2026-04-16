@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 from cyclonedx.model.bom import Bom
+from cyclonedx.model.component import Component, ComponentType
 from spdx_tools.spdx.model import Actor, ActorType
 
 from sbomify_action.augmentation import (
@@ -2251,9 +2252,12 @@ class TestPurlVersionUpdate:
             component_version="2.0.0",
         )
 
-        # Verify version is updated and no PURL is added
+        # Verify version is updated and a generic PURL fallback is set
         assert enriched_bom.metadata.component.version == "2.0.0"
-        assert enriched_bom.metadata.component.purl is None
+        assert enriched_bom.metadata.component.purl is not None
+        purl_str = str(enriched_bom.metadata.component.purl)
+        assert "pkg:generic/test-app" in purl_str
+        assert "2.0.0" in purl_str
 
 
 class TestSpdxJsonPurlVersionUpdate:
@@ -2926,3 +2930,784 @@ class TestDocumentDescribesRoundTrip:
             if r["relationshipType"] == "DESCRIBES" and r["spdxElementId"] == "SPDXRef-DOCUMENT"
         ]
         assert len(describes_rels) >= 1
+
+
+class TestRootComponentPURL:
+    """Tests for root component PURL fallback in augment_cyclonedx_sbom."""
+
+    def test_root_gets_purl_when_missing(self):
+        """Root component without PURL should get pkg:generic/<name>@<version>."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="My App", version="1.0.0", type=ComponentType.APPLICATION)
+
+        augment_cyclonedx_sbom(bom, {}, component_name="My App", component_version="1.0.0")
+
+        assert bom.metadata.component.purl is not None
+        purl_str = str(bom.metadata.component.purl)
+        assert "pkg:generic/my-app" in purl_str
+        assert "1.0.0" in purl_str
+
+    def test_path_name_sanitized(self):
+        """File path names should be sanitized to valid PURL names."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="/home/user/project/uv.lock", version="1.0", type=ComponentType.APPLICATION
+        )
+
+        # Don't pass component_name so the path name is used for PURL
+        augment_cyclonedx_sbom(bom, {})
+
+        purl_str = str(bom.metadata.component.purl)
+        assert "pkg:generic/uv.lock" in purl_str
+        # No slashes in the PURL name
+        name_part = purl_str.split("pkg:generic/")[1].split("@")[0]
+        assert "/" not in name_part
+
+    def test_existing_purl_not_overwritten(self):
+        """Root component with existing PURL should not be overwritten."""
+        from packageurl import PackageURL
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="My App",
+            version="1.0.0",
+            type=ComponentType.APPLICATION,
+            purl=PackageURL(type="pypi", name="my-app", version="1.0.0"),
+        )
+
+        augment_cyclonedx_sbom(bom, {}, component_version="1.0.0")
+
+        assert str(bom.metadata.component.purl) == "pkg:pypi/my-app@1.0.0"
+
+    # --- Real-world root component name fixtures from each generator/ecosystem ---
+    # These are the actual root component names that cyclonedx-py, cdxgen, trivy,
+    # syft, and cargo-cyclonedx produce for each supported lockfile type.
+    # See: sbomify_action/_generation/utils.py for the full list.
+
+    @pytest.mark.parametrize(
+        "root_name,expected_name_part",
+        [
+            # Python ecosystems
+            ("requirements.txt", "requirements.txt"),
+            ("/path/to/requirements.txt", "requirements.txt"),
+            ("Pipfile.lock", "pipfile.lock"),
+            ("poetry.lock", "poetry.lock"),
+            ("pyproject.toml", "pyproject.toml"),
+            ("uv.lock", "uv.lock"),
+            # Rust
+            ("Cargo.lock", "cargo.lock"),
+            # JavaScript
+            ("package.json", "package.json"),
+            ("package-lock.json", "package-lock.json"),
+            ("yarn.lock", "yarn.lock"),
+            ("pnpm-lock.yaml", "pnpm-lock.yaml"),
+            ("bun.lock", "bun.lock"),
+            # Ruby
+            ("Gemfile.lock", "gemfile.lock"),
+            # Go
+            ("go.mod", "go.mod"),
+            ("go.sum", "go.sum"),
+            # Dart
+            ("pubspec.lock", "pubspec.lock"),
+            # C/C++
+            ("conan.lock", "conan.lock"),
+            # Java
+            ("pom.xml", "pom.xml"),
+            ("build.gradle", "build.gradle"),
+            ("build.gradle.kts", "build.gradle.kts"),
+            ("gradle.lockfile", "gradle.lockfile"),
+            # PHP
+            ("composer.json", "composer.json"),
+            ("composer.lock", "composer.lock"),
+            # .NET
+            ("packages.lock.json", "packages.lock.json"),
+            # Swift
+            ("Package.swift", "package.swift"),
+            ("Package.resolved", "package.resolved"),
+            # Elixir
+            ("mix.lock", "mix.lock"),
+            # Scala
+            ("build.sbt", "build.sbt"),
+            # Terraform (leading dot is preserved; `terraform.lock.hcl` is a substring of the result)
+            (".terraform.lock.hcl", "terraform.lock.hcl"),
+        ],
+    )
+    def test_root_purl_from_lockfile_name(self, root_name, expected_name_part):
+        """Root component names from real lockfiles should produce valid generic PURLs."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name=root_name, version="1.0.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+
+        assert bom.metadata.component.purl is not None, f"PURL not set for {root_name}"
+        purl_str = str(bom.metadata.component.purl)
+        assert purl_str.startswith("pkg:generic/"), f"Unexpected PURL for {root_name}: {purl_str}"
+        # Name must be sanitized (lowercase, no slashes)
+        name_part = purl_str.split("pkg:generic/")[1].split("@")[0]
+        assert "/" not in name_part
+        assert "\\" not in name_part
+        assert name_part == name_part.lower()
+        assert expected_name_part in name_part
+
+    @pytest.mark.parametrize(
+        "root_name",
+        [
+            # Absolute paths (common from syft, cdxgen with absolute input)
+            "/home/user/myapp/Cargo.lock",
+            "/repo/go.mod",
+            "/Users/dev/project/pubspec.lock",
+            # Relative paths (common from cyclonedx-py with -i)
+            "./requirements.txt",
+            "./subdir/pyproject.toml",
+            # Windows paths
+            r"C:\Users\dev\project\package.json",
+            r"C:\repo\pom.xml",
+            # Monorepo subdirectories
+            "backend/go.mod",
+            "frontend/package.json",
+            "services/auth/Gemfile.lock",
+        ],
+    )
+    def test_root_purl_from_path_name(self, root_name):
+        """Path-like root component names should be sanitized to the basename."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name=root_name, version="1.0.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+
+        assert bom.metadata.component.purl is not None
+        purl_str = str(bom.metadata.component.purl)
+        name_part = purl_str.split("pkg:generic/")[1].split("@")[0]
+        # No path separators should leak through
+        assert "/" not in name_part
+        assert "\\" not in name_part
+        assert ":" not in name_part  # no drive letters
+
+    @pytest.mark.parametrize(
+        "root_name,expected_substring",
+        [
+            # Real project names from each ecosystem
+            ("my-python-app", "my-python-app"),
+            ("MyRustProject", "myrustproject"),  # lowercased
+            ("com.example.MyApp", "com.example.myapp"),
+            ("@scope/npm-package", "scope-npm-package"),  # @ becomes -
+            ("my_python_app", "my_python_app"),  # underscores are valid PURL name chars — preserved
+            ("project with spaces", "project-with-spaces"),
+            ("weird!@#$%name", "weird-name"),  # multiple invalid chars collapsed
+            ("name.with.dots", "name.with.dots"),
+            ("UPPERCASE-NAME", "uppercase-name"),
+        ],
+    )
+    def test_root_purl_from_project_name(self, root_name, expected_substring):
+        """Typical project names should be sanitized into valid PURL names."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name=root_name, version="1.0.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+
+        assert bom.metadata.component.purl is not None
+        purl_str = str(bom.metadata.component.purl)
+        name_part = purl_str.split("pkg:generic/")[1].split("@")[0]
+        assert expected_substring in name_part
+        # Verify it's a valid PURL name (no invalid chars)
+        import re as _re
+
+        assert _re.match(r"^[a-z0-9._-]+$", name_part), f"Invalid PURL name chars: {name_part!r}"
+
+    def test_empty_name_no_purl_added(self):
+        """Root component with empty name should not get a PURL (can't sanitize)."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="x", version="1.0", type=ComponentType.APPLICATION)
+        # Set name to empty after construction (Component requires non-empty name)
+        bom.metadata.component.name = ""
+        augment_cyclonedx_sbom(bom, {})
+
+        # Should gracefully skip — no PURL added
+        assert bom.metadata.component.purl is None
+
+    def test_name_of_only_invalid_chars_no_purl(self):
+        """Root component name with only invalid chars should not get a PURL."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="!!!@@@###", version="1.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+
+        # All chars got stripped, result would be empty → no PURL
+        assert bom.metadata.component.purl is None
+
+    def test_root_purl_no_version(self):
+        """Root component without version should still get a PURL (no @version)."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="my-app", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+
+        assert bom.metadata.component.purl is not None
+        purl_str = str(bom.metadata.component.purl)
+        assert purl_str == "pkg:generic/my-app" or purl_str.startswith("pkg:generic/my-app")
+
+
+class TestSanitizeNameForPurl:
+    """Direct unit tests for _sanitize_name_for_purl helper."""
+
+    @pytest.mark.parametrize(
+        "input_name,expected",
+        [
+            # Simple names
+            ("myapp", "myapp"),
+            ("MyApp", "myapp"),
+            ("UPPER", "upper"),
+            # Dots and dashes
+            ("my-app", "my-app"),
+            ("my.app", "my.app"),
+            ("my_app", "my_app"),
+            ("name.with.many.dots", "name.with.many.dots"),
+            # Path stripping — Unix
+            ("/home/user/project", "project"),
+            ("/a/b/c/d", "d"),
+            ("./relative", "relative"),
+            ("../parent", "parent"),
+            # Path stripping — Windows
+            (r"C:\Users\dev\app", "app"),
+            (r"D:\project", "project"),
+            (r"\\server\share\file.lock", "file.lock"),
+            # Mixed separators
+            ("unix/path\\to/file", "file"),
+            # npm scoped — scope preserved
+            ("@scope/pkg", "scope-pkg"),
+            ("@my-org/my-pkg", "my-org-my-pkg"),
+            ("@TypeScript/types", "typescript-types"),
+            # Single @ without / is not a scope
+            ("@notascope", "notascope"),
+            # Lockfile names
+            ("uv.lock", "uv.lock"),
+            ("Cargo.lock", "cargo.lock"),
+            ("package-lock.json", "package-lock.json"),
+            # Special chars collapsed to single dash
+            ("a!b", "a-b"),
+            ("a!!!b", "a-b"),
+            ("a!@#$b", "a-b"),
+            ("a   b", "a-b"),  # spaces collapsed
+            ("a\tb", "a-b"),  # tabs
+            # Leading/trailing dashes stripped
+            ("-leading", "leading"),
+            ("trailing-", "trailing"),
+            ("--both--", "both"),
+            # Unicode — non-ASCII stripped
+            ("café", "caf"),
+            ("日本", None),  # all stripped → None
+            # Edge cases
+            ("", None),
+            (" ", None),
+            ("!!!", None),
+            ("-", None),
+            ("---", None),
+            (".", "."),  # single dot is valid
+            ("..", ".."),  # double dot (path traversal) survives but is harmless in PURL
+        ],
+    )
+    def test_sanitize_name(self, input_name, expected):
+        from sbomify_action.augmentation import _sanitize_name_for_purl
+
+        assert _sanitize_name_for_purl(input_name) == expected
+
+
+class TestRootComponentPURLAdvanced:
+    """Advanced edge cases for root component PURL."""
+
+    def test_no_metadata_component_no_crash(self):
+        """BOM without metadata.component should not crash."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        # No metadata.component set
+        augment_cyclonedx_sbom(bom, {})
+        # Should not crash
+
+    def test_oci_container_purl_preserved(self):
+        """Container SBOMs with pkg:oci PURLs must never be overwritten."""
+        from packageurl import PackageURL
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="almalinux",
+            version="8",
+            type=ComponentType.CONTAINER,
+            purl=PackageURL.from_string("pkg:oci/almalinux@sha256:abc123"),
+        )
+        augment_cyclonedx_sbom(bom, {})
+        assert "pkg:oci/" in str(bom.metadata.component.purl)
+
+    def test_maven_purl_preserved(self):
+        """Existing Maven PURLs must not be overwritten."""
+        from packageurl import PackageURL
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="my-app",
+            version="1.0.0",
+            type=ComponentType.APPLICATION,
+            purl=PackageURL(type="maven", namespace="com.example", name="my-app", version="1.0.0"),
+        )
+        augment_cyclonedx_sbom(bom, {})
+        assert str(bom.metadata.component.purl).startswith("pkg:maven/")
+
+    def test_deb_purl_preserved(self):
+        """Existing deb PURLs must not be overwritten."""
+        from packageurl import PackageURL
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="bash",
+            version="5.2",
+            type=ComponentType.APPLICATION,
+            purl=PackageURL(type="deb", namespace="debian", name="bash", version="5.2"),
+        )
+        augment_cyclonedx_sbom(bom, {})
+        assert str(bom.metadata.component.purl).startswith("pkg:deb/")
+
+    def test_existing_generic_purl_preserved(self):
+        """Components with an existing generic PURL should keep it (no overwrite)."""
+        from packageurl import PackageURL
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="myapp",
+            version="1.0.0",
+            type=ComponentType.APPLICATION,
+            purl=PackageURL(type="generic", name="myapp", version="1.0.0"),
+        )
+        augment_cyclonedx_sbom(bom, {}, component_version="1.0.0")
+        # PURL already set → not changed
+        assert str(bom.metadata.component.purl) == "pkg:generic/myapp@1.0.0"
+
+    def test_very_long_name_sanitized(self):
+        """Long names should still produce a valid PURL."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        long_name = "a" * 500
+        bom = Bom()
+        bom.metadata.component = Component(name=long_name, version="1.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+        assert bom.metadata.component.purl is not None
+        assert len(str(bom.metadata.component.purl)) > 0
+
+    def test_name_with_percent_encoded_chars(self):
+        """URL-encoded chars in name should be handled."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="my%20app", version="1.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+        # % is not valid in PURL name → becomes dash
+        purl_str = str(bom.metadata.component.purl)
+        assert "%" not in purl_str.split("pkg:generic/")[1].split("@")[0]
+
+    def test_name_with_query_string_chars(self):
+        """Query string characters should be sanitized."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="app?foo=bar", version="1.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+        purl_str = str(bom.metadata.component.purl)
+        name_part = purl_str.split("pkg:generic/")[1].split("@")[0]
+        assert "?" not in name_part
+        assert "=" not in name_part
+
+    def test_name_with_colon(self):
+        """Colons (used in container refs) should be sanitized."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="debian:12", version="", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+        purl_str = str(bom.metadata.component.purl)
+        name_part = (
+            purl_str.split("pkg:generic/")[1].split("@")[0]
+            if "@" in purl_str.split("pkg:generic/")[1]
+            else purl_str.split("pkg:generic/")[1]
+        )
+        assert ":" not in name_part
+
+    def test_version_with_special_chars_preserved(self):
+        """Version strings can contain characters that PURL accepts."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="app", version="1.0.0-alpha+build.1", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+        assert bom.metadata.component.purl is not None
+        assert bom.metadata.component.purl.name == "app"
+        assert bom.metadata.component.purl.version == "1.0.0-alpha+build.1"
+
+    @pytest.mark.parametrize(
+        "component_type",
+        [
+            ComponentType.APPLICATION,
+            ComponentType.LIBRARY,
+            ComponentType.FRAMEWORK,
+            ComponentType.OPERATING_SYSTEM,
+            ComponentType.DEVICE,
+            ComponentType.FIRMWARE,
+            ComponentType.FILE,
+        ],
+    )
+    def test_works_for_any_component_type(self, component_type):
+        """Root PURL should be added regardless of component type."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="my-app", version="1.0", type=component_type)
+        augment_cyclonedx_sbom(bom, {})
+        assert bom.metadata.component.purl is not None
+
+
+class TestRootComponentPURLEndToEnd:
+    """End-to-end tests simulating real SBOM generator outputs."""
+
+    @pytest.mark.parametrize(
+        "generator,root_name,expected_purl_prefix",
+        [
+            # cyclonedx-py
+            ("cyclonedx-py", "./requirements.txt", "pkg:generic/requirements.txt"),
+            ("cyclonedx-py", "requirements.txt", "pkg:generic/requirements.txt"),
+            ("cyclonedx-py", "Pipfile.lock", "pkg:generic/pipfile.lock"),
+            ("cyclonedx-py", "poetry.lock", "pkg:generic/poetry.lock"),
+            ("cyclonedx-py", "pyproject.toml", "pkg:generic/pyproject.toml"),
+            # cdxgen (varied inputs)
+            ("cdxgen", "my-npm-app", "pkg:generic/my-npm-app"),
+            ("cdxgen", "com.example.MyApp", "pkg:generic/com.example.myapp"),
+            ("cdxgen", "go.mod", "pkg:generic/go.mod"),
+            # cargo-cyclonedx
+            ("cargo-cdx", "my-rust-crate", "pkg:generic/my-rust-crate"),
+            ("cargo-cdx", "crates-rust_lib", "pkg:generic/crates-rust_lib"),
+            # syft (container or path-based)
+            ("syft", "/srv/app/go.mod", "pkg:generic/go.mod"),
+            ("syft", "alpine-container", "pkg:generic/alpine-container"),
+            # trivy (lockfile scanning)
+            ("trivy", "poetry.lock", "pkg:generic/poetry.lock"),
+        ],
+    )
+    def test_generator_root_produces_valid_purl(self, generator, root_name, expected_purl_prefix):
+        """Each generator's typical root component name should produce a valid PURL."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name=root_name, version="1.0.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+        assert bom.metadata.component.purl is not None
+        purl_str = str(bom.metadata.component.purl)
+        assert expected_purl_prefix in purl_str, f"Generator {generator}: got {purl_str}"
+
+
+class TestRootComponentPURLNoOrphans:
+    """Verify that adding root component PURL does not create dependency graph orphans.
+
+    Addresses @vpetersson's review concern: "Be careful with orphans when you
+    alter the root component. You might need to reconstruct the tree."
+
+    Our fallback only sets component.purl (never touches bom_ref), so the
+    dependency graph (which references bom_ref values) should remain intact.
+    """
+
+    def test_bom_ref_unchanged_by_purl_addition(self):
+        """Setting the root PURL must not modify its bom_ref."""
+        from cyclonedx.model.bom_ref import BomRef
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        original_bom_ref = "root-app-original-ref"
+        bom.metadata.component = Component(
+            name="my-app",
+            version="1.0.0",
+            type=ComponentType.APPLICATION,
+            bom_ref=BomRef(original_bom_ref),
+        )
+        augment_cyclonedx_sbom(bom, {})
+
+        assert bom.metadata.component.purl is not None
+        # bom_ref must be untouched
+        assert bom.metadata.component.bom_ref.value == original_bom_ref
+
+    def test_dependency_graph_intact_after_purl_addition(self):
+        """Adding root PURL must not orphan any dependencies."""
+        from cyclonedx.model.bom_ref import BomRef
+        from cyclonedx.model.dependency import Dependency
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        root_ref = BomRef("root-ref")
+        dep_ref = BomRef("pkg:pypi/requests@2.31.0")
+        bom.metadata.component = Component(
+            name="my-app", version="1.0", type=ComponentType.APPLICATION, bom_ref=root_ref
+        )
+        # Add a component that's depended on
+        dep_component = Component(
+            name="requests",
+            version="2.31.0",
+            type=ComponentType.LIBRARY,
+            bom_ref=dep_ref,
+        )
+        bom.components.add(dep_component)
+        # Root depends on requests
+        root_dep = Dependency(ref=root_ref)
+        root_dep.dependencies.add(Dependency(ref=dep_ref))
+        bom.dependencies.add(root_dep)
+
+        augment_cyclonedx_sbom(bom, {})
+
+        # Root PURL was added
+        assert bom.metadata.component.purl is not None
+        # Dependency graph references are still intact
+        dep_refs = {d.ref.value for d in bom.dependencies}
+        assert root_ref.value in dep_refs or any(d.ref.value == root_ref.value for d in bom.dependencies)
+
+    def test_components_list_unchanged_by_purl_addition(self):
+        """Adding root PURL must not add/remove/modify any components."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="my-app", version="1.0", type=ComponentType.APPLICATION)
+        dep1 = Component(name="dep1", version="1.0", type=ComponentType.LIBRARY)
+        dep2 = Component(name="dep2", version="2.0", type=ComponentType.LIBRARY)
+        bom.components.add(dep1)
+        bom.components.add(dep2)
+        original_count = len(bom.components)
+        original_names = {c.name for c in bom.components}
+
+        augment_cyclonedx_sbom(bom, {})
+
+        assert len(bom.components) == original_count
+        assert {c.name for c in bom.components} == original_names
+
+    def test_purl_addition_does_not_affect_existing_component_purls(self):
+        """Adding root PURL must not modify other components' PURLs."""
+        from packageurl import PackageURL
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="my-app", version="1.0", type=ComponentType.APPLICATION)
+        dep = Component(
+            name="requests",
+            version="2.31.0",
+            type=ComponentType.LIBRARY,
+            purl=PackageURL(type="pypi", name="requests", version="2.31.0"),
+        )
+        bom.components.add(dep)
+        original_dep_purl = str(dep.purl)
+
+        augment_cyclonedx_sbom(bom, {})
+
+        dep_in_bom = next(c for c in bom.components if c.name == "requests")
+        assert str(dep_in_bom.purl) == original_dep_purl
+
+    def test_purl_addition_with_complex_dependency_tree(self):
+        """Complex nested dependency tree must remain valid after root PURL addition."""
+        from cyclonedx.model.bom_ref import BomRef
+        from cyclonedx.model.dependency import Dependency
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+        from sbomify_action.serialization import serialize_cyclonedx_bom
+
+        bom = Bom()
+        root_ref = BomRef("root")
+        a_ref = BomRef("pkg:pypi/a@1.0")
+        b_ref = BomRef("pkg:pypi/b@1.0")
+        c_ref = BomRef("pkg:pypi/c@1.0")
+
+        bom.metadata.component = Component(
+            name="my-app", version="1.0", type=ComponentType.APPLICATION, bom_ref=root_ref
+        )
+        bom.components.add(Component(name="a", version="1.0", type=ComponentType.LIBRARY, bom_ref=a_ref))
+        bom.components.add(Component(name="b", version="1.0", type=ComponentType.LIBRARY, bom_ref=b_ref))
+        bom.components.add(Component(name="c", version="1.0", type=ComponentType.LIBRARY, bom_ref=c_ref))
+        # root -> a -> b -> c
+        root_dep = Dependency(ref=root_ref)
+        root_dep.dependencies.add(Dependency(ref=a_ref))
+        bom.dependencies.add(root_dep)
+        a_dep = Dependency(ref=a_ref)
+        a_dep.dependencies.add(Dependency(ref=b_ref))
+        bom.dependencies.add(a_dep)
+        b_dep = Dependency(ref=b_ref)
+        b_dep.dependencies.add(Dependency(ref=c_ref))
+        bom.dependencies.add(b_dep)
+
+        augment_cyclonedx_sbom(bom, {})
+
+        # Should serialize successfully (would fail if dependency graph is broken)
+        result = serialize_cyclonedx_bom(bom, "1.5")
+        data = json.loads(result)
+        assert "components" in data
+        assert len(data["components"]) == 3
+        # Root has PURL now
+        assert data["metadata"]["component"].get("purl", "").startswith("pkg:generic/")
+
+    def test_preserves_services_section(self):
+        """SBOMs with services should not lose the services section."""
+        from cyclonedx.model.service import Service
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="my-app", version="1.0", type=ComponentType.APPLICATION)
+        bom.services.add(Service(name="my-service", version="1.0"))
+        original_service_count = len(bom.services)
+
+        augment_cyclonedx_sbom(bom, {})
+
+        assert len(bom.services) == original_service_count
+
+
+class TestSpdxGenericFallbackPURL:
+    """Tests for SPDX generic fallback PURL (issue coverage).
+
+    When no VCS URL is available or _construct_purl_from_vcs returns None,
+    _ensure_spdx_main_package_purl should fall back to pkg:generic/<name>@<version>
+    with ExternalPackageRefCategory.PACKAGE_MANAGER (vs OTHER for VCS-derived).
+    """
+
+    def _make_document(self, pkg_name: str = "my-app", pkg_version: str = "1.0.0"):
+        """Create a minimal SPDX document with a single main package."""
+        from spdx_tools.spdx.model import (
+            CreationInfo,
+            Document,
+            Package,
+        )
+
+        doc = Document(
+            creation_info=CreationInfo(
+                spdx_version="SPDX-2.3",
+                spdx_id="SPDXRef-DOCUMENT",
+                name="test-document",
+                document_namespace="https://example.com/test",
+                creators=[Actor(actor_type=ActorType.TOOL, name="test-tool")],
+                created=__import__("datetime").datetime(2026, 1, 1),
+            )
+        )
+        doc.packages = [
+            Package(
+                spdx_id="SPDXRef-Package",
+                name=pkg_name,
+                version=pkg_version,
+                download_location="NOASSERTION",
+            )
+        ]
+        return doc
+
+    def test_generic_fallback_when_no_vcs_url(self):
+        """Missing VCS URL should produce pkg:generic/ PURL with PACKAGE_MANAGER category."""
+        from spdx_tools.spdx.model import ExternalPackageRefCategory
+
+        from sbomify_action.augmentation import _ensure_spdx_main_package_purl
+
+        doc = self._make_document("my-app", "1.0.0")
+        _ensure_spdx_main_package_purl(doc, {})
+
+        ext_refs = doc.packages[0].external_references
+        purl_refs = [r for r in ext_refs if r.reference_type == "purl"]
+        assert len(purl_refs) == 1
+        assert purl_refs[0].locator == "pkg:generic/my-app@1.0.0"
+        assert purl_refs[0].category == ExternalPackageRefCategory.PACKAGE_MANAGER
+
+    def test_generic_fallback_when_vcs_url_unparseable(self):
+        """Unparseable VCS URL should fall through to generic fallback."""
+        from spdx_tools.spdx.model import ExternalPackageRefCategory
+
+        from sbomify_action.augmentation import _ensure_spdx_main_package_purl
+
+        doc = self._make_document("my-app", "2.0.0")
+        # Non-github/gitlab/bitbucket URL — _construct_purl_from_vcs returns None
+        _ensure_spdx_main_package_purl(doc, {"vcs_url": "https://example.com/not-a-vcs"})
+
+        ext_refs = doc.packages[0].external_references
+        purl_refs = [r for r in ext_refs if r.reference_type == "purl"]
+        assert len(purl_refs) == 1
+        assert purl_refs[0].locator == "pkg:generic/my-app@2.0.0"
+        assert purl_refs[0].category == ExternalPackageRefCategory.PACKAGE_MANAGER
+
+    def test_vcs_purl_uses_other_category(self):
+        """VCS-derived PURL should use ExternalPackageRefCategory.OTHER."""
+        from spdx_tools.spdx.model import ExternalPackageRefCategory
+
+        from sbomify_action.augmentation import _ensure_spdx_main_package_purl
+
+        doc = self._make_document("my-app", "1.0.0")
+        _ensure_spdx_main_package_purl(
+            doc,
+            {
+                "vcs_url": "https://github.com/example/my-app",
+                "vcs_commit_sha": "abc123def456",
+            },
+        )
+
+        ext_refs = doc.packages[0].external_references
+        purl_refs = [r for r in ext_refs if r.reference_type == "purl"]
+        assert len(purl_refs) == 1
+        assert "pkg:github/example/my-app" in purl_refs[0].locator
+        assert purl_refs[0].category == ExternalPackageRefCategory.OTHER
+
+    def test_existing_purl_not_overwritten(self):
+        """Package with existing PURL externalRef should not get another one."""
+        from spdx_tools.spdx.model import ExternalPackageRef, ExternalPackageRefCategory
+
+        from sbomify_action.augmentation import _ensure_spdx_main_package_purl
+
+        doc = self._make_document("my-app", "1.0.0")
+        existing_ref = ExternalPackageRef(
+            category=ExternalPackageRefCategory.PACKAGE_MANAGER,
+            reference_type="purl",
+            locator="pkg:pypi/my-app@1.0.0",
+        )
+        doc.packages[0].external_references = [existing_ref]
+
+        _ensure_spdx_main_package_purl(doc, {})
+
+        purl_refs = [r for r in doc.packages[0].external_references if r.reference_type == "purl"]
+        assert len(purl_refs) == 1
+        assert purl_refs[0].locator == "pkg:pypi/my-app@1.0.0"
+
+    def test_no_packages_no_crash(self):
+        """Document with no packages should not crash."""
+        from sbomify_action.augmentation import _ensure_spdx_main_package_purl
+
+        doc = self._make_document()
+        doc.packages = []
+
+        _ensure_spdx_main_package_purl(doc, {})  # Should not raise
+
+    def test_unsanitizable_name_no_purl_added(self):
+        """Package with unsanitizable name should not get a generic PURL."""
+        from sbomify_action.augmentation import _ensure_spdx_main_package_purl
+
+        doc = self._make_document("!!!", "1.0.0")
+
+        _ensure_spdx_main_package_purl(doc, {})
+
+        purl_refs = [r for r in doc.packages[0].external_references if r.reference_type == "purl"]
+        # Name is all invalid chars → sanitizer returns None → no PURL added
+        assert len(purl_refs) == 0

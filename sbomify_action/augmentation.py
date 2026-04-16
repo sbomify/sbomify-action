@@ -31,6 +31,7 @@ Version support:
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -156,6 +157,31 @@ def _propagate_supplier_to_lockfile_packages(document: Document, supplier: Actor
 
     if propagated_count > 0:
         logger.info(f"Propagated supplier to {propagated_count} lockfile package(s)")
+
+
+def _sanitize_name_for_purl(name: str) -> str | None:
+    """Sanitize a component name for use as a PURL name.
+
+    Handles three input shapes produced by SBOM generators:
+    1. File paths (e.g. ``/home/user/project/uv.lock``, ``backend/go.mod``,
+       Windows paths) — extract the basename.
+    2. npm scoped names (e.g. ``@scope/name``) — replace the ``@`` and ``/``
+       with dashes to preserve the scope information.
+    3. Simple names — lowercase and replace invalid PURL chars with dashes.
+
+    Returns None if the result is empty after sanitization.
+    """
+    # Treat as a path only when it contains a path separator AND does not look
+    # like an npm scoped name. Scoped names start with ``@`` and have exactly
+    # one slash separating scope and package.
+    is_scoped_name = name.startswith("@") and name.count("/") == 1 and "\\" not in name
+    if not is_scoped_name and ("/" in name or "\\" in name):
+        name = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    # Replace invalid chars with dashes, then collapse any resulting (or
+    # pre-existing) runs of dashes to a single dash.
+    safe = re.sub(r"[^a-z0-9._-]+", "-", name.lower())
+    safe = re.sub(r"-+", "-", safe).strip("-")
+    return safe or None
 
 
 def _update_component_purl_version(component: Component, new_version: str) -> bool:
@@ -790,12 +816,26 @@ def augment_cyclonedx_sbom(
                 )
             # Always update PURL to repair possible version/PURL mismatch
             _update_component_purl_version(bom.metadata.component, component_version)
+
         else:
             # Create component if it doesn't exist
             bom.metadata.component = Component(
                 name=component_name or "unknown", type=ComponentType.APPLICATION, version=component_version
             )
             logger.info(f"Set component version from configuration: '{component_version}'")
+
+    # Ensure root component has a PURL for NTIA unique-identifiers compliance.
+    # cyclonedx-py creates root components from lockfile paths without PURLs.
+    if hasattr(bom.metadata, "component") and bom.metadata.component and not bom.metadata.component.purl:
+        comp = bom.metadata.component
+        safe_name = _sanitize_name_for_purl(comp.name or "")
+        if safe_name:
+            try:
+                comp.purl = PackageURL(type="generic", name=safe_name, version=comp.version or None)
+                logger.info(f"Set root component PURL: {comp.purl}")
+                audit_trail.record_augmentation("purl", str(comp.purl), source="generic-fallback")
+            except Exception as e:
+                logger.debug(f"Failed to create PURL for root component '{safe_name}': {e}")
 
     # Add lifecycle phase if present (CISA 2025 Generation Context requirement)
     # See: https://sbomify.com/compliance/cisa-minimum-elements/
@@ -985,8 +1025,6 @@ def _sanitize_license_ref_id(name: str) -> str:
     Raises:
         ValueError: If name cannot be sanitized to valid identifier
     """
-    import re
-
     if not name or not name.strip():
         raise ValueError("License name cannot be empty")
 
@@ -1598,10 +1636,12 @@ def _ensure_spdx_main_package_purl(document: Document, augmentation_data: dict[s
     Ensure the SPDX main package has a PURL for NTIA compliance.
 
     NTIA Minimum Elements require a unique identifier (PURL) for the main component.
-    This function checks if one exists and constructs one from VCS info if possible.
+    This function checks if one exists and constructs one using two strategies:
+    1. From VCS info (github/gitlab/bitbucket) — category: OTHER
+    2. Generic fallback from sanitized package name — category: PACKAGE_MANAGER
 
     The PURL is added as an externalRef with:
-    - category: OTHER (VCS-based PURLs like github/gitlab/bitbucket)
+    - category: OTHER (VCS-based) or PACKAGE_MANAGER (generic fallback)
     - referenceType: purl
     - locator: the PURL string
 
@@ -1630,16 +1670,31 @@ def _ensure_spdx_main_package_purl(document: Document, augmentation_data: dict[s
     vcs_url: str | None = augmentation_data.get("vcs_url")
     vcs_commit_sha: str | None = augmentation_data.get("vcs_commit_sha")
 
-    if not vcs_url:
-        return
+    purl = None
+    purl_source = "generic-fallback"
 
-    purl = _construct_purl_from_vcs(vcs_url, vcs_commit_sha)
+    if vcs_url:
+        purl = _construct_purl_from_vcs(vcs_url, vcs_commit_sha)
+        if purl:
+            purl_source = "vcs"
+
+    # Fallback: create a generic PURL if VCS didn't produce one
+    if not purl:
+        safe_name = _sanitize_name_for_purl(main_package.name or "")
+        if safe_name:
+            try:
+                purl = str(PackageURL(type="generic", name=safe_name, version=main_package.version or None))
+            except Exception as e:
+                logger.debug(f"Failed to construct generic PURL for SPDX package '{safe_name}': {e}")
+                purl = None
 
     if purl:
-        # VCS-based PURLs (github, gitlab, bitbucket) use OTHER category
-        # since they're not traditional package managers
+        # Use PACKAGE_MANAGER for generic PURLs, OTHER for VCS-based
+        category = (
+            ExternalPackageRefCategory.OTHER if purl_source == "vcs" else ExternalPackageRefCategory.PACKAGE_MANAGER
+        )
         ext_ref = ExternalPackageRef(
-            category=ExternalPackageRefCategory.OTHER,
+            category=category,
             reference_type="purl",
             locator=purl,
             comment="Package URL for unique identification (NTIA Minimum Elements)",
@@ -1648,7 +1703,7 @@ def _ensure_spdx_main_package_purl(document: Document, augmentation_data: dict[s
 
         # Record to audit trail
         audit_trail = get_audit_trail()
-        audit_trail.record_augmentation("purl", purl, source="vcs")
+        audit_trail.record_augmentation("purl", purl, source=purl_source)
         logger.info(f"Added PURL to SPDX main package: {purl}")
 
 
