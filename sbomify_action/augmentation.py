@@ -162,12 +162,26 @@ def _propagate_supplier_to_lockfile_packages(document: Document, supplier: Actor
 def _sanitize_name_for_purl(name: str) -> str | None:
     """Sanitize a component name for use as a PURL name.
 
-    Extracts basename from file paths, lowercases, replaces invalid chars.
-    Returns None if the result is empty.
+    Handles three input shapes produced by SBOM generators:
+    1. File paths (e.g. ``/home/user/project/uv.lock``, ``backend/go.mod``,
+       Windows paths) — extract the basename.
+    2. npm scoped names (e.g. ``@scope/name``) — replace the ``@`` and ``/``
+       with dashes to preserve the scope information.
+    3. Simple names — lowercase and replace invalid PURL chars with dashes.
+
+    Returns None if the result is empty after sanitization.
     """
-    if "/" in name or "\\" in name:
+    # Treat as a path only when it contains a path separator AND does not look
+    # like an npm scoped name. Scoped names start with ``@`` and have exactly
+    # one slash separating scope and package.
+    is_scoped_name = name.startswith("@") and name.count("/") == 1 and "\\" not in name
+    if not is_scoped_name and ("/" in name or "\\" in name):
         name = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
     safe = re.sub(r"[^a-z0-9._-]", "-", name.lower()).strip("-")
+    # Collapse consecutive dashes that result from stripping multiple
+    # invalid chars in a row (e.g. "weird!@#$%name" -> "weird-----name" -> "weird-name").
+    while "--" in safe:
+        safe = safe.replace("--", "-")
     return safe or None
 
 

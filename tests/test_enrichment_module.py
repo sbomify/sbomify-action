@@ -2809,3 +2809,177 @@ class TestRootComponentPURL:
         augment_cyclonedx_sbom(bom, {}, component_version="1.0.0")
 
         assert str(bom.metadata.component.purl) == "pkg:pypi/my-app@1.0.0"
+
+    # --- Real-world root component name fixtures from each generator/ecosystem ---
+    # These are the actual root component names that cyclonedx-py, cdxgen, trivy,
+    # syft, and cargo-cyclonedx produce for each supported lockfile type.
+    # See: sbomify_action/_generation/utils.py for the full list.
+
+    @pytest.mark.parametrize(
+        "root_name,expected_name_part",
+        [
+            # Python ecosystems
+            ("requirements.txt", "requirements.txt"),
+            ("/path/to/requirements.txt", "requirements.txt"),
+            ("Pipfile.lock", "pipfile.lock"),
+            ("poetry.lock", "poetry.lock"),
+            ("pyproject.toml", "pyproject.toml"),
+            ("uv.lock", "uv.lock"),
+            # Rust
+            ("Cargo.lock", "cargo.lock"),
+            # JavaScript
+            ("package.json", "package.json"),
+            ("package-lock.json", "package-lock.json"),
+            ("yarn.lock", "yarn.lock"),
+            ("pnpm-lock.yaml", "pnpm-lock.yaml"),
+            ("bun.lock", "bun.lock"),
+            # Ruby
+            ("Gemfile.lock", "gemfile.lock"),
+            # Go
+            ("go.mod", "go.mod"),
+            ("go.sum", "go.sum"),
+            # Dart
+            ("pubspec.lock", "pubspec.lock"),
+            # C/C++
+            ("conan.lock", "conan.lock"),
+            # Java
+            ("pom.xml", "pom.xml"),
+            ("build.gradle", "build.gradle"),
+            ("build.gradle.kts", "build.gradle.kts"),
+            ("gradle.lockfile", "gradle.lockfile"),
+            # PHP
+            ("composer.json", "composer.json"),
+            ("composer.lock", "composer.lock"),
+            # .NET
+            ("packages.lock.json", "packages.lock.json"),
+            # Swift
+            ("Package.swift", "package.swift"),
+            ("Package.resolved", "package.resolved"),
+            # Elixir
+            ("mix.lock", "mix.lock"),
+            # Scala
+            ("build.sbt", "build.sbt"),
+            # Terraform (hidden file — leading dot stripped after sanitization)
+            (".terraform.lock.hcl", "terraform.lock.hcl"),
+        ],
+    )
+    def test_root_purl_from_lockfile_name(self, root_name, expected_name_part):
+        """Root component names from real lockfiles should produce valid generic PURLs."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name=root_name, version="1.0.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+
+        assert bom.metadata.component.purl is not None, f"PURL not set for {root_name}"
+        purl_str = str(bom.metadata.component.purl)
+        assert purl_str.startswith("pkg:generic/"), f"Unexpected PURL for {root_name}: {purl_str}"
+        # Name must be sanitized (lowercase, no slashes)
+        name_part = purl_str.split("pkg:generic/")[1].split("@")[0]
+        assert "/" not in name_part
+        assert "\\" not in name_part
+        assert name_part == name_part.lower()
+        assert expected_name_part in name_part
+
+    @pytest.mark.parametrize(
+        "root_name",
+        [
+            # Absolute paths (common from syft, cdxgen with absolute input)
+            "/home/user/myapp/Cargo.lock",
+            "/repo/go.mod",
+            "/Users/dev/project/pubspec.lock",
+            # Relative paths (common from cyclonedx-py with -i)
+            "./requirements.txt",
+            "./subdir/pyproject.toml",
+            # Windows paths
+            r"C:\Users\dev\project\package.json",
+            r"C:\repo\pom.xml",
+            # Monorepo subdirectories
+            "backend/go.mod",
+            "frontend/package.json",
+            "services/auth/Gemfile.lock",
+        ],
+    )
+    def test_root_purl_from_path_name(self, root_name):
+        """Path-like root component names should be sanitized to the basename."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name=root_name, version="1.0.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+
+        assert bom.metadata.component.purl is not None
+        purl_str = str(bom.metadata.component.purl)
+        name_part = purl_str.split("pkg:generic/")[1].split("@")[0]
+        # No path separators should leak through
+        assert "/" not in name_part
+        assert "\\" not in name_part
+        assert ":" not in name_part  # no drive letters
+
+    @pytest.mark.parametrize(
+        "root_name,expected_substring",
+        [
+            # Real project names from each ecosystem
+            ("my-python-app", "my-python-app"),
+            ("MyRustProject", "myrustproject"),  # lowercased
+            ("com.example.MyApp", "com.example.myapp"),
+            ("@scope/npm-package", "scope-npm-package"),  # @ becomes -
+            ("my_python_app", "my_python_app"),  # underscores preserved... or not?
+            ("project with spaces", "project-with-spaces"),
+            ("weird!@#$%name", "weird-name"),  # multiple invalid chars collapsed
+            ("name.with.dots", "name.with.dots"),
+            ("UPPERCASE-NAME", "uppercase-name"),
+        ],
+    )
+    def test_root_purl_from_project_name(self, root_name, expected_substring):
+        """Typical project names should be sanitized into valid PURL names."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name=root_name, version="1.0.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+
+        assert bom.metadata.component.purl is not None
+        purl_str = str(bom.metadata.component.purl)
+        name_part = purl_str.split("pkg:generic/")[1].split("@")[0]
+        assert expected_substring in name_part
+        # Verify it's a valid PURL name (no invalid chars)
+        import re as _re
+
+        assert _re.match(r"^[a-z0-9._-]+$", name_part), f"Invalid PURL name chars: {name_part!r}"
+
+    def test_empty_name_no_purl_added(self):
+        """Root component with empty name should not get a PURL (can't sanitize)."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="x", version="1.0", type=ComponentType.APPLICATION)
+        # Set name to empty after construction (Component requires non-empty name)
+        bom.metadata.component.name = ""
+        augment_cyclonedx_sbom(bom, {})
+
+        # Should gracefully skip — no PURL added
+        assert bom.metadata.component.purl is None
+
+    def test_name_of_only_invalid_chars_no_purl(self):
+        """Root component name with only invalid chars should not get a PURL."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="!!!@@@###", version="1.0", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+
+        # All chars got stripped, result would be empty → no PURL
+        assert bom.metadata.component.purl is None
+
+    def test_root_purl_no_version(self):
+        """Root component without version should still get a PURL (no @version)."""
+        from sbomify_action.augmentation import augment_cyclonedx_sbom
+
+        bom = Bom()
+        bom.metadata.component = Component(name="my-app", type=ComponentType.APPLICATION)
+        augment_cyclonedx_sbom(bom, {})
+
+        assert bom.metadata.component.purl is not None
+        purl_str = str(bom.metadata.component.purl)
+        assert purl_str == "pkg:generic/my-app" or purl_str.startswith("pkg:generic/my-app")
