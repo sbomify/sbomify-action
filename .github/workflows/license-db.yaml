@@ -135,7 +135,7 @@ jobs:
           echo "Uploading to release: $(cat $GITHUB_OUTPUT | grep tag | cut -d= -f2)"
 
       - name: Upload to release
-        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v2
         with:
           files: ${{ matrix.distro }}-${{ matrix.version }}.json.gz
           tag_name: ${{ steps.get_tag.outputs.tag }}
