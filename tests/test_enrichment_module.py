@@ -708,6 +708,85 @@ class TestSourceRegistry:
         priorities = [s.priority for s in sources]
         assert priorities == sorted(priorities)
 
+    def test_early_exit_skips_non_cle_sources_after_ntia_complete(self):
+        """After NTIA fields are filled, non-CLE sources should be skipped."""
+        registry = SourceRegistry()
+        purl = PackageURL.from_string("pkg:pypi/requests@2.31.0")
+        session = Mock()
+
+        # Source 1: fills all NTIA fields (priority 10)
+        ntia_source = Mock()
+        ntia_source.name = "pypi.org"
+        ntia_source.priority = 10
+        ntia_source.supports.return_value = True
+        ntia_source.fetch.return_value = NormalizedMetadata(
+            description="HTTP library", licenses=["Apache-2.0"], supplier="Kenneth Reitz", source="pypi.org"
+        )
+
+        # Source 2: non-CLE source (priority 40) — should be skipped
+        non_cle_source = Mock()
+        non_cle_source.name = "deps.dev"
+        non_cle_source.priority = 40
+        non_cle_source.provides_cle = False
+        non_cle_source.supports.return_value = True
+
+        # Source 3: CLE provider (priority 43) — should still run
+        cle_source = Mock()
+        cle_source.name = "tea"
+        cle_source.priority = 43
+        cle_source.provides_cle = True
+        cle_source.supports.return_value = True
+        cle_source.fetch.return_value = NormalizedMetadata(
+            cle_release_date="2024-01-01", cle_eos="2025-12-31", cle_eol="2026-06-30", source="tea"
+        )
+
+        registry.register(ntia_source)
+        registry.register(non_cle_source)
+        registry.register(cle_source)
+
+        result = registry.fetch_metadata(purl, session)
+
+        ntia_source.fetch.assert_called_once()
+        non_cle_source.fetch.assert_not_called()
+        cle_source.fetch.assert_called_once()
+        assert result.cle_eos == "2025-12-31"
+
+    def test_early_exit_breaks_when_all_cle_fields_present(self):
+        """When NTIA + all 3 CLE fields are filled, remaining sources should be skipped entirely."""
+        registry = SourceRegistry()
+        purl = PackageURL.from_string("pkg:pypi/requests@2.31.0")
+        session = Mock()
+
+        # Source fills everything
+        full_source = Mock()
+        full_source.name = "pypi.org"
+        full_source.priority = 10
+        full_source.supports.return_value = True
+        full_source.fetch.return_value = NormalizedMetadata(
+            description="HTTP library",
+            licenses=["Apache-2.0"],
+            supplier="Kenneth Reitz",
+            cle_release_date="2024-01-01",
+            cle_eos="2025-12-31",
+            cle_eol="2026-06-30",
+            source="pypi.org",
+        )
+
+        # Should never run
+        extra_source = Mock()
+        extra_source.name = "tea"
+        extra_source.priority = 43
+        extra_source.supports.return_value = True
+
+        registry.register(full_source)
+        registry.register(extra_source)
+
+        result = registry.fetch_metadata(purl, session)
+
+        full_source.fetch.assert_called_once()
+        extra_source.fetch.assert_not_called()
+        assert result.cle_eol == "2026-06-30"
+
 
 # =============================================================================
 # Test Enricher
