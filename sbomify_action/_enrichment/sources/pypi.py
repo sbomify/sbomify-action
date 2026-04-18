@@ -35,14 +35,17 @@ _cache: Dict[str, Optional[NormalizedMetadata]] = {}
 def is_pep691_yanked(value: Any) -> bool:
     """Return True if `value` indicates a PEP 691 "yanked" state.
 
-    PEP 691 specifies the `yanked` key is either a boolean (True -> yanked)
-    or a non-empty string (the reason; presence means yanked). Any other
-    type (dict, list, numeric) is treated as non-yanked so a malformed or
-    malicious response can't inject a fake yank.
+    Branches:
+      1. bool    — True means yanked, False means not yanked.
+      2. str     — non-empty (after strip) is a yank reason, treated as
+                   yanked; empty/whitespace-only is not.
+      3. default — any other type (dict, list, numeric, None) is not
+                   yanked, so a malformed or malicious response can't
+                   inject a fake yank.
 
-    isinstance(bool) is checked first because `isinstance(True, int)`
-    returns True in Python; without the bool-first ordering the numeric
-    branch would never be reachable for genuine bool values.
+    `isinstance(bool)` runs before any potential numeric branch because
+    `isinstance(True, int)` is True — checking bool first keeps real
+    bools out of any future is-numeric branch.
     """
     if isinstance(value, bool):
         return value
@@ -265,7 +268,10 @@ class PyPISource:
         selected_dist: Optional[Dict[str, Any]] = None
         for dist in urls:
             fn = dist.get("filename", "")
-            if fn.endswith(".whl"):
+            # PEP 427 wheels conventionally use lowercase ".whl", but some
+            # toolchains upload mixed-case suffixes; match case-insensitively
+            # so wheel preference is consistent with the BSI derivation path.
+            if fn.lower().endswith(".whl"):
                 distribution_filename = fn
                 selected_dist = dist
                 break
@@ -283,8 +289,10 @@ class PyPISource:
         # - release_date: upload_time_iso_8601 of the chosen distribution file.
         # - end_of_life: version-level yanked flag. A yanked release has been
         #   withdrawn by its maintainer and should no longer be consumed; we
-        #   map that to an EOL date at the upload time (falling back to the
-        #   current UTC date if the upload timestamp is unavailable).
+        #   map that to an EOL date at the upload time. When the upload
+        #   timestamp is unavailable we deliberately leave cle_eol unset
+        #   rather than synthesise "today" — downstream output must stay
+        #   deterministic across repeated enrichment runs.
         cle_release_date: Optional[str] = None
         cle_eol: Optional[str] = None
         upload_date = None

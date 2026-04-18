@@ -90,6 +90,20 @@ class NormalizedMetadata:
                     merged_sources[field_name] = other.source
                 return other_val
 
+        # Merge hashes as a union keyed by algorithm — self wins on
+        # conflicting algorithms, but every algorithm contributed by
+        # `other` is preserved. Dropping other's keys would silently lose
+        # useful digests when PyPI gives sha256 and another source
+        # contributes blake2b / md5 for the same artefact.
+        merged_hashes: Dict[str, str] = dict(self.hashes)
+        added_hash_alg = False
+        for alg, hex_value in other.hashes.items():
+            if alg not in merged_hashes:
+                merged_hashes[alg] = hex_value
+                added_hash_alg = True
+        if added_hash_alg and other.source and "hashes" not in merged_sources:
+            merged_sources["hashes"] = other.source
+
         # Merge license_texts (combine both)
         merged_license_texts = dict(self.license_texts)
         for lic_id, text in other.license_texts.items():
@@ -116,7 +130,7 @@ class NormalizedMetadata:
             distribution_filename=pick(
                 "distribution_filename", self.distribution_filename, other.distribution_filename
             ),
-            hashes=pick("hashes", self.hashes, other.hashes, is_list=True),
+            hashes=merged_hashes,
             # CLE fields
             cle_eos=pick("cle_eos", self.cle_eos, other.cle_eos),
             cle_eol=pick("cle_eol", self.cle_eol, other.cle_eol),

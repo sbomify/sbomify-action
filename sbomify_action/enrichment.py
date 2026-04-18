@@ -422,16 +422,6 @@ _BSI_EXECUTABLE_SUFFIXES = (
     ".dylib",
 )
 
-# Component types that BSI treats as non-executable source/document bundles.
-# Used when no filename is available.
-_BSI_NON_EXECUTABLE_TYPES = {
-    ComponentType.DATA,
-    ComponentType.FILE,
-    ComponentType.LIBRARY,
-    ComponentType.FRAMEWORK,
-    ComponentType.MACHINE_LEARNING_MODEL,
-}
-
 # Strongly-typed components that carry enough semantics for BSI derivation
 # without a distribution filename. Hoisted to module scope so the same
 # tuple isn't rebuilt on every component in the enrichment loop.
@@ -456,7 +446,15 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
 
     - bsi:component:executable   "executable" | "non-executable"
     - bsi:component:archive      "archive" | "no archive"
-    - bsi:component:structured   "structured" | "unstructured"
+    - bsi:component:structured   emitted only as "structured" — any
+                                 component that reaches derivation has a
+                                 distribution filename or a strongly-typed
+                                 packaging semantics, both of which imply
+                                 an identifiable, parseable artefact per
+                                 BSI §8.1.6. We don't have a reliable
+                                 signal to emit "unstructured", so we
+                                 leave that classification to operator
+                                 input rather than guess.
 
     Derivation only triggers when we have a clear signal:
     - A distribution filename (filename extension drives archive/executable),

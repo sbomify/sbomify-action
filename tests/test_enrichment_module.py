@@ -137,6 +137,37 @@ class TestNormalizedMetadata:
         assert merged.description == "First"  # Preserved
         assert merged.licenses == ["Apache-2.0"]  # Preserved
 
+    def test_merge_unions_hash_algorithms(self):
+        """hashes is a dict keyed by algorithm, not a list — merging must
+        preserve algorithms from both sources. Self wins on conflict."""
+        meta1 = NormalizedMetadata(hashes={"sha256": "a" * 64}, source="pypi")
+        meta2 = NormalizedMetadata(
+            hashes={"sha256": "b" * 64, "blake2b-256": "c" * 64, "md5": "d" * 32},
+            source="ecosyste.ms",
+        )
+
+        merged = meta1.merge(meta2)
+
+        assert merged.hashes == {
+            "sha256": "a" * 64,  # self wins on conflicting algorithm
+            "blake2b-256": "c" * 64,  # new algorithm preserved
+            "md5": "d" * 32,
+        }
+        # Source attribution records the contributing source when we
+        # actually added keys from `other`.
+        assert merged.field_sources.get("hashes") == "ecosyste.ms"
+
+    def test_merge_hashes_no_other_keys_leaves_source_untouched(self):
+        """When `other` contributes no new hash algorithms, we should not
+        fabricate a hashes source attribution for `other`."""
+        meta1 = NormalizedMetadata(hashes={"sha256": "a" * 64}, source="pypi")
+        meta2 = NormalizedMetadata(hashes={"sha256": "b" * 64}, source="ecosyste.ms")
+
+        merged = meta1.merge(meta2)
+
+        assert merged.hashes == {"sha256": "a" * 64}
+        assert "hashes" not in merged.field_sources
+
 
 # =============================================================================
 # Test PURLSource
@@ -688,8 +719,12 @@ class TestPyPISource:
         source = PyPISource()
 
         class _Shim:
-            """PackageURL normalises '..' in name away, so we test the refusal
-            logic with a lightweight shim exposing the same attribute surface."""
+            """Use a lightweight shim exposing the attribute surface the
+            fetch() method relies on. `PackageURL.from_string` actually
+            preserves `..` in the name field (verified empirically) — so
+            a real PURL would do, too — but the shim keeps the unit test
+            independent of how the third-party parser may normalise in
+            the future."""
 
             name = ".."
             version = "1.0"
