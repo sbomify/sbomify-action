@@ -400,6 +400,189 @@ class TestPyPISource:
             f"Expected 'Direct Author' from author field, got: {metadata.maintainer_name}"
         )
 
+    # ---------- Per-file hash + yanked + release-date coverage --------------
+
+    def test_fetch_populates_hashes_from_digests(self, mock_session):
+        """PyPI `digests` block is extracted into NormalizedMetadata.hashes."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/django@5.1.3")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "info": {"summary": "A framework", "license": "BSD-3-Clause"},
+            "urls": [
+                {
+                    "filename": "Django-5.1.3-py3-none-any.whl",
+                    "digests": {"md5": "d" * 32, "sha256": "a" * 64},
+                    "upload_time_iso_8601": "2024-11-05T05:24:21Z",
+                    "yanked": False,
+                }
+            ],
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is not None
+        assert metadata.distribution_filename == "Django-5.1.3-py3-none-any.whl"
+        assert metadata.hashes == {"md5": "d" * 32, "sha256": "a" * 64}
+        assert metadata.cle_release_date == "2024-11-05"
+        assert metadata.cle_eol is None  # Not yanked
+
+    def test_fetch_prefers_wheel_over_sdist_for_hashes(self, mock_session):
+        """When multiple dists are available, wheel wins and its digests come through."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@1.0")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "info": {"summary": "Foo", "license": "MIT"},
+            "urls": [
+                {"filename": "foo-1.0.tar.gz", "digests": {"sha256": "b" * 64}},
+                {
+                    "filename": "foo-1.0-py3-none-any.whl",
+                    "digests": {"sha256": "a" * 64},
+                    "upload_time_iso_8601": "2024-05-01T12:00:00Z",
+                },
+            ],
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata.distribution_filename == "foo-1.0-py3-none-any.whl"
+        assert metadata.hashes == {"sha256": "a" * 64}
+        assert metadata.cle_release_date == "2024-05-01"
+
+    def test_fetch_yanked_version_populates_eol(self, mock_session):
+        """Yanked release → cle_eol at upload time."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/bad-release@9.9.9")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "info": {"summary": "Oops", "license": "MIT", "yanked": True},
+            "urls": [
+                {
+                    "filename": "bad_release-9.9.9-py3-none-any.whl",
+                    "digests": {"sha256": "c" * 64},
+                    "upload_time_iso_8601": "2023-07-04T08:15:30Z",
+                    "yanked": True,
+                }
+            ],
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata.cle_eol == "2023-07-04"
+
+    def test_fetch_yanked_flag_only_on_dist(self, mock_session):
+        """Fallback: yanked on the per-file entry also triggers EOL."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@1.0")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "info": {"summary": "foo", "license": "MIT"},  # info.yanked absent
+            "urls": [
+                {
+                    "filename": "foo-1.0.whl",
+                    "digests": {"sha256": "a" * 64},
+                    "upload_time_iso_8601": "2022-01-01T00:00:00Z",
+                    "yanked": True,  # file-level yanked
+                }
+            ],
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata.cle_eol == "2022-01-01"
+
+    def test_fetch_yanked_without_upload_time_uses_today(self, mock_session):
+        """Yanked release without upload_time still gets cle_eol (today's UTC date)."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@1.0")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "info": {"summary": "foo", "license": "MIT", "yanked": True},
+            "urls": [{"filename": "foo-1.0.whl"}],  # no upload_time, no digests
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+
+        from datetime import datetime
+        from datetime import timezone as _tz
+
+        assert metadata.cle_eol is not None
+        # Format is YYYY-MM-DD
+        assert len(metadata.cle_eol) == 10
+        assert metadata.cle_eol == datetime.now(_tz.utc).strftime("%Y-%m-%d")
+
+    def test_fetch_version_specific_endpoint_when_purl_has_version(self, mock_session):
+        """URL should be /pypi/{name}/{version}/json when PURL carries a version."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/django@5.1.3")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"info": {"summary": "x"}, "urls": []}
+        mock_session.get.return_value = mock_response
+
+        source.fetch(purl, mock_session)
+
+        called_url = mock_session.get.call_args[0][0]
+        assert called_url.endswith("/pypi/django/5.1.3/json")
+
+    def test_fetch_latest_endpoint_when_purl_has_no_version(self, mock_session):
+        """URL should be /pypi/{name}/json when PURL has no version."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/django")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"info": {"summary": "x"}, "urls": []}
+        mock_session.get.return_value = mock_response
+
+        source.fetch(purl, mock_session)
+
+        called_url = mock_session.get.call_args[0][0]
+        assert called_url.endswith("/pypi/django/json")
+
+    def test_fetch_malformed_digests_ignored(self, mock_session):
+        """Non-string hash values in the digests block do not blow up."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@1.0")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "info": {"summary": "foo", "license": "MIT"},
+            "urls": [
+                {
+                    "filename": "foo-1.0.whl",
+                    "digests": {
+                        "sha256": "a" * 64,  # good
+                        "md5": "",  # rejected (empty)
+                        "blake2b": None,  # rejected (not str)
+                        "sha512": "  ",  # rejected (whitespace-only)
+                    },
+                }
+            ],
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+        assert metadata.hashes == {"sha256": "a" * 64}
+
 
 # =============================================================================
 # Test parse_author_string utility
@@ -2798,6 +2981,84 @@ class TestBSIEnrichmentFields:
         added = _apply_bsi_derived_properties(component, metadata)
         assert added == []
 
+    def test_bsi_plain_library_no_filename_skipped(self):
+        """A plain library with no filename has no unambiguous signal and
+        must not get made-up values."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_bsi_derived_properties
+
+        component = Component(name="foo", version="1.0", type=ComponentType.LIBRARY)
+        added = _apply_bsi_derived_properties(component, NormalizedMetadata())
+        assert added == []
+
+    @pytest.mark.parametrize(
+        "filename,expected_archive,expected_exec",
+        [
+            ("foo-1.0.tar.gz", "archive", "non-executable"),
+            ("foo-1.0.tgz", "archive", "non-executable"),
+            ("foo-1.0.tar.bz2", "archive", "non-executable"),
+            ("foo-1.0.tar.xz", "archive", "non-executable"),
+            ("foo-1.0.zip", "archive", "non-executable"),
+            ("foo.jar", "archive", "non-executable"),
+            ("foo.war", "archive", "non-executable"),
+            ("foo.deb", "archive", "non-executable"),
+            ("foo.rpm", "archive", "non-executable"),
+            ("foo.gem", "archive", "non-executable"),
+            ("foo.crate", "archive", "non-executable"),
+            ("myapp.exe", "no archive", "executable"),
+            ("runner.bin", "no archive", "executable"),
+            ("libfoo.so", "no archive", "executable"),
+            ("libfoo.dylib", "no archive", "executable"),
+            ("plugin.dll", "no archive", "executable"),
+        ],
+    )
+    def test_bsi_filename_extensions_derive_correctly(self, filename, expected_archive, expected_exec):
+        """Each recognised archive / executable filename extension maps to
+        the expected BSI boolean-style property values."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="anything", version="0", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(distribution_filename=filename)
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        props = {p.name: p.value for p in component.properties}
+        assert props.get("bsi:component:archive") == expected_archive, filename
+        assert props.get("bsi:component:executable") == expected_exec, filename
+        assert props.get("bsi:component:structured") == "structured", filename
+
+    @pytest.mark.parametrize(
+        "type_,expected_archive,expected_exec",
+        [
+            (ComponentType.APPLICATION, "no archive", "executable"),
+            (ComponentType.CONTAINER, "archive", "executable"),
+            (ComponentType.FIRMWARE, "archive", "executable"),
+            (ComponentType.OPERATING_SYSTEM, "no archive", "executable"),
+        ],
+    )
+    def test_bsi_type_only_derivation(self, type_, expected_archive, expected_exec):
+        """Strongly-typed components with no filename derive boolean-style
+        properties from the component type alone."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="x", version="1.0", type=type_)
+        _apply_metadata_to_cyclonedx_component(component, NormalizedMetadata())
+        props = {p.name: p.value for p in component.properties}
+        assert props.get("bsi:component:archive") == expected_archive, type_
+        assert props.get("bsi:component:executable") == expected_exec, type_
+        assert props.get("bsi:component:structured") == "structured"
+
+    def test_bsi_case_insensitive_filename_extension(self):
+        """Uppercase filename extensions match the same way as lowercase."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="x", version="1.0", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(distribution_filename="FOO-1.0.WHL")
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        props = {p.name: p.value for p in component.properties}
+        assert props["bsi:component:archive"] == "archive"
+
     # --- P1 #3: per-component hashes ---------------------------------------------
 
     def test_component_hashes_applied_from_pypi_digests(self):
@@ -2857,6 +3118,68 @@ class TestBSIEnrichmentFields:
         algs = {c.algorithm.name for c in package.checksums}
         assert "SHA256" in algs
         assert "MD5" in algs
+
+    def test_spdx_checksums_not_duplicated(self):
+        """Repeated enrichment runs don't duplicate the same checksum entry."""
+        from spdx_tools.spdx.model import Package, SpdxNoAssertion
+
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_spdx_package
+
+        package = Package(name="django", spdx_id="SPDXRef-Package-django", download_location=SpdxNoAssertion())
+        metadata = NormalizedMetadata(hashes={"sha256": "a" * 64})
+        _apply_metadata_to_spdx_package(package, metadata)
+        _apply_metadata_to_spdx_package(package, metadata)
+        assert len(package.checksums) == 1
+
+    def test_spdx_checksums_unknown_algorithm_ignored(self):
+        """Unknown SPDX algorithm names are silently skipped."""
+        from spdx_tools.spdx.model import Package, SpdxNoAssertion
+
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_spdx_package
+
+        package = Package(name="x", spdx_id="SPDXRef-x", download_location=SpdxNoAssertion())
+        metadata = NormalizedMetadata(hashes={"rot13": "abc", "sha256": "a" * 64})
+        _apply_metadata_to_spdx_package(package, metadata)
+        algs = {c.algorithm.name for c in package.checksums}
+        assert algs == {"SHA256"}
+
+    def test_cyclonedx_sha512_hash_emitted(self):
+        """SHA-512 (BSI TR-03183-2's preferred hash) makes it through."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="x", version="1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(hashes={"sha512": "f" * 128})
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        hashes = list(component.hashes)
+        assert len(hashes) == 1
+        assert str(hashes[0].alg).endswith("SHA_512")
+        assert str(hashes[0].content) == "f" * 128
+
+    def test_cyclonedx_hash_whitespace_trimmed_and_lowercased(self):
+        """Algorithm keys and hex content are normalised."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="x", version="1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(hashes={"SHA256": "  " + "a" * 64 + "  "})
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        hashes = list(component.hashes)
+        assert len(hashes) == 1
+        # Content written is stripped + lowercased (we stored as-lower already)
+        assert str(hashes[0].content) == "a" * 64
+
+    def test_cyclonedx_empty_hash_value_rejected(self):
+        """Empty / whitespace-only hex values don't produce Hash objects."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="x", version="1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(hashes={"sha256": "   "})
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        assert len(list(component.hashes)) == 0
 
     # --- P2 #6: enriched licences marked as BSI "original/declared" --------------
 
