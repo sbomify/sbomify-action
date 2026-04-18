@@ -504,8 +504,12 @@ class TestPyPISource:
 
         assert metadata.cle_eol == "2022-01-01"
 
-    def test_fetch_yanked_without_upload_time_uses_today(self, mock_session):
-        """Yanked release without upload_time still gets cle_eol (today's UTC date)."""
+    def test_fetch_yanked_without_upload_time_leaves_eol_unset(self, mock_session):
+        """A yanked release with no upload timestamp leaves cle_eol unset.
+
+        Falling back to today's date would make output non-deterministic and
+        emit a misleading "yanked just now" signal to downstream consumers.
+        """
         source = PyPISource()
         purl = PackageURL.from_string("pkg:pypi/foo@1.0")
 
@@ -513,19 +517,84 @@ class TestPyPISource:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "info": {"summary": "foo", "license": "MIT", "yanked": True},
-            "urls": [{"filename": "foo-1.0.whl"}],  # no upload_time, no digests
+            "urls": [{"filename": "foo-1.0.whl"}],  # no upload_time
         }
         mock_session.get.return_value = mock_response
 
         metadata = source.fetch(purl, mock_session)
+        assert metadata.cle_eol is None
 
-        from datetime import datetime
-        from datetime import timezone as _tz
+    def test_fetch_yanked_with_reason_string_treated_as_yanked(self, mock_session):
+        """Per PEP 691, `yanked` can be either a bool or a non-empty reason string."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@1.0")
 
-        assert metadata.cle_eol is not None
-        # Format is YYYY-MM-DD
-        assert len(metadata.cle_eol) == 10
-        assert metadata.cle_eol == datetime.now(_tz.utc).strftime("%Y-%m-%d")
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "info": {"summary": "foo", "license": "MIT", "yanked": "Security advisory X"},
+            "urls": [
+                {
+                    "filename": "foo-1.0.whl",
+                    "digests": {"sha256": "a" * 64},
+                    "upload_time_iso_8601": "2021-03-03T00:00:00Z",
+                }
+            ],
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+        assert metadata.cle_eol == "2021-03-03"
+
+    def test_fetch_yanked_empty_string_not_yanked(self, mock_session):
+        """Empty-string / whitespace-only yanked is not a truthy PEP 691 signal."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@1.0")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "info": {"summary": "foo", "license": "MIT", "yanked": "   "},
+            "urls": [
+                {
+                    "filename": "foo-1.0.whl",
+                    "digests": {"sha256": "a" * 64},
+                    "upload_time_iso_8601": "2021-03-03T00:00:00Z",
+                }
+            ],
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+        assert metadata.cle_eol is None
+
+    @pytest.mark.parametrize("bad_yanked", [{"reason": "x"}, [True], 1, 0.5, 0])
+    def test_fetch_yanked_non_bool_non_string_ignored(self, mock_session, bad_yanked):
+        """Malformed yanked types (dict / list / number) must not trigger yank.
+
+        Defence-in-depth against attacker-controlled / cached responses.
+        """
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()  # isolate from other parametric runs
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@1.0")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "info": {"summary": "foo", "license": "MIT", "yanked": bad_yanked},
+            "urls": [
+                {
+                    "filename": "foo-1.0.whl",
+                    "upload_time_iso_8601": "2020-01-01T00:00:00Z",
+                }
+            ],
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+        assert metadata.cle_eol is None, f"bad yanked={bad_yanked!r} unexpectedly set cle_eol"
 
     def test_fetch_version_specific_endpoint_when_purl_has_version(self, mock_session):
         """URL should be /pypi/{name}/{version}/json when PURL carries a version."""
@@ -556,6 +625,101 @@ class TestPyPISource:
 
         called_url = mock_session.get.call_args[0][0]
         assert called_url.endswith("/pypi/django/json")
+
+    # --- Security: path traversal via PURL version ----------------------------
+
+    def test_fetch_rejects_path_traversal_in_version(self, mock_session):
+        """An SBOM-crafted PURL like pkg:pypi/foo@%2E%2E/admin must not cause
+        the Action to fetch https://pypi.org/admin/json. Verify the fetch is
+        refused outright and no HTTP call is made."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@%2E%2E/%2E%2E/admin")
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is None
+        assert not mock_session.get.called, "request must not be sent for traversal PURLs"
+
+    def test_fetch_rejects_forward_slash_in_version(self, mock_session):
+        """Explicit '/' in version also triggers the safety refusal."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@1.0/admin")
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is None
+        assert not mock_session.get.called
+
+    def test_fetch_rejects_path_traversal_in_name(self, mock_session):
+        """Traversal tokens in the PURL name are refused symmetrically."""
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()
+        source = PyPISource()
+
+        class _Shim:
+            """PackageURL normalises '..' in name away, so we test the refusal
+            logic with a lightweight shim exposing the same attribute surface."""
+
+            name = ".."
+            version = "1.0"
+
+        metadata = source.fetch(_Shim(), mock_session)  # type: ignore[arg-type]
+
+        assert metadata is None
+        assert not mock_session.get.called
+
+    def test_fetch_encodes_special_characters_in_purl_components(self, mock_session):
+        """Safe special characters survive but are percent-encoded in the URL,
+        so `requests` cannot normalise them into path traversal."""
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/some%20pkg@1.0%2B0")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"info": {"summary": "x"}, "urls": []}
+        mock_session.get.return_value = mock_response
+
+        source.fetch(purl, mock_session)
+
+        called_url = mock_session.get.call_args[0][0]
+        # Space and '+' are percent-encoded; no raw path separators leak through.
+        assert "some%20pkg" in called_url or "some pkg" not in called_url
+        assert ".." not in called_url
+        assert "/pypi/" in called_url
+
+    def test_fetch_versioned_404_falls_back_to_latest(self, mock_session):
+        """If the version-specific endpoint 404s but the package exists, the
+        source retries the latest-only URL so we still get base metadata."""
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@99.99.99")
+
+        versioned = Mock()
+        versioned.status_code = 404
+        latest = Mock()
+        latest.status_code = 200
+        latest.json.return_value = {
+            "info": {"summary": "foo (latest)", "license": "MIT"},
+            "urls": [
+                {
+                    "filename": "foo-1.0-py3-none-any.whl",
+                    "digests": {"sha256": "a" * 64},
+                    "upload_time_iso_8601": "2024-01-01T00:00:00Z",
+                }
+            ],
+        }
+        mock_session.get.side_effect = [versioned, latest]
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is not None
+        assert metadata.description == "foo (latest)"
+        assert mock_session.get.call_count == 2
+        # Fallback must have reached the non-versioned URL
+        assert mock_session.get.call_args_list[1][0][0].endswith("/pypi/foo/json")
 
     def test_fetch_malformed_digests_ignored(self, mock_session):
         """Non-string hash values in the digests block do not blow up."""
@@ -3118,6 +3282,102 @@ class TestBSIEnrichmentFields:
         algs = {c.algorithm.name for c in package.checksums}
         assert "SHA256" in algs
         assert "MD5" in algs
+
+    @pytest.mark.parametrize(
+        "alg_key,cdx_suffix,hex_len",
+        [
+            ("md5", "MD5", 32),
+            ("sha1", "SHA_1", 40),
+            ("sha-1", "SHA_1", 40),
+            ("sha256", "SHA_256", 64),
+            ("sha-256", "SHA_256", 64),
+            ("sha384", "SHA_384", 96),
+            ("sha-384", "SHA_384", 96),
+            ("sha512", "SHA_512", 128),
+            ("sha-512", "SHA_512", 128),
+            ("sha3-256", "SHA3_256", 64),
+            ("sha3-384", "SHA3_384", 96),
+            ("sha3-512", "SHA3_512", 128),
+            ("blake2b-256", "BLAKE2B_256", 64),
+            ("blake2b-384", "BLAKE2B_384", 96),
+            ("blake2b-512", "BLAKE2B_512", 128),
+            ("blake3", "BLAKE3", 64),  # no fixed length enforced, 64 is the common default
+        ],
+    )
+    def test_cyclonedx_every_mapped_hash_algorithm_emits(self, alg_key, cdx_suffix, hex_len):
+        """Every key in _CYCLONEDX_HASH_ALGORITHMS produces the expected enum,
+        and hex-length validation accepts the correct length for each algorithm."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="x", version="1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(hashes={alg_key: "a" * hex_len})
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        hashes = list(component.hashes)
+        assert len(hashes) == 1, f"no hash emitted for {alg_key!r}"
+        assert str(hashes[0].alg).endswith(cdx_suffix), (
+            f"{alg_key!r} mapped to {hashes[0].alg!r}, expected suffix {cdx_suffix}"
+        )
+
+    @pytest.mark.parametrize(
+        "alg_key,spdx_name,hex_len",
+        [
+            ("md5", "MD5", 32),
+            ("sha1", "SHA1", 40),
+            ("sha-1", "SHA1", 40),
+            ("sha224", "SHA224", 56),
+            ("sha-224", "SHA224", 56),
+            ("sha256", "SHA256", 64),
+            ("sha-256", "SHA256", 64),
+            ("sha384", "SHA384", 96),
+            ("sha-384", "SHA384", 96),
+            ("sha512", "SHA512", 128),
+            ("sha-512", "SHA512", 128),
+            ("sha3-256", "SHA3_256", 64),
+            ("sha3-384", "SHA3_384", 96),
+            ("sha3-512", "SHA3_512", 128),
+            ("blake2b-256", "BLAKE2B_256", 64),
+            ("blake2b-384", "BLAKE2B_384", 96),
+            ("blake2b-512", "BLAKE2B_512", 128),
+            ("blake3", "BLAKE3", 64),
+        ],
+    )
+    def test_spdx_every_mapped_hash_algorithm_emits(self, alg_key, spdx_name, hex_len):
+        """Every key in _SPDX_CHECKSUM_ALGORITHMS maps to its enum value,
+        including the SPDX-only SHA-224 entry that the CDX enum lacks."""
+        from spdx_tools.spdx.model import Package, SpdxNoAssertion
+
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_spdx_package
+
+        package = Package(name="x", spdx_id="SPDXRef-x", download_location=SpdxNoAssertion())
+        metadata = NormalizedMetadata(hashes={alg_key: "a" * hex_len})
+        _apply_metadata_to_spdx_package(package, metadata)
+        assert len(package.checksums) == 1
+        assert package.checksums[0].algorithm.name == spdx_name
+
+    def test_cyclonedx_hash_wrong_length_rejected(self):
+        """A SHA-256 hex-value of the wrong length is rejected rather than
+        written into the SBOM. Defence against malformed sources."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="x", version="1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(hashes={"sha256": "a" * 40})  # SHA-1 length, wrong
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        assert len(list(component.hashes)) == 0
+
+    def test_cyclonedx_hash_non_hex_characters_rejected(self):
+        """Non-hex characters in the hash content are rejected."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="x", version="1", type=ComponentType.LIBRARY)
+        # Script-injection attempt that happens to be 64 chars
+        payload = "<script>alert(1)</script>abcdef" + "0" * 34
+        metadata = NormalizedMetadata(hashes={"sha256": payload})
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        assert len(list(component.hashes)) == 0
 
     def test_spdx_checksums_not_duplicated(self):
         """Repeated enrichment runs don't duplicate the same checksum entry."""

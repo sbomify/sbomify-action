@@ -1,8 +1,8 @@
 """PyPI data source for Python package metadata."""
 
 import json
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import requests
 from packageurl import PackageURL
@@ -72,16 +72,40 @@ class PyPISource:
             return _cache[cache_key]
 
         try:
+            # Reject PURL components that could rewrite the URL path.
+            # PackageURL.from_string preserves ".." and "/" in the name/version
+            # fields; `requests` then normalises raw "../.." segments, which
+            # can redirect our GET to arbitrary pypi.org paths. Encode both
+            # components with safe="" and explicitly refuse traversal tokens.
+            raw_name = purl.name or ""
+            raw_version = purl.version or ""
+            if "/" in raw_name or ".." in raw_name:
+                logger.warning(f"Refusing PyPI fetch for PURL with suspicious name: {raw_name!r}")
+                _cache[cache_key] = None
+                return None
+            if "/" in raw_version or ".." in raw_version:
+                logger.warning(f"Refusing PyPI fetch for PURL with suspicious version: {raw_version!r}")
+                _cache[cache_key] = None
+                return None
+            safe_name = quote(raw_name, safe="")
+            safe_version = quote(raw_version, safe="") if raw_version else ""
+
             # Prefer the version-specific endpoint when a version is present:
             # it surfaces per-release fields (yanked, upload_time, file hashes)
-            # that the latest-only endpoint flattens out. Fall back to the
-            # latest-only endpoint when no version is available in the PURL.
-            if purl.version:
-                url = f"{PYPI_API_BASE}/{purl.name}/{purl.version}/json"
-            else:
-                url = f"{PYPI_API_BASE}/{purl.name}/json"
+            # that the latest-only endpoint flattens out. If the versioned URL
+            # returns 404 (package exists, version doesn't), fall back to the
+            # latest-only endpoint so we still get base-package metadata.
+            latest_url = f"{PYPI_API_BASE}/{safe_name}/json"
+            primary_url = f"{PYPI_API_BASE}/{safe_name}/{safe_version}/json" if safe_version else latest_url
             logger.debug(f"Fetching PyPI metadata for: {purl.name}")
-            response = session.get(url, timeout=DEFAULT_TIMEOUT)
+            response = session.get(primary_url, timeout=DEFAULT_TIMEOUT)
+
+            if response.status_code == 404 and primary_url != latest_url:
+                logger.debug(
+                    f"PyPI version-specific 404 for {purl.name}@{purl.version}; "
+                    "retrying the latest-only endpoint for base metadata."
+                )
+                response = session.get(latest_url, timeout=DEFAULT_TIMEOUT)
 
             metadata = None
             if response.status_code == 200:
@@ -209,11 +233,26 @@ class PyPISource:
             if isinstance(upload_time, str) and upload_time.strip():
                 upload_date = upload_time.strip().split("T", 1)[0]
                 cle_release_date = upload_date
-        is_yanked = bool(info.get("yanked"))
+
+        # Per PEP 691, the `yanked` key can be either a bool (True -> yanked) or
+        # a non-empty string (the reason string; presence also means yanked).
+        # Accept both to stay spec-compliant, but reject unexpected types so a
+        # malformed or malicious response can't inject a fake yank.
+        def _is_pep691_yanked(value: Any) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return bool(value.strip())
+            return False
+
+        is_yanked = _is_pep691_yanked(info.get("yanked"))
         if not is_yanked and selected_dist is not None:
-            is_yanked = bool(selected_dist.get("yanked"))
-        if is_yanked:
-            cle_eol = upload_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            is_yanked = _is_pep691_yanked(selected_dist.get("yanked"))
+        if is_yanked and upload_date:
+            # Only emit an EOL date when we have a real upload timestamp.
+            # Falling back to "today" would make the output non-deterministic
+            # and produce a false "yanked just now" signal downstream.
+            cle_eol = upload_date
 
         logger.debug(f"Successfully fetched PyPI metadata for: {package_name}")
 

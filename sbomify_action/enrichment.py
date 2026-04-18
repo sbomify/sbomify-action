@@ -52,6 +52,7 @@ Plugin architecture is in sbomify_action/_enrichment/:
 
 import json
 import os
+import re as _re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -431,6 +432,16 @@ _BSI_NON_EXECUTABLE_TYPES = {
     ComponentType.MACHINE_LEARNING_MODEL,
 }
 
+# Strongly-typed components that carry enough semantics for BSI derivation
+# without a distribution filename. Hoisted to module scope so the same
+# tuple isn't rebuilt on every component in the enrichment loop.
+_BSI_DEPLOYABLE_TYPES = (
+    ComponentType.APPLICATION,
+    ComponentType.CONTAINER,
+    ComponentType.FIRMWARE,
+    ComponentType.OPERATING_SYSTEM,
+)
+
 
 def _filename_suffix_matches(filename: str, suffixes: tuple[str, ...]) -> bool:
     """Case-insensitive suffix match that handles multi-part endings like .tar.gz."""
@@ -464,15 +475,8 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
     filename = (metadata.distribution_filename or "").strip()
     component_type = getattr(component, "type", None)
 
-    _DEPLOYABLE_TYPES = (
-        ComponentType.APPLICATION,
-        ComponentType.CONTAINER,
-        ComponentType.FIRMWARE,
-        ComponentType.OPERATING_SYSTEM,
-    )
-
     has_filename_signal = bool(filename)
-    has_type_signal = component_type in _DEPLOYABLE_TYPES
+    has_type_signal = component_type in _BSI_DEPLOYABLE_TYPES
     if not (has_filename_signal or has_type_signal):
         return added
 
@@ -497,7 +501,7 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
         exec_value: Optional[str] = None
         if filename and _filename_suffix_matches(filename, _BSI_EXECUTABLE_SUFFIXES):
             exec_value = "executable"
-        elif component_type in _DEPLOYABLE_TYPES:
+        elif component_type in _BSI_DEPLOYABLE_TYPES:
             exec_value = "executable"
         elif filename and _filename_suffix_matches(filename, _BSI_ARCHIVE_SUFFIXES):
             # Archive-packaged libraries are not themselves executable.
@@ -565,7 +569,12 @@ _SPDX_CHECKSUM_ALGORITHMS: Dict[str, ChecksumAlgorithm] = {
 
 
 def _apply_spdx_checksums(package: Package, hashes: Dict[str, str]) -> List[str]:
-    """Add distribution-artefact checksums to an SPDX package."""
+    """Add distribution-artefact checksums to an SPDX package.
+
+    Shares the same hex-length validation as the CycloneDX path so that
+    any non-hex or malformed payload is rejected rather than written out
+    verbatim.
+    """
     added: List[str] = []
     existing = {(c.algorithm, (c.value or "").lower()) for c in (package.checksums or [])}
     for raw_alg, raw_value in hashes.items():
@@ -574,7 +583,7 @@ def _apply_spdx_checksums(package: Package, hashes: Dict[str, str]) -> List[str]
         if spdx_alg is None:
             continue
         value = (raw_value or "").strip().lower()
-        if not value:
+        if not value or not _is_valid_hex_hash(alg_key, value):
             continue
         if (spdx_alg, value) in existing:
             continue
@@ -584,10 +593,52 @@ def _apply_spdx_checksums(package: Package, hashes: Dict[str, str]) -> List[str]
     return added
 
 
+# Pre-compiled hex check — restricts hash content to the characters the
+# schema actually allows. Length is checked separately via _HASH_HEX_LENGTHS
+# so a malicious / misbehaving source can't inject non-hex payloads (which
+# would land verbatim in the emitted SBOM otherwise).
+_HEX_RE = _re.compile(r"^[0-9a-f]+$")
+
+_HASH_HEX_LENGTHS: Dict[str, int] = {
+    "md5": 32,
+    "sha1": 40,
+    "sha-1": 40,
+    "sha224": 56,
+    "sha-224": 56,
+    "sha256": 64,
+    "sha-256": 64,
+    "sha384": 96,
+    "sha-384": 96,
+    "sha512": 128,
+    "sha-512": 128,
+    "sha3-256": 64,
+    "sha3-384": 96,
+    "sha3-512": 128,
+    "blake2b-256": 64,
+    "blake2b-384": 96,
+    "blake2b-512": 128,
+}
+
+
+def _is_valid_hex_hash(alg_key: str, value: str) -> bool:
+    """Return True if value is a lower-case hex string of the expected
+    length for the named algorithm. Unknown algorithms pass through the
+    format check (presence-only) so BLAKE3 and future additions still work."""
+    if not _HEX_RE.match(value):
+        return False
+    expected = _HASH_HEX_LENGTHS.get(alg_key)
+    if expected is None:
+        # For algorithms with no fixed expected length (e.g. BLAKE3),
+        # just require non-empty hex.
+        return len(value) > 0
+    return len(value) == expected
+
+
 def _apply_component_hashes(component: Component, hashes: Dict[str, str]) -> List[str]:
     """Add distribution-artefact hashes to a CycloneDX component from a
-    `{algorithm: hex}` map. Only recognised algorithms are emitted; the
-    same (alg, content) pair is not duplicated across enrichment runs.
+    `{algorithm: hex}` map. Only recognised algorithms with valid hex
+    content of the expected length are emitted; the same (alg, content)
+    pair is not duplicated across enrichment runs.
     """
     added: List[str] = []
     existing = {(str(h.alg), str(h.content).lower()) for h in component.hashes}
@@ -597,7 +648,7 @@ def _apply_component_hashes(component: Component, hashes: Dict[str, str]) -> Lis
         if cdx_alg is None:
             continue
         value = (raw_value or "").strip().lower()
-        if not value:
+        if not value or not _is_valid_hex_hash(alg_key, value):
             continue
         if (str(cdx_alg), value) in existing:
             continue
