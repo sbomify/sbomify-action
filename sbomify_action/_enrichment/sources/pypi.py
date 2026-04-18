@@ -1,4 +1,11 @@
-"""PyPI data source for Python package metadata."""
+"""PyPI data source for Python package metadata.
+
+The module-level `_cache` is intentionally a plain dict: enrichment runs
+single-threaded today (one call per component, sequentially). If this ever
+moves behind a ThreadPoolExecutor, wrap the cache in a `threading.Lock`
+before doing so — the 404-fallback path writes both the version-specific
+key and the `::latest` sentinel key in two separate statements.
+"""
 
 import json
 from typing import Any, Dict, Optional
@@ -17,8 +24,11 @@ from .purl import PURL_TYPE_TO_SUPPLIER
 
 PYPI_API_BASE = "https://pypi.org/pypi"
 DEFAULT_TIMEOUT = 10  # seconds - PyPI is fast
+# Sentinel for the name-only cache slot. PEP 440 forbids ":" in versions,
+# so this cannot collide with a literal `pkg:pypi/foo@anything` version.
+_LATEST_CACHE_SUFFIX = "::latest"
 
-# Simple in-memory cache
+# Simple in-memory cache; see module docstring for thread-safety contract.
 _cache: Dict[str, Optional[NormalizedMetadata]] = {}
 
 
@@ -38,6 +48,8 @@ def is_pep691_yanked(value: Any) -> bool:
         return value
     if isinstance(value, str):
         return bool(value.strip())
+    if value is not None:
+        logger.debug(f"PyPI yanked field has unexpected type {type(value).__name__}; treating as not yanked")
     return False
 
 
@@ -127,7 +139,7 @@ class PyPISource:
                 # latest-only GETs. The name-only cache key is distinct
                 # from the version-keyed cache so real version hits are
                 # unaffected.
-                latest_cache_key = f"pypi:{purl.name}:_latest"
+                latest_cache_key = f"pypi:{purl.name}{_LATEST_CACHE_SUFFIX}"
                 if latest_cache_key in _cache:
                     logger.debug(f"Cache hit (PyPI latest) for 404 fallback: {purl.name}")
                     metadata = _cache[latest_cache_key]
@@ -141,8 +153,18 @@ class PyPISource:
                 metadata = None
                 if response.status_code == 200:
                     metadata = self._normalize_response(purl.name, response.json())
-                _cache[latest_cache_key] = metadata
-                _cache[cache_key] = metadata
+                    _cache[latest_cache_key] = metadata
+                    _cache[cache_key] = metadata
+                elif response.status_code == 404:
+                    # Genuine "package gone" — permanent, safe to cache.
+                    _cache[latest_cache_key] = None
+                    _cache[cache_key] = None
+                else:
+                    # Transient failure (5xx / rate limit). Do NOT cache:
+                    # a retry on a later component may succeed.
+                    logger.warning(
+                        f"Transient PyPI error on latest fallback for {purl.name}: HTTP {response.status_code}"
+                    )
                 return metadata
 
             metadata = None

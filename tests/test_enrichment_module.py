@@ -579,7 +579,13 @@ class TestPyPISource:
             (None, False),
             ("", False),
             ("   ", False),
+            # Unicode whitespace reasons — Python str.strip() removes all
+            # Unicode whitespace, so a whitespace-only reason stays falsy.
+            ("\t", False),
+            ("\u00a0", False),  # non-breaking space
             ("Security advisory X", True),
+            # Non-ASCII reason strings are valid per PEP 691 §4.1.
+            ("Sicherheitsl\u00fccke", True),
             ({"reason": "x"}, False),
             ([True], False),
             (1, False),  # isinstance(True, int) but bool check runs first
@@ -750,6 +756,58 @@ class TestPyPISource:
         assert mock_session.get.call_count == 2
         # Fallback must have reached the non-versioned URL
         assert mock_session.get.call_args_list[1][0][0].endswith("/pypi/foo/json")
+
+    def test_versioned_404_reuses_warm_latest_cache(self, mock_session):
+        """When the name-only latest cache slot is already populated from a
+        prior fallback, a second component whose pinned version 404s must
+        short-circuit to the cached value without a second HTTP call.
+
+        Pins down the fix for the 404 amplification vulnerability: a
+        regression that dropped the cache-hit short-circuit would force
+        ``mock_session.get.call_count == 2`` and fail this test.
+        """
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()
+        # Pre-warm the name-only cache slot, as a prior 404 fallback would.
+        pre_cached = NormalizedMetadata(description="cached foo", source="pypi.org")
+        pypi_module._cache[f"pypi:foo{pypi_module._LATEST_CACHE_SUFFIX}"] = pre_cached
+
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@99.99.99")
+        versioned = Mock()
+        versioned.status_code = 404
+        mock_session.get.return_value = versioned
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is pre_cached
+        assert mock_session.get.call_count == 1, "versioned 404 with a warm latest cache must NOT issue a second GET"
+
+    def test_versioned_404_transient_error_not_cached(self, mock_session):
+        """When the version-specific endpoint 404s and the latest-endpoint
+        retry returns a transient 5xx, the source must NOT cache None for
+        the name-only key — a subsequent component in the same run should
+        still get a chance to re-fetch when PyPI recovers.
+        """
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@99.99.99")
+
+        versioned = Mock()
+        versioned.status_code = 404
+        transient = Mock()
+        transient.status_code = 503
+        mock_session.get.side_effect = [versioned, transient]
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is None
+        assert f"pypi:foo{pypi_module._LATEST_CACHE_SUFFIX}" not in pypi_module._cache, (
+            "transient 5xx must not be cached — retries can still succeed later"
+        )
 
     def test_fetch_malformed_digests_ignored(self, mock_session):
         """Non-string hash values in the digests block do not blow up."""
@@ -3423,14 +3481,19 @@ class TestBSIEnrichmentFields:
         assert len(package.checksums) == 0
 
     def test_spdx_hash_non_hex_characters_rejected(self):
-        """SPDX parity: non-hex content rejected symmetrically with the CDX path."""
+        """SPDX parity: non-hex content rejected symmetrically with the CDX path.
+
+        Payload is exactly 64 characters (valid SHA-256 length) but every
+        character is outside ``[0-9a-f]`` so it isolates the regex branch —
+        a bug that dropped the length check would still fail this test.
+        """
         from spdx_tools.spdx.model import Package, SpdxNoAssertion
 
         from sbomify_action._enrichment.metadata import NormalizedMetadata
         from sbomify_action.enrichment import _apply_metadata_to_spdx_package
 
         package = Package(name="x", spdx_id="SPDXRef-x", download_location=SpdxNoAssertion())
-        payload = "<script>alert(1)</script>abcdef" + "0" * 34
+        payload = "g" * 64  # length-valid but never hex
         metadata = NormalizedMetadata(hashes={"sha256": payload})
         _apply_metadata_to_spdx_package(package, metadata)
         assert len(package.checksums) == 0
