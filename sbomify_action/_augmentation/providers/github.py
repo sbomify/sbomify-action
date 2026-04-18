@@ -92,8 +92,14 @@ class GitHubActionsProvider:
         # CISA 2025 Generation Context to "build" when running on GitHub
         # Actions so downstream consumers (and the compliance plugins) see
         # a value even when the user hasn't supplied sbomify.json.
-        # Other providers (json_config, sbomify API) override this via the
-        # standard merge rules because their `source` priority is higher.
+        #
+        # Priority interaction with other providers: the registry merges
+        # providers in ascending-priority order where `result.merge(later)`
+        # preserves already-set fields. json_config (priority 10) runs
+        # before github-actions (priority 20), so a lifecycle_phase set in
+        # sbomify.json wins. sbomify-api (priority 50) runs AFTER and
+        # therefore does NOT override the CI default — sbomify-api only
+        # fills in fields that no higher-priority provider has set.
         return AugmentationMetadata(
             source=self.name,
             vcs_url=vcs_url,

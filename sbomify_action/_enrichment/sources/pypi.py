@@ -22,6 +22,25 @@ DEFAULT_TIMEOUT = 10  # seconds - PyPI is fast
 _cache: Dict[str, Optional[NormalizedMetadata]] = {}
 
 
+def is_pep691_yanked(value: Any) -> bool:
+    """Return True if `value` indicates a PEP 691 "yanked" state.
+
+    PEP 691 specifies the `yanked` key is either a boolean (True -> yanked)
+    or a non-empty string (the reason; presence means yanked). Any other
+    type (dict, list, numeric) is treated as non-yanked so a malformed or
+    malicious response can't inject a fake yank.
+
+    isinstance(bool) is checked first because `isinstance(True, int)`
+    returns True in Python; without the bool-first ordering the numeric
+    branch would never be reachable for genuine bool values.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return bool(value.strip())
+    return False
+
+
 def clear_cache() -> None:
     """Clear the PyPI metadata cache."""
     _cache.clear()
@@ -101,11 +120,30 @@ class PyPISource:
             response = session.get(primary_url, timeout=DEFAULT_TIMEOUT)
 
             if response.status_code == 404 and primary_url != latest_url:
+                # Reuse a name-only cache entry if we've already fetched the
+                # latest endpoint for this package. Without this an attacker
+                # submitting N distinct fake versions for a real package
+                # would force 2N requests — the N 404s plus N redundant
+                # latest-only GETs. The name-only cache key is distinct
+                # from the version-keyed cache so real version hits are
+                # unaffected.
+                latest_cache_key = f"pypi:{purl.name}:_latest"
+                if latest_cache_key in _cache:
+                    logger.debug(f"Cache hit (PyPI latest) for 404 fallback: {purl.name}")
+                    metadata = _cache[latest_cache_key]
+                    _cache[cache_key] = metadata
+                    return metadata
                 logger.debug(
                     f"PyPI version-specific 404 for {purl.name}@{purl.version}; "
                     "retrying the latest-only endpoint for base metadata."
                 )
                 response = session.get(latest_url, timeout=DEFAULT_TIMEOUT)
+                metadata = None
+                if response.status_code == 200:
+                    metadata = self._normalize_response(purl.name, response.json())
+                _cache[latest_cache_key] = metadata
+                _cache[cache_key] = metadata
+                return metadata
 
             metadata = None
             if response.status_code == 200:
@@ -234,20 +272,9 @@ class PyPISource:
                 upload_date = upload_time.strip().split("T", 1)[0]
                 cle_release_date = upload_date
 
-        # Per PEP 691, the `yanked` key can be either a bool (True -> yanked) or
-        # a non-empty string (the reason string; presence also means yanked).
-        # Accept both to stay spec-compliant, but reject unexpected types so a
-        # malformed or malicious response can't inject a fake yank.
-        def _is_pep691_yanked(value: Any) -> bool:
-            if isinstance(value, bool):
-                return value
-            if isinstance(value, str):
-                return bool(value.strip())
-            return False
-
-        is_yanked = _is_pep691_yanked(info.get("yanked"))
+        is_yanked = is_pep691_yanked(info.get("yanked"))
         if not is_yanked and selected_dist is not None:
-            is_yanked = _is_pep691_yanked(selected_dist.get("yanked"))
+            is_yanked = is_pep691_yanked(selected_dist.get("yanked"))
         if is_yanked and upload_date:
             # Only emit an EOL date when we have a real upload timestamp.
             # Falling back to "today" would make the output non-deterministic

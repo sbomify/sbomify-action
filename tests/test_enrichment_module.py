@@ -568,6 +568,30 @@ class TestPyPISource:
         metadata = source.fetch(purl, mock_session)
         assert metadata.cle_eol is None
 
+    # Direct unit tests for the module-level is_pep691_yanked helper.
+    # Kept close to the fetch-level tests so the two contracts stay in sync.
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (True, True),
+            (False, False),
+            (None, False),
+            ("", False),
+            ("   ", False),
+            ("Security advisory X", True),
+            ({"reason": "x"}, False),
+            ([True], False),
+            (1, False),  # isinstance(True, int) but bool check runs first
+            (0, False),
+            (0.5, False),
+        ],
+    )
+    def test_is_pep691_yanked_contract(self, value, expected):
+        from sbomify_action._enrichment.sources.pypi import is_pep691_yanked
+
+        assert is_pep691_yanked(value) is expected, f"is_pep691_yanked({value!r}) expected {expected!r}"
+
     @pytest.mark.parametrize("bad_yanked", [{"reason": "x"}, [True], 1, 0.5, 0])
     def test_fetch_yanked_non_bool_non_string_ignored(self, mock_session, bad_yanked):
         """Malformed yanked types (dict / list / number) must not trigger yank.
@@ -672,6 +696,9 @@ class TestPyPISource:
     def test_fetch_encodes_special_characters_in_purl_components(self, mock_session):
         """Safe special characters survive but are percent-encoded in the URL,
         so `requests` cannot normalise them into path traversal."""
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()
         source = PyPISource()
         purl = PackageURL.from_string("pkg:pypi/some%20pkg@1.0%2B0")
 
@@ -683,8 +710,11 @@ class TestPyPISource:
         source.fetch(purl, mock_session)
 
         called_url = mock_session.get.call_args[0][0]
-        # Space and '+' are percent-encoded; no raw path separators leak through.
-        assert "some%20pkg" in called_url or "some pkg" not in called_url
+        # Space is percent-encoded as %20; raw space never reaches the URL;
+        # the '+' version marker is preserved as its percent-encoded form;
+        # and no raw path separators leak through.
+        assert "some%20pkg" in called_url, f"expected encoded space in {called_url!r}"
+        assert " " not in called_url, f"raw space should never reach the URL: {called_url!r}"
         assert ".." not in called_url
         assert "/pypi/" in called_url
 
@@ -3378,6 +3408,32 @@ class TestBSIEnrichmentFields:
         metadata = NormalizedMetadata(hashes={"sha256": payload})
         _apply_metadata_to_cyclonedx_component(component, metadata)
         assert len(list(component.hashes)) == 0
+
+    def test_spdx_hash_wrong_length_rejected(self):
+        """SPDX parity: a SHA-256 value of the wrong length is rejected
+        rather than written into the package checksums."""
+        from spdx_tools.spdx.model import Package, SpdxNoAssertion
+
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_spdx_package
+
+        package = Package(name="x", spdx_id="SPDXRef-x", download_location=SpdxNoAssertion())
+        metadata = NormalizedMetadata(hashes={"sha256": "a" * 40})  # wrong length
+        _apply_metadata_to_spdx_package(package, metadata)
+        assert len(package.checksums) == 0
+
+    def test_spdx_hash_non_hex_characters_rejected(self):
+        """SPDX parity: non-hex content rejected symmetrically with the CDX path."""
+        from spdx_tools.spdx.model import Package, SpdxNoAssertion
+
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_spdx_package
+
+        package = Package(name="x", spdx_id="SPDXRef-x", download_location=SpdxNoAssertion())
+        payload = "<script>alert(1)</script>abcdef" + "0" * 34
+        metadata = NormalizedMetadata(hashes={"sha256": payload})
+        _apply_metadata_to_spdx_package(package, metadata)
+        assert len(package.checksums) == 0
 
     def test_spdx_checksums_not_duplicated(self):
         """Repeated enrichment runs don't duplicate the same checksum entry."""
