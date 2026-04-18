@@ -1,6 +1,7 @@
 """PyPI data source for Python package metadata."""
 
 import json
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import requests
@@ -71,7 +72,14 @@ class PyPISource:
             return _cache[cache_key]
 
         try:
-            url = f"{PYPI_API_BASE}/{purl.name}/json"
+            # Prefer the version-specific endpoint when a version is present:
+            # it surfaces per-release fields (yanked, upload_time, file hashes)
+            # that the latest-only endpoint flattens out. Fall back to the
+            # latest-only endpoint when no version is available in the PURL.
+            if purl.version:
+                url = f"{PYPI_API_BASE}/{purl.name}/{purl.version}/json"
+            else:
+                url = f"{PYPI_API_BASE}/{purl.name}/json"
             logger.debug(f"Fetching PyPI metadata for: {purl.name}")
             response = session.get(url, timeout=DEFAULT_TIMEOUT)
 
@@ -162,17 +170,50 @@ class PyPISource:
             elif "homepage" in key_lower and not homepage:
                 homepage = url_value
 
-        # Extract distribution filename from release files (BSI TR-03183-2)
-        # Prefer wheel (.whl) over sdist (.tar.gz)
+        # Extract distribution filename + hashes from release files
+        # (BSI TR-03183-2 §5.2.2 filename + hash / NTIA / CISA hash element).
+        # Prefer wheel (.whl) over sdist (.tar.gz); take the hashes of the
+        # distribution whose filename we record so the two fields describe
+        # the same artefact.
         distribution_filename = None
+        distribution_hashes: Dict[str, str] = {}
         urls = data.get("urls", [])
+        selected_dist: Optional[Dict[str, Any]] = None
         for dist in urls:
             fn = dist.get("filename", "")
             if fn.endswith(".whl"):
                 distribution_filename = fn
+                selected_dist = dist
                 break
             elif fn and not distribution_filename:
                 distribution_filename = fn
+                selected_dist = dist
+        if selected_dist is not None:
+            raw_digests = selected_dist.get("digests") or {}
+            if isinstance(raw_digests, dict):
+                for alg_name, hex_value in raw_digests.items():
+                    if isinstance(alg_name, str) and isinstance(hex_value, str) and hex_value.strip():
+                        distribution_hashes[alg_name.strip().lower()] = hex_value.strip().lower()
+
+        # Release date + lifecycle-status inference (ECMA-428 CLE).
+        # - release_date: upload_time_iso_8601 of the chosen distribution file.
+        # - end_of_life: version-level yanked flag. A yanked release has been
+        #   withdrawn by its maintainer and should no longer be consumed; we
+        #   map that to an EOL date at the upload time (falling back to the
+        #   current UTC date if the upload timestamp is unavailable).
+        cle_release_date: Optional[str] = None
+        cle_eol: Optional[str] = None
+        upload_date = None
+        if selected_dist is not None:
+            upload_time = selected_dist.get("upload_time_iso_8601") or selected_dist.get("upload_time") or ""
+            if isinstance(upload_time, str) and upload_time.strip():
+                upload_date = upload_time.strip().split("T", 1)[0]
+                cle_release_date = upload_date
+        is_yanked = bool(info.get("yanked"))
+        if not is_yanked and selected_dist is not None:
+            is_yanked = bool(selected_dist.get("yanked"))
+        if is_yanked:
+            cle_eol = upload_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         logger.debug(f"Successfully fetched PyPI metadata for: {package_name}")
 
@@ -194,6 +235,12 @@ class PyPISource:
             field_sources["issue_tracker_url"] = self.name
         if distribution_filename:
             field_sources["distribution_filename"] = self.name
+        if distribution_hashes:
+            field_sources["hashes"] = self.name
+        if cle_release_date:
+            field_sources["cle_release_date"] = self.name
+        if cle_eol:
+            field_sources["cle_eol"] = self.name
 
         return NormalizedMetadata(
             description=info.get("summary"),
@@ -208,6 +255,9 @@ class PyPISource:
             maintainer_name=maintainer_name,
             maintainer_email=maintainer_email,
             distribution_filename=distribution_filename,
+            hashes=distribution_hashes,
+            cle_release_date=cle_release_date,
+            cle_eol=cle_eol,
             source=self.name,
             field_sources=field_sources,
         )

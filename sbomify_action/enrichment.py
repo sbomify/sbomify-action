@@ -55,7 +55,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from cyclonedx.model import ExternalReference, ExternalReferenceType, Property, XsUri
+from cyclonedx.model import ExternalReference, ExternalReferenceType, HashAlgorithm, HashType, Property, XsUri
 from cyclonedx.model.bom import Bom
 from cyclonedx.model.component import Component, ComponentType
 from cyclonedx.model.contact import OrganizationalContact, OrganizationalEntity
@@ -63,6 +63,8 @@ from cyclonedx.model.license import LicenseAcknowledgement, LicenseExpression
 from spdx_tools.spdx.model import (  # type: ignore[attr-defined]
     Actor,
     ActorType,
+    Checksum,
+    ChecksumAlgorithm,
     Document,
     ExternalPackageRef,
     ExternalPackageRefCategory,
@@ -515,6 +517,96 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
     return added
 
 
+# Map SPDX-style algorithm names (PyPI digest keys) to CycloneDX HashAlgorithm.
+# The CycloneDX taxonomy uses upper-case SHA-256 etc.; the PyPI JSON API and
+# SPDX checksum fields use lower-case sha256 etc. We normalise to the enum.
+_CYCLONEDX_HASH_ALGORITHMS: Dict[str, HashAlgorithm] = {
+    "md5": HashAlgorithm.MD5,
+    "sha1": HashAlgorithm.SHA_1,
+    "sha-1": HashAlgorithm.SHA_1,
+    "sha256": HashAlgorithm.SHA_256,
+    "sha-256": HashAlgorithm.SHA_256,
+    "sha384": HashAlgorithm.SHA_384,
+    "sha-384": HashAlgorithm.SHA_384,
+    "sha512": HashAlgorithm.SHA_512,
+    "sha-512": HashAlgorithm.SHA_512,
+    "sha3-256": HashAlgorithm.SHA3_256,
+    "sha3-384": HashAlgorithm.SHA3_384,
+    "sha3-512": HashAlgorithm.SHA3_512,
+    "blake2b-256": HashAlgorithm.BLAKE2B_256,
+    "blake2b-384": HashAlgorithm.BLAKE2B_384,
+    "blake2b-512": HashAlgorithm.BLAKE2B_512,
+    "blake3": HashAlgorithm.BLAKE3,
+}
+
+
+# SPDX ChecksumAlgorithm mapping — superset of CycloneDX since SPDX has
+# SHA-224, MD2/MD4/MD6 and ADLER32 in addition.
+_SPDX_CHECKSUM_ALGORITHMS: Dict[str, ChecksumAlgorithm] = {
+    "md5": ChecksumAlgorithm.MD5,
+    "sha1": ChecksumAlgorithm.SHA1,
+    "sha-1": ChecksumAlgorithm.SHA1,
+    "sha224": ChecksumAlgorithm.SHA224,
+    "sha-224": ChecksumAlgorithm.SHA224,
+    "sha256": ChecksumAlgorithm.SHA256,
+    "sha-256": ChecksumAlgorithm.SHA256,
+    "sha384": ChecksumAlgorithm.SHA384,
+    "sha-384": ChecksumAlgorithm.SHA384,
+    "sha512": ChecksumAlgorithm.SHA512,
+    "sha-512": ChecksumAlgorithm.SHA512,
+    "sha3-256": ChecksumAlgorithm.SHA3_256,
+    "sha3-384": ChecksumAlgorithm.SHA3_384,
+    "sha3-512": ChecksumAlgorithm.SHA3_512,
+    "blake2b-256": ChecksumAlgorithm.BLAKE2B_256,
+    "blake2b-384": ChecksumAlgorithm.BLAKE2B_384,
+    "blake2b-512": ChecksumAlgorithm.BLAKE2B_512,
+    "blake3": ChecksumAlgorithm.BLAKE3,
+}
+
+
+def _apply_spdx_checksums(package: Package, hashes: Dict[str, str]) -> List[str]:
+    """Add distribution-artefact checksums to an SPDX package."""
+    added: List[str] = []
+    existing = {(c.algorithm, (c.value or "").lower()) for c in (package.checksums or [])}
+    for raw_alg, raw_value in hashes.items():
+        alg_key = raw_alg.strip().lower()
+        spdx_alg = _SPDX_CHECKSUM_ALGORITHMS.get(alg_key)
+        if spdx_alg is None:
+            continue
+        value = (raw_value or "").strip().lower()
+        if not value:
+            continue
+        if (spdx_alg, value) in existing:
+            continue
+        package.checksums.append(Checksum(algorithm=spdx_alg, value=value))
+        added.append(f"checksum:{alg_key}")
+        existing.add((spdx_alg, value))
+    return added
+
+
+def _apply_component_hashes(component: Component, hashes: Dict[str, str]) -> List[str]:
+    """Add distribution-artefact hashes to a CycloneDX component from a
+    `{algorithm: hex}` map. Only recognised algorithms are emitted; the
+    same (alg, content) pair is not duplicated across enrichment runs.
+    """
+    added: List[str] = []
+    existing = {(str(h.alg), str(h.content).lower()) for h in component.hashes}
+    for raw_alg, raw_value in hashes.items():
+        alg_key = raw_alg.strip().lower()
+        cdx_alg = _CYCLONEDX_HASH_ALGORITHMS.get(alg_key)
+        if cdx_alg is None:
+            continue
+        value = (raw_value or "").strip().lower()
+        if not value:
+            continue
+        if (str(cdx_alg), value) in existing:
+            continue
+        component.hashes.add(HashType(alg=cdx_alg, content=value))
+        added.append(f"hash:{alg_key}")
+        existing.add((str(cdx_alg), value))
+    return added
+
+
 def _apply_metadata_to_cyclonedx_component(
     component: Component, metadata: NormalizedMetadata, source: str = "unknown"
 ) -> List[str]:
@@ -583,6 +675,12 @@ def _apply_metadata_to_cyclonedx_component(
     # BSI-compliant SBOMs don't require every generator to emit these by hand.
     _added_bsi = _apply_bsi_derived_properties(component, metadata)
     added_fields.extend(_added_bsi)
+
+    # Hashes (NTIA / BSI §5.2.2 / CISA "Component Hash"). Only add algorithms
+    # we recognise and that aren't already on the component.
+    if metadata.hashes:
+        _added_hashes = _apply_component_hashes(component, metadata.hashes)
+        added_fields.extend(_added_hashes)
 
     # Manufacturer - component creator with email for BSI TR-03183-2 compliance.
     # Uses maintainer_name + maintainer_email from PyPI author/author_email fields.
@@ -711,6 +809,12 @@ def _apply_metadata_to_spdx_package(
         if sanitized_download:
             package.download_location = sanitized_download
             added_fields.append("downloadLocation")
+
+    # Checksums (NTIA / BSI §5.2.2 / CISA "Component Hash"). SPDX 2.x uses
+    # package.checksums with a ChecksumAlgorithm enum.
+    if metadata.hashes:
+        _added_sums = _apply_spdx_checksums(package, metadata.hashes)
+        added_fields.extend(_added_sums)
 
     # Licenses (sanitized) - use helper to avoid boolean evaluation of LicenseExpression
     if _is_spdx_license_empty(package.license_declared) and metadata.licenses:

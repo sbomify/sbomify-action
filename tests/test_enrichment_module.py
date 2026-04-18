@@ -2798,6 +2798,66 @@ class TestBSIEnrichmentFields:
         added = _apply_bsi_derived_properties(component, metadata)
         assert added == []
 
+    # --- P1 #3: per-component hashes ---------------------------------------------
+
+    def test_component_hashes_applied_from_pypi_digests(self):
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(
+            distribution_filename="Django-5.1-py3-none-any.whl",
+            hashes={
+                "md5": "d" * 32,
+                "sha256": "a" * 64,
+                "blake2b-256": "b" * 64,
+            },
+        )
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        alg_names = {str(h.alg) for h in component.hashes}
+        assert any("SHA_256" in n for n in alg_names)
+        assert any("MD5" in n for n in alg_names)
+        assert any("BLAKE2B_256" in n for n in alg_names)
+
+    def test_component_hashes_not_duplicated(self):
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(hashes={"sha256": "a" * 64})
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        hashes = list(component.hashes)
+        assert len(hashes) == 1
+        assert str(hashes[0].content) == "a" * 64
+
+    def test_component_hashes_unknown_algorithm_ignored(self):
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(hashes={"rot13": "a" * 32})
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        assert len(list(component.hashes)) == 0
+
+    def test_spdx_checksums_applied(self):
+        from spdx_tools.spdx.model import Package, SpdxNoAssertion
+
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_spdx_package
+
+        package = Package(
+            name="django",
+            spdx_id="SPDXRef-Package-django",
+            download_location=SpdxNoAssertion(),
+        )
+        metadata = NormalizedMetadata(hashes={"sha256": "a" * 64, "md5": "d" * 32})
+        _apply_metadata_to_spdx_package(package, metadata)
+        assert len(package.checksums) == 2
+        algs = {c.algorithm.name for c in package.checksums}
+        assert "SHA256" in algs
+        assert "MD5" in algs
+
     # --- P2 #6: enriched licences marked as BSI "original/declared" --------------
 
     def test_enriched_license_marked_declared(self):

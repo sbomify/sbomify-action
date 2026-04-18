@@ -44,6 +44,10 @@ class NormalizedMetadata:
 
     # Distribution info (BSI TR-03183-2 compliance)
     distribution_filename: Optional[str] = None
+    # Hashes of the deployable artefact, keyed by SPDX algorithm name
+    # (e.g. "sha256", "sha512", "md5"). Values are lower-case hex strings.
+    # Used to populate NTIA / BSI §5.2.2 / CISA "Component Hash" elements.
+    hashes: Dict[str, str] = field(default_factory=dict)
 
     # CLE (Common Lifecycle Enumeration) fields - ECMA-428
     # Used for distro-level lifecycle dates applied to all packages from that distro
@@ -112,6 +116,7 @@ class NormalizedMetadata:
             distribution_filename=pick(
                 "distribution_filename", self.distribution_filename, other.distribution_filename
             ),
+            hashes=pick("hashes", self.hashes, other.hashes, is_list=True),
             # CLE fields
             cle_eos=pick("cle_eos", self.cle_eos, other.cle_eos),
             cle_eol=pick("cle_eol", self.cle_eol, other.cle_eol),
@@ -136,6 +141,7 @@ class NormalizedMetadata:
             or self.maintainer_name
             or self.maintainer_email
             or self.distribution_filename
+            or self.hashes
             or self.cle_eos
             or self.cle_eol
         )
