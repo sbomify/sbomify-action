@@ -88,10 +88,17 @@ class GitHubActionsProvider:
 
         logger.info(f"Detected GitHub Actions: {repository} @ {truncate_sha(commit_sha)}")
 
+        # CI runs are, by definition, a "build" lifecycle phase. Default the
+        # CISA 2025 Generation Context to "build" when running on GitHub
+        # Actions so downstream consumers (and the compliance plugins) see
+        # a value even when the user hasn't supplied sbomify.json.
+        # Other providers (json_config, sbomify API) override this via the
+        # standard merge rules because their `source` priority is higher.
         return AugmentationMetadata(
             source=self.name,
             vcs_url=vcs_url,
             vcs_commit_sha=commit_sha,
             vcs_ref=ref,
             vcs_commit_url=vcs_commit_url,
+            lifecycle_phase="build",
         )

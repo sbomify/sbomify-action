@@ -2732,6 +2732,88 @@ class TestBSIEnrichmentFields:
         filenames = [p for p in component.properties if p.name == "bsi:component:filename"]
         assert len(filenames) == 1
 
+    # --- BSI §5.2.2 derived boolean properties -----------------------------------
+
+    def test_bsi_wheel_library_derives_archive_non_executable_structured(self):
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(distribution_filename="Django-5.1-py3-none-any.whl")
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        props = {p.name: p.value for p in component.properties}
+        assert props["bsi:component:archive"] == "archive"
+        assert props["bsi:component:executable"] == "non-executable"
+        assert props["bsi:component:structured"] == "structured"
+
+    def test_bsi_exe_application_derives_executable_no_archive(self):
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="myapp", version="1.0", type=ComponentType.APPLICATION)
+        metadata = NormalizedMetadata(distribution_filename="myapp-1.0.exe")
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        props = {p.name: p.value for p in component.properties}
+        assert props["bsi:component:executable"] == "executable"
+        assert props["bsi:component:archive"] == "no archive"
+        assert props["bsi:component:structured"] == "structured"
+
+    def test_bsi_container_type_defaults(self):
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="myimg", version="1.0", type=ComponentType.CONTAINER)
+        metadata = NormalizedMetadata()  # no filename — fall through to type-based default
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        props = {p.name: p.value for p in component.properties}
+        assert props["bsi:component:archive"] == "archive"
+        assert props["bsi:component:executable"] == "executable"
+        assert props["bsi:component:structured"] == "structured"
+
+    def test_bsi_operator_supplied_values_win(self):
+        """Pre-existing BSI properties must not be overwritten by the helper."""
+        from cyclonedx.model import Property
+
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
+        component.properties.add(Property(name="bsi:component:archive", value="no archive"))
+        component.properties.add(Property(name="bsi:component:executable", value="executable"))
+        metadata = NormalizedMetadata(distribution_filename="Django-5.1-py3-none-any.whl")
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        props = [(p.name, p.value) for p in component.properties]
+        # Only one of each; the operator's values survive
+        assert ("bsi:component:archive", "no archive") in props
+        assert ("bsi:component:executable", "executable") in props
+        assert ("bsi:component:archive", "archive") not in props
+
+    def test_bsi_unknown_filename_no_derivation(self):
+        """When we cannot derive anything confidently we emit nothing."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_bsi_derived_properties
+
+        component = Component(name="?", version="0", type=ComponentType.DEVICE)
+        metadata = NormalizedMetadata()
+        added = _apply_bsi_derived_properties(component, metadata)
+        assert added == []
+
+    # --- P2 #6: enriched licences marked as BSI "original/declared" --------------
+
+    def test_enriched_license_marked_declared(self):
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(licenses=["BSD-3-Clause"])
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        licences = list(component.licenses)
+        assert len(licences) == 1
+        # CycloneDX LicenseExpression exposes the enum via .acknowledgement
+        ack = getattr(licences[0], "acknowledgement", None)
+        assert ack is not None
+        assert str(ack.value) == "declared"
+
 
 class TestNormalizedMetadataDistributionFilename:
     """Tests for distribution_filename in NormalizedMetadata."""

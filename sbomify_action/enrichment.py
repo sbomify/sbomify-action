@@ -53,13 +53,13 @@ Plugin architecture is in sbomify_action/_enrichment/:
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from cyclonedx.model import ExternalReference, ExternalReferenceType, Property, XsUri
 from cyclonedx.model.bom import Bom
 from cyclonedx.model.component import Component, ComponentType
 from cyclonedx.model.contact import OrganizationalContact, OrganizationalEntity
-from cyclonedx.model.license import LicenseExpression
+from cyclonedx.model.license import LicenseAcknowledgement, LicenseExpression
 from spdx_tools.spdx.model import (  # type: ignore[attr-defined]
     Actor,
     ActorType,
@@ -379,6 +379,142 @@ def _extract_packages_from_spdx(document: Document) -> List[Tuple[Package, str]]
     return packages
 
 
+# Filename suffixes that BSI TR-03183-2 §5.2.2 recognises as archives.
+# Covers common language-agnostic wheel / tarball / zip / container formats.
+_BSI_ARCHIVE_SUFFIXES = (
+    ".whl",
+    ".egg",
+    ".tar",
+    ".tar.gz",
+    ".tgz",
+    ".tar.bz2",
+    ".tbz2",
+    ".tar.xz",
+    ".txz",
+    ".zip",
+    ".jar",
+    ".war",
+    ".ear",
+    ".aar",
+    ".gem",
+    ".crate",
+    ".deb",
+    ".rpm",
+    ".apk",
+    ".nupkg",
+    ".pkg",
+    ".snap",
+)
+
+# Filename suffixes treated as stand-alone executables (not archives).
+# When one of these is the filename, executable == "executable".
+_BSI_EXECUTABLE_SUFFIXES = (
+    ".exe",
+    ".msi",
+    ".bin",
+    ".elf",
+    ".app",
+    ".dll",
+    ".so",
+    ".dylib",
+)
+
+# Component types that BSI treats as non-executable source/document bundles.
+# Used when no filename is available.
+_BSI_NON_EXECUTABLE_TYPES = {
+    ComponentType.DATA,
+    ComponentType.FILE,
+    ComponentType.LIBRARY,
+    ComponentType.FRAMEWORK,
+    ComponentType.MACHINE_LEARNING_MODEL,
+}
+
+
+def _filename_suffix_matches(filename: str, suffixes: tuple[str, ...]) -> bool:
+    """Case-insensitive suffix match that handles multi-part endings like .tar.gz."""
+    lowered = filename.lower()
+    return any(lowered.endswith(suffix) for suffix in suffixes)
+
+
+def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMetadata) -> List[str]:
+    """Emit the three remaining BSI TR-03183-2 §5.2.2 boolean-style properties
+    when they can be derived unambiguously. Each property is only added when
+    absent — operator-supplied values always win.
+
+    - bsi:component:executable   "executable" | "non-executable"
+    - bsi:component:archive      "archive" | "no archive"
+    - bsi:component:structured   "structured" | "unstructured"
+
+    Derivation only triggers when we have a clear signal:
+    - A distribution filename (filename extension drives archive/executable),
+      OR
+    - A strongly-typed component (application/container/firmware/operating-system)
+      whose BSI semantics are unambiguous without a filename.
+
+    A plain `library` with no filename gets nothing added — there is no
+    reliable signal to distinguish a source tarball from a wheel from a
+    shared-library binary.
+
+    Returns the list of property names that were added (for audit trail).
+    """
+    added: List[str] = []
+    existing = {prop.name for prop in component.properties}
+    filename = (metadata.distribution_filename or "").strip()
+    component_type = getattr(component, "type", None)
+
+    _DEPLOYABLE_TYPES = (
+        ComponentType.APPLICATION,
+        ComponentType.CONTAINER,
+        ComponentType.FIRMWARE,
+        ComponentType.OPERATING_SYSTEM,
+    )
+
+    has_filename_signal = bool(filename)
+    has_type_signal = component_type in _DEPLOYABLE_TYPES
+    if not (has_filename_signal or has_type_signal):
+        return added
+
+    # --- archive ---
+    if "bsi:component:archive" not in existing:
+        archive_value: Optional[str] = None
+        if filename and _filename_suffix_matches(filename, _BSI_ARCHIVE_SUFFIXES):
+            archive_value = "archive"
+        elif filename and _filename_suffix_matches(filename, _BSI_EXECUTABLE_SUFFIXES):
+            archive_value = "no archive"
+        elif component_type in (ComponentType.CONTAINER, ComponentType.FIRMWARE):
+            archive_value = "archive"
+        elif component_type in (ComponentType.APPLICATION, ComponentType.OPERATING_SYSTEM):
+            # Installed OS / running application is not itself an archive.
+            archive_value = "no archive"
+        if archive_value is not None:
+            component.properties.add(Property(name="bsi:component:archive", value=archive_value))
+            added.append("bsi:component:archive")
+
+    # --- executable ---
+    if "bsi:component:executable" not in existing:
+        exec_value: Optional[str] = None
+        if filename and _filename_suffix_matches(filename, _BSI_EXECUTABLE_SUFFIXES):
+            exec_value = "executable"
+        elif component_type in _DEPLOYABLE_TYPES:
+            exec_value = "executable"
+        elif filename and _filename_suffix_matches(filename, _BSI_ARCHIVE_SUFFIXES):
+            # Archive-packaged libraries are not themselves executable.
+            exec_value = "non-executable"
+        if exec_value is not None:
+            component.properties.add(Property(name="bsi:component:executable", value=exec_value))
+            added.append("bsi:component:executable")
+
+    # --- structured ---
+    # Packaged software artefacts (wheels, jars, debs, containers, firmware
+    # images) all carry metadata files, so they qualify as "structured" per
+    # BSI §8.1.6.
+    if "bsi:component:structured" not in existing:
+        component.properties.add(Property(name="bsi:component:structured", value="structured"))
+        added.append("bsi:component:structured")
+
+    return added
+
+
 def _apply_metadata_to_cyclonedx_component(
     component: Component, metadata: NormalizedMetadata, source: str = "unknown"
 ) -> List[str]:
@@ -406,7 +542,9 @@ def _apply_metadata_to_cyclonedx_component(
             component.description = sanitized_desc
             added_fields.append("description")
 
-    # Licenses (sanitized)
+    # Licenses (sanitized) — marked as "declared" because enrichment pulls
+    # the licence straight from the upstream registry (PyPI trove classifier,
+    # package metadata, etc.), which is BSI §5.2.4's "original licence".
     has_licenses = component.licenses is not None and len(component.licenses) > 0
     if not has_licenses and metadata.licenses:
         sanitized_licenses: list[str] = [s for lic in metadata.licenses if (s := sanitize_license(lic)) is not None]
@@ -415,7 +553,10 @@ def _apply_metadata_to_cyclonedx_component(
                 license_expression = sanitized_licenses[0]
             else:
                 license_expression = " OR ".join(sanitized_licenses)
-            license_expr = LicenseExpression(value=license_expression)
+            license_expr = LicenseExpression(
+                value=license_expression,
+                acknowledgement=LicenseAcknowledgement.DECLARED,
+            )
             component.licenses.add(license_expr)
             added_fields.append("license")
 
@@ -436,6 +577,12 @@ def _apply_metadata_to_cyclonedx_component(
                 filename_prop = Property(name="bsi:component:filename", value=sanitized_fn)
                 component.properties.add(filename_prop)
                 added_fields.append("filename")
+
+    # BSI TR-03183-2 §5.2.2 derived properties: executable / archive / structured.
+    # Derive sensible defaults from component type and distribution filename so
+    # BSI-compliant SBOMs don't require every generator to emit these by hand.
+    _added_bsi = _apply_bsi_derived_properties(component, metadata)
+    added_fields.extend(_added_bsi)
 
     # Manufacturer - component creator with email for BSI TR-03183-2 compliance.
     # Uses maintainer_name + maintainer_email from PyPI author/author_email fields.

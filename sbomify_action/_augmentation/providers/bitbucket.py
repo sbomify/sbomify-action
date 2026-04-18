@@ -102,4 +102,5 @@ class BitbucketPipelinesProvider:
             vcs_commit_sha=commit_sha,
             vcs_ref=ref,
             vcs_commit_url=vcs_commit_url,
+            lifecycle_phase="build",
         )
