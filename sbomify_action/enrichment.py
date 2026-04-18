@@ -52,17 +52,21 @@ Plugin architecture is in sbomify_action/_enrichment/:
 
 import json
 import os
+import re as _re
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from cyclonedx.model import ExternalReference, ExternalReferenceType, Property, XsUri
+from cyclonedx.model import ExternalReference, ExternalReferenceType, HashAlgorithm, HashType, Property, XsUri
 from cyclonedx.model.bom import Bom
 from cyclonedx.model.component import Component, ComponentType
 from cyclonedx.model.contact import OrganizationalContact, OrganizationalEntity
-from cyclonedx.model.license import LicenseExpression
+from cyclonedx.model.license import LicenseAcknowledgement, LicenseExpression
+from sortedcontainers import SortedSet
 from spdx_tools.spdx.model import (  # type: ignore[attr-defined]
     Actor,
     ActorType,
+    Checksum,
+    ChecksumAlgorithm,
     Document,
     ExternalPackageRef,
     ExternalPackageRefCategory,
@@ -379,6 +383,291 @@ def _extract_packages_from_spdx(document: Document) -> List[Tuple[Package, str]]
     return packages
 
 
+# Filename suffixes that BSI TR-03183-2 §5.2.2 recognises as archives.
+# Covers common language-agnostic wheel / tarball / zip / container formats.
+_BSI_ARCHIVE_SUFFIXES = (
+    ".whl",
+    ".egg",
+    ".tar",
+    ".tar.gz",
+    ".tgz",
+    ".tar.bz2",
+    ".tbz2",
+    ".tar.xz",
+    ".txz",
+    ".zip",
+    ".jar",
+    ".war",
+    ".ear",
+    ".aar",
+    ".gem",
+    ".crate",
+    ".deb",
+    ".rpm",
+    ".apk",
+    ".nupkg",
+    ".pkg",
+    ".snap",
+)
+
+# Filename suffixes treated as stand-alone executables (not archives).
+# When one of these is the filename, executable == "executable".
+_BSI_EXECUTABLE_SUFFIXES = (
+    ".exe",
+    ".msi",
+    ".bin",
+    ".elf",
+    ".app",
+    ".dll",
+    ".so",
+    ".dylib",
+)
+
+# Strongly-typed components that carry enough semantics for BSI derivation
+# without a distribution filename. Hoisted to module scope so the same
+# tuple isn't rebuilt on every component in the enrichment loop.
+_BSI_DEPLOYABLE_TYPES = (
+    ComponentType.APPLICATION,
+    ComponentType.CONTAINER,
+    ComponentType.FIRMWARE,
+    ComponentType.OPERATING_SYSTEM,
+)
+
+
+def _filename_suffix_matches(filename: str, suffixes: tuple[str, ...]) -> bool:
+    """Case-insensitive suffix match that handles multi-part endings like .tar.gz."""
+    lowered = filename.lower()
+    return any(lowered.endswith(suffix) for suffix in suffixes)
+
+
+def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMetadata) -> List[str]:
+    """Emit the three remaining BSI TR-03183-2 §5.2.2 boolean-style properties
+    when they can be derived unambiguously. Each property is only added when
+    absent — operator-supplied values always win.
+
+    - bsi:component:executable   "executable" | "non-executable"
+    - bsi:component:archive      "archive" | "no archive"
+    - bsi:component:structured   emitted only as "structured" — any
+                                 component that reaches derivation has a
+                                 distribution filename or a strongly-typed
+                                 packaging semantics, both of which imply
+                                 an identifiable, parseable artefact per
+                                 BSI §8.1.6. We don't have a reliable
+                                 signal to emit "unstructured", so we
+                                 leave that classification to operator
+                                 input rather than guess.
+
+    Derivation only triggers when we have a clear signal:
+    - A distribution filename (filename extension drives archive/executable),
+      OR
+    - A strongly-typed component (application/container/firmware/operating-system)
+      whose BSI semantics are unambiguous without a filename.
+
+    A plain `library` with no filename gets nothing added — there is no
+    reliable signal to distinguish a source tarball from a wheel from a
+    shared-library binary.
+
+    Returns the list of property names that were added (for audit trail).
+    """
+    added: List[str] = []
+    existing = {prop.name for prop in component.properties}
+    filename = (metadata.distribution_filename or "").strip()
+    component_type = getattr(component, "type", None)
+
+    has_filename_signal = bool(filename)
+    has_type_signal = component_type in _BSI_DEPLOYABLE_TYPES
+    if not (has_filename_signal or has_type_signal):
+        return added
+
+    # --- archive ---
+    if "bsi:component:archive" not in existing:
+        archive_value: Optional[str] = None
+        if filename and _filename_suffix_matches(filename, _BSI_ARCHIVE_SUFFIXES):
+            archive_value = "archive"
+        elif filename and _filename_suffix_matches(filename, _BSI_EXECUTABLE_SUFFIXES):
+            archive_value = "no archive"
+        elif component_type in (ComponentType.CONTAINER, ComponentType.FIRMWARE):
+            archive_value = "archive"
+        elif component_type in (ComponentType.APPLICATION, ComponentType.OPERATING_SYSTEM):
+            # Installed OS / running application is not itself an archive.
+            archive_value = "no archive"
+        if archive_value is not None:
+            component.properties.add(Property(name="bsi:component:archive", value=archive_value))
+            added.append("bsi:component:archive")
+
+    # --- executable ---
+    if "bsi:component:executable" not in existing:
+        exec_value: Optional[str] = None
+        if filename and _filename_suffix_matches(filename, _BSI_EXECUTABLE_SUFFIXES):
+            exec_value = "executable"
+        elif component_type in _BSI_DEPLOYABLE_TYPES:
+            exec_value = "executable"
+        elif filename and _filename_suffix_matches(filename, _BSI_ARCHIVE_SUFFIXES):
+            # Archive-packaged libraries are not themselves executable.
+            exec_value = "non-executable"
+        if exec_value is not None:
+            component.properties.add(Property(name="bsi:component:executable", value=exec_value))
+            added.append("bsi:component:executable")
+
+    # --- structured ---
+    # Packaged software artefacts (wheels, jars, debs, containers, firmware
+    # images) all carry metadata files, so they qualify as "structured" per
+    # BSI §8.1.6.
+    if "bsi:component:structured" not in existing:
+        component.properties.add(Property(name="bsi:component:structured", value="structured"))
+        added.append("bsi:component:structured")
+
+    return added
+
+
+# Map SPDX-style algorithm names (PyPI digest keys) to CycloneDX HashAlgorithm.
+# The CycloneDX taxonomy uses upper-case SHA-256 etc.; the PyPI JSON API and
+# SPDX checksum fields use lower-case sha256 etc. We normalise to the enum.
+_CYCLONEDX_HASH_ALGORITHMS: Dict[str, HashAlgorithm] = {
+    "md5": HashAlgorithm.MD5,
+    "sha1": HashAlgorithm.SHA_1,
+    "sha-1": HashAlgorithm.SHA_1,
+    "sha256": HashAlgorithm.SHA_256,
+    "sha-256": HashAlgorithm.SHA_256,
+    "sha384": HashAlgorithm.SHA_384,
+    "sha-384": HashAlgorithm.SHA_384,
+    "sha512": HashAlgorithm.SHA_512,
+    "sha-512": HashAlgorithm.SHA_512,
+    "sha3-256": HashAlgorithm.SHA3_256,
+    "sha3-384": HashAlgorithm.SHA3_384,
+    "sha3-512": HashAlgorithm.SHA3_512,
+    "blake2b-256": HashAlgorithm.BLAKE2B_256,
+    "blake2b-384": HashAlgorithm.BLAKE2B_384,
+    "blake2b-512": HashAlgorithm.BLAKE2B_512,
+    "blake3": HashAlgorithm.BLAKE3,
+}
+
+
+# SPDX ChecksumAlgorithm mapping — superset of CycloneDX since SPDX has
+# SHA-224, MD2/MD4/MD6 and ADLER32 in addition.
+_SPDX_CHECKSUM_ALGORITHMS: Dict[str, ChecksumAlgorithm] = {
+    "md5": ChecksumAlgorithm.MD5,
+    "sha1": ChecksumAlgorithm.SHA1,
+    "sha-1": ChecksumAlgorithm.SHA1,
+    "sha224": ChecksumAlgorithm.SHA224,
+    "sha-224": ChecksumAlgorithm.SHA224,
+    "sha256": ChecksumAlgorithm.SHA256,
+    "sha-256": ChecksumAlgorithm.SHA256,
+    "sha384": ChecksumAlgorithm.SHA384,
+    "sha-384": ChecksumAlgorithm.SHA384,
+    "sha512": ChecksumAlgorithm.SHA512,
+    "sha-512": ChecksumAlgorithm.SHA512,
+    "sha3-256": ChecksumAlgorithm.SHA3_256,
+    "sha3-384": ChecksumAlgorithm.SHA3_384,
+    "sha3-512": ChecksumAlgorithm.SHA3_512,
+    "blake2b-256": ChecksumAlgorithm.BLAKE2B_256,
+    "blake2b-384": ChecksumAlgorithm.BLAKE2B_384,
+    "blake2b-512": ChecksumAlgorithm.BLAKE2B_512,
+    "blake3": ChecksumAlgorithm.BLAKE3,
+}
+
+
+def _apply_spdx_checksums(package: Package, hashes: Dict[str, str]) -> List[str]:
+    """Add distribution-artefact checksums to an SPDX package.
+
+    Shares the same hex-length validation as the CycloneDX path so that
+    any non-hex or malformed payload is rejected rather than written out
+    verbatim.
+    """
+    added: List[str] = []
+    existing = {(c.algorithm, (c.value or "").lower()) for c in (package.checksums or [])}
+    for raw_alg, raw_value in hashes.items():
+        alg_key = raw_alg.strip().lower()
+        spdx_alg = _SPDX_CHECKSUM_ALGORITHMS.get(alg_key)
+        if spdx_alg is None:
+            continue
+        value = (raw_value or "").strip().lower()
+        if not value or not _is_valid_hex_hash(alg_key, value):
+            continue
+        if (spdx_alg, value) in existing:
+            continue
+        package.checksums.append(Checksum(algorithm=spdx_alg, value=value))
+        added.append(f"checksum:{alg_key}")
+        existing.add((spdx_alg, value))
+    return added
+
+
+# Pre-compiled hex check — restricts hash content to the characters the
+# schema actually allows. Length is checked separately via _HASH_HEX_LENGTHS
+# so a malicious / misbehaving source can't inject non-hex payloads (which
+# would land verbatim in the emitted SBOM otherwise).
+_HEX_RE = _re.compile(r"^[0-9a-f]+$")
+
+_HASH_HEX_LENGTHS: Dict[str, int] = {
+    "md5": 32,
+    "sha1": 40,
+    "sha-1": 40,
+    "sha224": 56,
+    "sha-224": 56,
+    "sha256": 64,
+    "sha-256": 64,
+    "sha384": 96,
+    "sha-384": 96,
+    "sha512": 128,
+    "sha-512": 128,
+    "sha3-256": 64,
+    "sha3-384": 96,
+    "sha3-512": 128,
+    "blake2b-256": 64,
+    "blake2b-384": 96,
+    "blake2b-512": 128,
+}
+
+
+def _is_valid_hex_hash(alg_key: str, value: str) -> bool:
+    """Return True if value is a lower-case hex string of the expected
+    length for the named algorithm. Unknown algorithms pass through the
+    format check (presence-only) so BLAKE3 and future additions still work."""
+    if not _HEX_RE.match(value):
+        return False
+    expected = _HASH_HEX_LENGTHS.get(alg_key)
+    if expected is None:
+        # For algorithms with no fixed expected length (e.g. BLAKE3),
+        # just require non-empty hex.
+        return len(value) > 0
+    return len(value) == expected
+
+
+def _apply_component_hashes(component: Component, hashes: Dict[str, str]) -> List[str]:
+    """Add distribution-artefact hashes to a CycloneDX component from a
+    `{algorithm: hex}` map. Only recognised algorithms with valid hex
+    content of the expected length are emitted; the same (alg, content)
+    pair is not duplicated across enrichment runs.
+
+    `Component.hashes` defaults to an empty SortedSet in the CycloneDX
+    library, but deserialised or user-constructed components may legitimately
+    have `hashes is None`. Mirror the `(component.hashes or [])` pattern
+    already in use in `_hash_enrichment/enricher.py` so enrichment does not
+    crash on such input.
+    """
+    added: List[str] = []
+    if component.hashes is None:
+        component.hashes = SortedSet()
+    existing = {(str(h.alg), str(h.content).lower()) for h in (component.hashes or [])}
+    for raw_alg, raw_value in hashes.items():
+        alg_key = raw_alg.strip().lower()
+        cdx_alg = _CYCLONEDX_HASH_ALGORITHMS.get(alg_key)
+        if cdx_alg is None:
+            continue
+        value = (raw_value or "").strip().lower()
+        if not value or not _is_valid_hex_hash(alg_key, value):
+            continue
+        if (str(cdx_alg), value) in existing:
+            continue
+        # `component.hashes` is typed as Iterable[HashType] by the
+        # cyclonedx lib (the concrete default is SortedSet), so cast it
+        # locally to suppress mypy while preserving runtime behaviour.
+        component.hashes.add(HashType(alg=cdx_alg, content=value))  # type: ignore[union-attr]
+        added.append(f"hash:{alg_key}")
+        existing.add((str(cdx_alg), value))
+    return added
+
+
 def _apply_metadata_to_cyclonedx_component(
     component: Component, metadata: NormalizedMetadata, source: str = "unknown"
 ) -> List[str]:
@@ -406,7 +695,9 @@ def _apply_metadata_to_cyclonedx_component(
             component.description = sanitized_desc
             added_fields.append("description")
 
-    # Licenses (sanitized)
+    # Licenses (sanitized) — marked as "declared" because enrichment pulls
+    # the licence straight from the upstream registry (PyPI trove classifier,
+    # package metadata, etc.), which is BSI §5.2.4's "original licence".
     has_licenses = component.licenses is not None and len(component.licenses) > 0
     if not has_licenses and metadata.licenses:
         sanitized_licenses: list[str] = [s for lic in metadata.licenses if (s := sanitize_license(lic)) is not None]
@@ -415,7 +706,10 @@ def _apply_metadata_to_cyclonedx_component(
                 license_expression = sanitized_licenses[0]
             else:
                 license_expression = " OR ".join(sanitized_licenses)
-            license_expr = LicenseExpression(value=license_expression)
+            license_expr = LicenseExpression(
+                value=license_expression,
+                acknowledgement=LicenseAcknowledgement.DECLARED,
+            )
             component.licenses.add(license_expr)
             added_fields.append("license")
 
@@ -436,6 +730,18 @@ def _apply_metadata_to_cyclonedx_component(
                 filename_prop = Property(name="bsi:component:filename", value=sanitized_fn)
                 component.properties.add(filename_prop)
                 added_fields.append("filename")
+
+    # BSI TR-03183-2 §5.2.2 derived properties: executable / archive / structured.
+    # Derive sensible defaults from component type and distribution filename so
+    # BSI-compliant SBOMs don't require every generator to emit these by hand.
+    _added_bsi = _apply_bsi_derived_properties(component, metadata)
+    added_fields.extend(_added_bsi)
+
+    # Hashes (NTIA / BSI §5.2.2 / CISA "Component Hash"). Only add algorithms
+    # we recognise and that aren't already on the component.
+    if metadata.hashes:
+        _added_hashes = _apply_component_hashes(component, metadata.hashes)
+        added_fields.extend(_added_hashes)
 
     # Manufacturer - component creator with email for BSI TR-03183-2 compliance.
     # Uses maintainer_name + maintainer_email from PyPI author/author_email fields.
@@ -564,6 +870,12 @@ def _apply_metadata_to_spdx_package(
         if sanitized_download:
             package.download_location = sanitized_download
             added_fields.append("downloadLocation")
+
+    # Checksums (NTIA / BSI §5.2.2 / CISA "Component Hash"). SPDX 2.x uses
+    # package.checksums with a ChecksumAlgorithm enum.
+    if metadata.hashes:
+        _added_sums = _apply_spdx_checksums(package, metadata.hashes)
+        added_fields.extend(_added_sums)
 
     # Licenses (sanitized) - use helper to avoid boolean evaluation of LicenseExpression
     if _is_spdx_license_empty(package.license_declared) and metadata.licenses:

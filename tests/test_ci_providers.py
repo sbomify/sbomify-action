@@ -125,6 +125,8 @@ class TestGitHubActionsProvider(unittest.TestCase):
         self.assertEqual(result.vcs_ref, "main")
         self.assertEqual(result.vcs_commit_url, "https://github.com/owner/repo/commit/abc123def456")
         self.assertEqual(result.source, "github-actions")
+        # CISA 2025 Generation Context defaults to "build" when running in CI
+        self.assertEqual(result.lifecycle_phase, "build")
 
     @patch.dict(
         os.environ,
@@ -239,6 +241,7 @@ class TestGitLabCIProvider(unittest.TestCase):
         self.assertEqual(result.vcs_ref, "main")
         self.assertEqual(result.vcs_commit_url, "https://gitlab.com/owner/repo/-/commit/abc123def456")
         self.assertEqual(result.source, "gitlab-ci")
+        self.assertEqual(result.lifecycle_phase, "build")
 
     @patch.dict(
         os.environ,
@@ -325,6 +328,7 @@ class TestBitbucketPipelinesProvider(unittest.TestCase):
         self.assertEqual(result.vcs_ref, "main")
         self.assertEqual(result.vcs_commit_url, "https://bitbucket.org/owner/repo/commits/abc123def456")
         self.assertEqual(result.source, "bitbucket-pipelines")
+        self.assertEqual(result.lifecycle_phase, "build")
 
     @patch.dict(
         os.environ,
