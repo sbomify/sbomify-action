@@ -107,10 +107,14 @@ class PyPISource:
 
         try:
             # Reject PURL components that could rewrite the URL path.
-            # PackageURL.from_string preserves ".." and "/" in the name/version
-            # fields; `requests` then normalises raw "../.." segments, which
-            # can redirect our GET to arbitrary pypi.org paths. Encode both
-            # components with safe="" and explicitly refuse traversal tokens.
+            # Empirically, packageurl-python's PackageURL.from_string preserves
+            # ".." and "/" in the name/version fields (PEP 440 disallows them
+            # in a real PyPI version, but the parser doesn't enforce that).
+            # `requests` then normalises raw "../.." segments, which can
+            # redirect our GET to arbitrary pypi.org paths. Percent-encode
+            # both components with safe="" AND explicitly refuse traversal
+            # tokens so defence-in-depth doesn't depend on either the third-
+            # party parser or the HTTP client behaving a specific way.
             raw_name = purl.name or ""
             raw_version = purl.version or ""
             if "/" in raw_name or ".." in raw_name:

@@ -61,6 +61,7 @@ from cyclonedx.model.bom import Bom
 from cyclonedx.model.component import Component, ComponentType
 from cyclonedx.model.contact import OrganizationalContact, OrganizationalEntity
 from cyclonedx.model.license import LicenseAcknowledgement, LicenseExpression
+from sortedcontainers import SortedSet
 from spdx_tools.spdx.model import (  # type: ignore[attr-defined]
     Actor,
     ActorType,
@@ -637,9 +638,17 @@ def _apply_component_hashes(component: Component, hashes: Dict[str, str]) -> Lis
     `{algorithm: hex}` map. Only recognised algorithms with valid hex
     content of the expected length are emitted; the same (alg, content)
     pair is not duplicated across enrichment runs.
+
+    `Component.hashes` defaults to an empty SortedSet in the CycloneDX
+    library, but deserialised or user-constructed components may legitimately
+    have `hashes is None`. Mirror the `(component.hashes or [])` pattern
+    already in use in `_hash_enrichment/enricher.py` so enrichment does not
+    crash on such input.
     """
     added: List[str] = []
-    existing = {(str(h.alg), str(h.content).lower()) for h in component.hashes}
+    if component.hashes is None:
+        component.hashes = SortedSet()
+    existing = {(str(h.alg), str(h.content).lower()) for h in (component.hashes or [])}
     for raw_alg, raw_value in hashes.items():
         alg_key = raw_alg.strip().lower()
         cdx_alg = _CYCLONEDX_HASH_ALGORITHMS.get(alg_key)
@@ -650,7 +659,10 @@ def _apply_component_hashes(component: Component, hashes: Dict[str, str]) -> Lis
             continue
         if (str(cdx_alg), value) in existing:
             continue
-        component.hashes.add(HashType(alg=cdx_alg, content=value))
+        # `component.hashes` is typed as Iterable[HashType] by the
+        # cyclonedx lib (the concrete default is SortedSet), so cast it
+        # locally to suppress mypy while preserving runtime behaviour.
+        component.hashes.add(HashType(alg=cdx_alg, content=value))  # type: ignore[union-attr]
         added.append(f"hash:{alg_key}")
         existing.add((str(cdx_alg), value))
     return added

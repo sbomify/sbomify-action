@@ -3388,6 +3388,23 @@ class TestBSIEnrichmentFields:
         _apply_metadata_to_cyclonedx_component(component, metadata)
         assert len(list(component.hashes)) == 0
 
+    def test_component_hashes_initialised_when_hashes_is_none(self):
+        """Components deserialised from some inputs can legitimately have
+        `hashes is None`. The hash-enrichment path must initialise the
+        collection instead of iterating None (which would raise)."""
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
+        component.hashes = None  # type: ignore[assignment]
+        metadata = NormalizedMetadata(hashes={"sha256": "a" * 64})
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+
+        assert component.hashes is not None
+        hashes = list(component.hashes)
+        assert len(hashes) == 1
+        assert str(hashes[0].content) == "a" * 64
+
     def test_spdx_checksums_applied(self):
         from spdx_tools.spdx.model import Package, SpdxNoAssertion
 
@@ -3496,8 +3513,15 @@ class TestBSIEnrichmentFields:
         from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
 
         component = Component(name="x", version="1", type=ComponentType.LIBRARY)
-        # Script-injection attempt that happens to be 64 chars
-        payload = "<script>alert(1)</script>abcdef" + "0" * 34
+        # Exactly 64 characters but only hex up to "abcdef" plus zeros is NOT
+        # the point — this payload ALSO contains script-injection tokens, and
+        # we want the non-hex regex branch to reject it. The test-intent is
+        # "characters outside [0-9a-f] are refused", so we pin the payload
+        # length to the valid SHA-256 length and put the non-hex tokens up
+        # front. See test_spdx_hash_non_hex_characters_rejected for the
+        # cleaner "g" * 64 variant that isolates only the regex branch.
+        payload = "<script>alert(1)</script>abcdef" + "0" * 33  # len == 64
+        assert len(payload) == 64
         metadata = NormalizedMetadata(hashes={"sha256": payload})
         _apply_metadata_to_cyclonedx_component(component, metadata)
         assert len(list(component.hashes)) == 0
