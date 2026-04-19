@@ -625,6 +625,15 @@ _HASH_HEX_LENGTHS: Dict[str, int] = {
     "sha3-256": 64,
     "sha3-384": 96,
     "sha3-512": 128,
+    # Both PyPI underscore variants (warehouse legacy.py emits
+    # `blake2b_256`) and the canonical hyphen form — keep the two
+    # maps mutually consistent with _CYCLONEDX_HASH_ALGORITHMS /
+    # _SPDX_CHECKSUM_ALGORITHMS. Missing an entry here silently falls
+    # back to the presence-only "unknown algorithm" branch, which
+    # would accept a 4-char or 80-char hex payload as a valid hash.
+    "blake2b_256": 64,
+    "blake2b_384": 96,
+    "blake2b_512": 128,
     "blake2b-256": 64,
     "blake2b-384": 96,
     "blake2b-512": 128,

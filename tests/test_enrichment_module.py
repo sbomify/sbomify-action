@@ -3559,6 +3559,43 @@ class TestBSIEnrichmentFields:
         _apply_metadata_to_cyclonedx_component(component, metadata)
         assert len(list(component.hashes)) == 0
 
+    @pytest.mark.parametrize(
+        "alg,bad_value",
+        [
+            # Underscore forms (as emitted by PyPI / warehouse legacy.py):
+            # missing length table entries would let these through the
+            # "unknown algorithm — presence only" branch and accept any
+            # hex string as a valid BLAKE2b digest. Each pair is either
+            # a too-short or too-long hex string for the named algorithm.
+            ("blake2b_256", "a" * 4),  # correct length is 64
+            ("blake2b_256", "a" * 80),
+            ("blake2b_384", "a" * 64),  # correct length is 96
+            ("blake2b_512", "a" * 64),  # correct length is 128
+            # Hyphen forms should behave identically.
+            ("blake2b-256", "a" * 4),
+            ("blake2b-384", "a" * 64),
+        ],
+    )
+    def test_component_blake2b_wrong_length_rejected(self, alg, bad_value):
+        """Regression: round-8 added blake2b_256/384/512 underscore keys
+        to the algorithm maps so PyPI-emitted digests map to the CDX enum,
+        but the parallel _HASH_HEX_LENGTHS table only had hyphen forms.
+        Length validation fell through to the "unknown algorithm" branch
+        and accepted any hex string. A malicious / truncated 4-char hex
+        would land in the SBOM as a valid BLAKE2b hash. Pin the fix so
+        both sets of keys stay in sync.
+        """
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+
+        component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
+        metadata = NormalizedMetadata(hashes={alg: bad_value})
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        assert len(list(component.hashes)) == 0, (
+            f"wrong-length {alg} ({len(bad_value)} chars) should have been rejected; "
+            f"got hashes={list(component.hashes)!r}"
+        )
+
     def test_component_hashes_initialised_when_hashes_is_none(self):
         """Components deserialised from some inputs can legitimately have
         `hashes is None`. The hash-enrichment path must initialise the
