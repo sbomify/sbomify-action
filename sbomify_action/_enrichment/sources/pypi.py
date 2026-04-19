@@ -117,17 +117,25 @@ class PyPISource:
             # party parser or the HTTP client behaving a specific way.
             raw_name = purl.name or ""
             raw_version = purl.version or ""
-            if "/" in raw_name or ".." in raw_name:
+            # Path-traversal tokens in name/version could rewrite the
+            # request URL after `requests` normalises raw "../.." segments.
+            # ":" is additionally refused: PEP 440 forbids ":" in a
+            # canonical version, and allowing it would let a crafted PURL
+            # like `pkg:pypi/foo@:latest` build a cache key that collides
+            # with the name-only `::latest` sentinel slot.
+            if "/" in raw_name or ".." in raw_name or ":" in raw_name:
                 logger.warning(
-                    f"Refusing PyPI fetch for PURL with path-traversal tokens in name: {raw_name!r} "
-                    f"(rejected because the name contains '/' or '..' which could rewrite the request URL)"
+                    f"Refusing PyPI fetch for PURL with unsafe tokens in name: {raw_name!r} "
+                    f"(rejected because the name contains '/', '..' or ':' which could "
+                    f"rewrite the request URL or collide with an internal cache key)"
                 )
                 _cache[cache_key] = None
                 return None
-            if "/" in raw_version or ".." in raw_version:
+            if "/" in raw_version or ".." in raw_version or ":" in raw_version:
                 logger.warning(
-                    f"Refusing PyPI fetch for PURL with path-traversal tokens in version: {raw_version!r} "
-                    f"(rejected because the version contains '/' or '..' which could rewrite the request URL)"
+                    f"Refusing PyPI fetch for PURL with unsafe tokens in version: {raw_version!r} "
+                    f"(rejected because the version contains '/', '..' or ':' which could "
+                    f"rewrite the request URL or collide with an internal cache key)"
                 )
                 _cache[cache_key] = None
                 return None

@@ -461,6 +461,82 @@ class TestPyPISource:
         assert metadata.cle_release_date == "2024-11-05"
         assert metadata.cle_eol is None  # Not yanked
 
+    def test_fetch_captures_pypi_blake2b_256_digest(self, mock_session):
+        """PyPI's JSON API emits BLAKE2b-256 under the `blake2b_256` key
+        (underscore, not hyphen). Previously our algorithm mapping only
+        recognised the hyphenated canonical form, so every BLAKE2b hash
+        from a PyPI wheel was silently dropped during enrichment. Pin
+        the mapping so a regression gets caught immediately.
+        """
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/requests@2.31.0")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "info": {"summary": "HTTP for humans", "license": "Apache-2.0"},
+            "urls": [
+                {
+                    "filename": "requests-2.31.0-py3-none-any.whl",
+                    "digests": {
+                        "blake2b_256": "1" * 64,  # underscore — PyPI canonical
+                        "md5": "2" * 32,
+                        "sha256": "3" * 64,
+                    },
+                    "upload_time_iso_8601": "2023-05-22T00:00:00Z",
+                }
+            ],
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is not None
+        # All three digests must land in the normalised hashes map.
+        assert metadata.hashes == {
+            "blake2b_256": "1" * 64,
+            "md5": "2" * 32,
+            "sha256": "3" * 64,
+        }
+
+    def test_fetch_rejects_purl_version_with_colon(self, mock_session):
+        """A PURL whose version contains ':' is rejected. PEP 440 forbids
+        ':' in versions, and allowing it would let a crafted PURL like
+        `pkg:pypi/foo@:latest` build a primary cache key `pypi:foo::latest`
+        that collides with the internal name-only `_LATEST_CACHE_SUFFIX`
+        slot and cross-poison distinct packages.
+        """
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()
+
+        class _Shim:
+            name = "foo"
+            version = ":latest"
+
+        source = PyPISource()
+        metadata = source.fetch(_Shim(), mock_session)  # type: ignore[arg-type]
+
+        assert metadata is None
+        assert not mock_session.get.called, "colon-bearing version should be refused before any network I/O"
+
+    def test_fetch_rejects_purl_name_with_colon(self, mock_session):
+        """Symmetric guard: colons in the name field are refused too
+        (same cache-key collision potential)."""
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()
+
+        class _Shim:
+            name = "evil:name"
+            version = "1.0"
+
+        source = PyPISource()
+        metadata = source.fetch(_Shim(), mock_session)  # type: ignore[arg-type]
+
+        assert metadata is None
+        assert not mock_session.get.called
+
     def test_fetch_prefers_wheel_over_sdist_for_hashes(self, mock_session):
         """When multiple dists are available, wheel wins and its digests come through."""
         source = PyPISource()

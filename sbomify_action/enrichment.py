@@ -536,6 +536,14 @@ _CYCLONEDX_HASH_ALGORITHMS: Dict[str, HashAlgorithm] = {
     "sha3-256": HashAlgorithm.SHA3_256,
     "sha3-384": HashAlgorithm.SHA3_384,
     "sha3-512": HashAlgorithm.SHA3_512,
+    # PyPI's JSON API historically emits BLAKE2b digests under the
+    # `blake2b_256` key (underscore, not hyphen) — see pypi/warehouse
+    # legacy.py. Accept both forms so PyPI-enriched SBOMs don't silently
+    # drop their BLAKE2b hash. Hyphen is retained for other emitters
+    # that follow the canonical BLAKE2 naming.
+    "blake2b_256": HashAlgorithm.BLAKE2B_256,
+    "blake2b_384": HashAlgorithm.BLAKE2B_384,
+    "blake2b_512": HashAlgorithm.BLAKE2B_512,
     "blake2b-256": HashAlgorithm.BLAKE2B_256,
     "blake2b-384": HashAlgorithm.BLAKE2B_384,
     "blake2b-512": HashAlgorithm.BLAKE2B_512,
@@ -560,6 +568,10 @@ _SPDX_CHECKSUM_ALGORITHMS: Dict[str, ChecksumAlgorithm] = {
     "sha3-256": ChecksumAlgorithm.SHA3_256,
     "sha3-384": ChecksumAlgorithm.SHA3_384,
     "sha3-512": ChecksumAlgorithm.SHA3_512,
+    # PyPI underscore variants (see comment on the CDX mapping).
+    "blake2b_256": ChecksumAlgorithm.BLAKE2B_256,
+    "blake2b_384": ChecksumAlgorithm.BLAKE2B_384,
+    "blake2b_512": ChecksumAlgorithm.BLAKE2B_512,
     "blake2b-256": ChecksumAlgorithm.BLAKE2B_256,
     "blake2b-384": ChecksumAlgorithm.BLAKE2B_384,
     "blake2b-512": ChecksumAlgorithm.BLAKE2B_512,
