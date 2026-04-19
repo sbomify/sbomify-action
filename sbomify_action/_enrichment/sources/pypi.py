@@ -118,11 +118,17 @@ class PyPISource:
             raw_name = purl.name or ""
             raw_version = purl.version or ""
             if "/" in raw_name or ".." in raw_name:
-                logger.warning(f"Refusing PyPI fetch for PURL with suspicious name: {raw_name!r}")
+                logger.warning(
+                    f"Refusing PyPI fetch for PURL with path-traversal tokens in name: {raw_name!r} "
+                    f"(rejected because the name contains '/' or '..' which could rewrite the request URL)"
+                )
                 _cache[cache_key] = None
                 return None
             if "/" in raw_version or ".." in raw_version:
-                logger.warning(f"Refusing PyPI fetch for PURL with suspicious version: {raw_version!r}")
+                logger.warning(
+                    f"Refusing PyPI fetch for PURL with path-traversal tokens in version: {raw_version!r} "
+                    f"(rejected because the version contains '/' or '..' which could rewrite the request URL)"
+                )
                 _cache[cache_key] = None
                 return None
             safe_name = quote(raw_name, safe="")
@@ -177,25 +183,48 @@ class PyPISource:
             metadata = None
             if response.status_code == 200:
                 metadata = self._normalize_response(purl.name, response.json())
+                _cache[cache_key] = metadata
             elif response.status_code == 404:
+                # Package genuinely missing — permanent, safe to cache so
+                # repeat components for the same missing name skip the
+                # network round-trip.
                 logger.debug(f"Package not found on PyPI: {purl.name}")
+                _cache[cache_key] = None
             else:
-                logger.warning(f"Failed to fetch PyPI metadata for {purl.name}: HTTP {response.status_code}")
-
-            # Cache result
-            _cache[cache_key] = metadata
+                # Transient failure (5xx / rate limit). Do NOT cache:
+                # a retry on a later component may succeed once PyPI
+                # recovers. Include package + HTTP status so ops logs
+                # show what to correlate against PyPI status pages.
+                logger.warning(
+                    f"Transient PyPI error for {purl.name}@{purl.version or 'latest'}: "
+                    f"HTTP {response.status_code} (not caching — later components will retry)"
+                )
             return metadata
 
         except requests.exceptions.Timeout:
-            logger.warning(f"Timeout fetching PyPI metadata for {purl.name}")
-            _cache[cache_key] = None
+            # Timeout is always transient — network / slow-server.
+            # Do not cache so a later component can re-try.
+            logger.warning(
+                f"Timeout fetching PyPI metadata for {purl.name}@{purl.version or 'latest'} "
+                f"(not caching — later components will retry)"
+            )
             return None
         except requests.exceptions.RequestException as e:
-            logger.warning(f"Error fetching PyPI metadata for {purl.name}: {e}")
-            _cache[cache_key] = None
+            # Network-layer exceptions (ConnectionError, SSLError,
+            # TooManyRedirects, etc.) are almost always transient.
+            logger.warning(
+                f"Network error fetching PyPI metadata for {purl.name}@{purl.version or 'latest'}: "
+                f"{e.__class__.__name__}: {e} (not caching — later components will retry)"
+            )
             return None
         except json.JSONDecodeError as e:
-            logger.warning(f"JSON decode error for PyPI {purl.name}: {e}")
+            # Malformed response is almost always a deterministic
+            # upstream issue (HTML error page, corrupt encoding) — cache
+            # None so we don't re-hit it N times in the same run.
+            logger.warning(
+                f"JSON decode error for PyPI {purl.name}@{purl.version or 'latest'}: {e} "
+                f"(caching None to avoid repeated failures)"
+            )
             _cache[cache_key] = None
             return None
 

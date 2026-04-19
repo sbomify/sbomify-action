@@ -844,6 +844,84 @@ class TestPyPISource:
             "transient 5xx must not be cached — retries can still succeed later"
         )
 
+    def test_direct_path_transient_5xx_not_cached(self, mock_session):
+        """Primary-URL 5xx must not cache None; a later component retry
+        against PyPI should still be able to hit the network.
+        """
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@1.0")
+
+        failed = Mock()
+        failed.status_code = 503
+        mock_session.get.return_value = failed
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is None
+        assert "pypi:foo:1.0" not in pypi_module._cache, "transient 5xx on the primary URL must not be cached"
+
+    def test_direct_path_timeout_not_cached(self, mock_session):
+        """requests.Timeout is always transient — the cache must stay
+        empty so a subsequent component can attempt a fresh fetch.
+        """
+        import requests as _requests
+
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@1.0")
+
+        mock_session.get.side_effect = _requests.exceptions.Timeout("simulated")
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is None
+        assert "pypi:foo:1.0" not in pypi_module._cache, "timeouts must not be cached — later components may retry"
+
+    def test_direct_path_connection_error_not_cached(self, mock_session):
+        """Network-layer RequestException (e.g. ConnectionError) is treated
+        as transient and must not poison the cache."""
+        import requests as _requests
+
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/foo@1.0")
+
+        mock_session.get.side_effect = _requests.exceptions.ConnectionError("refused")
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is None
+        assert "pypi:foo:1.0" not in pypi_module._cache
+
+    def test_direct_path_404_is_cached(self, mock_session):
+        """Genuine 404 is a permanent "package missing" — SAFE to cache
+        so repeated components for the same name skip the network.
+        """
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()
+        source = PyPISource()
+        purl = PackageURL.from_string("pkg:pypi/never-existed@1.0")
+
+        missing = Mock()
+        missing.status_code = 404
+        mock_session.get.return_value = missing
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is None
+        assert "pypi:never-existed:1.0" in pypi_module._cache, (
+            "404 is permanent; caching None avoids repeated network round-trips"
+        )
+        assert pypi_module._cache["pypi:never-existed:1.0"] is None
+
     def test_fetch_malformed_digests_ignored(self, mock_session):
         """Non-string hash values in the digests block do not blow up."""
         source = PyPISource()
