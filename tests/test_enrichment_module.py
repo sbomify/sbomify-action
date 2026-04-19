@@ -622,6 +622,10 @@ class TestPyPISource:
             (1, False),  # isinstance(True, int) but bool check runs first
             (0, False),
             (0.5, False),
+            # Bytes are not PEP 691 strings — even non-empty ones must not
+            # be interpreted as a yank reason.
+            (b"yanked", False),
+            (b"", False),
         ],
     )
     def test_is_pep691_yanked_contract(self, value, expected):
@@ -844,9 +848,20 @@ class TestPyPISource:
             "transient 5xx must not be cached — retries can still succeed later"
         )
 
-    def test_direct_path_transient_5xx_not_cached(self, mock_session):
-        """Primary-URL 5xx must not cache None; a later component retry
-        against PyPI should still be able to hit the network.
+    @pytest.mark.parametrize(
+        "status_code",
+        [
+            429,  # rate limit — always transient
+            500,  # internal server error
+            502,  # bad gateway
+            503,  # service unavailable
+            504,  # gateway timeout
+        ],
+    )
+    def test_direct_path_transient_status_not_cached(self, mock_session, status_code):
+        """Every status code treated as transient must leave the cache empty
+        so a later component can retry. 404 is the only non-2xx status that
+        is safe to cache (permanent "package missing").
         """
         from sbomify_action._enrichment.sources import pypi as pypi_module
 
@@ -855,13 +870,15 @@ class TestPyPISource:
         purl = PackageURL.from_string("pkg:pypi/foo@1.0")
 
         failed = Mock()
-        failed.status_code = 503
+        failed.status_code = status_code
         mock_session.get.return_value = failed
 
         metadata = source.fetch(purl, mock_session)
 
         assert metadata is None
-        assert "pypi:foo:1.0" not in pypi_module._cache, "transient 5xx on the primary URL must not be cached"
+        assert "pypi:foo:1.0" not in pypi_module._cache, (
+            f"transient HTTP {status_code} on the primary URL must not be cached"
+        )
 
     def test_direct_path_timeout_not_cached(self, mock_session):
         """requests.Timeout is always transient — the cache must stay
@@ -3712,6 +3729,66 @@ class TestBSIEnrichmentFields:
         ack = getattr(licences[0], "acknowledgement", None)
         assert ack is not None
         assert str(ack.value) == "declared"
+
+    @pytest.mark.parametrize(
+        "spec_version,expect_acknowledgement",
+        [
+            # CDX 1.3 / 1.4 / 1.5: license.acknowledgement did not exist in
+            # the schema. cyclonedx-python-lib's version-specific outputter
+            # drops the field on serialisation. If we emit it on a <1.6
+            # BOM we must NOT see it in the output JSON.
+            ("1.3", False),
+            ("1.4", False),
+            ("1.5", False),
+            # CDX 1.6 added license.acknowledgement (specification PR #408).
+            ("1.6", True),
+            ("1.7", True),
+        ],
+    )
+    def test_acknowledgement_serialization_is_version_gated(self, spec_version, expect_acknowledgement):
+        """Locks the serialisation-time contract: license.acknowledgement is
+        dropped on CDX <1.6 and present on >=1.6. The enrichment helper
+        unconditionally attaches `acknowledgement=declared`; the cyclonedx-
+        python-lib outputter is responsible for the version filter. If that
+        library ever regresses, this test catches it before the
+        cross-version-compat claim in the PR description breaks.
+        """
+        import json as _json
+
+        from cyclonedx.model.bom import Bom
+
+        from sbomify_action._enrichment.metadata import NormalizedMetadata
+        from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
+        from sbomify_action.serialization import serialize_cyclonedx_bom
+
+        bom = Bom()
+        component = Component(
+            name="django",
+            version="5.1",
+            type=ComponentType.LIBRARY,
+            bom_ref="django@5.1",
+        )
+        metadata = NormalizedMetadata(licenses=["BSD-3-Clause"])
+        _apply_metadata_to_cyclonedx_component(component, metadata)
+        bom.components.add(component)
+
+        out = serialize_cyclonedx_bom(bom, spec_version)
+        payload = _json.loads(out)
+
+        emitted = payload.get("components", [{}])[0]
+        licence_entries = emitted.get("licenses", [])
+        assert licence_entries, f"no licence emitted for CDX {spec_version}"
+        first = licence_entries[0]
+        # LicenseExpression may serialise the field at the top level or nest
+        # it under "license" depending on the library version; probe both.
+        body = first if "acknowledgement" in first else first.get("license", {})
+        present = "acknowledgement" in body
+        assert present is expect_acknowledgement, (
+            f"CDX {spec_version}: expected acknowledgement "
+            f"{'present' if expect_acknowledgement else 'absent'}, got {licence_entries!r}"
+        )
+        if expect_acknowledgement:
+            assert body.get("acknowledgement") == "declared"
 
 
 class TestNormalizedMetadataDistributionFilename:
