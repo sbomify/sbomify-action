@@ -1171,6 +1171,189 @@ class TestLifecyclePhasePrecedence:
             assert metadata.lifecycle_phase == "post-build"
 
 
+class TestLifecyclePhaseSpdxCdxParity:
+    """End-to-end parity tests: CI provider default → both SPDX and
+    CycloneDX outputs carry the same lifecycle phase.
+
+    The augmentation code writes the phase to different spec-native
+    locations:
+      * CycloneDX: ``metadata.lifecycles[].phase`` (1.5+)
+      * SPDX 2.x: ``creationInfo.creatorComment`` as ``"Lifecycle phase: <phase>"``
+
+    The sbomify CISA plugin reads both, so any drift between the two
+    paths would give the same BOM different compliance verdicts in
+    CDX vs SPDX. These tests pin the parity explicitly.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_cwd(self):
+        original = os.getcwd()
+        try:
+            yield
+        finally:
+            os.chdir(original)
+
+    def _fetch_from_registry(self, env):
+        """Run the real registry (minus sbomify-api) with ``env`` as
+        the only env vars and return the merged AugmentationMetadata."""
+        from sbomify_action._augmentation.providers import (
+            BitbucketPipelinesProvider,
+            DockerImageProvider,
+            GitHubActionsProvider,
+            GitLabCIProvider,
+            JsonConfigProvider,
+        )
+        from sbomify_action._augmentation.registry import ProviderRegistry
+
+        registry = ProviderRegistry()
+        registry.register(JsonConfigProvider())
+        registry.register(DockerImageProvider())
+        registry.register(GitHubActionsProvider())
+        registry.register(GitLabCIProvider())
+        registry.register(BitbucketPipelinesProvider())
+
+        with patch.dict(os.environ, env, clear=True):
+            return registry.fetch_metadata()
+
+    def _minimal_spdx_doc(self):
+        """Build a minimal SPDX 2.3 Document suitable for augmentation."""
+        from datetime import datetime
+
+        from spdx_tools.spdx.model import CreationInfo, Document, Package
+
+        return Document(
+            creation_info=CreationInfo(
+                spdx_version="SPDX-2.3",
+                spdx_id="SPDXRef-DOCUMENT",
+                name="test-parity-sbom",
+                document_namespace="https://example.com/parity",
+                creators=[],
+                created=datetime(2026, 4, 20, 12, 0, 0),
+            ),
+            packages=[
+                Package(
+                    spdx_id="SPDXRef-root",
+                    name="parity-app",
+                    download_location="https://example.com/download",
+                    version="1.0.0",
+                )
+            ],
+            relationships=[],
+        )
+
+    def _minimal_cdx_bom(self):
+        """Build a minimal CycloneDX 1.6 BOM suitable for augmentation."""
+        from cyclonedx.model.bom import Bom
+        from cyclonedx.model.component import Component, ComponentType
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="parity-app",
+            version="1.0.0",
+            type=ComponentType.APPLICATION,
+            bom_ref="parity-app@1.0.0",
+        )
+        return bom
+
+    def test_github_ci_lockfile_writes_pre_build_to_both_formats(self):
+        """GitHub Actions + lockfile scan → both SPDX creatorComment
+        and CDX metadata.lifecycles[0].phase hold ``pre-build``."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+            }
+            metadata = self._fetch_from_registry(env)
+
+        assert metadata is not None
+        augmentation_data = metadata.to_dict()
+        assert augmentation_data["lifecycle_phase"] == "pre-build"
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom, augment_spdx_sbom
+
+        # CDX path
+        bom = self._minimal_cdx_bom()
+        augmented_bom = augment_cyclonedx_sbom(bom, augmentation_data, spec_version="1.6")
+        phases = [lc.phase.value for lc in augmented_bom.metadata.lifecycles if lc.phase is not None]
+        assert "pre-build" in phases, f"CDX lifecycles should carry pre-build; got {phases}"
+
+        # SPDX path
+        doc = self._minimal_spdx_doc()
+        augmented_doc = augment_spdx_sbom(doc, augmentation_data)
+        creator_comment = augmented_doc.creation_info.creator_comment or ""
+        assert "Lifecycle phase: pre-build" in creator_comment, (
+            f"SPDX creator comment should carry pre-build; got {creator_comment!r}"
+        )
+
+    def test_docker_image_writes_post_build_to_both_formats(self):
+        """``--docker-image`` on CI → both formats hold ``post-build``."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+                "DOCKER_IMAGE": "ubuntu:24.04",
+            }
+            metadata = self._fetch_from_registry(env)
+
+        assert metadata is not None
+        augmentation_data = metadata.to_dict()
+        assert augmentation_data["lifecycle_phase"] == "post-build"
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom, augment_spdx_sbom
+
+        bom = self._minimal_cdx_bom()
+        augmented_bom = augment_cyclonedx_sbom(bom, augmentation_data, spec_version="1.6")
+        phases = [lc.phase.value for lc in augmented_bom.metadata.lifecycles if lc.phase is not None]
+        assert "post-build" in phases
+
+        doc = self._minimal_spdx_doc()
+        augmented_doc = augment_spdx_sbom(doc, augmentation_data)
+        creator_comment = augmented_doc.creation_info.creator_comment or ""
+        assert "Lifecycle phase: post-build" in creator_comment
+
+    def test_json_config_override_writes_build_to_both_formats(self):
+        """Operator override via sbomify.json → both formats carry the
+        operator-chosen ``build`` value, confirming the merge order
+        survives all the way to the emitted BOM."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_file = Path(tmpdir) / "sbomify.json"
+            config_file.write_text(json.dumps({"lifecycle_phase": "build"}))
+            os.chdir(tmpdir)
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+                "DOCKER_IMAGE": "ubuntu:24.04",
+            }
+            metadata = self._fetch_from_registry(env)
+
+        assert metadata is not None
+        augmentation_data = metadata.to_dict()
+        assert augmentation_data["lifecycle_phase"] == "build"
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom, augment_spdx_sbom
+
+        bom = self._minimal_cdx_bom()
+        augmented_bom = augment_cyclonedx_sbom(bom, augmentation_data, spec_version="1.6")
+        phases = [lc.phase.value for lc in augmented_bom.metadata.lifecycles if lc.phase is not None]
+        assert "build" in phases
+
+        doc = self._minimal_spdx_doc()
+        augmented_doc = augment_spdx_sbom(doc, augmentation_data)
+        creator_comment = augmented_doc.creation_info.creator_comment or ""
+        assert "Lifecycle phase: build" in creator_comment
+
+
 class TestCliDockerImageEnvMirror:
     """Tests for the CLI's DOCKER_IMAGE env-mirror logic.
 
