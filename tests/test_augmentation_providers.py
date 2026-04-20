@@ -1357,10 +1357,10 @@ class TestLifecyclePhaseSpdxCdxParity:
 class TestCliDockerImageEnvMirror:
     """Tests for the CLI's DOCKER_IMAGE env-mirror logic.
 
-    The typer ``envvar="DOCKER_IMAGE"`` binding reads env → flag, but
-    does not write flag → env. The CLI mirrors ``--docker-image`` into
-    the environment so the DockerImageProvider (which reads the env
-    var) sees the flag-form input. The logic is small and isolated,
+    Click's ``envvar="DOCKER_IMAGE"`` binding reads env → option, but
+    does not write option → env. The CLI mirrors ``--docker-image``
+    into the environment so the DockerImageProvider (which reads the
+    env var) sees the flag-form input. The logic is small and isolated,
     so test it directly rather than through the full CLI entrypoint.
     """
 
