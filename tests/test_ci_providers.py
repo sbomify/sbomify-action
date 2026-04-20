@@ -428,6 +428,47 @@ class TestDockerImageProvider(unittest.TestCase):
         """Empty string env var is treated as absent."""
         self.assertIsNone(self.provider.fetch())
 
+    @patch.dict(os.environ, {"DOCKER_IMAGE": "ubuntu:24.04"}, clear=True)
+    def test_emits_only_lifecycle_phase_no_other_fields(self):
+        """Provider must not touch vcs_url / authors / supplier / etc.
+        The CI providers own VCS metadata; json_config and sbomify-api
+        own org metadata; DockerImageProvider owns the single signal
+        that its input is a built artifact. Keeping it narrow prevents
+        surprise collisions in the merge."""
+        result = self.provider.fetch()
+        assert result is not None  # mypy
+        self.assertEqual(result.lifecycle_phase, "post-build")
+        # Explicit null-checks on every field the other providers set —
+        # so if someone broadens DockerImageProvider later, this test
+        # forces them to justify each addition.
+        self.assertIsNone(result.supplier)
+        self.assertIsNone(result.manufacturer)
+        self.assertIsNone(result.authors)
+        self.assertIsNone(result.licenses)
+        self.assertIsNone(result.vcs_url)
+        self.assertIsNone(result.vcs_commit_sha)
+        self.assertIsNone(result.vcs_ref)
+        self.assertIsNone(result.vcs_commit_url)
+        self.assertIsNone(result.security_contact)
+        self.assertIsNone(result.support_period_end)
+        self.assertIsNone(result.release_date)
+        self.assertIsNone(result.end_of_life)
+
+    @patch.dict(
+        os.environ,
+        {
+            "DOCKER_IMAGE": "registry.example.com/team/app:v1.2.3-arm64",
+        },
+        clear=True,
+    )
+    def test_accepts_arbitrary_image_reference_forms(self):
+        """The image string is not parsed — any non-empty value triggers
+        post-build. This keeps the provider robust across docker/podman/
+        OCI registry variants without baking in a reference parser."""
+        result = self.provider.fetch()
+        assert result is not None
+        self.assertEqual(result.lifecycle_phase, "post-build")
+
 
 class TestAugmentationMetadataVcsFields(unittest.TestCase):
     """Tests for VCS fields in AugmentationMetadata."""

@@ -1100,6 +1100,136 @@ class TestLifecyclePhasePrecedence:
             assert metadata is not None
             assert metadata.lifecycle_phase == "pre-build"
 
+    def test_docker_image_alone_without_ci_still_emits_post_build(self):
+        """DOCKER_IMAGE set with no CI env vars and no sbomify.json must
+        still emit ``post-build`` — a user running the action locally
+        against a built image deserves the same spec-correct phase as
+        a CI run against the same image."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {"DOCKER_IMAGE": "ubuntu:24.04"}
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "post-build"
+
+    def test_json_config_overrides_docker_image_without_ci(self):
+        """sbomify.json beats docker-image provider even without a CI
+        provider in the mix. Mirrors the real-world case where a user
+        is running locally and wants the container-image scan classified
+        as something other than ``post-build``."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_file = Path(tmpdir) / "sbomify.json"
+            config_file.write_text(json.dumps({"lifecycle_phase": "operations"}))
+            os.chdir(tmpdir)
+            env = {"DOCKER_IMAGE": "ubuntu:24.04"}
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "operations"
+
+    def test_no_input_signals_yields_no_lifecycle_phase(self):
+        """No CI env, no DOCKER_IMAGE, no sbomify.json → no provider
+        has a lifecycle_phase to contribute, so the merged metadata's
+        lifecycle_phase is None. The compliance plugins will then
+        correctly report "missing generation context" rather than
+        inventing a phase."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            with patch.dict(os.environ, {}, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            # Registry may return None or a metadata object with no
+            # fields set — either signals "nothing to augment".
+            assert metadata is None or metadata.lifecycle_phase is None
+
+    def test_disable_vcs_augmentation_still_lets_docker_image_fire(self):
+        """DISABLE_VCS_AUGMENTATION only silences the CI providers' VCS
+        side of things; the DockerImageProvider (which doesn't touch
+        VCS metadata) must still emit its lifecycle_phase signal."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {
+                "DISABLE_VCS_AUGMENTATION": "true",
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+                "DOCKER_IMAGE": "ubuntu:24.04",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "post-build"
+
+
+class TestCliDockerImageEnvMirror:
+    """Tests for the CLI's DOCKER_IMAGE env-mirror logic.
+
+    The typer ``envvar="DOCKER_IMAGE"`` binding reads env → flag, but
+    does not write flag → env. The CLI mirrors ``--docker-image`` into
+    the environment so the DockerImageProvider (which reads the env
+    var) sees the flag-form input. The logic is small and isolated,
+    so test it directly rather than through the full CLI entrypoint.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_cwd_and_env(self):
+        original_cwd = os.getcwd()
+        original_docker = os.environ.get("DOCKER_IMAGE")
+        try:
+            yield
+        finally:
+            os.chdir(original_cwd)
+            if original_docker is None:
+                os.environ.pop("DOCKER_IMAGE", None)
+            else:
+                os.environ["DOCKER_IMAGE"] = original_docker
+
+    @staticmethod
+    def _apply_mirror(docker_image):
+        """Replicates the CLI's mirror logic verbatim so the test
+        doesn't have to spin up the full typer context.
+        """
+        if docker_image and not os.getenv("DOCKER_IMAGE"):
+            os.environ["DOCKER_IMAGE"] = docker_image
+
+    def test_flag_writes_env_when_env_not_set(self):
+        """--docker-image flag without DOCKER_IMAGE env set → env is
+        populated so the provider fires."""
+        os.environ.pop("DOCKER_IMAGE", None)
+        self._apply_mirror("ubuntu:24.04")
+        assert os.environ.get("DOCKER_IMAGE") == "ubuntu:24.04"
+
+    def test_existing_env_is_not_overwritten(self):
+        """If DOCKER_IMAGE is already set in the env (the CI invocation
+        path), the mirror must not clobber it — the envvar is the
+        source of truth when both are present."""
+        os.environ["DOCKER_IMAGE"] = "already:set"
+        self._apply_mirror("flag:value")
+        assert os.environ["DOCKER_IMAGE"] == "already:set"
+
+    def test_none_flag_does_not_touch_env(self):
+        """No flag and no env → mirror is a no-op, env stays absent."""
+        os.environ.pop("DOCKER_IMAGE", None)
+        self._apply_mirror(None)
+        assert "DOCKER_IMAGE" not in os.environ
+
+    def test_empty_flag_does_not_touch_env(self):
+        """Empty-string flag is not a valid image reference; treat it
+        as absent so the mirror does not shadow a later env lookup."""
+        os.environ.pop("DOCKER_IMAGE", None)
+        self._apply_mirror("")
+        assert "DOCKER_IMAGE" not in os.environ
+
 
 class TestJsonConfigProviderIntegration:
     """Integration tests for JSON config provider with augmentation."""
