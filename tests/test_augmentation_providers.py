@@ -1380,9 +1380,9 @@ class TestCliDockerImageEnvMirror:
     @staticmethod
     def _apply_mirror(docker_image):
         """Replicates the CLI's mirror logic verbatim so the test
-        doesn't have to spin up the full typer context.
+        doesn't have to spin up the full Click context.
         """
-        if docker_image and not os.getenv("DOCKER_IMAGE"):
+        if docker_image:
             os.environ["DOCKER_IMAGE"] = docker_image
 
     def test_flag_writes_env_when_env_not_set(self):
@@ -1392,13 +1392,17 @@ class TestCliDockerImageEnvMirror:
         self._apply_mirror("ubuntu:24.04")
         assert os.environ.get("DOCKER_IMAGE") == "ubuntu:24.04"
 
-    def test_existing_env_is_not_overwritten(self):
-        """If DOCKER_IMAGE is already set in the env (the CI invocation
-        path), the mirror must not clobber it — the envvar is the
-        source of truth when both are present."""
-        os.environ["DOCKER_IMAGE"] = "already:set"
-        self._apply_mirror("flag:value")
-        assert os.environ["DOCKER_IMAGE"] == "already:set"
+    def test_flag_overwrites_existing_env_for_consistency(self):
+        """Click already resolved CLI flag vs env var before the CLI
+        body runs, so ``docker_image`` here IS the effective value.
+        Mirror it unconditionally so the DockerImageProvider sees the
+        same image the rest of the pipeline scans — otherwise a user
+        who runs with a stale ``DOCKER_IMAGE=old:tag`` in the shell and
+        passes ``--docker-image new:tag`` would see the provider log
+        ``old:tag`` while the actual SBOM is generated from ``new:tag``."""
+        os.environ["DOCKER_IMAGE"] = "old:tag"
+        self._apply_mirror("new:tag")
+        assert os.environ["DOCKER_IMAGE"] == "new:tag"
 
     def test_none_flag_does_not_touch_env(self):
         """No flag and no env → mirror is a no-op, env stays absent."""

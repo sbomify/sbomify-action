@@ -2279,9 +2279,13 @@ def cli(
     # Mirror --docker-image into the environment so the DockerImageProvider
     # (which reads DOCKER_IMAGE) sets lifecycle_phase=post-build even when
     # the user passed the flag on the CLI rather than via the env var.
-    # The typer envvar binding only reads env → flag; it does not write
-    # flag → env.
-    if docker_image and not os.getenv("DOCKER_IMAGE"):
+    # Click's envvar binding only reads env → option; it does not write
+    # option → env. Always overwrite when docker_image is provided — if
+    # the user passes a --docker-image that differs from the existing
+    # DOCKER_IMAGE env var, the flag must win (Click already resolved
+    # the two, so docker_image here is the effective value) and
+    # downstream logging must reflect the image that is actually scanned.
+    if docker_image:
         os.environ["DOCKER_IMAGE"] = docker_image
 
     print_banner()

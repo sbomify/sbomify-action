@@ -44,9 +44,17 @@ class NormalizedMetadata:
 
     # Distribution info (BSI TR-03183-2 compliance)
     distribution_filename: Optional[str] = None
-    # Hashes of the deployable artefact, keyed by SPDX algorithm name
-    # (e.g. "sha256", "sha512", "md5"). Values are lower-case hex strings.
-    # Used to populate NTIA / BSI §5.2.2 / CISA "Component Hash" elements.
+    # Hashes of the deployable artefact, keyed by algorithm name as the
+    # source provided it. Keys are lower-case strings — typically SPDX /
+    # CycloneDX canonical names such as "sha256", "sha512", "md5", but
+    # some sources legitimately use their own variant spelling. The PyPI
+    # source, for instance, returns BLAKE2b-256 under the underscore
+    # form "blake2b_256" (matching PyPI's JSON API), and we keep that
+    # form here so the downstream algorithm map (_CYCLONEDX_HASH_ALGORITHMS /
+    # _SPDX_CHECKSUM_ALGORITHMS in enrichment.py) can recognise it
+    # without a second normalisation step. Values are lower-case hex
+    # strings. Used to populate NTIA / BSI §5.2.2 / CISA "Component
+    # Hash" elements.
     hashes: Dict[str, str] = field(default_factory=dict)
 
     # CLE (Common Lifecycle Enumeration) fields - ECMA-428
@@ -95,14 +103,27 @@ class NormalizedMetadata:
         # `other` is preserved. Dropping other's keys would silently lose
         # useful digests when PyPI gives sha256 and another source
         # contributes blake2b / md5 for the same artefact.
+        #
+        # Attribution for the union field: if `other` adds at least one
+        # new algorithm key, refresh ``field_sources["hashes"]`` to
+        # record BOTH contributing sources (comma-separated). Previously
+        # this branch early-exited when self already had a "hashes"
+        # entry, which hid the fact that the merged value actually
+        # contained algorithms from both sources. Attribution follows
+        # the existing source-tracking convention used elsewhere (e.g.
+        # AugmentationMetadata.merge concatenates sources with ", ").
         merged_hashes: Dict[str, str] = dict(self.hashes)
         added_hash_alg = False
         for alg, hex_value in other.hashes.items():
             if alg not in merged_hashes:
                 merged_hashes[alg] = hex_value
                 added_hash_alg = True
-        if added_hash_alg and other.source and "hashes" not in merged_sources:
-            merged_sources["hashes"] = other.source
+        if added_hash_alg and other.source:
+            prior = merged_sources.get("hashes")
+            if not prior:
+                merged_sources["hashes"] = other.source
+            elif other.source not in prior.split(", "):
+                merged_sources["hashes"] = f"{prior}, {other.source}"
 
         # Merge license_texts (combine both)
         merged_license_texts = dict(self.license_texts)

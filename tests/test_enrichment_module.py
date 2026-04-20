@@ -168,6 +168,46 @@ class TestNormalizedMetadata:
         assert merged.hashes == {"sha256": "a" * 64}
         assert "hashes" not in merged.field_sources
 
+    def test_merge_hashes_extends_attribution_when_both_contribute(self):
+        """When self already carries a ``hashes`` attribution and ``other``
+        adds a new algorithm, the attribution must record BOTH sources —
+        otherwise a downstream audit trail would hide which source
+        actually contributed the additional digest."""
+        meta1 = NormalizedMetadata(
+            hashes={"sha256": "a" * 64},
+            source="pypi",
+            field_sources={"hashes": "pypi"},
+        )
+        meta2 = NormalizedMetadata(
+            hashes={"blake2b_256": "c" * 64},
+            source="ecosyste.ms",
+        )
+
+        merged = meta1.merge(meta2)
+
+        assert merged.hashes == {"sha256": "a" * 64, "blake2b_256": "c" * 64}
+        assert merged.field_sources["hashes"] == "pypi, ecosyste.ms", (
+            "expected union attribution recording both contributing sources"
+        )
+
+    def test_merge_hashes_attribution_does_not_duplicate_same_source(self):
+        """Guard: if ``other.source`` matches an entry already in
+        ``field_sources['hashes']`` we must not duplicate it."""
+        meta1 = NormalizedMetadata(
+            hashes={"sha256": "a" * 64},
+            source="pypi",
+            field_sources={"hashes": "pypi"},
+        )
+        meta2 = NormalizedMetadata(
+            hashes={"blake2b_256": "c" * 64},
+            source="pypi",  # same source name as meta1
+        )
+
+        merged = meta1.merge(meta2)
+
+        assert merged.hashes == {"sha256": "a" * 64, "blake2b_256": "c" * 64}
+        assert merged.field_sources["hashes"] == "pypi"
+
 
 # =============================================================================
 # Test PURLSource

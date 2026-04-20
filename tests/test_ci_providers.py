@@ -126,7 +126,11 @@ class TestGitHubActionsProvider(unittest.TestCase):
         self.assertEqual(result.vcs_ref, "main")
         self.assertEqual(result.vcs_commit_url, "https://github.com/owner/repo/commit/abc123def456")
         self.assertEqual(result.source, "github-actions")
-        # CISA 2025 Generation Context defaults to "build" when running in CI
+        # CycloneDX 1.7 meta:enum aligns a CI lockfile / manifest scan
+        # with "pre-build" ("information obtained prior to a build
+        # process … may contain source files, development artifacts and
+        # manifests"). The DockerImageProvider overrides to "post-build"
+        # when DOCKER_IMAGE is set; json_config can still force anything.
         self.assertEqual(result.lifecycle_phase, "pre-build")
 
     @patch.dict(
