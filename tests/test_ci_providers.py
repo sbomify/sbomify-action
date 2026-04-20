@@ -7,6 +7,7 @@ from unittest.mock import patch
 from sbomify_action._augmentation.metadata import AugmentationMetadata
 from sbomify_action._augmentation.providers import (
     BitbucketPipelinesProvider,
+    DockerImageProvider,
     GitHubActionsProvider,
     GitLabCIProvider,
     is_vcs_augmentation_disabled,
@@ -126,7 +127,7 @@ class TestGitHubActionsProvider(unittest.TestCase):
         self.assertEqual(result.vcs_commit_url, "https://github.com/owner/repo/commit/abc123def456")
         self.assertEqual(result.source, "github-actions")
         # CISA 2025 Generation Context defaults to "build" when running in CI
-        self.assertEqual(result.lifecycle_phase, "build")
+        self.assertEqual(result.lifecycle_phase, "pre-build")
 
     @patch.dict(
         os.environ,
@@ -241,7 +242,7 @@ class TestGitLabCIProvider(unittest.TestCase):
         self.assertEqual(result.vcs_ref, "main")
         self.assertEqual(result.vcs_commit_url, "https://gitlab.com/owner/repo/-/commit/abc123def456")
         self.assertEqual(result.source, "gitlab-ci")
-        self.assertEqual(result.lifecycle_phase, "build")
+        self.assertEqual(result.lifecycle_phase, "pre-build")
 
     @patch.dict(
         os.environ,
@@ -328,7 +329,7 @@ class TestBitbucketPipelinesProvider(unittest.TestCase):
         self.assertEqual(result.vcs_ref, "main")
         self.assertEqual(result.vcs_commit_url, "https://bitbucket.org/owner/repo/commits/abc123def456")
         self.assertEqual(result.source, "bitbucket-pipelines")
-        self.assertEqual(result.lifecycle_phase, "build")
+        self.assertEqual(result.lifecycle_phase, "pre-build")
 
     @patch.dict(
         os.environ,
@@ -393,6 +394,39 @@ class TestBitbucketPipelinesProvider(unittest.TestCase):
         """Provider returns None when repository URL cannot be determined."""
         result = self.provider.fetch()
         self.assertIsNone(result)
+
+
+class TestDockerImageProvider(unittest.TestCase):
+    """Tests for the DockerImageProvider lifecycle-phase default."""
+
+    def setUp(self):
+        self.provider = DockerImageProvider()
+
+    def test_name_and_priority(self):
+        """Provider name is "docker-image", priority beats CI (20) and
+        loses to json_config (10)."""
+        self.assertEqual(self.provider.name, "docker-image")
+        self.assertEqual(self.provider.priority, 15)
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_returns_none_when_docker_image_not_set(self):
+        """No DOCKER_IMAGE env var → provider yields no metadata."""
+        self.assertIsNone(self.provider.fetch())
+
+    @patch.dict(os.environ, {"DOCKER_IMAGE": "ubuntu:24.04"}, clear=True)
+    def test_emits_post_build_for_container_image(self):
+        """Scanning a built image is ``post-build`` per CDX 1.7
+        ``meta:enum`` for the lifecycle ``phase`` property."""
+        result = self.provider.fetch()
+        self.assertIsNotNone(result)
+        assert result is not None  # mypy
+        self.assertEqual(result.lifecycle_phase, "post-build")
+        self.assertEqual(result.source, "docker-image")
+
+    @patch.dict(os.environ, {"DOCKER_IMAGE": ""}, clear=True)
+    def test_empty_docker_image_env_yields_none(self):
+        """Empty string env var is treated as absent."""
+        self.assertIsNone(self.provider.fetch())
 
 
 class TestAugmentationMetadataVcsFields(unittest.TestCase):

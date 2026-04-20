@@ -2276,6 +2276,14 @@ def cli(
     # Reset audit trail for this run
     reset_audit_trail()
 
+    # Mirror --docker-image into the environment so the DockerImageProvider
+    # (which reads DOCKER_IMAGE) sets lifecycle_phase=post-build even when
+    # the user passed the flag on the CLI rather than via the env var.
+    # The typer envvar binding only reads env → flag; it does not write
+    # flag → env.
+    if docker_image and not os.getenv("DOCKER_IMAGE"):
+        os.environ["DOCKER_IMAGE"] = docker_image
+
     print_banner()
 
     # Setup dependencies

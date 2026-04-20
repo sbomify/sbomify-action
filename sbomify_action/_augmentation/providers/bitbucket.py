@@ -96,11 +96,16 @@ class BitbucketPipelinesProvider:
 
         logger.info(f"Detected Bitbucket Pipelines: {vcs_url} @ {truncate_sha(commit_sha)}")
 
+        # Default to ``pre-build`` — see GitHubActionsProvider for the
+        # full CycloneDX 1.7 schema rationale. Lockfile / manifest scans
+        # are ``pre-build``; the docker-image augmentation overrides to
+        # ``post-build`` when the input is a built artifact; ``json_config``
+        # (priority 10) beats this provider for operator overrides.
         return AugmentationMetadata(
             source=self.name,
             vcs_url=vcs_url,
             vcs_commit_sha=commit_sha,
             vcs_ref=ref,
             vcs_commit_url=vcs_commit_url,
-            lifecycle_phase="build",
+            lifecycle_phase="pre-build",
         )

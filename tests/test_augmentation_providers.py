@@ -928,10 +928,12 @@ class TestCreateDefaultRegistry:
         registry = create_default_registry()
         providers = registry.list_providers()
 
-        # 5 providers: json-config, github-actions, gitlab-ci, bitbucket-pipelines, sbomify-api
-        assert len(providers) == 5
+        # 6 providers: json-config, docker-image, github-actions,
+        # gitlab-ci, bitbucket-pipelines, sbomify-api
+        assert len(providers) == 6
         provider_names = [p["name"] for p in providers]
         assert "json-config" in provider_names
+        assert "docker-image" in provider_names
         assert "github-actions" in provider_names
         assert "gitlab-ci" in provider_names
         assert "bitbucket-pipelines" in provider_names
@@ -940,6 +942,7 @@ class TestCreateDefaultRegistry:
         # Verify priority ordering (lower = higher priority)
         priorities = {p["name"]: p["priority"] for p in providers}
         assert priorities["json-config"] == 10  # Highest priority
+        assert priorities["docker-image"] == 15  # Container-image input
         assert priorities["github-actions"] == 20
         assert priorities["gitlab-ci"] == 20
         assert priorities["bitbucket-pipelines"] == 20

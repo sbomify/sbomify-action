@@ -88,17 +88,28 @@ class GitHubActionsProvider:
 
         logger.info(f"Detected GitHub Actions: {repository} @ {truncate_sha(commit_sha)}")
 
-        # CI runs are, by definition, a "build" lifecycle phase. Default the
-        # CISA 2025 Generation Context to "build" when running on GitHub
-        # Actions so downstream consumers (and the compliance plugins) see
-        # a value even when the user hasn't supplied sbomify.json. See
-        # AugmentationMetadata.merge for how this interacts with json_config
-        # (wins, priority 10) and sbomify-api (doesn't override, priority 50).
+        # CycloneDX 1.7 schema meta:enum defines the lifecycle phases as:
+        #   * pre-build  — "information obtained prior to a build process
+        #                  and may contain source files and development
+        #                  artifacts and manifests" (lockfiles are manifests)
+        #   * build      — "information obtained during a build process"
+        #                  (emitted by compiler / build tool itself)
+        #   * post-build — "information obtained after a build process has
+        #                  completed and the resulting component(s) are
+        #                  available for further analysis" (e.g. scanning
+        #                  a built container image)
+        # The common GitHub Actions usage of sbomify-action is scanning
+        # lockfiles / source manifests, so default to ``pre-build``. When
+        # the action runs against a built artifact (``--docker-image``),
+        # the docker-image augmentation overrides to ``post-build``.
+        # Users who emit a BOM mid-compilation (Maven / Gradle plugins,
+        # ``cargo bom`` and similar) can override via ``sbomify.json`` /
+        # ``json_config`` (priority 10 beats this provider at 20).
         return AugmentationMetadata(
             source=self.name,
             vcs_url=vcs_url,
             vcs_commit_sha=commit_sha,
             vcs_ref=ref,
             vcs_commit_url=vcs_commit_url,
-            lifecycle_phase="build",
+            lifecycle_phase="pre-build",
         )

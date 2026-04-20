@@ -6,6 +6,8 @@ metadata for SBOM augmentation. Multiple providers can supply metadata
 
 Providers (in priority order):
 - json-config: Reads from sbomify.json config file (priority 10)
+- docker-image: Emits lifecycle_phase=post-build when the input is a
+  container image (--docker-image / DOCKER_IMAGE) (priority 15)
 - github-actions: Auto-detects VCS info from GitHub Actions env (priority 20)
 - gitlab-ci: Auto-detects VCS info from GitLab CI env (priority 20)
 - bitbucket-pipelines: Auto-detects VCS info from Bitbucket Pipelines env (priority 20)
@@ -46,6 +48,7 @@ def create_default_registry() -> ProviderRegistry:
 
     Providers are registered in priority order (lower number = higher priority):
     - Priority 10: JsonConfigProvider (local config, can override CI-detected VCS)
+    - Priority 15: DockerImageProvider (lifecycle_phase=post-build for container images)
     - Priority 20: CI providers (GitHub Actions, GitLab CI, Bitbucket Pipelines)
     - Priority 50: SbomifyApiProvider (backend metadata)
 
@@ -54,6 +57,7 @@ def create_default_registry() -> ProviderRegistry:
     """
     from .providers import (
         BitbucketPipelinesProvider,
+        DockerImageProvider,
         GitHubActionsProvider,
         GitLabCIProvider,
         JsonConfigProvider,
@@ -64,6 +68,11 @@ def create_default_registry() -> ProviderRegistry:
 
     # Priority 10: Local config (can override CI-detected VCS)
     registry.register(JsonConfigProvider())
+
+    # Priority 15: Docker-image input sets lifecycle_phase=post-build.
+    # Beats CI providers' pre-build default; loses to json_config so
+    # operators can still override.
+    registry.register(DockerImageProvider())
 
     # Priority 20: CI providers (auto-detect VCS from environment)
     registry.register(GitHubActionsProvider())
