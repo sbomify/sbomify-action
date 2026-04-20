@@ -1,9 +1,12 @@
 """Tests for augmentation providers (JSON config and sbomify API)."""
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
+
+import pytest
 
 from sbomify_action._augmentation import (
     AugmentationMetadata,
@@ -947,6 +950,155 @@ class TestCreateDefaultRegistry:
         assert priorities["gitlab-ci"] == 20
         assert priorities["bitbucket-pipelines"] == 20
         assert priorities["sbomify-api"] == 50  # Lowest priority
+
+
+class TestLifecyclePhasePrecedence:
+    """End-to-end precedence tests for lifecycle_phase across the registry.
+
+    These pin the spec-correct defaults that the providers emit in
+    realistic input/environment combinations, so a future refactor can't
+    silently regress the CDX 1.7 meta:enum alignment (pre-build for
+    lockfile scans, post-build for built-image scans, build only when
+    the operator explicitly opts in via sbomify.json).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_cwd(self):
+        """Save and restore working directory around each test.
+
+        JsonConfigProvider reads ``sbomify.json`` from cwd, so these
+        tests ``chdir`` into an isolated tmpdir. Without this fixture
+        the chdir leaks into sibling tests and breaks anything that
+        relies on the real project cwd.
+        """
+        original = os.getcwd()
+        try:
+            yield
+        finally:
+            os.chdir(original)
+
+    def _registry_no_api(self):
+        """Registry without the sbomify-api provider so tests don't hit
+        the network. Returns the same 5 providers that actually decide
+        lifecycle_phase today."""
+        from sbomify_action._augmentation.providers import (
+            BitbucketPipelinesProvider,
+            DockerImageProvider,
+            GitHubActionsProvider,
+            GitLabCIProvider,
+            JsonConfigProvider,
+        )
+        from sbomify_action._augmentation.registry import ProviderRegistry
+
+        registry = ProviderRegistry()
+        registry.register(JsonConfigProvider())
+        registry.register(DockerImageProvider())
+        registry.register(GitHubActionsProvider())
+        registry.register(GitLabCIProvider())
+        registry.register(BitbucketPipelinesProvider())
+        return registry
+
+    def test_ci_lockfile_scan_defaults_to_pre_build(self):
+        """GitHub Actions env alone (no json config, no docker image)
+        yields pre-build — the schema-correct default for a lockfile /
+        manifest scan on CI."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)  # no sbomify.json here
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "pre-build"
+
+    def test_docker_image_overrides_ci_default_to_post_build(self):
+        """DOCKER_IMAGE set alongside GITHUB_ACTIONS yields post-build.
+        DockerImageProvider (priority 15) wins over the CI providers
+        (priority 20) so a container-image scan lands in the correct
+        phase even when running on GitHub Actions."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+                "DOCKER_IMAGE": "ubuntu:24.04",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "post-build"
+
+    def test_json_config_overrides_both_ci_and_docker(self):
+        """Operator-supplied sbomify.json (priority 10) is the final
+        word — operators who truly emit a BOM mid-compilation can
+        opt into ``lifecycle_phase="build"`` regardless of CI /
+        docker-image detection."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_file = Path(tmpdir) / "sbomify.json"
+            config_file.write_text(json.dumps({"lifecycle_phase": "build"}))
+            os.chdir(tmpdir)
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+                "DOCKER_IMAGE": "ubuntu:24.04",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "build"
+
+    def test_gitlab_defaults_to_pre_build(self):
+        """Same spec-alignment applies to GitLab CI and Bitbucket
+        Pipelines — parametrise-style coverage without the pytest
+        parametrise boilerplate since patch.dict with different
+        env sets doesn't compose cleanly as parameters."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {
+                "GITLAB_CI": "true",
+                "CI_PROJECT_URL": "https://gitlab.com/group/proj",
+                "CI_COMMIT_SHA": "a" * 40,
+                "CI_COMMIT_REF_NAME": "main",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "pre-build"
+
+    def test_bitbucket_defaults_to_pre_build(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {
+                "BITBUCKET_PIPELINE_UUID": "{abc-123}",
+                "BITBUCKET_GIT_HTTP_ORIGIN": "https://bitbucket.org/ws/repo",
+                "BITBUCKET_COMMIT": "a" * 40,
+                "BITBUCKET_BRANCH": "main",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "pre-build"
 
 
 class TestJsonConfigProviderIntegration:
