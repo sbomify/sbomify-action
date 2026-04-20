@@ -96,9 +96,20 @@ class PyPISource:
         Returns:
             NormalizedMetadata if successful, None otherwise
         """
-        # Include version in cache key for version-specific lookups
-        version = purl.version or "latest"
-        cache_key = f"pypi:{purl.name}:{version}"
+        # Include version in cache key for version-specific lookups.
+        #
+        # Versionless fetches share the same slot as the 404-fallback latest
+        # lookup so a version-first request that 404s can reuse a prior
+        # versionless hit (and vice versa), saving one redundant GET. Both
+        # write to ``pypi:<name>::latest`` (the ``_LATEST_CACHE_SUFFIX``
+        # sentinel) rather than diverging into ``pypi:<name>:latest`` and
+        # ``pypi:<name>::latest`` respectively. The ``:`` character is
+        # forbidden in PURL name/version below, so the sentinel can't be
+        # forged from an inbound PURL.
+        if purl.version:
+            cache_key = f"pypi:{purl.name}:{purl.version}"
+        else:
+            cache_key = f"pypi:{purl.name}{_LATEST_CACHE_SUFFIX}"
 
         # Check cache
         if cache_key in _cache:
@@ -117,25 +128,34 @@ class PyPISource:
             # party parser or the HTTP client behaving a specific way.
             raw_name = purl.name or ""
             raw_version = purl.version or ""
+
             # Path-traversal tokens in name/version could rewrite the
             # request URL after `requests` normalises raw "../.." segments.
-            # ":" is additionally refused: PEP 440 forbids ":" in a
-            # canonical version, and allowing it would let a crafted PURL
-            # like `pkg:pypi/foo@:latest` build a cache key that collides
-            # with the name-only `::latest` sentinel slot.
-            if "/" in raw_name or ".." in raw_name or ":" in raw_name:
+            # Names: PEP 503 allows "." and "_" inside a normalised project
+            # name (so "a..b" is a legal-but-unusual name). Reject only
+            # actual path separators ("/", "\\") and the whole-name
+            # dot-segments ("." / ".."). The ":" character is refused too
+            # because an inbound ":" in the name could construct the
+            # `::latest` cache sentinel below.
+            # Versions: PEP 440 forbids "/", "\\", "..", and ":" in a
+            # canonical version, so enforce all of them directly.
+            def _is_dot_segment(value: str) -> bool:
+                return value in {".", ".."}
+
+            if "/" in raw_name or "\\" in raw_name or ":" in raw_name or _is_dot_segment(raw_name):
                 logger.warning(
                     f"Refusing PyPI fetch for PURL with unsafe tokens in name: {raw_name!r} "
-                    f"(rejected because the name contains '/', '..' or ':' which could "
-                    f"rewrite the request URL or collide with an internal cache key)"
+                    f"(rejected because the name contains '/', '\\', ':' or is a whole "
+                    f"dot-segment, which could rewrite the request URL or collide with an "
+                    f"internal cache key)"
                 )
                 _cache[cache_key] = None
                 return None
-            if "/" in raw_version or ".." in raw_version or ":" in raw_version:
+            if "/" in raw_version or "\\" in raw_version or ".." in raw_version or ":" in raw_version:
                 logger.warning(
                     f"Refusing PyPI fetch for PURL with unsafe tokens in version: {raw_version!r} "
-                    f"(rejected because the version contains '/', '..' or ':' which could "
-                    f"rewrite the request URL or collide with an internal cache key)"
+                    f"(rejected because the version contains '/', '\\', '..' or ':' which "
+                    f"could rewrite the request URL or collide with an internal cache key)"
                 )
                 _cache[cache_key] = None
                 return None

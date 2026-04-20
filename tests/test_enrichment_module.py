@@ -268,6 +268,23 @@ class TestPURLSource:
 class TestPyPISource:
     """Test the PyPISource data source."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_pypi_cache(self):
+        """Isolate every PyPI test from the module-level `_cache`.
+
+        `PyPISource.fetch()` memoises both successful responses and known-404
+        entries in a module-level dict. Several tests in this class reuse the
+        same PURL (`pkg:pypi/foo@1.0`, `pkg:pypi/django@5.1`, …), so without
+        explicit isolation the second test that touches the same key would
+        silently hit the cache and skip its own mocked response, making the
+        suite order-dependent / flaky.
+        """
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        pypi_module._cache.clear()
+        yield
+        pypi_module._cache.clear()
+
     def test_source_properties(self):
         """Test source name and priority."""
         source = PyPISource()

@@ -61,7 +61,6 @@ from cyclonedx.model.bom import Bom
 from cyclonedx.model.component import Component, ComponentType
 from cyclonedx.model.contact import OrganizationalContact, OrganizationalEntity
 from cyclonedx.model.license import LicenseAcknowledgement, LicenseExpression
-from sortedcontainers import SortedSet
 from spdx_tools.spdx.model import (  # type: ignore[attr-defined]
     Actor,
     ActorType,
@@ -470,6 +469,12 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
     Returns the list of property names that were added (for audit trail).
     """
     added: List[str] = []
+    # `Component.properties` can be None on deserialised or user-constructed
+    # components (see _enrich_os_component which already handles this).
+    # Initialise with a plain `set()` so the subsequent `.add()` calls work
+    # without depending on `sortedcontainers`.
+    if component.properties is None:
+        component.properties = set()
     existing = {prop.name for prop in component.properties}
     filename = (metadata.distribution_filename or "").strip()
     component_type = getattr(component, "type", None)
@@ -480,8 +485,8 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
         return added
 
     # --- archive ---
+    archive_value: Optional[str] = None
     if "bsi:component:archive" not in existing:
-        archive_value: Optional[str] = None
         if filename and _filename_suffix_matches(filename, _BSI_ARCHIVE_SUFFIXES):
             archive_value = "archive"
         elif filename and _filename_suffix_matches(filename, _BSI_EXECUTABLE_SUFFIXES):
@@ -496,8 +501,8 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
             added.append("bsi:component:archive")
 
     # --- executable ---
+    exec_value: Optional[str] = None
     if "bsi:component:executable" not in existing:
-        exec_value: Optional[str] = None
         if filename and _filename_suffix_matches(filename, _BSI_EXECUTABLE_SUFFIXES):
             exec_value = "executable"
         elif component_type in _BSI_DEPLOYABLE_TYPES:
@@ -512,8 +517,16 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
     # --- structured ---
     # Packaged software artefacts (wheels, jars, debs, containers, firmware
     # images) all carry metadata files, so they qualify as "structured" per
-    # BSI §8.1.6.
-    if "bsi:component:structured" not in existing:
+    # BSI §8.1.6. Only emit when the component genuinely looks packaged:
+    # either an archive/executable signal was derived above, or the
+    # component type is in `_BSI_DEPLOYABLE_TYPES` (application, container,
+    # firmware, OS). A bare `library` with an unrecognised filename suffix
+    # is ambiguous and gets nothing — per the docstring contract, we do
+    # not guess "structured" from weak signals.
+    has_structured_signal = bool(
+        archive_value is not None or exec_value is not None or component_type in _BSI_DEPLOYABLE_TYPES
+    )
+    if "bsi:component:structured" not in existing and has_structured_signal:
         component.properties.add(Property(name="bsi:component:structured", value="structured"))
         added.append("bsi:component:structured")
 
@@ -660,15 +673,15 @@ def _apply_component_hashes(component: Component, hashes: Dict[str, str]) -> Lis
     content of the expected length are emitted; the same (alg, content)
     pair is not duplicated across enrichment runs.
 
-    `Component.hashes` defaults to an empty SortedSet in the CycloneDX
+    `Component.hashes` defaults to an empty collection in the CycloneDX
     library, but deserialised or user-constructed components may legitimately
-    have `hashes is None`. Mirror the `(component.hashes or [])` pattern
-    already in use in `_hash_enrichment/enricher.py` so enrichment does not
-    crash on such input.
+    have `hashes is None`. Initialise with a plain `set()` (matching
+    `_hash_enrichment/enricher.py`) so enrichment does not crash on such
+    input and does not depend on the transitive `sortedcontainers` package.
     """
     added: List[str] = []
     if component.hashes is None:
-        component.hashes = SortedSet()
+        component.hashes = set()
     existing = {(str(h.alg), str(h.content).lower()) for h in (component.hashes or [])}
     for raw_alg, raw_value in hashes.items():
         alg_key = raw_alg.strip().lower()
