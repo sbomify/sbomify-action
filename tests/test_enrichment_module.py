@@ -831,6 +831,37 @@ class TestPyPISource:
         assert metadata is None
         assert not mock_session.get.called
 
+    def test_fetch_rejection_does_not_poison_latest_cache_sentinel(self, mock_session):
+        """Regression: a crafted version like ``":latest"`` used to yield
+        ``cache_key == "pypi:<name>::latest"`` — the same slot as the
+        internal ``_LATEST_CACHE_SUFFIX`` sentinel — and the unsafe-token
+        branch would cache ``None`` there, poisoning later legitimate
+        versionless fetches for the same name. The fix validates raw
+        name/version BEFORE building any cache key and returns ``None``
+        without writing to the cache."""
+        from sbomify_action._enrichment.sources import pypi as pypi_module
+
+        source = PyPISource()
+
+        class _Shim:
+            # `:` in the version bypasses PackageURL quoting — construct
+            # the attacker-controlled shape directly to make sure the fix
+            # holds regardless of parser normalisation.
+            name = "foo"
+            version = ":latest"
+
+        metadata = source.fetch(_Shim(), mock_session)  # type: ignore[arg-type]
+
+        assert metadata is None
+        assert not mock_session.get.called, "request must not be sent for unsafe PURLs"
+
+        # The fix: unsafe inputs do NOT populate the cache at all. The
+        # legitimate versionless sentinel slot must remain untouched.
+        sentinel_key = f"pypi:foo{pypi_module._LATEST_CACHE_SUFFIX}"
+        assert sentinel_key not in pypi_module._cache, (
+            "unsafe-version rejection must not poison the versionless cache sentinel"
+        )
+
     def test_fetch_encodes_special_characters_in_purl_components(self, mock_session):
         """Safe special characters survive but are percent-encoded in the URL,
         so `requests` cannot normalise them into path traversal."""

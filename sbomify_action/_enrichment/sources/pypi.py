@@ -96,20 +96,61 @@ class PyPISource:
         Returns:
             NormalizedMetadata if successful, None otherwise
         """
-        # Include version in cache key for version-specific lookups.
+        # Validate the raw PURL components BEFORE building any cache key.
         #
+        # If we built ``cache_key`` first, a crafted version like ``":latest"``
+        # would produce ``pypi:<name>::latest`` — exactly the internal
+        # ``_LATEST_CACHE_SUFFIX`` sentinel — and the subsequent unsafe-token
+        # rejection would cache ``None`` there, poisoning legitimate
+        # versionless fetches for the same name. So the ordering is:
+        #
+        #   1. Extract raw name/version.
+        #   2. Reject unsafe tokens (log only, do NOT write to cache).
+        #   3. Build the cache key from the now-validated name/version.
+        #
+        # Path-traversal rules:
+        #   - Names: PEP 503 allows "." and "_" inside a normalised project
+        #     name (so "a..b" is a legal-but-unusual name). Reject only
+        #     actual path separators ("/", "\\") and the whole-name
+        #     dot-segments ("." / ".."). The ":" character is refused too
+        #     because an inbound ":" in the name could construct the
+        #     ``::latest`` cache sentinel.
+        #   - Versions: PEP 440 forbids "/", "\\", "..", and ":" in a
+        #     canonical version, so enforce all of them directly.
+        raw_name = purl.name or ""
+        raw_version = purl.version or ""
+
+        def _is_dot_segment(value: str) -> bool:
+            return value in {".", ".."}
+
+        if "/" in raw_name or "\\" in raw_name or ":" in raw_name or _is_dot_segment(raw_name):
+            logger.warning(
+                f"Refusing PyPI fetch for PURL with unsafe tokens in name: {raw_name!r} "
+                f"(rejected because the name contains '/', '\\', ':' or is a whole "
+                f"dot-segment, which could rewrite the request URL or collide with an "
+                f"internal cache key)"
+            )
+            return None
+        if "/" in raw_version or "\\" in raw_version or ".." in raw_version or ":" in raw_version:
+            logger.warning(
+                f"Refusing PyPI fetch for PURL with unsafe tokens in version: {raw_version!r} "
+                f"(rejected because the version contains '/', '\\', '..' or ':' which "
+                f"could rewrite the request URL or collide with an internal cache key)"
+            )
+            return None
+
         # Versionless fetches share the same slot as the 404-fallback latest
         # lookup so a version-first request that 404s can reuse a prior
         # versionless hit (and vice versa), saving one redundant GET. Both
         # write to ``pypi:<name>::latest`` (the ``_LATEST_CACHE_SUFFIX``
         # sentinel) rather than diverging into ``pypi:<name>:latest`` and
         # ``pypi:<name>::latest`` respectively. The ``:`` character is
-        # forbidden in PURL name/version below, so the sentinel can't be
+        # forbidden in PURL name/version above, so the sentinel can't be
         # forged from an inbound PURL.
-        if purl.version:
-            cache_key = f"pypi:{purl.name}:{purl.version}"
+        if raw_version:
+            cache_key = f"pypi:{raw_name}:{raw_version}"
         else:
-            cache_key = f"pypi:{purl.name}{_LATEST_CACHE_SUFFIX}"
+            cache_key = f"pypi:{raw_name}{_LATEST_CACHE_SUFFIX}"
 
         # Check cache
         if cache_key in _cache:
@@ -117,48 +158,6 @@ class PyPISource:
             return _cache[cache_key]
 
         try:
-            # Reject PURL components that could rewrite the URL path.
-            # Empirically, packageurl-python's PackageURL.from_string preserves
-            # ".." and "/" in the name/version fields (PEP 440 disallows them
-            # in a real PyPI version, but the parser doesn't enforce that).
-            # `requests` then normalises raw "../.." segments, which can
-            # redirect our GET to arbitrary pypi.org paths. Percent-encode
-            # both components with safe="" AND explicitly refuse traversal
-            # tokens so defence-in-depth doesn't depend on either the third-
-            # party parser or the HTTP client behaving a specific way.
-            raw_name = purl.name or ""
-            raw_version = purl.version or ""
-
-            # Path-traversal tokens in name/version could rewrite the
-            # request URL after `requests` normalises raw "../.." segments.
-            # Names: PEP 503 allows "." and "_" inside a normalised project
-            # name (so "a..b" is a legal-but-unusual name). Reject only
-            # actual path separators ("/", "\\") and the whole-name
-            # dot-segments ("." / ".."). The ":" character is refused too
-            # because an inbound ":" in the name could construct the
-            # `::latest` cache sentinel below.
-            # Versions: PEP 440 forbids "/", "\\", "..", and ":" in a
-            # canonical version, so enforce all of them directly.
-            def _is_dot_segment(value: str) -> bool:
-                return value in {".", ".."}
-
-            if "/" in raw_name or "\\" in raw_name or ":" in raw_name or _is_dot_segment(raw_name):
-                logger.warning(
-                    f"Refusing PyPI fetch for PURL with unsafe tokens in name: {raw_name!r} "
-                    f"(rejected because the name contains '/', '\\', ':' or is a whole "
-                    f"dot-segment, which could rewrite the request URL or collide with an "
-                    f"internal cache key)"
-                )
-                _cache[cache_key] = None
-                return None
-            if "/" in raw_version or "\\" in raw_version or ".." in raw_version or ":" in raw_version:
-                logger.warning(
-                    f"Refusing PyPI fetch for PURL with unsafe tokens in version: {raw_version!r} "
-                    f"(rejected because the version contains '/', '\\', '..' or ':' which "
-                    f"could rewrite the request URL or collide with an internal cache key)"
-                )
-                _cache[cache_key] = None
-                return None
             safe_name = quote(raw_name, safe="")
             safe_version = quote(raw_version, safe="") if raw_version else ""
 

@@ -517,14 +517,28 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
     # --- structured ---
     # Packaged software artefacts (wheels, jars, debs, containers, firmware
     # images) all carry metadata files, so they qualify as "structured" per
-    # BSI §8.1.6. Only emit when the component genuinely looks packaged:
-    # either an archive/executable signal was derived above, or the
-    # component type is in `_BSI_DEPLOYABLE_TYPES` (application, container,
-    # firmware, OS). A bare `library` with an unrecognised filename suffix
-    # is ambiguous and gets nothing — per the docstring contract, we do
-    # not guess "structured" from weak signals.
+    # BSI §8.1.6. Base the signal on the component's inherent shape, not on
+    # whether this invocation happened to add archive/executable:
+    #   1. A recognised filename suffix (archive OR executable) → structured.
+    #   2. An existing bsi:component:archive / bsi:component:executable
+    #      property already on the component (operator-supplied) → structured.
+    #   3. A deployable component type (application / container / firmware /
+    #      operating-system) → structured.
+    # A bare `library` with an unrecognised filename suffix and no
+    # operator-supplied archive/executable hints is ambiguous and gets
+    # nothing — per the docstring contract, we do not guess "structured"
+    # from weak signals.
+    has_recognised_filename = bool(filename) and (
+        _filename_suffix_matches(filename, _BSI_ARCHIVE_SUFFIXES)
+        or _filename_suffix_matches(filename, _BSI_EXECUTABLE_SUFFIXES)
+    )
+    operator_has_archive_exec = "bsi:component:archive" in existing or "bsi:component:executable" in existing
     has_structured_signal = bool(
-        archive_value is not None or exec_value is not None or component_type in _BSI_DEPLOYABLE_TYPES
+        has_recognised_filename
+        or operator_has_archive_exec
+        or archive_value is not None
+        or exec_value is not None
+        or component_type in _BSI_DEPLOYABLE_TYPES
     )
     if "bsi:component:structured" not in existing and has_structured_signal:
         component.properties.add(Property(name="bsi:component:structured", value="structured"))
@@ -721,6 +735,19 @@ def _apply_metadata_to_cyclonedx_component(
     added_fields = []
     audit_trail = get_audit_trail()
     purl_str = str(component.purl) if component.purl else component.name
+
+    # `Component.properties` / `.licenses` / `.external_references` can be
+    # `None` on deserialised or user-constructed components. The enrichment
+    # path below iterates/adds to all three, so normalise them up-front
+    # rather than scattering `is None` guards across every branch. Plain
+    # `set()` matches `_hash_enrichment/enricher.py` and avoids relying on
+    # the transitive `sortedcontainers` default.
+    if component.properties is None:
+        component.properties = set()
+    if component.licenses is None:
+        component.licenses = set()
+    if component.external_references is None:
+        component.external_references = set()
 
     # Description (sanitized)
     if not component.description and metadata.description:
