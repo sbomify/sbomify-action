@@ -1,4 +1,6 @@
+import contextlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -22,6 +24,56 @@ from spdx_tools.spdx.writer.write_anything import write_file as spdx_write_file
 from sbomify_action.augmentation import augment_sbom_from_file
 from sbomify_action.enrichment import clear_cache, enrich_sbom
 from sbomify_action.serialization import serialize_cyclonedx_bom
+
+# Environment keys that any augmentation provider might react to.
+# The schema-compliance tests mock sbomify-api and drive the whole
+# pipeline to verify that an operator-supplied lifecycle_phase makes
+# it all the way to the emitted BOM. If the suite runs IN GitHub
+# Actions / GitLab CI / Bitbucket Pipelines, the real CI providers
+# fire and win over the sbomify-api mock (priority 20 < 50), which
+# would falsely fail these assertions. Scrub the relevant env vars
+# for the duration of each test so only the mocked providers speak.
+_AUGMENTATION_ENV_KEYS_TO_CLEAR = (
+    "GITHUB_ACTIONS",
+    "GITHUB_REPOSITORY",
+    "GITHUB_SHA",
+    "GITHUB_REF",
+    "GITHUB_REF_NAME",
+    "GITHUB_SERVER_URL",
+    "GITLAB_CI",
+    "CI_PROJECT_URL",
+    "CI_PROJECT_PATH",
+    "CI_SERVER_URL",
+    "CI_COMMIT_SHA",
+    "CI_COMMIT_REF_NAME",
+    "CI_COMMIT_TAG",
+    "BITBUCKET_PIPELINE_UUID",
+    "BITBUCKET_GIT_HTTP_ORIGIN",
+    "BITBUCKET_WORKSPACE",
+    "BITBUCKET_REPO_SLUG",
+    "BITBUCKET_COMMIT",
+    "BITBUCKET_BRANCH",
+    "BITBUCKET_TAG",
+    "DOCKER_IMAGE",
+)
+
+
+@contextlib.contextmanager
+def _scrub_ci_env():
+    """Remove all CI / docker-image environment variables for the
+    duration of the block and restore them afterwards. Use this when
+    a test wants only the mocked providers (sbomify-api / json-config)
+    to contribute augmentation metadata."""
+    saved = {k: os.environ.pop(k, None) for k in _AUGMENTATION_ENV_KEYS_TO_CLEAR}
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
 
 # Path to schemas
 REPO_ROOT = Path(__file__).parent.parent
@@ -88,6 +140,7 @@ def test_cyclonedx_full_flow_compliance(version, tmp_path):
     mock_api_response.json.return_value = augmentation_data
 
     with (
+        _scrub_ci_env(),
         patch(
             "sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file",
             return_value=None,
@@ -222,6 +275,7 @@ def test_spdx_full_flow_compliance(version, tmp_path):
     mock_api_response.json.return_value = augmentation_data
 
     with (
+        _scrub_ci_env(),
         patch(
             "sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file",
             return_value=None,
