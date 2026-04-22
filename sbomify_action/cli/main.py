@@ -1150,9 +1150,7 @@ def run_pipeline(config: Config) -> None:
                     spdx_sbom = fetch_chainguard_sbom(chainguard_info)
 
                     if config.sbom_format == "cyclonedx":
-                        cdx_json = convert_spdx_to_cyclonedx(
-                            spdx_sbom, config.spec_version or "1.6"
-                        )
+                        cdx_json = convert_spdx_to_cyclonedx(spdx_sbom, config.spec_version or "1.6")
                         with open(STEP_1_FILE, "w", encoding="utf-8") as f:
                             f.write(cdx_json)
                     else:
@@ -1162,8 +1160,7 @@ def run_pipeline(config: Config) -> None:
                     result = GenerationResult.success_result(
                         output_file=STEP_1_FILE,
                         sbom_format=config.sbom_format,
-                        spec_version=config.spec_version
-                        or ("1.6" if config.sbom_format == "cyclonedx" else "2.3"),
+                        spec_version=config.spec_version or ("1.6" if config.sbom_format == "cyclonedx" else "2.3"),
                         generator_name="chainguard-sbom",
                     )
                 else:
