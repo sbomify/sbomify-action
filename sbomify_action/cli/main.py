@@ -1138,12 +1138,23 @@ def run_pipeline(config: Config) -> None:
 
                 chainguard_info = detect_chainguard_image(config.docker_image)
 
-                # Skip Chainguard reuse for incompatible spec versions
+                # Check version compatibility before fetching the SBOM
                 if chainguard_info and config.sbom_format == "spdx" and config.spec_version == "3.0.1":
                     logger.info(
                         "SPDX 3.0.1 requested; Chainguard provides SPDX 2.x — falling back to normal generation"
                     )
                     chainguard_info = None
+
+                if chainguard_info and config.sbom_format == "cyclonedx":
+                    spec = config.spec_version or "1.6"
+                    # Compare as tuples for correct numeric ordering (e.g. "1.10" > "1.3")
+                    spec_parts = tuple(int(x) for x in spec.split("."))
+                    if spec_parts < (1, 3):
+                        logger.info(
+                            f"CycloneDX {spec} requested; Chainguard conversion requires 1.3+ — "
+                            "falling back to normal generation"
+                        )
+                        chainguard_info = None
 
                 if chainguard_info:
                     logger.info(f"Detected Chainguard base image: {chainguard_info.image_ref}")
@@ -1154,47 +1165,38 @@ def run_pipeline(config: Config) -> None:
                         logger.warning(f"Failed to fetch Chainguard SBOM, falling back to normal generation: {e}")
                         chainguard_info = None
 
-                    if chainguard_info:
-                        gha_warning(
-                            "Chainguard image detected. Using Chainguard-provided SBOM. "
-                            "Any binaries added via COPY --from=... (e.g. cosign, crane, osv-scanner) "
-                            "will NOT be included. Use ADDITIONAL_PACKAGES to declare them. "
-                            "See: https://github.com/sbomify/sbomify-action#additional-packages",
-                            title="Chainguard Image Detected",
-                        )
-                        if config.sbom_format == "cyclonedx":
-                            spec = config.spec_version or "1.6"
-                            # Chainguard conversion requires CDX 1.3+; fall back for older versions
-                            if spec < "1.3":
-                                logger.info(
-                                    f"CycloneDX {spec} requested; Chainguard conversion requires 1.3+ — "
-                                    "falling back to normal generation"
-                                )
-                                chainguard_info = None
-                            else:
-                                cdx_json = convert_spdx_to_cyclonedx(spdx_sbom, spec)
-                                with open(STEP_1_FILE, "w", encoding="utf-8") as f:
-                                    f.write(cdx_json)
-                                actual_spec_version = spec
-                        else:
-                            with open(STEP_1_FILE, "w", encoding="utf-8") as f:
-                                json.dump(spdx_sbom, f, ensure_ascii=False)
-                            # Use the actual SPDX version from the document
-                            spdx_version = str(spdx_sbom.get("spdxVersion", "SPDX-2.3"))
-                            actual_spec_version = spdx_version.replace("SPDX-", "")
-                            if config.spec_version and config.spec_version != actual_spec_version:
-                                logger.warning(
-                                    f"Requested SPDX {config.spec_version} but Chainguard SBOM is "
-                                    f"SPDX {actual_spec_version}; using {actual_spec_version}"
-                                )
+                if chainguard_info:
+                    if config.sbom_format == "cyclonedx":
+                        cdx_spec = config.spec_version or "1.6"
+                        cdx_json = convert_spdx_to_cyclonedx(spdx_sbom, cdx_spec)
+                        with open(STEP_1_FILE, "w", encoding="utf-8") as f:
+                            f.write(cdx_json)
+                        actual_spec_version = cdx_spec
+                    else:
+                        with open(STEP_1_FILE, "w", encoding="utf-8") as f:
+                            json.dump(spdx_sbom, f, ensure_ascii=False)
+                        # Use the actual SPDX version from the document
+                        spdx_version = str(spdx_sbom.get("spdxVersion", "SPDX-2.3"))
+                        actual_spec_version = spdx_version.replace("SPDX-", "")
+                        if config.spec_version and config.spec_version != actual_spec_version:
+                            logger.warning(
+                                f"Requested SPDX {config.spec_version} but Chainguard SBOM is "
+                                f"SPDX {actual_spec_version}; using {actual_spec_version}"
+                            )
 
-                    if chainguard_info:
-                        result = GenerationResult.success_result(
-                            output_file=STEP_1_FILE,
-                            sbom_format=config.sbom_format,
-                            spec_version=actual_spec_version,
-                            generator_name="chainguard-sbom",
-                        )
+                    gha_warning(
+                        "Chainguard image detected. Using Chainguard-provided SBOM. "
+                        "Any binaries added via COPY --from=... (e.g. cosign, crane, osv-scanner) "
+                        "will NOT be included. Use ADDITIONAL_PACKAGES to declare them. "
+                        "See: https://github.com/sbomify/sbomify-action#additional-packages",
+                        title="Chainguard Image Detected",
+                    )
+                    result = GenerationResult.success_result(
+                        output_file=STEP_1_FILE,
+                        sbom_format=config.sbom_format,
+                        spec_version=actual_spec_version,
+                        generator_name="chainguard-sbom",
+                    )
 
                 if not chainguard_info:
                     logger.info(f"Generating SBOM from Docker image: {config.docker_image}")
