@@ -5,6 +5,7 @@ downloads their SPDX SBOMs from cosign attestations, and converts to CycloneDX.
 """
 
 import base64
+import binascii
 import json
 import os
 import platform
@@ -340,7 +341,7 @@ def fetch_chainguard_sbom(info: ChainguardBaseImage) -> dict[str, Any]:
 
         try:
             payload = json.loads(base64.b64decode(payload_b64))
-        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        except (json.JSONDecodeError, ValueError, UnicodeDecodeError, binascii.Error):
             continue
 
         if payload.get("predicateType") == "https://spdx.dev/Document":
