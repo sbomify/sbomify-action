@@ -41,7 +41,7 @@ That's it! This generates a CycloneDX SBOM from your lockfile and enriches it wi
 
 - **Generate** SBOMs from lockfiles (Python, Node, Rust, Go, Ruby, Dart, C++) in CycloneDX or SPDX format
 - **Generate** SBOMs from Docker images
-- **Chainguard SBOM reuse** — Automatically detects Chainguard base images and uses their signed SBOMs instead of scanning
+- **Chainguard SBOM reuse** — Automatically detects Chainguard base images and uses their provided SBOMs instead of scanning
 - **Yocto/OpenEmbedded** — Batch process SPDX SBOMs from Yocto builds (extract, upload, release-tag)
 - **Inject** additional packages not in lockfiles (vendored code, runtime deps, system libraries)
 - **Augment** with business metadata (supplier, authors, licenses, lifecycle phase) from config file or sbomify
@@ -92,7 +92,7 @@ That's it! This generates a CycloneDX SBOM from your lockfile and enriches it wi
 
 ### Chainguard Images
 
-When `DOCKER_IMAGE` points to a [Chainguard](https://www.chainguard.dev/) image—or an image built `FROM` one—sbomify automatically detects it and uses the signed SBOM provided by Chainguard instead of scanning with Syft/cdxgen. This produces a more accurate SBOM because it comes directly from the image publisher.
+When `DOCKER_IMAGE` points to a [Chainguard](https://www.chainguard.dev/) image—or an image built `FROM` one—sbomify automatically detects it and uses the SBOM provided by Chainguard instead of scanning with Syft/cdxgen. This produces a more accurate SBOM because it comes directly from the image publisher.
 
 **Detection works two ways:**
 

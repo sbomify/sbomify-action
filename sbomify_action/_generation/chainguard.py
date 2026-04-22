@@ -6,6 +6,7 @@ downloads their SPDX SBOMs from cosign attestations, and converts to CycloneDX.
 
 import base64
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -54,8 +55,6 @@ def _extract_repo(image_ref: str) -> str:
 
 def _get_current_platform() -> str:
     """Get the current platform in OCI format (e.g., 'linux/amd64')."""
-    import os
-
     # Check environment variable first (CI environments may set this)
     target_arch = os.environ.get("TARGETARCH")
     if target_arch:
@@ -341,7 +340,7 @@ def fetch_chainguard_sbom(info: ChainguardBaseImage) -> dict[str, Any]:
 
         try:
             payload = json.loads(base64.b64decode(payload_b64))
-        except (json.JSONDecodeError, Exception):
+        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
             continue
 
         if payload.get("predicateType") == "https://spdx.dev/Document":
