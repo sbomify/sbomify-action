@@ -1158,14 +1158,18 @@ def run_pipeline(config: Config) -> None:
                             cdx_json = convert_spdx_to_cyclonedx(spdx_sbom, config.spec_version or "1.6")
                             with open(STEP_1_FILE, "w", encoding="utf-8") as f:
                                 f.write(cdx_json)
+                            actual_spec_version = config.spec_version or "1.6"
                         else:
                             with open(STEP_1_FILE, "w", encoding="utf-8") as f:
                                 json.dump(spdx_sbom, f, ensure_ascii=False)
+                            # Use the actual SPDX version from the document, not what user requested
+                            spdx_version = str(spdx_sbom.get("spdxVersion", "SPDX-2.3"))
+                            actual_spec_version = spdx_version.replace("SPDX-", "")
 
                         result = GenerationResult.success_result(
                             output_file=STEP_1_FILE,
                             sbom_format=config.sbom_format,
-                            spec_version=config.spec_version or ("1.6" if config.sbom_format == "cyclonedx" else "2.3"),
+                            spec_version=actual_spec_version,
                             generator_name="chainguard-sbom",
                         )
 
