@@ -83,6 +83,28 @@ _TOOL_METADATA: dict[str, dict[str, object]] = {
         "homepage": "https://github.com/CycloneDX/cyclonedx-rust-cargo",
         "required_for": ["Rust lockfiles (Cargo.lock)"],
     },
+    "crane": {
+        "name": "crane",
+        "description": "OCI registry client for inspecting container images",
+        "install_instructions": (
+            "Install via package manager:\n"
+            "  - macOS: brew install crane\n"
+            "  - Linux: See https://github.com/google/go-containerregistry/releases"
+        ),
+        "homepage": "https://github.com/google/go-containerregistry",
+        "required_for": ["Chainguard image detection"],
+    },
+    "cosign": {
+        "name": "cosign",
+        "description": "Container image signing and attestation tool",
+        "install_instructions": (
+            "Install via package manager:\n"
+            "  - macOS: brew install cosign\n"
+            "  - Linux: See https://github.com/sigstore/cosign/releases"
+        ),
+        "homepage": "https://github.com/sigstore/cosign",
+        "required_for": ["Chainguard SBOM retrieval"],
+    },
 }
 
 
