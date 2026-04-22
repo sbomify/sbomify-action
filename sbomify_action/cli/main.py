@@ -1139,13 +1139,6 @@ def run_pipeline(config: Config) -> None:
                 chainguard_info = detect_chainguard_image(config.docker_image)
                 if chainguard_info:
                     logger.info(f"Detected Chainguard base image: {chainguard_info.image_ref}")
-                    gha_warning(
-                        "Chainguard image detected. Using Chainguard-provided SBOM. "
-                        "Any binaries added via COPY --from=... (e.g. cosign, crane, osv-scanner) "
-                        "will NOT be included. Use ADDITIONAL_PACKAGES to declare them. "
-                        "See: https://github.com/sbomify/sbomify-action#additional-packages",
-                        title="Chainguard Image Detected",
-                    )
 
                     try:
                         spdx_sbom = fetch_chainguard_sbom(chainguard_info)
@@ -1154,6 +1147,13 @@ def run_pipeline(config: Config) -> None:
                         chainguard_info = None
 
                     if chainguard_info:
+                        gha_warning(
+                            "Chainguard image detected. Using Chainguard-provided SBOM. "
+                            "Any binaries added via COPY --from=... (e.g. cosign, crane, osv-scanner) "
+                            "will NOT be included. Use ADDITIONAL_PACKAGES to declare them. "
+                            "See: https://github.com/sbomify/sbomify-action#additional-packages",
+                            title="Chainguard Image Detected",
+                        )
                         if config.sbom_format == "cyclonedx":
                             cdx_json = convert_spdx_to_cyclonedx(spdx_sbom, config.spec_version or "1.6")
                             with open(STEP_1_FILE, "w", encoding="utf-8") as f:

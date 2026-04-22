@@ -11,6 +11,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from urllib.parse import unquote
 
 from cyclonedx.model import HashAlgorithm, HashType
@@ -110,7 +111,7 @@ def _resolve_platform_digest(image_ref: str) -> str | None:
         for entry in manifest.get("manifests", []):
             p = entry.get("platform", {})
             if p.get("os") == os_name and p.get("architecture") == arch:
-                return entry["digest"]
+                return str(entry["digest"])
         logger.debug(f"No matching platform {current_platform} in manifest list for {image_ref}")
         return None
 
@@ -300,7 +301,7 @@ def detect_chainguard_image(docker_image: str) -> ChainguardBaseImage | None:
     return _detect_chainguard_from_provenance(docker_image)
 
 
-def fetch_chainguard_sbom(info: ChainguardBaseImage) -> dict:
+def fetch_chainguard_sbom(info: ChainguardBaseImage) -> dict[str, Any]:
     """Download the SPDX SBOM from a Chainguard image's cosign attestation.
 
     Args:
@@ -348,7 +349,7 @@ def fetch_chainguard_sbom(info: ChainguardBaseImage) -> dict:
             if predicate.get("spdxVersion"):
                 pkg_count = len(predicate.get("packages", []))
                 logger.info(f"Found Chainguard SPDX SBOM with {pkg_count} packages")
-                return predicate
+                return dict(predicate)
 
     raise RuntimeError(f"No SPDX SBOM found in attestations for {image_with_digest}")
 
@@ -363,7 +364,7 @@ _SPDX_TO_CDX_HASH_ALG: dict[str, HashAlgorithm] = {
 }
 
 
-def convert_spdx_to_cyclonedx(spdx_doc: dict, spec_version: str = "1.6") -> str:
+def convert_spdx_to_cyclonedx(spdx_doc: dict[str, Any], spec_version: str = "1.6") -> str:
     """Convert a Chainguard SPDX SBOM to CycloneDX JSON.
 
     Handles the simple structure of Chainguard SBOMs: packages with PURLs,
