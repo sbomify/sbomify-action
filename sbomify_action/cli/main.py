@@ -1136,25 +1136,19 @@ def run_pipeline(config: Config) -> None:
                     fetch_chainguard_sbom,
                 )
 
-                chainguard_info = detect_chainguard_image(config.docker_image)
-
-                # Check version compatibility before fetching the SBOM
-                if chainguard_info and config.sbom_format == "spdx" and config.spec_version == "3.0.1":
-                    logger.info(
-                        "SPDX 3.0.1 requested; Chainguard provides SPDX 2.x — falling back to normal generation"
-                    )
-                    chainguard_info = None
-
-                if chainguard_info and config.sbom_format == "cyclonedx":
+                # Check format/version compatibility before attempting detection
+                chainguard_compatible = True
+                if config.sbom_format == "spdx" and config.spec_version == "3.0.1":
+                    logger.debug("SPDX 3.0.1 requested; skipping Chainguard detection")
+                    chainguard_compatible = False
+                elif config.sbom_format == "cyclonedx":
                     spec = config.spec_version or "1.6"
-                    # Compare as tuples for correct numeric ordering (e.g. "1.10" > "1.3")
                     spec_parts = tuple(int(x) for x in spec.split("."))
                     if spec_parts < (1, 3):
-                        logger.info(
-                            f"CycloneDX {spec} requested; Chainguard conversion requires 1.3+ — "
-                            "falling back to normal generation"
-                        )
-                        chainguard_info = None
+                        logger.debug(f"CycloneDX {spec} requested; skipping Chainguard detection")
+                        chainguard_compatible = False
+
+                chainguard_info = detect_chainguard_image(config.docker_image) if chainguard_compatible else None
 
                 if chainguard_info:
                     logger.info(f"Detected Chainguard base image: {chainguard_info.image_ref}")
