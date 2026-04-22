@@ -1182,6 +1182,11 @@ def run_pipeline(config: Config) -> None:
                             # Use the actual SPDX version from the document
                             spdx_version = str(spdx_sbom.get("spdxVersion", "SPDX-2.3"))
                             actual_spec_version = spdx_version.replace("SPDX-", "")
+                            if config.spec_version and config.spec_version != actual_spec_version:
+                                logger.warning(
+                                    f"Requested SPDX {config.spec_version} but Chainguard SBOM is "
+                                    f"SPDX {actual_spec_version}; using {actual_spec_version}"
+                                )
 
                     if chainguard_info:
                         result = GenerationResult.success_result(

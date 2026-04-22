@@ -55,10 +55,10 @@ RUN curl -sL \
 
 # Install crane (uses Linux_x86_64 / Linux_arm64 naming)
 RUN CRANE_ARCH=$([ "${TARGETARCH}" = "amd64" ] && echo "x86_64" || echo "${TARGETARCH}") && \
-    curl -sL \
+    curl -fsSL \
         -o go-containerregistry_Linux_${CRANE_ARCH}.tar.gz \
         "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_${CRANE_ARCH}.tar.gz" && \
-    curl -sL \
+    curl -fsSL \
         -o crane_checksums.txt \
         "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/checksums.txt" && \
     sha256sum --ignore-missing -c crane_checksums.txt && \
@@ -68,10 +68,10 @@ RUN CRANE_ARCH=$([ "${TARGETARCH}" = "amd64" ] && echo "x86_64" || echo "${TARGE
     rm -rf /tmp/*
 
 # Install cosign (uses linux-amd64 / linux-arm64 naming)
-RUN curl -sL \
+RUN curl -fsSL \
         -o cosign-linux-${TARGETARCH} \
         "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-${TARGETARCH}" && \
-    curl -sL \
+    curl -fsSL \
         -o cosign_checksums.txt \
         "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign_checksums.txt" && \
     sha256sum --ignore-missing -c cosign_checksums.txt && \

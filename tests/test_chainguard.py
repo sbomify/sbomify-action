@@ -346,6 +346,41 @@ class TestDetectFromProvenance:
 
     @patch("sbomify_action._generation.chainguard.shutil.which", return_value="/usr/local/bin/crane")
     @patch("sbomify_action._generation.chainguard._run_crane")
+    def test_detects_chainguard_with_registry_port(self, mock_crane, mock_which):
+        """Ensure provenance detection works with registry:port image refs."""
+        chainguard_manifest_list = json.dumps(
+            {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.index.v1+json",
+                "manifests": [
+                    {
+                        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                        "digest": "sha256:platformdigest0000000000000000000000000000000000000000000000000",
+                        "platform": {"architecture": "amd64", "os": "linux"},
+                    },
+                ],
+            }
+        )
+
+        mock_crane.side_effect = [
+            MANIFEST_WITH_ATTESTATION,
+            ATTESTATION_MANIFEST,
+            PROVENANCE_WITH_CHAINGUARD,
+            chainguard_manifest_list,
+        ]
+
+        result = detect_chainguard_image("localhost:5000/myorg/myapp:v1.0")
+        assert result is not None
+        assert result.image_ref == "cgr.dev/chainguard/python"
+
+        # Verify crane was called with correct repo (port preserved, tag stripped)
+        calls = mock_crane.call_args_list
+        # Second call: crane manifest for attestation should use "localhost:5000/myorg/myapp@<digest>"
+        att_call_args = calls[1][0][0]  # first positional arg is the args list
+        assert att_call_args[1].startswith("localhost:5000/myorg/myapp@")
+
+    @patch("sbomify_action._generation.chainguard.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.chainguard._run_crane")
     def test_no_chainguard_in_provenance(self, mock_crane, mock_which):
         mock_crane.side_effect = [
             MANIFEST_WITH_ATTESTATION,
