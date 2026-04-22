@@ -1137,6 +1137,14 @@ def run_pipeline(config: Config) -> None:
                 )
 
                 chainguard_info = detect_chainguard_image(config.docker_image)
+
+                # Skip Chainguard reuse for incompatible spec versions
+                if chainguard_info and config.sbom_format == "spdx" and config.spec_version == "3.0.1":
+                    logger.info(
+                        "SPDX 3.0.1 requested; Chainguard provides SPDX 2.x — falling back to normal generation"
+                    )
+                    chainguard_info = None
+
                 if chainguard_info:
                     logger.info(f"Detected Chainguard base image: {chainguard_info.image_ref}")
 
@@ -1155,17 +1163,27 @@ def run_pipeline(config: Config) -> None:
                             title="Chainguard Image Detected",
                         )
                         if config.sbom_format == "cyclonedx":
-                            cdx_json = convert_spdx_to_cyclonedx(spdx_sbom, config.spec_version or "1.6")
-                            with open(STEP_1_FILE, "w", encoding="utf-8") as f:
-                                f.write(cdx_json)
-                            actual_spec_version = config.spec_version or "1.6"
+                            spec = config.spec_version or "1.6"
+                            # Chainguard conversion requires CDX 1.3+; fall back for older versions
+                            if spec < "1.3":
+                                logger.info(
+                                    f"CycloneDX {spec} requested; Chainguard conversion requires 1.3+ — "
+                                    "falling back to normal generation"
+                                )
+                                chainguard_info = None
+                            else:
+                                cdx_json = convert_spdx_to_cyclonedx(spdx_sbom, spec)
+                                with open(STEP_1_FILE, "w", encoding="utf-8") as f:
+                                    f.write(cdx_json)
+                                actual_spec_version = spec
                         else:
                             with open(STEP_1_FILE, "w", encoding="utf-8") as f:
                                 json.dump(spdx_sbom, f, ensure_ascii=False)
-                            # Use the actual SPDX version from the document, not what user requested
+                            # Use the actual SPDX version from the document
                             spdx_version = str(spdx_sbom.get("spdxVersion", "SPDX-2.3"))
                             actual_spec_version = spdx_version.replace("SPDX-", "")
 
+                    if chainguard_info:
                         result = GenerationResult.success_result(
                             output_file=STEP_1_FILE,
                             sbom_format=config.sbom_format,
