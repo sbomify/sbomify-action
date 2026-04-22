@@ -32,6 +32,25 @@ class ChainguardBaseImage:
     digest: str  # per-architecture digest, e.g., "sha256:242e08c..."
 
 
+def _extract_repo(image_ref: str) -> str:
+    """Extract the repository (without tag or digest) from an image reference.
+
+    Handles registries with ports (e.g., localhost:5000/repo/image:tag)
+    by only stripping a :tag suffix when the colon appears after the last /.
+    """
+    # Strip @digest first
+    if "@" in image_ref:
+        image_ref = image_ref.split("@")[0]
+
+    # Strip :tag only if the colon is after the last /
+    last_slash = image_ref.rfind("/")
+    last_colon = image_ref.rfind(":")
+    if last_colon > last_slash:
+        image_ref = image_ref[:last_colon]
+
+    return image_ref
+
+
 def _get_current_platform() -> str:
     """Get the current platform in OCI format (e.g., 'linux/amd64')."""
     import os
@@ -41,11 +60,13 @@ def _get_current_platform() -> str:
     if target_arch:
         return f"linux/{target_arch}"
 
-    machine = platform.machine()
+    machine = platform.machine().lower()
     arch_map = {
         "x86_64": "amd64",
+        "amd64": "amd64",
         "aarch64": "arm64",
         "arm64": "arm64",
+        "armv7l": "arm",
     }
     arch = arch_map.get(machine, machine)
     return f"linux/{arch}"
@@ -139,7 +160,7 @@ def _detect_direct_chainguard(docker_image: str) -> ChainguardBaseImage | None:
         return None
 
     # Extract the image ref without tag/digest for the ChainguardBaseImage
-    image_ref = docker_image.split("@")[0].split(":")[0]
+    image_ref = _extract_repo(docker_image)
     return ChainguardBaseImage(image_ref=image_ref, digest=digest)
 
 
@@ -203,11 +224,8 @@ def _detect_chainguard_from_provenance(docker_image: str) -> ChainguardBaseImage
 
     # Fetch the attestation manifest to find the provenance layer
     try:
-        att_manifest_json = _run_crane(["manifest", f"{docker_image.split(':')[0]}@{att_digest}"])
-        # Handle case where docker_image has @ instead of :
-        if "@" in docker_image:
-            registry_repo = docker_image.split("@")[0]
-            att_manifest_json = _run_crane(["manifest", f"{registry_repo}@{att_digest}"])
+        registry_repo = _extract_repo(docker_image)
+        att_manifest_json = _run_crane(["manifest", f"{registry_repo}@{att_digest}"])
         att_manifest = json.loads(att_manifest_json)
     except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
         logger.debug(f"Failed to fetch attestation manifest: {e}")
@@ -227,11 +245,6 @@ def _detect_chainguard_from_provenance(docker_image: str) -> ChainguardBaseImage
 
     # Fetch and parse the provenance blob
     try:
-        # Need to resolve the registry/repo for blob fetching
-        if "@" in docker_image:
-            registry_repo = docker_image.split("@")[0]
-        else:
-            registry_repo = docker_image.split(":")[0]
         provenance_json = _run_crane(["blob", f"{registry_repo}@{provenance_digest}"])
         provenance = json.loads(provenance_json)
     except (subprocess.CalledProcessError, json.JSONDecodeError) as e:

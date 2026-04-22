@@ -1147,23 +1147,29 @@ def run_pipeline(config: Config) -> None:
                         title="Chainguard Image Detected",
                     )
 
-                    spdx_sbom = fetch_chainguard_sbom(chainguard_info)
+                    try:
+                        spdx_sbom = fetch_chainguard_sbom(chainguard_info)
+                    except RuntimeError as e:
+                        logger.warning(f"Failed to fetch Chainguard SBOM, falling back to normal generation: {e}")
+                        chainguard_info = None
 
-                    if config.sbom_format == "cyclonedx":
-                        cdx_json = convert_spdx_to_cyclonedx(spdx_sbom, config.spec_version or "1.6")
-                        with open(STEP_1_FILE, "w", encoding="utf-8") as f:
-                            f.write(cdx_json)
-                    else:
-                        with open(STEP_1_FILE, "w", encoding="utf-8") as f:
-                            json.dump(spdx_sbom, f, ensure_ascii=False)
+                    if chainguard_info:
+                        if config.sbom_format == "cyclonedx":
+                            cdx_json = convert_spdx_to_cyclonedx(spdx_sbom, config.spec_version or "1.6")
+                            with open(STEP_1_FILE, "w", encoding="utf-8") as f:
+                                f.write(cdx_json)
+                        else:
+                            with open(STEP_1_FILE, "w", encoding="utf-8") as f:
+                                json.dump(spdx_sbom, f, ensure_ascii=False)
 
-                    result = GenerationResult.success_result(
-                        output_file=STEP_1_FILE,
-                        sbom_format=config.sbom_format,
-                        spec_version=config.spec_version or ("1.6" if config.sbom_format == "cyclonedx" else "2.3"),
-                        generator_name="chainguard-sbom",
-                    )
-                else:
+                        result = GenerationResult.success_result(
+                            output_file=STEP_1_FILE,
+                            sbom_format=config.sbom_format,
+                            spec_version=config.spec_version or ("1.6" if config.sbom_format == "cyclonedx" else "2.3"),
+                            generator_name="chainguard-sbom",
+                        )
+
+                if not chainguard_info:
                     logger.info(f"Generating SBOM from Docker image: {config.docker_image}")
                     result = generate_sbom(
                         docker_image=config.docker_image,

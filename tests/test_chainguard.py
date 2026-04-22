@@ -8,6 +8,7 @@ import pytest
 
 from sbomify_action._generation.chainguard import (
     ChainguardBaseImage,
+    _extract_repo,
     _parse_purl_docker_uri,
     convert_spdx_to_cyclonedx,
     detect_chainguard_image,
@@ -216,6 +217,26 @@ def _make_cosign_attestation_output(spdx_doc: dict) -> str:
 
 
 # --- Tests ---
+
+
+class TestExtractRepo:
+    def test_simple_tag(self):
+        assert _extract_repo("nginx:latest") == "nginx"
+
+    def test_registry_with_port(self):
+        assert _extract_repo("localhost:5000/repo/image:tag") == "localhost:5000/repo/image"
+
+    def test_digest_ref(self):
+        assert _extract_repo("nginx@sha256:abc123") == "nginx"
+
+    def test_registry_port_and_digest(self):
+        assert _extract_repo("localhost:5000/repo@sha256:abc123") == "localhost:5000/repo"
+
+    def test_no_tag_or_digest(self):
+        assert _extract_repo("cgr.dev/chainguard/python") == "cgr.dev/chainguard/python"
+
+    def test_tag_with_registry_port(self):
+        assert _extract_repo("myregistry.io:8443/org/app:v1.2.3") == "myregistry.io:8443/org/app"
 
 
 class TestParseDockerPurl:
