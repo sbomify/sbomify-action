@@ -5,6 +5,8 @@ ARG BUN_VERSION=1.3.10
 ARG BOMCTL_VERSION=0.4.3
 ARG SYFT_VERSION=1.42.3
 ARG CARGO_CYCLONEDX_VERSION=0.5.9
+ARG CRANE_VERSION=0.21.5
+ARG COSIGN_VERSION=3.0.6
 
 FROM python:3.13-slim-trixie AS fetcher
 
@@ -14,6 +16,8 @@ ARG TARGETARCH
 # Re-declare global ARGs needed in this stage
 ARG BOMCTL_VERSION
 ARG SYFT_VERSION
+ARG CRANE_VERSION
+ARG COSIGN_VERSION
 
 WORKDIR /tmp
 
@@ -47,6 +51,32 @@ RUN curl -sL \
     tar xvfz syft_${SYFT_VERSION}_linux_${TARGETARCH}.tar.gz && \
     chmod +x /tmp/syft && \
     mv syft /usr/local/bin && \
+    rm -rf /tmp/*
+
+# Install crane (uses Linux_x86_64 / Linux_arm64 naming)
+RUN CRANE_ARCH=$([ "${TARGETARCH}" = "amd64" ] && echo "x86_64" || echo "${TARGETARCH}") && \
+    curl -sL \
+        -o go-containerregistry_Linux_${CRANE_ARCH}.tar.gz \
+        "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_${CRANE_ARCH}.tar.gz" && \
+    curl -sL \
+        -o crane_checksums.txt \
+        "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/checksums.txt" && \
+    sha256sum --ignore-missing -c crane_checksums.txt && \
+    tar xvfz go-containerregistry_Linux_${CRANE_ARCH}.tar.gz crane && \
+    chmod +x /tmp/crane && \
+    mv crane /usr/local/bin && \
+    rm -rf /tmp/*
+
+# Install cosign (uses linux-amd64 / linux-arm64 naming)
+RUN curl -sL \
+        -o cosign-linux-${TARGETARCH} \
+        "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-${TARGETARCH}" && \
+    curl -sL \
+        -o cosign_checksums.txt \
+        "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign_checksums.txt" && \
+    sha256sum --ignore-missing -c cosign_checksums.txt && \
+    chmod +x cosign-linux-${TARGETARCH} && \
+    mv cosign-linux-${TARGETARCH} /usr/local/bin/cosign && \
     rm -rf /tmp/*
 
 # Node/Bun stage for cdxgen
@@ -149,6 +179,8 @@ LABEL com.sbomify.maintainer="sbomify <hello@sbomify.com>" \
 # Copy tools from fetcher
 COPY --from=fetcher /usr/local/bin/bomctl /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/syft /usr/local/bin/
+COPY --from=fetcher /usr/local/bin/crane /usr/local/bin/
+COPY --from=fetcher /usr/local/bin/cosign /usr/local/bin/
 # cargo-cyclonedx: pre-built for amd64, compiled for arm64
 COPY --from=rust-builder /usr/local/cargo/bin/cargo-cyclonedx /usr/local/bin/
 COPY --from=node-fetcher /usr/local/bin/bun /usr/local/bin/
