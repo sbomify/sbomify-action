@@ -18,7 +18,7 @@ Watch our FOSDEM 2026 talk for a real-world crash course on generating CRA-ready
 
 Generate, augment, enrich, and manage SBOMs in your CI/CD pipeline. Works standalone or with [sbomify](https://sbomify.com).
 
-**Recommended**: Use the GitHub Action or Docker image—they include the recommended SBOM generators pre-installed (Syft, cdxgen, cyclonedx-py, cargo-cyclonedx, and more). For other CI platforms, see [examples below](#other-cicd-platforms). A [pip package](#pip-advanced) is also available for advanced use cases.
+**Recommended**: Use the GitHub Action or Docker image—they include the recommended SBOM generators pre-installed (Syft, cdxgen, cyclonedx-py, cargo-cyclonedx, crane, cosign, and more). For other CI platforms, see [examples below](#other-cicd-platforms). A [pip package](#pip-advanced) is also available for advanced use cases.
 
 > **Note**: Trivy support is temporarily disabled due to recurring security vulnerabilities. Syft and cdxgen cover all supported ecosystems.
 
@@ -41,6 +41,7 @@ That's it! This generates a CycloneDX SBOM from your lockfile and enriches it wi
 
 - **Generate** SBOMs from lockfiles (Python, Node, Rust, Go, Ruby, Dart, C++) in CycloneDX or SPDX format
 - **Generate** SBOMs from Docker images
+- **Chainguard SBOM reuse** — Automatically detects Chainguard base images and uses their signed SBOMs instead of scanning
 - **Yocto/OpenEmbedded** — Batch process SPDX SBOMs from Yocto builds (extract, upload, release-tag)
 - **Inject** additional packages not in lockfiles (vendored code, runtime deps, system libraries)
 - **Augment** with business metadata (supplier, authors, licenses, lifecycle phase) from config file or sbomify
@@ -88,6 +89,39 @@ That's it! This generates a CycloneDX SBOM from your lockfile and enriches it wi
     UPLOAD: false
     ENRICH: true
 ```
+
+### Chainguard Images
+
+When `DOCKER_IMAGE` points to a [Chainguard](https://www.chainguard.dev/) image—or an image built `FROM` one—sbomify automatically detects it and uses the signed SBOM provided by Chainguard instead of scanning with Syft/cdxgen. This produces a more accurate SBOM because it comes directly from the image publisher.
+
+**Detection works two ways:**
+
+1. **Direct Chainguard images** (`cgr.dev/chainguard/...`) — detected by image reference and verified via image config
+2. **User-built images FROM Chainguard** — detected by parsing BuildKit SLSA provenance attestations embedded in the image
+
+No configuration needed—just point `DOCKER_IMAGE` at your image:
+
+```yaml
+- uses: sbomify/sbomify-action@master
+  env:
+    DOCKER_IMAGE: cgr.dev/chainguard/python:latest
+    OUTPUT_FILE: sbom.cdx.json
+    UPLOAD: false
+    ENRICH: true
+```
+
+**Important:** Chainguard SBOMs only cover the base image packages. If your Dockerfile uses `COPY --from=...` to add binaries (e.g., cosign, crane, osv-scanner), those will **not** appear in the SBOM. Use [`ADDITIONAL_PACKAGES`](#additional-packages) to declare them:
+
+```yaml
+- uses: sbomify/sbomify-action@master
+  env:
+    DOCKER_IMAGE: my-org/my-image:latest
+    ADDITIONAL_PACKAGES: "pkg:golang/github.com/sigstore/cosign@2.4.0"
+    OUTPUT_FILE: sbom.cdx.json
+    UPLOAD: false
+```
+
+> **Note:** Chainguard detection requires `crane` and `cosign` CLI tools. Both are bundled in the Docker image. For pip installations, install them separately (see [Required Tools](#required-tools)).
 
 <details>
 <summary><strong>More examples</strong> (augmentation, SPDX, attestation, additional packages...)</summary>
@@ -947,6 +981,8 @@ When installed via pip, sbomify-action requires external SBOM generators. The Do
 | **cyclonedx-py** | `pip install cyclonedx-bom`                                                                     | Native Python generator; `cyclonedx-py` is the CLI command provided by the `cyclonedx-bom` package (installed as a dependency) |
 | **Syft**         | [Installation guide](https://github.com/anchore/syft#installation)                              | macOS: `brew install syft`                                                                                                     |
 | **cdxgen**       | `npm install -g @cyclonedx/cdxgen`                                                              | Requires Node.js/Bun                                                                                                           |
+| **crane**        | [Installation guide](https://github.com/google/go-containerregistry#installation)               | Required for Chainguard image detection; macOS: `brew install crane`                                                           |
+| **cosign**       | [Installation guide](https://github.com/sigstore/cosign#installation)                           | Required for Chainguard SBOM retrieval; macOS: `brew install cosign`                                                           |
 
 **Minimum requirement**: At least one generator must be installed for SBOM generation. For Python projects, `cyclonedx-bom` (which provides the `cyclonedx-py` command) is installed as a dependency when you install sbomify-action via pip. For other ecosystems or Docker images, install `syft` or `cdxgen`.
 
