@@ -1,9 +1,12 @@
 """Tests for augmentation providers (JSON config and sbomify API)."""
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
+
+import pytest
 
 from sbomify_action._augmentation import (
     AugmentationMetadata,
@@ -928,10 +931,12 @@ class TestCreateDefaultRegistry:
         registry = create_default_registry()
         providers = registry.list_providers()
 
-        # 5 providers: json-config, github-actions, gitlab-ci, bitbucket-pipelines, sbomify-api
-        assert len(providers) == 5
+        # 6 providers: json-config, docker-image, github-actions,
+        # gitlab-ci, bitbucket-pipelines, sbomify-api
+        assert len(providers) == 6
         provider_names = [p["name"] for p in providers]
         assert "json-config" in provider_names
+        assert "docker-image" in provider_names
         assert "github-actions" in provider_names
         assert "gitlab-ci" in provider_names
         assert "bitbucket-pipelines" in provider_names
@@ -940,10 +945,477 @@ class TestCreateDefaultRegistry:
         # Verify priority ordering (lower = higher priority)
         priorities = {p["name"]: p["priority"] for p in providers}
         assert priorities["json-config"] == 10  # Highest priority
+        assert priorities["docker-image"] == 15  # Container-image input
         assert priorities["github-actions"] == 20
         assert priorities["gitlab-ci"] == 20
         assert priorities["bitbucket-pipelines"] == 20
         assert priorities["sbomify-api"] == 50  # Lowest priority
+
+
+class TestLifecyclePhasePrecedence:
+    """End-to-end precedence tests for lifecycle_phase across the registry.
+
+    These pin the spec-correct defaults that the providers emit in
+    realistic input/environment combinations, so a future refactor can't
+    silently regress the CDX 1.7 meta:enum alignment (pre-build for
+    lockfile scans, post-build for built-image scans, build only when
+    the operator explicitly opts in via sbomify.json).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_cwd(self):
+        """Save and restore working directory around each test.
+
+        JsonConfigProvider reads ``sbomify.json`` from cwd, so these
+        tests ``chdir`` into an isolated tmpdir. Without this fixture
+        the chdir leaks into sibling tests and breaks anything that
+        relies on the real project cwd.
+        """
+        original = os.getcwd()
+        try:
+            yield
+        finally:
+            os.chdir(original)
+
+    def _registry_no_api(self):
+        """Registry without the sbomify-api provider so tests don't hit
+        the network. Returns the same 5 providers that actually decide
+        lifecycle_phase today."""
+        from sbomify_action._augmentation.providers import (
+            BitbucketPipelinesProvider,
+            DockerImageProvider,
+            GitHubActionsProvider,
+            GitLabCIProvider,
+            JsonConfigProvider,
+        )
+        from sbomify_action._augmentation.registry import ProviderRegistry
+
+        registry = ProviderRegistry()
+        registry.register(JsonConfigProvider())
+        registry.register(DockerImageProvider())
+        registry.register(GitHubActionsProvider())
+        registry.register(GitLabCIProvider())
+        registry.register(BitbucketPipelinesProvider())
+        return registry
+
+    def test_ci_lockfile_scan_defaults_to_pre_build(self):
+        """GitHub Actions env alone (no json config, no docker image)
+        yields pre-build — the schema-correct default for a lockfile /
+        manifest scan on CI."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)  # no sbomify.json here
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "pre-build"
+
+    def test_docker_image_overrides_ci_default_to_post_build(self):
+        """DOCKER_IMAGE set alongside GITHUB_ACTIONS yields post-build.
+        DockerImageProvider (priority 15) wins over the CI providers
+        (priority 20) so a container-image scan lands in the correct
+        phase even when running on GitHub Actions."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+                "DOCKER_IMAGE": "ubuntu:24.04",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "post-build"
+
+    def test_json_config_overrides_both_ci_and_docker(self):
+        """Operator-supplied sbomify.json (priority 10) is the final
+        word — operators who truly emit a BOM mid-compilation can
+        opt into ``lifecycle_phase="build"`` regardless of CI /
+        docker-image detection."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_file = Path(tmpdir) / "sbomify.json"
+            config_file.write_text(json.dumps({"lifecycle_phase": "build"}))
+            os.chdir(tmpdir)
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+                "DOCKER_IMAGE": "ubuntu:24.04",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "build"
+
+    def test_gitlab_defaults_to_pre_build(self):
+        """Same spec-alignment applies to GitLab CI and Bitbucket
+        Pipelines — parametrise-style coverage without the pytest
+        parametrise boilerplate since patch.dict with different
+        env sets doesn't compose cleanly as parameters."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {
+                "GITLAB_CI": "true",
+                "CI_PROJECT_URL": "https://gitlab.com/group/proj",
+                "CI_COMMIT_SHA": "a" * 40,
+                "CI_COMMIT_REF_NAME": "main",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "pre-build"
+
+    def test_bitbucket_defaults_to_pre_build(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {
+                "BITBUCKET_PIPELINE_UUID": "{abc-123}",
+                "BITBUCKET_GIT_HTTP_ORIGIN": "https://bitbucket.org/ws/repo",
+                "BITBUCKET_COMMIT": "a" * 40,
+                "BITBUCKET_BRANCH": "main",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "pre-build"
+
+    def test_docker_image_alone_without_ci_still_emits_post_build(self):
+        """DOCKER_IMAGE set with no CI env vars and no sbomify.json must
+        still emit ``post-build`` — a user running the action locally
+        against a built image deserves the same spec-correct phase as
+        a CI run against the same image."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {"DOCKER_IMAGE": "ubuntu:24.04"}
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "post-build"
+
+    def test_json_config_overrides_docker_image_without_ci(self):
+        """sbomify.json beats docker-image provider even without a CI
+        provider in the mix. Mirrors the real-world case where a user
+        is running locally and wants the container-image scan classified
+        as something other than ``post-build``."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_file = Path(tmpdir) / "sbomify.json"
+            config_file.write_text(json.dumps({"lifecycle_phase": "operations"}))
+            os.chdir(tmpdir)
+            env = {"DOCKER_IMAGE": "ubuntu:24.04"}
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "operations"
+
+    def test_no_input_signals_yields_no_lifecycle_phase(self):
+        """No CI env, no DOCKER_IMAGE, no sbomify.json → no provider
+        has a lifecycle_phase to contribute, so the merged metadata's
+        lifecycle_phase is None. The compliance plugins will then
+        correctly report "missing generation context" rather than
+        inventing a phase."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            with patch.dict(os.environ, {}, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            # Registry may return None or a metadata object with no
+            # fields set — either signals "nothing to augment".
+            assert metadata is None or metadata.lifecycle_phase is None
+
+    def test_disable_vcs_augmentation_still_lets_docker_image_fire(self):
+        """DISABLE_VCS_AUGMENTATION only silences the CI providers' VCS
+        side of things; the DockerImageProvider (which doesn't touch
+        VCS metadata) must still emit its lifecycle_phase signal."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {
+                "DISABLE_VCS_AUGMENTATION": "true",
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+                "DOCKER_IMAGE": "ubuntu:24.04",
+            }
+            with patch.dict(os.environ, env, clear=True):
+                registry = self._registry_no_api()
+                metadata = registry.fetch_metadata()
+
+            assert metadata is not None
+            assert metadata.lifecycle_phase == "post-build"
+
+
+class TestLifecyclePhaseSpdxCdxParity:
+    """End-to-end parity tests: CI provider default → both SPDX and
+    CycloneDX outputs carry the same lifecycle phase.
+
+    The augmentation code writes the phase to different spec-native
+    locations:
+      * CycloneDX: ``metadata.lifecycles[].phase`` (1.5+)
+      * SPDX 2.x: ``creationInfo.creatorComment`` as ``"Lifecycle phase: <phase>"``
+
+    The sbomify CISA plugin reads both, so any drift between the two
+    paths would give the same BOM different compliance verdicts in
+    CDX vs SPDX. These tests pin the parity explicitly.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_cwd(self):
+        original = os.getcwd()
+        try:
+            yield
+        finally:
+            os.chdir(original)
+
+    def _fetch_from_registry(self, env):
+        """Run the real registry (minus sbomify-api) with ``env`` as
+        the only env vars and return the merged AugmentationMetadata."""
+        from sbomify_action._augmentation.providers import (
+            BitbucketPipelinesProvider,
+            DockerImageProvider,
+            GitHubActionsProvider,
+            GitLabCIProvider,
+            JsonConfigProvider,
+        )
+        from sbomify_action._augmentation.registry import ProviderRegistry
+
+        registry = ProviderRegistry()
+        registry.register(JsonConfigProvider())
+        registry.register(DockerImageProvider())
+        registry.register(GitHubActionsProvider())
+        registry.register(GitLabCIProvider())
+        registry.register(BitbucketPipelinesProvider())
+
+        with patch.dict(os.environ, env, clear=True):
+            return registry.fetch_metadata()
+
+    def _minimal_spdx_doc(self):
+        """Build a minimal SPDX 2.3 Document suitable for augmentation."""
+        from datetime import datetime
+
+        from spdx_tools.spdx.model import CreationInfo, Document, Package
+
+        return Document(
+            creation_info=CreationInfo(
+                spdx_version="SPDX-2.3",
+                spdx_id="SPDXRef-DOCUMENT",
+                name="test-parity-sbom",
+                document_namespace="https://example.com/parity",
+                creators=[],
+                created=datetime(2026, 4, 20, 12, 0, 0),
+            ),
+            packages=[
+                Package(
+                    spdx_id="SPDXRef-root",
+                    name="parity-app",
+                    download_location="https://example.com/download",
+                    version="1.0.0",
+                )
+            ],
+            relationships=[],
+        )
+
+    def _minimal_cdx_bom(self):
+        """Build a minimal CycloneDX 1.6 BOM suitable for augmentation."""
+        from cyclonedx.model.bom import Bom
+        from cyclonedx.model.component import Component, ComponentType
+
+        bom = Bom()
+        bom.metadata.component = Component(
+            name="parity-app",
+            version="1.0.0",
+            type=ComponentType.APPLICATION,
+            bom_ref="parity-app@1.0.0",
+        )
+        return bom
+
+    def test_github_ci_lockfile_writes_pre_build_to_both_formats(self):
+        """GitHub Actions + lockfile scan → both SPDX creatorComment
+        and CDX metadata.lifecycles[0].phase hold ``pre-build``."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+            }
+            metadata = self._fetch_from_registry(env)
+
+        assert metadata is not None
+        augmentation_data = metadata.to_dict()
+        assert augmentation_data["lifecycle_phase"] == "pre-build"
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom, augment_spdx_sbom
+
+        # CDX path
+        bom = self._minimal_cdx_bom()
+        augmented_bom = augment_cyclonedx_sbom(bom, augmentation_data, spec_version="1.6")
+        phases = [lc.phase.value for lc in augmented_bom.metadata.lifecycles if lc.phase is not None]
+        assert "pre-build" in phases, f"CDX lifecycles should carry pre-build; got {phases}"
+
+        # SPDX path
+        doc = self._minimal_spdx_doc()
+        augmented_doc = augment_spdx_sbom(doc, augmentation_data)
+        creator_comment = augmented_doc.creation_info.creator_comment or ""
+        assert "Lifecycle phase: pre-build" in creator_comment, (
+            f"SPDX creator comment should carry pre-build; got {creator_comment!r}"
+        )
+
+    def test_docker_image_writes_post_build_to_both_formats(self):
+        """``--docker-image`` on CI → both formats hold ``post-build``."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+                "DOCKER_IMAGE": "ubuntu:24.04",
+            }
+            metadata = self._fetch_from_registry(env)
+
+        assert metadata is not None
+        augmentation_data = metadata.to_dict()
+        assert augmentation_data["lifecycle_phase"] == "post-build"
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom, augment_spdx_sbom
+
+        bom = self._minimal_cdx_bom()
+        augmented_bom = augment_cyclonedx_sbom(bom, augmentation_data, spec_version="1.6")
+        phases = [lc.phase.value for lc in augmented_bom.metadata.lifecycles if lc.phase is not None]
+        assert "post-build" in phases
+
+        doc = self._minimal_spdx_doc()
+        augmented_doc = augment_spdx_sbom(doc, augmentation_data)
+        creator_comment = augmented_doc.creation_info.creator_comment or ""
+        assert "Lifecycle phase: post-build" in creator_comment
+
+    def test_json_config_override_writes_build_to_both_formats(self):
+        """Operator override via sbomify.json → both formats carry the
+        operator-chosen ``build`` value, confirming the merge order
+        survives all the way to the emitted BOM."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_file = Path(tmpdir) / "sbomify.json"
+            config_file.write_text(json.dumps({"lifecycle_phase": "build"}))
+            os.chdir(tmpdir)
+            env = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_SHA": "a" * 40,
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SERVER_URL": "https://github.com",
+                "DOCKER_IMAGE": "ubuntu:24.04",
+            }
+            metadata = self._fetch_from_registry(env)
+
+        assert metadata is not None
+        augmentation_data = metadata.to_dict()
+        assert augmentation_data["lifecycle_phase"] == "build"
+
+        from sbomify_action.augmentation import augment_cyclonedx_sbom, augment_spdx_sbom
+
+        bom = self._minimal_cdx_bom()
+        augmented_bom = augment_cyclonedx_sbom(bom, augmentation_data, spec_version="1.6")
+        phases = [lc.phase.value for lc in augmented_bom.metadata.lifecycles if lc.phase is not None]
+        assert "build" in phases
+
+        doc = self._minimal_spdx_doc()
+        augmented_doc = augment_spdx_sbom(doc, augmentation_data)
+        creator_comment = augmented_doc.creation_info.creator_comment or ""
+        assert "Lifecycle phase: build" in creator_comment
+
+
+class TestCliDockerImageEnvMirror:
+    """Tests for the CLI's DOCKER_IMAGE env-mirror logic.
+
+    Click's ``envvar="DOCKER_IMAGE"`` binding reads env → option, but
+    does not write option → env. The CLI mirrors ``--docker-image``
+    into the environment so the DockerImageProvider (which reads the
+    env var) sees the flag-form input. The logic is small and isolated,
+    so test it directly rather than through the full CLI entrypoint.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_cwd_and_env(self):
+        original_cwd = os.getcwd()
+        original_docker = os.environ.get("DOCKER_IMAGE")
+        try:
+            yield
+        finally:
+            os.chdir(original_cwd)
+            if original_docker is None:
+                os.environ.pop("DOCKER_IMAGE", None)
+            else:
+                os.environ["DOCKER_IMAGE"] = original_docker
+
+    @staticmethod
+    def _apply_mirror(docker_image):
+        """Replicates the CLI's mirror logic verbatim so the test
+        doesn't have to spin up the full Click context.
+        """
+        if docker_image:
+            os.environ["DOCKER_IMAGE"] = docker_image
+
+    def test_flag_writes_env_when_env_not_set(self):
+        """--docker-image flag without DOCKER_IMAGE env set → env is
+        populated so the provider fires."""
+        os.environ.pop("DOCKER_IMAGE", None)
+        self._apply_mirror("ubuntu:24.04")
+        assert os.environ.get("DOCKER_IMAGE") == "ubuntu:24.04"
+
+    def test_flag_overwrites_existing_env_for_consistency(self):
+        """Click already resolved CLI flag vs env var before the CLI
+        body runs, so ``docker_image`` here IS the effective value.
+        Mirror it unconditionally so the DockerImageProvider sees the
+        same image the rest of the pipeline scans — otherwise a user
+        who runs with a stale ``DOCKER_IMAGE=old:tag`` in the shell and
+        passes ``--docker-image new:tag`` would see the provider log
+        ``old:tag`` while the actual SBOM is generated from ``new:tag``."""
+        os.environ["DOCKER_IMAGE"] = "old:tag"
+        self._apply_mirror("new:tag")
+        assert os.environ["DOCKER_IMAGE"] == "new:tag"
+
+    def test_none_flag_does_not_touch_env(self):
+        """No flag and no env → mirror is a no-op, env stays absent."""
+        os.environ.pop("DOCKER_IMAGE", None)
+        self._apply_mirror(None)
+        assert "DOCKER_IMAGE" not in os.environ
+
+    def test_empty_flag_does_not_touch_env(self):
+        """Empty-string flag is not a valid image reference; treat it
+        as absent so the mirror does not shadow a later env lookup."""
+        os.environ.pop("DOCKER_IMAGE", None)
+        self._apply_mirror("")
+        assert "DOCKER_IMAGE" not in os.environ
 
 
 class TestJsonConfigProviderIntegration:

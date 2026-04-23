@@ -81,11 +81,23 @@ class AugmentationMetadata:
         )
 
     def merge(self, other: "AugmentationMetadata") -> "AugmentationMetadata":
-        """
-        Merge another metadata instance into this one.
+        """Merge another metadata instance into this one.
 
         The current instance's values take precedence (are not overwritten).
         Only missing fields are filled from the other instance.
+
+        Provider-priority semantics. The augmentation registry sorts
+        providers by ``priority`` ascending and folds results with
+        ``result.merge(later)`` — so the **earlier** provider (lower
+        numeric priority) always wins on any field both set. Concretely:
+
+        * ``json_config`` (priority 10) beats ``github-actions`` /
+          ``gitlab-ci`` (priority 20) beats ``sbomify-api`` (priority 50).
+        * Lower-priority providers only fill fields higher-priority
+          providers left empty — they never override an earlier choice.
+
+        New providers slotting in between existing priorities inherit
+        the same contract.
 
         Args:
             other: Another AugmentationMetadata to merge from

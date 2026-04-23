@@ -7,6 +7,7 @@ from unittest.mock import patch
 from sbomify_action._augmentation.metadata import AugmentationMetadata
 from sbomify_action._augmentation.providers import (
     BitbucketPipelinesProvider,
+    DockerImageProvider,
     GitHubActionsProvider,
     GitLabCIProvider,
     is_vcs_augmentation_disabled,
@@ -125,6 +126,12 @@ class TestGitHubActionsProvider(unittest.TestCase):
         self.assertEqual(result.vcs_ref, "main")
         self.assertEqual(result.vcs_commit_url, "https://github.com/owner/repo/commit/abc123def456")
         self.assertEqual(result.source, "github-actions")
+        # CycloneDX 1.7 meta:enum aligns a CI lockfile / manifest scan
+        # with "pre-build" ("information obtained prior to a build
+        # process … may contain source files, development artifacts and
+        # manifests"). The DockerImageProvider overrides to "post-build"
+        # when DOCKER_IMAGE is set; json_config can still force anything.
+        self.assertEqual(result.lifecycle_phase, "pre-build")
 
     @patch.dict(
         os.environ,
@@ -239,6 +246,7 @@ class TestGitLabCIProvider(unittest.TestCase):
         self.assertEqual(result.vcs_ref, "main")
         self.assertEqual(result.vcs_commit_url, "https://gitlab.com/owner/repo/-/commit/abc123def456")
         self.assertEqual(result.source, "gitlab-ci")
+        self.assertEqual(result.lifecycle_phase, "pre-build")
 
     @patch.dict(
         os.environ,
@@ -325,6 +333,7 @@ class TestBitbucketPipelinesProvider(unittest.TestCase):
         self.assertEqual(result.vcs_ref, "main")
         self.assertEqual(result.vcs_commit_url, "https://bitbucket.org/owner/repo/commits/abc123def456")
         self.assertEqual(result.source, "bitbucket-pipelines")
+        self.assertEqual(result.lifecycle_phase, "pre-build")
 
     @patch.dict(
         os.environ,
@@ -389,6 +398,80 @@ class TestBitbucketPipelinesProvider(unittest.TestCase):
         """Provider returns None when repository URL cannot be determined."""
         result = self.provider.fetch()
         self.assertIsNone(result)
+
+
+class TestDockerImageProvider(unittest.TestCase):
+    """Tests for the DockerImageProvider lifecycle-phase default."""
+
+    def setUp(self):
+        self.provider = DockerImageProvider()
+
+    def test_name_and_priority(self):
+        """Provider name is "docker-image", priority beats CI (20) and
+        loses to json_config (10)."""
+        self.assertEqual(self.provider.name, "docker-image")
+        self.assertEqual(self.provider.priority, 15)
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_returns_none_when_docker_image_not_set(self):
+        """No DOCKER_IMAGE env var → provider yields no metadata."""
+        self.assertIsNone(self.provider.fetch())
+
+    @patch.dict(os.environ, {"DOCKER_IMAGE": "ubuntu:24.04"}, clear=True)
+    def test_emits_post_build_for_container_image(self):
+        """Scanning a built image is ``post-build`` per CDX 1.7
+        ``meta:enum`` for the lifecycle ``phase`` property."""
+        result = self.provider.fetch()
+        self.assertIsNotNone(result)
+        assert result is not None  # mypy
+        self.assertEqual(result.lifecycle_phase, "post-build")
+        self.assertEqual(result.source, "docker-image")
+
+    @patch.dict(os.environ, {"DOCKER_IMAGE": ""}, clear=True)
+    def test_empty_docker_image_env_yields_none(self):
+        """Empty string env var is treated as absent."""
+        self.assertIsNone(self.provider.fetch())
+
+    @patch.dict(os.environ, {"DOCKER_IMAGE": "ubuntu:24.04"}, clear=True)
+    def test_emits_only_lifecycle_phase_no_other_fields(self):
+        """Provider must not touch vcs_url / authors / supplier / etc.
+        The CI providers own VCS metadata; json_config and sbomify-api
+        own org metadata; DockerImageProvider owns the single signal
+        that its input is a built artifact. Keeping it narrow prevents
+        surprise collisions in the merge."""
+        result = self.provider.fetch()
+        assert result is not None  # mypy
+        self.assertEqual(result.lifecycle_phase, "post-build")
+        # Explicit null-checks on every field the other providers set —
+        # so if someone broadens DockerImageProvider later, this test
+        # forces them to justify each addition.
+        self.assertIsNone(result.supplier)
+        self.assertIsNone(result.manufacturer)
+        self.assertIsNone(result.authors)
+        self.assertIsNone(result.licenses)
+        self.assertIsNone(result.vcs_url)
+        self.assertIsNone(result.vcs_commit_sha)
+        self.assertIsNone(result.vcs_ref)
+        self.assertIsNone(result.vcs_commit_url)
+        self.assertIsNone(result.security_contact)
+        self.assertIsNone(result.support_period_end)
+        self.assertIsNone(result.release_date)
+        self.assertIsNone(result.end_of_life)
+
+    @patch.dict(
+        os.environ,
+        {
+            "DOCKER_IMAGE": "registry.example.com/team/app:v1.2.3-arm64",
+        },
+        clear=True,
+    )
+    def test_accepts_arbitrary_image_reference_forms(self):
+        """The image string is not parsed — any non-empty value triggers
+        post-build. This keeps the provider robust across docker/podman/
+        OCI registry variants without baking in a reference parser."""
+        result = self.provider.fetch()
+        assert result is not None
+        self.assertEqual(result.lifecycle_phase, "post-build")
 
 
 class TestAugmentationMetadataVcsFields(unittest.TestCase):
