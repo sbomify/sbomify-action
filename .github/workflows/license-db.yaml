@@ -137,7 +137,7 @@ jobs:
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.get_tag.outputs.tag }}
+          ASSET: ${{ matrix.distro }}-${{ matrix.version }}.json.gz
         run: |
-          gh release upload "${{ steps.get_tag.outputs.tag }}" \
-            "${{ matrix.distro }}-${{ matrix.version }}.json.gz" \
-            --clobber
+          gh release upload "$RELEASE_TAG" "$ASSET" --clobber
