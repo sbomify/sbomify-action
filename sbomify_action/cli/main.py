@@ -1179,9 +1179,12 @@ def run_pipeline(config: Config) -> None:
                             )
 
                     gha_warning(
-                        "Chainguard image detected. Using Chainguard-provided SBOM. "
-                        "Any binaries added via COPY --from=... (e.g. cosign, crane, osv-scanner) "
-                        "will NOT be included. Use ADDITIONAL_PACKAGES to declare them. "
+                        "Using the SBOM published by Chainguard for this image. It covers the "
+                        "packages in the Chainguard base image only — anything your Dockerfile "
+                        "adds on top (your application binary, files brought in via COPY/ADD, "
+                        "artifacts from other build stages via COPY --from=..., etc.) will NOT "
+                        "appear in the resulting SBOM. To include them, list them in "
+                        "ADDITIONAL_PACKAGES or commit an additional_packages.txt. "
                         "See: https://github.com/sbomify/sbomify-action#additional-packages",
                         title="Chainguard Image Detected",
                     )
