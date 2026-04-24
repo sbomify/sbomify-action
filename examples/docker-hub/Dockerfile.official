@@ -1,0 +1,29 @@
+# Sample user image built on a Docker Hub Official Image.
+#
+# Scenario: a Python app with both apt and pip installs on top of the base.
+# sbomify-action should detect the `library/python` base via BuildKit SLSA
+# provenance, fetch Docker Hub's upstream SPDX SBOM for the base layers, and
+# overlay the user-installed packages via Syft.
+#
+# Build with:
+#   docker buildx build --sbom=false --provenance=mode=max \
+#     -t localhost:5000/sbomify-test/app-official:latest \
+#     --push -f Dockerfile.official .
+#
+# Note: --sbom=false so BuildKit does NOT attach its own full-image SBOM —
+# we want sbomify-action to fetch the BASE image's SBOM (from library/python)
+# and overlay Syft on top.
+
+FROM python:3.11-slim
+
+# apt packages the user installs on top of the base
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python packages the user installs
+RUN pip install --no-cache-dir requests==2.32.3 click==8.1.7
+
+WORKDIR /app
+COPY hello.py ./
+CMD ["python", "hello.py"]
