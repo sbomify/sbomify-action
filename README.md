@@ -110,13 +110,13 @@ No configuration needed—just point `DOCKER_IMAGE` at your image:
     ENRICH: true
 ```
 
-**Important:** Chainguard SBOMs only cover the base image packages. If your Dockerfile uses `COPY --from=...` to add binaries (e.g., cosign, crane, osv-scanner), those will **not** appear in the SBOM. Use [`ADDITIONAL_PACKAGES`](#additional-packages) to declare them:
+**Important:** Chainguard SBOMs only cover the packages in the Chainguard base image. Anything your Dockerfile adds on top — your application binary, files brought in via `COPY`/`ADD`, or artifacts pulled from other build stages with `COPY --from=...` — will **not** appear in the SBOM. List those in [`ADDITIONAL_PACKAGES`](#additional-packages), via [`ADDITIONAL_PACKAGES_FILE`](#additional-packages), or in the default `additional_packages.txt` file:
 
 ```yaml
 - uses: sbomify/sbomify-action@master
   env:
-    DOCKER_IMAGE: my-org/my-image:latest
-    ADDITIONAL_PACKAGES: "pkg:golang/github.com/sigstore/cosign@2.4.0"
+    DOCKER_IMAGE: my-org/my-app:latest
+    ADDITIONAL_PACKAGES: "pkg:golang/github.com/my-org/my-app@1.2.3"
     OUTPUT_FILE: sbom.cdx.json
     UPLOAD: false
 ```
@@ -728,6 +728,8 @@ PRODUCT_RELEASE: '["product_id_1:v1.0.0", "product_id_2:v2.0.0"]'
 > **Note**: Requires `TOKEN` and `COMPONENT_ID` to be set, as this feature interacts with the sbomify API.
 
 </details>
+
+<a id="additional-packages"></a>
 
 <details>
 <summary><strong>Additional packages</strong></summary>
