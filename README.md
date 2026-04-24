@@ -110,7 +110,7 @@ No configuration needed—just point `DOCKER_IMAGE` at your image:
     ENRICH: true
 ```
 
-**Important:** Chainguard SBOMs only cover the packages in the Chainguard base image. Anything your Dockerfile adds on top — your application binary, files brought in via `COPY`/`ADD`, or artifacts pulled from other build stages with `COPY --from=...` — will **not** appear in the SBOM. List those in [`ADDITIONAL_PACKAGES`](#additional-packages) (or an `additional_packages.txt`):
+**Important:** Chainguard SBOMs only cover the packages in the Chainguard base image. Anything your Dockerfile adds on top — your application binary, files brought in via `COPY`/`ADD`, or artifacts pulled from other build stages with `COPY --from=...` — will **not** appear in the SBOM. List those in [`ADDITIONAL_PACKAGES`](#additional-packages), via [`ADDITIONAL_PACKAGES_FILE`](#additional-packages), or in the default `additional_packages.txt` file:
 
 ```yaml
 - uses: sbomify/sbomify-action@master
