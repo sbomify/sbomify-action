@@ -1183,8 +1183,10 @@ def run_pipeline(config: Config) -> None:
                         "packages in the Chainguard base image only — anything your Dockerfile "
                         "adds on top (your application binary, files brought in via COPY/ADD, "
                         "artifacts from other build stages via COPY --from=..., etc.) will NOT "
-                        "appear in the resulting SBOM. To include them, list them in "
-                        "ADDITIONAL_PACKAGES or commit an additional_packages.txt. "
+                        "appear in the resulting SBOM. To include them, provide additional "
+                        "packages via ADDITIONAL_PACKAGES or ADDITIONAL_PACKAGES_FILE "
+                        "(for example, an additional_packages.txt file created at workflow "
+                        "runtime or otherwise supplied to the action). "
                         "See: https://github.com/sbomify/sbomify-action#additional-packages",
                         title="Chainguard Image Detected",
                     )

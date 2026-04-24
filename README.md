@@ -729,6 +729,8 @@ PRODUCT_RELEASE: '["product_id_1:v1.0.0", "product_id_2:v2.0.0"]'
 
 </details>
 
+<a id="additional-packages"></a>
+
 <details>
 <summary><strong>Additional packages</strong></summary>
 

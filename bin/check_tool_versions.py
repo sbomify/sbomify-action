@@ -57,7 +57,6 @@ class ToolInfo:
 
 # Tools to check - maps ENV variable name to GitHub repo
 TOOLS = [
-    ToolInfo(name="trivy", env_var="TRIVY_VERSION", github_repo="aquasecurity/trivy"),
     ToolInfo(name="syft", env_var="SYFT_VERSION", github_repo="anchore/syft"),
     ToolInfo(name="bomctl", env_var="BOMCTL_VERSION", github_repo="bomctl/bomctl"),
     ToolInfo(
@@ -65,6 +64,8 @@ TOOLS = [
         env_var="CARGO_CYCLONEDX_VERSION",
         github_repo="CycloneDX/cyclonedx-rust-cargo",
     ),
+    ToolInfo(name="crane", env_var="CRANE_VERSION", github_repo="google/go-containerregistry"),
+    ToolInfo(name="cosign", env_var="COSIGN_VERSION", github_repo="sigstore/cosign"),
 ]
 
 
