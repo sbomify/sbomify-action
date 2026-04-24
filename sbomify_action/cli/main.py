@@ -1239,6 +1239,7 @@ def run_pipeline(config: Config) -> None:
 
                     merge_succeeded = False
                     if upstream_spdx:
+                        import copy
                         import tempfile
 
                         syft_tmp_path: str | None = None
@@ -1275,7 +1276,11 @@ def run_pipeline(config: Config) -> None:
                                 merged = merge_cyclonedx(upstream_doc, syft_doc)
                                 actual_spec_version = cdx_spec
                             else:
-                                merged = merge_spdx(dict(upstream_spdx), syft_doc)
+                                # merge_spdx mutates its first argument (nested
+                                # lists of packages, relationships, extracted
+                                # licenses). Deep-copy so the fetched upstream
+                                # doc stays reusable if callers later cache it.
+                                merged = merge_spdx(copy.deepcopy(upstream_spdx), syft_doc)
                                 spdx_version = str(merged.get("spdxVersion", "SPDX-2.3"))
                                 actual_spec_version = spdx_version.replace("SPDX-", "")
                                 if config.spec_version and config.spec_version != actual_spec_version:

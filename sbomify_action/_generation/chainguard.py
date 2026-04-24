@@ -151,15 +151,20 @@ _SPDX_TO_CDX_HASH_ALG: dict[str, HashAlgorithm] = {
 def convert_spdx_to_cyclonedx(spdx_doc: dict[str, Any], spec_version: str = "1.6") -> str:
     """Convert an SPDX 2.x SBOM dict to CycloneDX JSON.
 
-    Handles the simple package shape (PURLs, checksums, supplier, description).
-    Generic enough to use on any SPDX 2.x doc (Chainguard, Docker Hub, etc.).
+    Generic SPDX 2.x → CDX 1.x converter (not Chainguard-specific despite its
+    module location). Reads the package shape only (PURLs, checksums, supplier,
+    description, license); SPDX files and file-level relationships are
+    intentionally not carried over — the resulting CDX describes packages, not
+    individual filesystem entries. Also used by the Docker Hub merge path
+    (:mod:`.sbom_merge`).
 
     Args:
-        spdx_doc: SPDX document dict
-        spec_version: Target CycloneDX spec version (default "1.6")
+        spdx_doc: SPDX document dict (the ``predicate`` body from an in-toto
+            attestation, not the wrapping statement).
+        spec_version: Target CycloneDX spec version (default "1.6").
 
     Returns:
-        CycloneDX JSON string
+        CycloneDX JSON string.
     """
     bom = Bom()
 

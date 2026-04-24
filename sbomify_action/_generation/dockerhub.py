@@ -26,11 +26,13 @@ SBOM delivery differs by tier:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from sbomify_action.logging_config import logger
 
 from . import buildkit_provenance as bkp
+
+DockerHubTier = Literal["official", "dhi"]
 
 DHI_COSIGN_KEY_URL = "https://registry.scout.docker.com/keyring/dhi/latest.pub"
 _DOCKER_HUB_HOSTS = {"docker.io", "index.docker.io", "registry-1.docker.io"}
@@ -64,10 +66,10 @@ class DockerHubBaseImage:
     image_ref: str  # canonical repo, e.g., "docker.io/library/python"
     index_ref: str  # ref that resolves to an image index
     digest: str  # per-platform manifest digest
-    tier: str  # "official" or "dhi"
+    tier: DockerHubTier
 
 
-def _classify_ref(image_ref: str) -> str | None:
+def _classify_ref(image_ref: str) -> DockerHubTier | None:
     """Return ``"official"``, ``"dhi"``, or ``None`` for an image reference.
 
     Handles both full refs (``docker.io/library/python``) and the shorthand
@@ -103,7 +105,7 @@ def _classify_ref(image_ref: str) -> str | None:
     return None
 
 
-def _canonicalize(image_ref: str, tier: str) -> str:
+def _canonicalize(image_ref: str, tier: DockerHubTier) -> str:
     """Return the canonical ``registry/namespace/name`` form for display/logs."""
     base = bkp.extract_repo(image_ref)
     if tier == "dhi":
@@ -209,10 +211,16 @@ def fetch_dockerhub_sbom(info: DockerHubBaseImage) -> dict[str, Any] | None:
         if not bkp.cosign_available():
             logger.warning("cosign not found on PATH, cannot fetch DHI SBOM")
             return None
-        # DHI attestations are keyed on the platform manifest digest.
+        # DHI attestations are keyed on the platform manifest digest and
+        # cosign-signed with Docker's scout keyring. verify=True runs
+        # `cosign verify-attestation` so the signature is actually checked
+        # against Docker's published key — download-only would silently
+        # accept tampered attestations. DHI isn't logged to public Rekor,
+        # so the tlog check is explicitly skipped.
         predicate = bkp.fetch_cosign_spdx_predicate(
             f"{info.image_ref}@{info.digest}",
             extra_cosign_args=["--key", DHI_COSIGN_KEY_URL, "--insecure-ignore-tlog=true"],
+            verify=True,
         )
     else:
         # Official Images attach SBOM attestations as siblings in the image

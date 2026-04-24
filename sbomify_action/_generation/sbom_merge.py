@@ -111,11 +111,17 @@ def _cdx_fill_empty(upstream: dict[str, Any], syft: dict[str, Any]) -> None:
         if not upstream.get(field) and syft.get(field):
             upstream[field] = syft[field]
 
-    existing_urls = {r.get("url") for r in upstream.get("externalReferences", [])}
+    # Key by (type, url): CycloneDX lets the same URL appear with different
+    # types (e.g., "vcs" and "website"), and those are semantically distinct.
+    existing_refs = {(r.get("type"), r.get("url")) for r in upstream.get("externalReferences", [])}
     for ref in syft.get("externalReferences", []):
-        if ref.get("url") and ref.get("url") not in existing_urls:
+        url = ref.get("url")
+        if not url:
+            continue
+        key = (ref.get("type"), url)
+        if key not in existing_refs:
             upstream.setdefault("externalReferences", []).append(ref)
-            existing_urls.add(ref.get("url"))
+            existing_refs.add(key)
 
 
 def _collect_cdx_bom_refs(bom: dict[str, Any]) -> set[str]:

@@ -84,6 +84,49 @@ class TestMergeCycloneDX:
         # Syft should not add a new overlay for this PURL.
         assert _get_prop(openssl, SBOMIFY_SOURCE_PROP) == SOURCE_DOCKERHUB
 
+    def test_external_references_dedup_by_type_and_url(self):
+        """Same URL under different type (e.g., vcs vs website) must NOT
+        collapse — they carry distinct semantic information."""
+        upstream = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "purl": "pkg:deb/debian/pkg@1",
+                    "bom-ref": "u-pkg",
+                    "externalReferences": [
+                        {"type": "website", "url": "https://example.org/pkg"},
+                    ],
+                },
+            ],
+        }
+        syft = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "purl": "pkg:deb/debian/pkg@1",
+                    "bom-ref": "s-pkg",
+                    "externalReferences": [
+                        # Same URL but different type — should NOT be treated
+                        # as a duplicate of upstream's website ref.
+                        {"type": "vcs", "url": "https://example.org/pkg"},
+                        # Truly identical — should dedupe away.
+                        {"type": "website", "url": "https://example.org/pkg"},
+                        # Different URL — should be added.
+                        {"type": "website", "url": "https://example.org/other"},
+                    ],
+                },
+            ],
+        }
+        merged = merge_cyclonedx(upstream, syft)
+        refs = merged["components"][0]["externalReferences"]
+        # Expected: upstream's website ref + syft's vcs ref + syft's other-URL website ref.
+        keys = sorted((r["type"], r["url"]) for r in refs)
+        assert keys == [
+            ("vcs", "https://example.org/pkg"),
+            ("website", "https://example.org/other"),
+            ("website", "https://example.org/pkg"),
+        ]
+
     def test_overlapping_purl_fills_empty_fields(self):
         upstream = {
             "components": [

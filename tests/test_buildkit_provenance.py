@@ -282,11 +282,31 @@ class TestClassifyRegistryError:
             assert "docker login" in hint.lower()
             assert "rate limit" in hint.lower()
 
+    def test_rate_limit_hint_is_registry_agnostic(self):
+        """The classifier is shared with Chainguard (cgr.dev), so the 429 hint
+        shouldn't assert 'Docker Hub' as the failing registry."""
+        hint = _classify_registry_error("TOOMANYREQUESTS: limit exceeded")
+        # The Docker Hub quota is still *mentioned* as context, but the hint
+        # doesn't claim Docker Hub IS the failing registry.
+        assert hint is not None
+        assert "<registry>" in hint  # user fills in based on their ref
+
     def test_unauthorized(self):
         stderr = "401 Unauthorized: authentication required"
         hint = _classify_registry_error(stderr)
         assert hint is not None
         assert "docker login" in hint.lower()
+        # DHI-specific remediation surfaced when relevant.
+        assert "dhi.io" in hint
+
+    def test_no_matching_credentials(self):
+        """crane's own 'No matching credentials' — distinct from 401, common
+        for dhi.io when the user has only done `docker login`."""
+        stderr = 'No matching credentials were found for "dhi.io"'
+        hint = _classify_registry_error(stderr)
+        assert hint is not None
+        assert "docker login" in hint.lower()
+        assert "dhi.io" in hint
 
     def test_not_found(self):
         hint = _classify_registry_error("Error: manifest not found (404)")

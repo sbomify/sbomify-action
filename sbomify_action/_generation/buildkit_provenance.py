@@ -80,6 +80,13 @@ def cosign_available() -> bool:
 def _classify_registry_error(stderr: str) -> str | None:
     """Return a human-friendly hint for common registry error shapes.
 
+    Kept registry-agnostic: this helper is shared by crane/cosign invocations
+    against Chainguard (``cgr.dev``), Docker Hub (``docker.io``), Docker
+    Hardened Images (``dhi.io``), and any other registry those tools reach.
+    Caller context (the image ref, the registry host) is not threaded in here
+    — hints stay generic but point at ``docker login <registry>`` with the
+    placeholder left for the user to fill in based on their own command.
+
     Returns ``None`` when the stderr doesn't match a known pattern — callers
     can then log the raw message.
     """
@@ -88,12 +95,29 @@ def _classify_registry_error(stderr: str) -> str | None:
     low = stderr.lower()
     if "toomanyrequests" in low or "rate limit" in low or "429" in low:
         return (
-            "Docker Hub anonymous pull rate limit exceeded (100 pulls / 6h). "
-            "Run `docker login` to raise the limit to 200/6h (free account) or "
-            "unlimited (paid)."
+            "Registry rate limit exceeded (HTTP 429). Authenticate with "
+            "`docker login <registry>` for a higher quota, or retry later. "
+            "(Docker Hub anonymous pulls are capped at 100 per 6h per IP; "
+            "authenticated free accounts get 200.)"
+        )
+    if "no matching credentials" in low:
+        # crane emits this when it can't find creds for the registry — distinct
+        # from a 401 because it never even tried to authenticate. Common cause:
+        # `docker login docker.io` doesn't grant access to `dhi.io` (separate
+        # registry, same account).
+        return (
+            "No credentials found for the target registry — run "
+            "`docker login <registry>`. Docker Hardened Images live at "
+            "`dhi.io`, which needs `docker login dhi.io` separately from "
+            "`docker login` (same Docker Hub credentials)."
         )
     if "401" in low and "unauthorized" in low:
-        return "Registry returned 401 Unauthorized — run `docker login` to authenticate."
+        return (
+            "Registry returned 401 Unauthorized. Run `docker login "
+            "<registry>` to authenticate. For DHI, use `docker login dhi.io` "
+            "and ensure your account is enrolled at "
+            "https://hub.docker.com/hardened-images (free)."
+        )
     if "not found" in low or "404" in low:
         return "Registry manifest not found (image may not exist or tag has moved)."
     return None
@@ -352,8 +376,9 @@ def iter_resolved_dependencies(statement: dict[str, Any]) -> Iterator[dict[str, 
 def fetch_cosign_spdx_predicate(
     image_with_digest: str,
     extra_cosign_args: list[str] | None = None,
+    verify: bool = False,
 ) -> dict[str, Any] | None:
-    """Run ``cosign download attestation`` and extract the SPDX predicate.
+    """Fetch (and optionally verify) the SPDX predicate from a cosign attestation.
 
     ``cosign`` emits one JSON DSSE envelope per line. Each envelope has a
     base64-encoded ``payload`` that is the in-toto statement. We scan for a
@@ -363,8 +388,18 @@ def fetch_cosign_spdx_predicate(
     ``extra_cosign_args`` are inserted before the image reference; use this
     to pass keys / tlog flags for signed-but-not-Rekor-logged attestations
     (e.g., Docker Hardened Images).
+
+    When ``verify=True`` the command switches from ``cosign download
+    attestation`` (fetch-only) to ``cosign verify-attestation --type
+    spdxjson`` (fetch + signature check). Callers that have a trust anchor
+    (a public key or a certificate identity) should set ``verify=True`` —
+    otherwise tampered attestations will be silently consumed. The output
+    format is identical in both modes, so parsing is unchanged.
     """
-    args = ["download", "attestation"]
+    if verify:
+        args = ["verify-attestation", "--type", "spdxjson"]
+    else:
+        args = ["download", "attestation"]
     if extra_cosign_args:
         args.extend(extra_cosign_args)
     args.append(image_with_digest)

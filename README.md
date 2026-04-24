@@ -133,7 +133,7 @@ Most Docker Official Images (`library/*` — `python`, `nginx`, `postgres`, etc.
 1. **Direct** — `DOCKER_IMAGE` is itself a Docker Official Image (`python:3.11-slim`, `library/nginx`, `ubuntu:24.04`, …) or a DHI (`dhi.io/python:3.11`)
 2. **Provenance** — `DOCKER_IMAGE` is a user image built with BuildKit `--provenance=mode=max`, and its provenance records a Docker Hub base
 
-Merged components carry a `sbomify:source` property (`docker-hub-upstream` or `syft-overlay`) so consumers can see which half of the merge each package came from.
+In CycloneDX output, merged components carry a `sbomify:source` property (`docker-hub-upstream` or `syft-overlay`) so consumers can see which half of the merge each package came from. SPDX output is merged too, but does not currently include an equivalent per-package source annotation.
 
 ```yaml
 - uses: sbomify/sbomify-action@master

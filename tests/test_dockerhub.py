@@ -468,6 +468,34 @@ class TestFetchDockerhubSbom:
         assert "--key" in call_args
         assert "--insecure-ignore-tlog=true" in call_args
 
+    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/bin/cosign")
+    @patch("sbomify_action._generation.buildkit_provenance.run_cosign")
+    def test_dhi_uses_verify_attestation_not_download(self, mock_cosign, mock_which):
+        """Regression guard: DHI must invoke `cosign verify-attestation` so
+        Docker's signature is actually checked. Downgrading to `download
+        attestation` would silently accept tampered SBOMs."""
+        payload = {
+            "predicateType": SPDX_DOCUMENT,
+            "predicate": {"spdxVersion": "SPDX-2.3", "packages": []},
+        }
+        envelope = {"payload": base64.b64encode(json.dumps(payload).encode()).decode()}
+        mock_cosign.return_value = json.dumps(envelope)
+
+        info = DockerHubBaseImage(
+            image_ref="dhi.io/python",
+            index_ref="dhi.io/python:latest",
+            digest="sha256:dhidigest",
+            tier="dhi",
+        )
+        fetch_dockerhub_sbom(info)
+
+        call_args = mock_cosign.call_args[0][0]
+        assert call_args[0] == "verify-attestation"
+        # --type spdxjson so cosign filters for SPDX-shaped attestations.
+        assert "--type" in call_args
+        assert "spdxjson" in call_args
+        assert "download" not in call_args
+
     @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value=None)
     def test_dhi_without_cosign_returns_none(self, mock_which):
         info = DockerHubBaseImage(
