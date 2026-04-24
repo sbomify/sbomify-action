@@ -42,6 +42,7 @@ That's it! This generates a CycloneDX SBOM from your lockfile and enriches it wi
 - **Generate** SBOMs from lockfiles (Python, Node, Rust, Go, Ruby, Dart, C++) in CycloneDX or SPDX format
 - **Generate** SBOMs from Docker images
 - **Chainguard SBOM reuse** — Automatically detects Chainguard base images and uses their provided SBOMs instead of scanning
+- **Docker Hub SBOM reuse** — Automatically detects Docker Official Images and Docker Hardened Images and merges their published SBOMs with a local Syft scan (keeps publisher metadata for base packages, still captures what you install on top)
 - **Yocto/OpenEmbedded** — Batch process SPDX SBOMs from Yocto builds (extract, upload, release-tag)
 - **Inject** additional packages not in lockfiles (vendored code, runtime deps, system libraries)
 - **Augment** with business metadata (supplier, authors, licenses, lifecycle phase) from config file or sbomify
@@ -122,6 +123,34 @@ No configuration needed—just point `DOCKER_IMAGE` at your image:
 ```
 
 > **Note:** Chainguard detection requires `crane` and `cosign` CLI tools. Both are bundled in the Docker image. For pip installations, install them separately (see [Required Tools](#required-tools)).
+
+### Docker Hub Images
+
+Most Docker Official Images (`library/*` — `python`, `nginx`, `postgres`, etc.) and all Docker Hardened Images (`dhi.io/*`) ship with signed SPDX SBOMs attached. sbomify detects this and **merges** the publisher's authoritative SBOM with a local Syft scan of the same image. Upstream wins on conflict for the packages it covers; Syft fills in the packages your `RUN apt-get install ...` / `RUN pip install ...` adds on top.
+
+**Detection works two ways, same as Chainguard:**
+
+1. **Direct** — `DOCKER_IMAGE` is itself a Docker Official Image (`python:3.11-slim`, `library/nginx`, `ubuntu:24.04`, …) or a DHI (`dhi.io/python:3.11`)
+2. **Provenance** — `DOCKER_IMAGE` is a user image built with BuildKit `--provenance=mode=max`, and its provenance records a Docker Hub base
+
+Merged components carry a `sbomify:source` property (`docker-hub-upstream` or `syft-overlay`) so consumers can see which half of the merge each package came from.
+
+```yaml
+- uses: sbomify/sbomify-action@master
+  env:
+    DOCKER_IMAGE: python:3.11-slim       # or a user image built FROM python:3.11-slim
+    OUTPUT_FILE: sbom.cdx.json
+    UPLOAD: false
+    ENRICH: true
+```
+
+Supported ecosystems (tested): `pkg:deb/*` (Debian, Ubuntu), `pkg:apk/*` (Alpine), `pkg:rpm/*` (Rocky, AlmaLinux, Fedora, Amazon Linux, Oracle), `pkg:alpm/*` (Arch), plus edge cases like `busybox`. Ecosystems dedup across upstream's and Syft's different qualifier/namespace conventions automatically (e.g., upstream `pkg:rpm/amazonlinux/bash` ↔ Syft `pkg:rpm/amzn/bash`).
+
+> **Rate limits:** Anonymous Docker Hub pulls are capped at 100 manifest requests per 6 hours per IP. Each detection + fetch uses ~3 requests. Run `docker login` with a free Docker Hub account to raise this to 200/6h, or use a paid plan for unlimited. When a rate limit, 401, or 404 is hit, sbomify logs a WARNING with the remediation and falls back to a plain Syft scan.
+
+> **Docker Hardened Images (DHI)**: cosign-signed with Docker's scout keyring, not logged to public Rekor. sbomify verifies with `--insecure-ignore-tlog=true` against Docker's published key. DHI images are served from a separate registry (`dhi.io`), so authenticating to Docker Hub alone is not enough — you need to run `docker login dhi.io` with the same Docker Hub credentials, and your account must have the (free) [Docker Hardened Images](https://hub.docker.com/hardened-images) entitlement.
+
+> **BuildKit vs. sbomify:** If you already build with `docker buildx build --sbom=true`, BuildKit attaches a complete SBOM of your final image — sbomify isn't needed for generation. This feature targets the common case of `--provenance=true --sbom=false`, where BuildKit records the base image but no full SBOM is attached.
 
 <details>
 <summary><strong>More examples</strong> (augmentation, SPDX, attestation, additional packages...)</summary>
@@ -983,8 +1012,8 @@ When installed via pip, sbomify-action requires external SBOM generators. The Do
 | **cyclonedx-py** | `pip install cyclonedx-bom`                                                                     | Native Python generator; `cyclonedx-py` is the CLI command provided by the `cyclonedx-bom` package (installed as a dependency) |
 | **Syft**         | [Installation guide](https://github.com/anchore/syft#installation)                              | macOS: `brew install syft`                                                                                                     |
 | **cdxgen**       | `npm install -g @cyclonedx/cdxgen`                                                              | Requires Node.js/Bun                                                                                                           |
-| **crane**        | [Installation guide](https://github.com/google/go-containerregistry#installation)               | Required for Chainguard image detection; macOS: `brew install crane`                                                           |
-| **cosign**       | [Installation guide](https://github.com/sigstore/cosign#installation)                           | Required for Chainguard SBOM retrieval; macOS: `brew install cosign`                                                           |
+| **crane**        | [Installation guide](https://github.com/google/go-containerregistry#installation)               | Required for Chainguard and Docker Hub image detection + SBOM fetch; macOS: `brew install crane`                               |
+| **cosign**       | [Installation guide](https://github.com/sigstore/cosign#installation)                           | Required for Chainguard and Docker Hardened Images (DHI) SBOM retrieval; macOS: `brew install cosign`                          |
 
 **Minimum requirement**: At least one generator must be installed for SBOM generation. For Python projects, `cyclonedx-bom` (which provides the `cyclonedx-py` command) is installed as a dependency when you install sbomify-action via pip. For other ecosystems or Docker images, install `syft` or `cdxgen`.
 
