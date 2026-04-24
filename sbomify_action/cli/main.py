@@ -1184,9 +1184,9 @@ def run_pipeline(config: Config) -> None:
                         "adds on top (your application binary, files brought in via COPY/ADD, "
                         "artifacts from other build stages via COPY --from=..., etc.) will NOT "
                         "appear in the resulting SBOM. To include them, provide additional "
-                        "packages via ADDITIONAL_PACKAGES or ADDITIONAL_PACKAGES_FILE "
-                        "(for example, an additional_packages.txt file created at workflow "
-                        "runtime or otherwise supplied to the action). "
+                        "packages via ADDITIONAL_PACKAGES, via ADDITIONAL_PACKAGES_FILE, or by "
+                        "placing an additional_packages.txt file in the workspace for sbomify "
+                        "to read. "
                         "See: https://github.com/sbomify/sbomify-action#additional-packages",
                         title="Chainguard Image Detected",
                     )
