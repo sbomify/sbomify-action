@@ -259,7 +259,9 @@ def configure_components(state: WizardState) -> None:
             else:
                 release_strategy = _ask_release_strategy(suggested_release)
         except GoBack:
-            # Drop everything we've planned so far so the runner can re-enter Phase 4.
+            # The top-level runner currently treats GoBack as cancellation,
+            # so clear the planned components to keep state consistent for any
+            # future flow that does retry Phase 4.
             state.plan.create_components.clear()
             raise
 

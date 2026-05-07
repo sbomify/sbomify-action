@@ -623,11 +623,24 @@ def _phase_open_pr(state: WizardState, opts: WizardOptions) -> None:
         print_warning(f"Cannot push directly to `{target}`. Pick a different branch name.")
         return
 
-    repo_root = state.facts.repo_root
+    repo_root = state.facts.repo_root.resolve()
+    # Compute git-friendly pathspecs (relative to repo_root, posix separators).
+    # Paths outside the repo are silently skipped — `git add` would fail anyway.
+    pathspecs: list[str] = []
+    for path in state.written_files:
+        try:
+            rel = path.resolve().relative_to(repo_root)
+        except ValueError:
+            continue
+        pathspecs.append(rel.as_posix())
+    if not pathspecs:
+        print_info("No wizard-written files inside the repo to commit; skipping PR.")
+        return
+
     try:
         _run_subprocess(["git", "checkout", "-b", branch], cwd=repo_root)
-        for path in state.written_files:
-            _run_subprocess(["git", "add", "--", str(path)], cwd=repo_root)
+        for spec in pathspecs:
+            _run_subprocess(["git", "add", "--", spec], cwd=repo_root)
         _run_subprocess(
             ["git", "commit", "-m", _PR_TITLE],
             cwd=repo_root,
@@ -706,7 +719,13 @@ def run_wizard_flow(opts: WizardOptions) -> int:
         if not selected:
             return 1
 
-        client = _phase_authenticate(opts)
+        try:
+            client = _phase_authenticate(opts)
+        except RuntimeError as e:
+            # Clean wizard-style exit instead of a stack trace for connectivity
+            # errors or 3-strikes-out auth.
+            print_warning(str(e))
+            return 1
         workspace = _prefetch_workspace(client)
 
         state = WizardState(facts=facts, api=client, workspace=workspace, selected=selected)
