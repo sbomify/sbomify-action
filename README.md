@@ -37,6 +37,19 @@ Generate, augment, enrich, and manage SBOMs in your CI/CD pipeline. Works standa
 
 That's it! This generates a CycloneDX SBOM from your lockfile and enriches it with metadata from package registries. For SPDX format, set `SBOM_FORMAT: spdx`.
 
+## Interactive Setup (Wizard)
+
+Prefer to skip writing YAML by hand? Run the wizard locally to discover your lockfiles, create the matching Products and Components on sbomify, and emit one GitHub Actions workflow per Component:
+
+```bash
+pip install sbomify-action
+sbomify-action wizard
+```
+
+The wizard prompts for an [API token](https://app.sbomify.com/settings/tokens), picks (or creates) a Product, configures one Component per detected lockfile, lets you choose a release strategy (`latest`, `v*`-tag, manual, or none), and writes the workflow files into `.github/workflows/`. Use `--dry-run` to preview the plan without making any API calls or writing files.
+
+> `sbomify-action init` is kept as an alias for `wizard`.
+
 ## Features
 
 - **Generate** SBOMs from lockfiles (Python, Node, Rust, Go, Ruby, Dart, C++) in CycloneDX or SPDX format

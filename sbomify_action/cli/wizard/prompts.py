@@ -160,6 +160,40 @@ def ask_confirm(question: str, default: bool = True, allow_back: bool = True) ->
     return bool(result)
 
 
+def ask_checkbox(
+    question: str,
+    choices: Sequence[str | Choice],
+    instruction: str | None = None,
+    allow_back: bool = True,
+) -> list[str]:
+    """Ask user to pick zero or more from a list (multi-select).
+
+    Args:
+        question: The question to ask
+        choices: List of choices (strings or Choice objects, possibly pre-checked)
+        instruction: Optional instruction text
+        allow_back: If True, raises GoBack on Escape
+
+    Returns:
+        List of selected values (may be empty)
+
+    Raises:
+        GoBack: If user presses Escape and allow_back is True
+    """
+    result = questionary.checkbox(
+        question,
+        choices=list(choices),
+        instruction=instruction or "(Space to toggle, Enter to confirm, Esc to go back)",
+        style=WIZARD_STYLE,
+    ).ask()
+
+    if result is None:
+        if allow_back:
+            raise GoBack()
+        return []
+    return [str(item) for item in result]
+
+
 def ask_autocomplete(
     question: str,
     choices: list[str],

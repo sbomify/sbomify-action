@@ -2298,8 +2298,8 @@ def cli(
       # Generate from Docker image with SPDX format
       sbomify-action --docker-image nginx:latest -f spdx -o sbom.spdx.json
 
-      # Create sbomify.json configuration interactively
-      sbomify-action init
+      # Onboard this repo to sbomify (lockfile discovery, components, workflows)
+      sbomify-action wizard
     """
     # Configure logging level early so all messages respect --verbose/--quiet
     if verbose and quiet:
@@ -2514,32 +2514,83 @@ def yocto_cmd(
         sys.exit(1)
 
 
-@cli.command("init")
-@click.option(
-    "-o",
-    "--output",
-    default="sbomify.json",
-    show_default=True,
-    help="Output path for the configuration file.",
-)
-def init_cmd(output: str) -> None:
-    """Interactive wizard to create sbomify.json configuration.
+def _wizard_options(func):
+    """Apply the shared option set used by both `wizard` and `init`."""
+    decorators = [
+        click.option(
+            "--token",
+            default=None,
+            help="sbomify API token. Falls back to $SBOMIFY_TOKEN, then $TOKEN, else prompts.",
+        ),
+        click.option(
+            "--api-base-url",
+            envvar="API_BASE_URL",
+            default=SBOMIFY_PRODUCTION_API,
+            show_default=True,
+            help="Base URL for the sbomify API.",
+        ),
+        click.option(
+            "--repo-root",
+            type=click.Path(file_okay=False, exists=True, path_type=Path),
+            default=Path("."),
+            show_default=True,
+            help="Root of the repository to scan for lockfiles.",
+        ),
+        click.option(
+            "--output-dir",
+            type=click.Path(file_okay=False, path_type=Path),
+            default=Path(".github/workflows"),
+            show_default=True,
+            help="Directory where generated GitHub Actions workflows are written.",
+        ),
+        click.option(
+            "--dry-run",
+            is_flag=True,
+            default=False,
+            help="Walk the wizard and render the plan, but make no API calls and write no files.",
+        ),
+    ]
+    for decorator in reversed(decorators):
+        func = decorator(func)
+    return func
 
-    This wizard helps you create a sbomify.json file that provides metadata
-    for SBOM augmentation. All fields are optional.
 
-    \b
-    The configuration includes:
-      - Organization info (supplier, manufacturer)
-      - Authors
-      - Licenses (SPDX identifiers)
-      - Security contact (CRA compliance)
-      - Lifecycle phase and dates
-      - VCS overrides (for self-hosted git servers)
+def _run_wizard_cli(
+    token: Optional[str],
+    api_base_url: str,
+    repo_root: Path,
+    output_dir: Path,
+    dry_run: bool,
+) -> None:
+    from sbomify_action.cli.wizard.wizard_runner import WizardOptions, run_wizard_flow
+
+    opts = WizardOptions(
+        token=token,
+        api_base_url=api_base_url.rstrip("/"),
+        repo_root=repo_root,
+        output_dir=output_dir,
+        dry_run=dry_run,
+    )
+    sys.exit(run_wizard_flow(opts))
+
+
+@cli.command("wizard")
+@_wizard_options
+def wizard_cmd(token: Optional[str], api_base_url: str, repo_root: Path, output_dir: Path, dry_run: bool) -> None:
+    """Interactive wizard to onboard a repository to sbomify.
+
+    Discovers lockfiles, sets up Products and Components on sbomify, configures release
+    tracking per component, and emits a GitHub Actions workflow per component.
     """
-    from sbomify_action.cli.wizard import run_wizard
+    _run_wizard_cli(token, api_base_url, repo_root, output_dir, dry_run)
 
-    sys.exit(run_wizard(output))
+
+@cli.command("init")
+@_wizard_options
+def init_cmd(token: Optional[str], api_base_url: str, repo_root: Path, output_dir: Path, dry_run: bool) -> None:
+    """Alias for `sbomify-action wizard`. Kept for backwards compatibility."""
+    click.echo("Note: `init` is an alias for `wizard`. Prefer `sbomify-action wizard`.", err=True)
+    _run_wizard_cli(token, api_base_url, repo_root, output_dir, dry_run)
 
 
 def main() -> None:

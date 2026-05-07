@@ -20,14 +20,6 @@ from sbomify_action.cli.wizard.validators import (
     validate_url,
 )
 
-# Section identifiers
-SECTION_ORGANIZATION = "organization"
-SECTION_AUTHORS = "authors"
-SECTION_LICENSES = "licenses"
-SECTION_SECURITY = "security"
-SECTION_LIFECYCLE = "lifecycle"
-SECTION_VCS = "vcs"
-
 
 def _collect_contact() -> dict[str, str] | None:
     """Collect a single contact entry."""
