@@ -558,7 +558,18 @@ def _has_unrelated_dirty_files(repo_root: Path, written: list[Path]) -> bool:
     porcelain = _git_check(["status", "--porcelain"], cwd=repo_root)
     if not porcelain:
         return False
-    written_rel = {str(p.resolve().relative_to(repo_root.resolve())) for p in written if p.exists()}
+    repo_root_resolved = repo_root.resolve()
+    written_rel: set[str] = set()
+    for p in written:
+        if not p.exists():
+            continue
+        try:
+            rel = p.resolve().relative_to(repo_root_resolved)
+        except ValueError:
+            # Path lives outside repo_root, so it can't appear in `git status` here.
+            continue
+        # `git status --porcelain` always uses forward slashes; normalise to match.
+        written_rel.add(rel.as_posix())
     for line in porcelain.splitlines():
         # porcelain lines are " M path" or "?? path" — strip the 2-char status.
         if len(line) < 4:

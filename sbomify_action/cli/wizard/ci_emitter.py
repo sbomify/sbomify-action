@@ -22,6 +22,13 @@ _HEADER = (
     "#       remove the TOKEN secret and uncomment `permissions: id-token: write`.\n"
 )
 
+# Pin generated workflows to a specific release per SECURITY.md guidance:
+# "Pin the action to a specific commit SHA … rather than @master".
+# Bump these together when cutting a new sbomify-action release.
+PINNED_ACTION_SHA = "ac8b0d423c90447f3011ef8ab5f9ff2e854c6931"
+PINNED_ACTION_VERSION = "v26.2.0"
+ACTION_USES_LINE = f"      - uses: sbomify/sbomify-action@{PINNED_ACTION_SHA}  # {PINNED_ACTION_VERSION}\n"
+
 
 def workflow_filename(component_name: str, *, component_slug: str | None = None) -> str:
     slug = component_slug or slugify(component_name) or "component"
@@ -71,7 +78,7 @@ def _trunk_template(
         f"      - uses: actions/checkout@v4\n"
         f"      - id: ver\n"
         f'        run: echo "v=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"\n'
-        f"      - uses: sbomify/sbomify-action@master\n"
+        f"{ACTION_USES_LINE}"
         f"        env:\n"
         f"{_common_env_lines(component_id=component_id, lock_file_rel=lock_file_rel, api_base_url=api_base_url)}"
     )
@@ -118,7 +125,7 @@ def _tag_template(
         f'            echo "v=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"\n'
         f'            echo "release=" >> "$GITHUB_OUTPUT"\n'
         f"          fi\n"
-        f"      - uses: sbomify/sbomify-action@master\n"
+        f"{ACTION_USES_LINE}"
         f"        env:\n"
         f"{env_with_release}"
     )
@@ -154,7 +161,7 @@ def _manual_template(
         f"          else\n"
         f'            echo "v=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"\n'
         f"          fi\n"
-        f"      - uses: sbomify/sbomify-action@master\n"
+        f"{ACTION_USES_LINE}"
         f"        env:\n"
         f"{env}"
     )

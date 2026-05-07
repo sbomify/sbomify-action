@@ -2564,6 +2564,11 @@ def _run_wizard_cli(
 ) -> None:
     from sbomify_action.cli.wizard.wizard_runner import WizardOptions, run_wizard_flow
 
+    # Resolve a relative --output-dir against --repo-root so the wizard always
+    # writes inside the selected repo regardless of the caller's CWD.
+    if not output_dir.is_absolute():
+        output_dir = repo_root / output_dir
+
     opts = WizardOptions(
         token=token,
         api_base_url=api_base_url.rstrip("/"),
