@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Optional, TypeVar, cast
 
 import click
 import sentry_sdk
@@ -2514,9 +2514,12 @@ def yocto_cmd(
         sys.exit(1)
 
 
-def _wizard_options(func):
+_FC = TypeVar("_FC", bound=Callable[..., Any])
+
+
+def _wizard_options(func: _FC) -> _FC:
     """Apply the shared option set used by both `wizard` and `init`."""
-    decorators = [
+    decorators: list[Callable[[Callable[..., Any]], Callable[..., Any]]] = [
         click.option(
             "--token",
             default=None,
@@ -2551,7 +2554,7 @@ def _wizard_options(func):
         ),
     ]
     for decorator in reversed(decorators):
-        func = decorator(func)
+        func = decorator(func)  # type: ignore[assignment]
     return func
 
 

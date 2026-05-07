@@ -39,6 +39,7 @@ from sbomify_action.cli.wizard.prompts import (
     print_warning,
 )
 from sbomify_action.cli.wizard.state import (
+    DiscoveredLockfile,
     Plan,
     PlannedComponent,
     RepoFacts,
@@ -155,7 +156,7 @@ def _print_welcome(facts: RepoFacts) -> None:
 # Phase 1 — discovery
 
 
-def _phase_discover(facts: RepoFacts) -> list:
+def _phase_discover(facts: RepoFacts) -> list[DiscoveredLockfile]:
     print_section_header("Step 1 of 6 — Discover lockfiles")
     found = discovery.discover(facts.repo_root)
     if not found:
@@ -357,12 +358,13 @@ def apply_plan(state: WizardState, opts: WizardOptions) -> None:
         state.applied.append(f"created product {product.get('name')}")
     else:
         assert state.plan.use_product_id is not None
-        product = next(
+        product_match: dict[str, Any] | None = next(
             (p for p in state.workspace.products if str(p.get("id")) == state.plan.use_product_id),
             None,
         )
-        if product is None:
+        if product_match is None:
             raise RuntimeError(f"Selected product {state.plan.use_product_id} not in workspace snapshot.")
+        product = product_match
 
     state.created_product_id = str(product.get("id") or "")
     print_success(f"Product ready: {product.get('name')} ({product.get('id')})")
