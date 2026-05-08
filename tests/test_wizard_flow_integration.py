@@ -17,6 +17,13 @@ from sbomify_action.cli.wizard import wizard_runner
 from sbomify_action.cli.wizard.wizard_runner import WizardOptions, run_wizard_flow
 
 
+@pytest.fixture(autouse=True)
+def _clear_ci_env(monkeypatch):
+    """run_wizard_flow aborts when CI/GITHUB_ACTIONS is set; clear for these tests."""
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+
+
 @pytest.fixture
 def repo_with_lockfile(tmp_path: Path) -> Path:
     (tmp_path / "backend").mkdir()
@@ -88,6 +95,22 @@ def _disable_pr_phase(monkeypatch) -> None:
 
 def test_non_tty_exits_with_warning(monkeypatch, tmp_path):
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    rc = run_wizard_flow(
+        WizardOptions(
+            token="tok",
+            api_base_url="https://app.sbomify.com",
+            repo_root=tmp_path,
+            output_dir=tmp_path / ".github" / "workflows",
+            dry_run=False,
+        )
+    )
+    assert rc == 1
+
+
+@pytest.mark.parametrize("env_var", ["GITHUB_ACTIONS", "CI"])
+def test_aborts_when_run_inside_ci(monkeypatch, tmp_path, env_var):
+    monkeypatch.setenv(env_var, "true")
+    _force_tty(monkeypatch)
     rc = run_wizard_flow(
         WizardOptions(
             token="tok",

@@ -124,6 +124,7 @@ def test_apply_plan_patches_contact_profile_when_strategy_is_profile(tmp_path):
 
 
 def test_apply_plan_writes_local_sbomify_json(tmp_path):
+    target = tmp_path / "backend" / "sbomify.json"
     plan = Plan(
         create_product="demo",
         create_components=[
@@ -134,12 +135,12 @@ def test_apply_plan_writes_local_sbomify_json(tmp_path):
                 sbomify_json={"supplier": {"name": "ACME"}},
             ),
         ],
+        sbomify_json_files=[(target, {"supplier": {"name": "ACME"}})],
     )
     state = _state(tmp_path, plan)
 
     apply_plan(state, _opts(tmp_path))
 
-    target = tmp_path / "backend" / "sbomify.json"
     assert target.exists()
     assert "ACME" in target.read_text()
 

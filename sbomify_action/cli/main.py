@@ -2574,6 +2574,18 @@ def _run_wizard_cli(
         output_dir = repo_root / output_dir
     output_dir = output_dir.resolve()
 
+    # GitHub Actions only loads workflow files from .github/workflows, and the
+    # generated workflows have a `paths:` filter pinned to that location. Reject
+    # anything else early — silently writing non-functional workflows is worse
+    # than failing fast.
+    expected = (repo_root / ".github" / "workflows").resolve()
+    if output_dir != expected:
+        raise click.BadParameter(
+            f"--output-dir must be {expected} (GitHub Actions only loads workflows "
+            "from .github/workflows). Got: " + str(output_dir),
+            param_hint="--output-dir",
+        )
+
     opts = WizardOptions(
         token=token,
         api_base_url=api_base_url.rstrip("/"),

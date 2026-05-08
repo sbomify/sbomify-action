@@ -273,6 +273,15 @@ def _format_component_row(planned: PlannedComponent) -> str:
 def _phase_review(state: WizardState, opts: WizardOptions) -> bool:
     print_section_header("Step 5 of 6 — Review")
 
+    # Materialise sbomify.json writes from the planned components so the review
+    # panel below shows them and apply_plan only executes (never appends to)
+    # the planned list.
+    state.plan.sbomify_json_files = [
+        (planned.lockfile.path.parent / "sbomify.json", planned.sbomify_json)
+        for planned in state.plan.create_components
+        if planned.augmentation == "local" and planned.sbomify_json
+    ]
+
     product_label = _resolve_product_summary(state)
     component_lines = [_format_component_row(c) for c in state.plan.create_components]
     body_lines: list[str] = [
@@ -402,10 +411,6 @@ def apply_plan(state: WizardState, opts: WizardOptions) -> None:
             state.applied.append(f"attached {planned.name}")
         except SbomifyAPIError as e:
             print_warning(f"Could not attach {planned.name} to product: {e}")
-
-        if planned.augmentation == "local" and planned.sbomify_json:
-            target = planned.lockfile.path.parent / "sbomify.json"
-            state.plan.sbomify_json_files.append((target, planned.sbomify_json))
 
     # 4. Optional initial release for tag-strategy components.
     if state.plan.create_initial_release:
@@ -703,6 +708,17 @@ def _print_done(state: WizardState, opts: WizardOptions) -> None:
 
 
 def run_wizard_flow(opts: WizardOptions) -> int:
+    # The wizard is a desktop tool — it commits files and opens PRs in a repo
+    # the user owns. Running it from inside a GitHub Actions job (or another
+    # CI) doesn't make sense, and would silently mutate a checkout in the
+    # runner's workspace.
+    if os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("CI") == "true":
+        print_warning(
+            "The wizard is for local desktop setup; it should not run inside a "
+            "CI runner. Run `sbomify-action wizard` from your machine instead."
+        )
+        return 1
+
     if not sys.stdout.isatty():
         print_warning("The wizard is interactive — re-run from a terminal.")
         return 1

@@ -35,14 +35,21 @@ def workflow_filename(component_name: str, *, component_slug: str | None = None)
     return f"sbomify-{slug}.yml"
 
 
-def _common_env_lines(*, component_id: str, lock_file_rel: str, api_base_url: str) -> str:
+def _common_env_lines(
+    *,
+    component_id: str,
+    lock_file_rel: str,
+    api_base_url: str,
+    augment: bool,
+) -> str:
+    augment_value = "true" if augment else "false"
     return (
         f"          TOKEN: ${{{{ secrets.SBOMIFY_TOKEN }}}}\n"
         f"          COMPONENT_ID: {component_id}\n"
         f"          COMPONENT_VERSION: ${{{{ steps.ver.outputs.v }}}}\n"
         f"          LOCK_FILE: {lock_file_rel}\n"
         f"          UPLOAD: 'true'\n"
-        f"          AUGMENT: 'true'\n"
+        f"          AUGMENT: '{augment_value}'\n"
         f"          ENRICH: 'true'\n"
         f"          SBOM_FORMAT: cyclonedx\n"
         f"          API_BASE_URL: {api_base_url}\n"
@@ -57,6 +64,7 @@ def _trunk_template(
     api_base_url: str,
     branch: str,
     slug: str,
+    augment: bool,
     extra_top_comment: str = "",
 ) -> str:
     return (
@@ -80,7 +88,7 @@ def _trunk_template(
         f'        run: echo "v=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"\n'
         f"{ACTION_USES_LINE}"
         f"        env:\n"
-        f"{_common_env_lines(component_id=component_id, lock_file_rel=lock_file_rel, api_base_url=api_base_url)}"
+        f"{_common_env_lines(component_id=component_id, lock_file_rel=lock_file_rel, api_base_url=api_base_url, augment=augment)}"
     )
 
 
@@ -93,8 +101,11 @@ def _tag_template(
     api_base_url: str,
     branch: str,
     slug: str,
+    augment: bool,
 ) -> str:
-    env = _common_env_lines(component_id=component_id, lock_file_rel=lock_file_rel, api_base_url=api_base_url)
+    env = _common_env_lines(
+        component_id=component_id, lock_file_rel=lock_file_rel, api_base_url=api_base_url, augment=augment
+    )
     # Splice PRODUCT_RELEASE in ahead of LOCK_FILE.
     env_with_release = env.replace(
         "          LOCK_FILE:",
@@ -137,8 +148,11 @@ def _manual_template(
     component_id: str,
     lock_file_rel: str,
     api_base_url: str,
+    augment: bool,
 ) -> str:
-    env = _common_env_lines(component_id=component_id, lock_file_rel=lock_file_rel, api_base_url=api_base_url)
+    env = _common_env_lines(
+        component_id=component_id, lock_file_rel=lock_file_rel, api_base_url=api_base_url, augment=augment
+    )
     return (
         f"{_HEADER}"
         f"name: sbomify - {component_name}\n"
@@ -175,6 +189,7 @@ def render_workflow(
     lock_file_rel: str,
     api_base_url: str,
     release_strategy: ReleaseStrategy,
+    augment: bool = True,
     default_branch: str = "main",
     component_slug: str | None = None,
 ) -> str:
@@ -189,6 +204,7 @@ def render_workflow(
             api_base_url=api_base_url,
             branch=default_branch,
             slug=slug,
+            augment=augment,
         )
     if release_strategy == "manual":
         return _manual_template(
@@ -196,6 +212,7 @@ def render_workflow(
             component_id=component_id,
             lock_file_rel=lock_file_rel,
             api_base_url=api_base_url,
+            augment=augment,
         )
 
     # latest / none — same template; 'none' adds a top comment.
@@ -212,6 +229,7 @@ def render_workflow(
         api_base_url=api_base_url,
         branch=default_branch,
         slug=slug,
+        augment=augment,
         extra_top_comment=extra_comment,
     )
 
@@ -244,6 +262,7 @@ def plan_workflow_files(
             lock_file_rel=str(planned.lockfile.rel_path).replace("\\", "/"),
             api_base_url=api_base_url,
             release_strategy=planned.release_strategy,
+            augment=planned.augmentation != "skip",
             default_branch=default_branch,
             component_slug=slug,
         )
