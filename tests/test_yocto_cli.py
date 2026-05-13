@@ -38,11 +38,29 @@ class TestYoctoCli:
         assert result.exit_code != 0
         assert "Missing option '--release'" in result.output or "required" in result.output.lower()
 
-    def test_missing_token(self, tmp_path):
+    def test_missing_token(self, tmp_path, monkeypatch):
+        # Clear both env vars so the fallback chain truly has no token to find.
+        monkeypatch.delenv("TOKEN", raising=False)
+        monkeypatch.delenv("SBOMIFY_TOKEN", raising=False)
         archive = _make_tar_gz(tmp_path)
         runner = CliRunner()
         result = runner.invoke(cli, ["yocto", archive, "--release", "prod:1.0"])
         assert result.exit_code != 0
+
+    @patch("sbomify_action._yocto.pipeline.run_yocto_pipeline")
+    def test_sbomify_token_env_var_accepted(self, mock_pipeline, tmp_path, monkeypatch):
+        # yocto should pick up $SBOMIFY_TOKEN (in addition to $TOKEN), matching
+        # the wizard's env-var precedence via the shared _resolve_token helper.
+        monkeypatch.delenv("TOKEN", raising=False)
+        monkeypatch.setenv("SBOMIFY_TOKEN", "from-sbomify-env")
+        archive = _make_tar_gz(tmp_path)
+        mock_pipeline.return_value = YoctoPipelineResult()
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["yocto", archive, "--release", "prod:1.0"])
+        assert result.exit_code == 0
+        config = mock_pipeline.call_args[0][0]
+        assert config.token == "from-sbomify-env"
 
     def test_invalid_release_format(self, tmp_path):
         archive = _make_tar_gz(tmp_path)

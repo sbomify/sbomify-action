@@ -186,13 +186,11 @@ def _phase_discover(facts: RepoFacts) -> list[DiscoveredLockfile]:
 # Phase 2 — authentication
 
 
-def _resolve_token(opt_token: str | None) -> str | None:
-    if opt_token:
-        return opt_token
-    return os.environ.get("SBOMIFY_TOKEN") or os.environ.get("TOKEN") or None
-
-
 def _phase_authenticate(opts: WizardOptions) -> SbomifyClient:
+    # Lazy import — cli.main is a heavy module and the wizard already imports
+    # it lazily for run_pipeline below.
+    from sbomify_action.cli.main import _resolve_token
+
     print_section_header("Step 2 of 6 — Authenticate")
 
     token = _resolve_token(opts.token)

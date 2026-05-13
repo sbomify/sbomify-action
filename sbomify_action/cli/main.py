@@ -146,6 +146,19 @@ STEP_2_FILE = "step_2.json"  # Output of augmentation
 STEP_3_FILE = "step_3.json"  # Output of enrichment
 
 
+def _resolve_token(*candidates: str | None) -> str | None:
+    """Return the first truthy candidate; otherwise fall back through `$SBOMIFY_TOKEN`, `$TOKEN`.
+
+    Used by subcommands that need to accept a token from multiple sources
+    (their own option, the root group's option, or an env var) without each
+    growing its own bespoke precedence ladder.
+    """
+    for candidate in candidates:
+        if candidate:
+            return candidate
+    return os.environ.get("SBOMIFY_TOKEN") or os.environ.get("TOKEN") or None
+
+
 def _get_current_utc_timestamp() -> str:
     """
     Generate current UTC timestamp in ISO-8601 format.
@@ -2470,16 +2483,17 @@ def yocto_cmd(
 
         logging.getLogger("sbomify_action").setLevel(logging.DEBUG)
 
-    # Get token from parent CLI group (--token on the root command or TOKEN env var)
-    yocto_token = ctx.parent.params.get("token") if ctx.parent else None
+    # Token / api-base-url come from the root group (Click resolves $TOKEN and
+    # $API_BASE_URL there). _resolve_token also picks up $SBOMIFY_TOKEN so yocto
+    # matches the wizard's env-var precedence.
+    parent_params = ctx.parent.params if ctx.parent else {}
+    yocto_token = _resolve_token(parent_params.get("token"))
     if not yocto_token:
-        # Also check env var directly as fallback
-        yocto_token = os.getenv("TOKEN")
-    if not yocto_token:
-        raise click.UsageError("Missing required option '--token' (provide via root command or TOKEN env var).")
+        raise click.UsageError(
+            "Missing required option '--token' (provide via root command, $SBOMIFY_TOKEN, or $TOKEN)."
+        )
 
-    # Get api-base-url from parent CLI group (--api-base-url on the root command or API_BASE_URL env var)
-    api_base_url = (ctx.parent.params.get("api_base_url") if ctx.parent else None) or SBOMIFY_PRODUCTION_API
+    api_base_url = parent_params.get("api_base_url") or SBOMIFY_PRODUCTION_API
 
     # Parse release format
     if ":" not in release:
