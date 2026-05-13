@@ -26,9 +26,8 @@ def list_components(api_base_url: str, token: str) -> dict[str, str]:
     headers = get_default_headers(token)
     components: dict[str, str] = {}
     page = 1
-    max_pages = 500  # Safety limit against infinite pagination
 
-    while page <= max_pages:
+    while True:
         try:
             response = requests.get(url, headers=headers, params={"page": page, "page_size": 100}, timeout=60)
         except requests.exceptions.ConnectionError:
@@ -47,22 +46,22 @@ def list_components(api_base_url: str, token: str) -> dict[str, str]:
         if not isinstance(data, dict):
             raise APIError(f"Failed to list components: unexpected response type ({type(data).__name__})")
 
-        for item in data.get("items", []):
+        items = data.get("items", [])
+        for item in items:
             name = item.get("name")
             comp_id = item.get("id")
             if name and comp_id:
                 components[name] = str(comp_id)
 
-        # Paginate based on 'next' link, not empty items
-        if not data.get("next"):
+        # Out-of-range pages return empty items since sbomify PR #960
+        # (issue #949) — that's the canonical termination signal. Prefer the
+        # structured `pagination.has_next` field when present.
+        if not items:
+            break
+        pagination = data.get("pagination")
+        if isinstance(pagination, dict) and pagination.get("has_next") is False:
             break
         page += 1
-
-    if page > max_pages and data.get("next"):
-        logger.warning(
-            f"Pagination safety limit reached ({max_pages} pages). "
-            f"Component cache may be incomplete ({len(components)} components fetched)."
-        )
 
     logger.info(f"Cached {len(components)} existing components")
     return components
@@ -97,11 +96,23 @@ def create_component(api_base_url: str, token: str, name: str) -> str:
         err_msg = f"Failed to create component '{name}'. [{response.status_code}]"
         detail = ""
         try:
-            detail = response.json().get("detail", "")
+            body = response.json()
+        except ValueError:
+            body = {}
+        if isinstance(body, dict):
+            detail = body.get("detail", "") or ""
             if detail:
                 err_msg += f" - {detail}"
-        except ValueError:
-            pass
+            # sbomify PR #961 (issue #952) surfaces per-field validation
+            # errors under `errors`. Include them so callers see which field
+            # was rejected instead of just "Validation error".
+            field_errors = body.get("errors")
+            if isinstance(field_errors, dict) and field_errors:
+                parts: list[str] = []
+                for field, messages in field_errors.items():
+                    joined = "; ".join(str(m) for m in messages) if isinstance(messages, list) else str(messages)
+                    parts.append(f"{field}: {joined}")
+                err_msg += " (" + "; ".join(parts) + ")"
 
         if response.status_code == 403 and "maximum" in detail.lower():
             raise PlanLimitError(err_msg)

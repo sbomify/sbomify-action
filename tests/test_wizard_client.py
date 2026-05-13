@@ -67,16 +67,80 @@ def test_other_4xx_raises_api_error():
     assert "Forbidden" in str(excinfo.value)
 
 
+def test_400_surfaces_field_level_errors():
+    """sbomify PR #961 (#952): the `errors` dict on 400 responses must be
+    surfaced inline so users see which field was rejected, not just
+    "Validation error"."""
+    session = MagicMock()
+    session.request.return_value = _response(
+        status=400,
+        json_body={
+            "detail": "Validation error",
+            "error_code": "INVALID_DATA",
+            "errors": {"name": ["Component with this Team and Name already exists."]},
+        },
+    )
+    client = _client(session)
+
+    with pytest.raises(SbomifyAPIError) as excinfo:
+        client.create_component("dup")
+    message = str(excinfo.value)
+    assert "Validation error" in message
+    assert "name" in message
+    assert "already exists" in message
+
+
+def test_400_field_errors_without_detail():
+    """If a 400 omits `detail` but includes `errors`, still surface the fields."""
+    session = MagicMock()
+    session.request.return_value = _response(
+        status=400,
+        json_body={"errors": {"version": ["Required."]}},
+    )
+    client = _client(session)
+
+    with pytest.raises(SbomifyAPIError) as excinfo:
+        client.create_component("x")
+    assert "version" in str(excinfo.value)
+    assert "Required" in str(excinfo.value)
+
+
 def test_pagination_collects_all_pages():
+    """Walks pages via sbomify's `pagination.has_next` field."""
     session = MagicMock()
     session.request.side_effect = [
-        _response(json_body={"items": [{"id": "a"}, {"id": "b"}], "total": 3}),
-        _response(json_body={"items": [{"id": "c"}], "total": 3}),
+        _response(
+            json_body={
+                "items": [{"id": "a"}, {"id": "b"}],
+                "pagination": {"has_next": True, "total": 3, "page": 1},
+            }
+        ),
+        _response(
+            json_body={
+                "items": [{"id": "c"}],
+                "pagination": {"has_next": False, "total": 3, "page": 2},
+            }
+        ),
     ]
     client = _client(session)
 
     products = client.list_products()
     assert [p["id"] for p in products] == ["a", "b", "c"]
+    assert session.request.call_count == 2
+
+
+def test_pagination_terminates_on_empty_items():
+    """Fallback termination: post-#960 servers return empty `items` for
+    out-of-range pages, so the loop must stop even without a `pagination` hint."""
+    session = MagicMock()
+    session.request.side_effect = [
+        _response(json_body={"items": [{"id": "a"}]}),
+        _response(json_body={"items": []}),
+    ]
+    client = _client(session)
+
+    products = client.list_products()
+    assert [p["id"] for p in products] == ["a"]
     assert session.request.call_count == 2
 
 
@@ -145,7 +209,7 @@ def test_ensure_default_project_reuses_existing_match():
         _response(
             json_body={
                 "items": [{"id": "proj_1", "name": "demo-default", "products": []}],
-                "total": 1,
+                "pagination": {"has_next": False, "total": 1, "page": 1},
             }
         ),
         _response(status=201, json_body={}),
@@ -185,7 +249,7 @@ def test_attach_component_to_product_patches_components_list():
                         "components": [],
                     }
                 ],
-                "total": 1,
+                "pagination": {"has_next": False, "total": 1, "page": 1},
             }
         ),
         # PATCH project components

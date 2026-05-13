@@ -22,7 +22,6 @@ from sbomify_action.http_client import get_default_headers
 from sbomify_action.logging_config import logger
 
 DEFAULT_TIMEOUT = 30
-PAGE_LIMIT = 50
 
 
 class SbomifyAPIError(APIError):
@@ -103,8 +102,25 @@ class SbomifyClient:
                 return ""
             if isinstance(payload, dict):
                 detail = payload.get("detail") or payload.get("message")
+                # sbomify returns per-field validation errors under `errors`
+                # (shape: {"<field>": ["<msg>", ...]}). Surface them inline so
+                # the wizard can show "name: already exists" instead of just
+                # "Validation error". See sbomify PR #961 (issue #952).
+                field_errors = payload.get("errors")
+                field_summary = ""
+                if isinstance(field_errors, dict) and field_errors:
+                    parts: list[str] = []
+                    for field, messages in field_errors.items():
+                        if isinstance(messages, list):
+                            joined = "; ".join(str(m) for m in messages)
+                        else:
+                            joined = str(messages)
+                        parts.append(f"{field}: {joined}")
+                    field_summary = " (" + "; ".join(parts) + ")"
                 if isinstance(detail, str):
-                    return detail
+                    return detail + field_summary
+                if field_summary:
+                    return field_summary.strip(" ()")
                 return str(payload)
             return str(payload)
         return response.text[:500]
@@ -112,7 +128,7 @@ class SbomifyClient:
     def _paginate(self, path: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         page = 1
-        while page <= PAGE_LIMIT:
+        while True:
             page_params = dict(params or {})
             page_params["page"] = page
             response = self._request("GET", path, params=page_params)
@@ -137,14 +153,12 @@ class SbomifyClient:
 
             results.extend(item for item in items if isinstance(item, dict))
 
+            if not items:
+                break
+
             if isinstance(data, dict):
-                total = data.get("total") or data.get("count")
-                if isinstance(total, int) and len(results) >= total:
-                    break
-                if not items:
-                    break
-            else:
-                if not items:
+                pagination = data.get("pagination")
+                if isinstance(pagination, dict) and pagination.get("has_next") is False:
                     break
 
             page += 1

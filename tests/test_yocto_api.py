@@ -26,26 +26,29 @@ class TestListComponents:
                 {"id": "comp-1", "name": "busybox"},
                 {"id": "comp-2", "name": "zlib"},
             ],
-            "next": None,
+            "pagination": {"has_next": False, "total": 2, "page": 1},
         }
         mock_get.return_value = mock_resp
 
         result = list_components(API_BASE, TOKEN)
         assert result == {"busybox": "comp-1", "zlib": "comp-2"}
+        # has_next=False must short-circuit after a single request.
+        assert mock_get.call_count == 1
 
     @patch("sbomify_action._yocto.api.requests.get")
     def test_pagination(self, mock_get):
+        """Walk multiple pages via `pagination.has_next` (sbomify's real shape)."""
         page1 = MagicMock()
         page1.ok = True
         page1.json.return_value = {
             "items": [{"id": "c1", "name": "pkg1"}],
-            "next": "page2",
+            "pagination": {"has_next": True, "total": 2, "page": 1},
         }
         page2 = MagicMock()
         page2.ok = True
         page2.json.return_value = {
             "items": [{"id": "c2", "name": "pkg2"}],
-            "next": None,
+            "pagination": {"has_next": False, "total": 2, "page": 2},
         }
         mock_get.side_effect = [page1, page2]
 
@@ -54,10 +57,26 @@ class TestListComponents:
         assert mock_get.call_count == 2
 
     @patch("sbomify_action._yocto.api.requests.get")
+    def test_pagination_terminates_on_empty_items(self, mock_get):
+        """Servers without `pagination.has_next` (or any pre-#960 shape) still
+        terminate via the empty-items signal once we walk past the end."""
+        page1 = MagicMock()
+        page1.ok = True
+        page1.json.return_value = {"items": [{"id": "c1", "name": "pkg1"}]}
+        page2 = MagicMock()
+        page2.ok = True
+        page2.json.return_value = {"items": []}  # post-#960: empty for out-of-range
+        mock_get.side_effect = [page1, page2]
+
+        result = list_components(API_BASE, TOKEN)
+        assert result == {"pkg1": "c1"}
+        assert mock_get.call_count == 2
+
+    @patch("sbomify_action._yocto.api.requests.get")
     def test_empty_response(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.ok = True
-        mock_resp.json.return_value = {"items": [], "next": None}
+        mock_resp.json.return_value = {"items": [], "pagination": {"has_next": False}}
         mock_get.return_value = mock_resp
 
         result = list_components(API_BASE, TOKEN)
@@ -151,6 +170,27 @@ class TestCreateComponent:
         with pytest.raises(APIError) as exc_info:
             create_component(API_BASE, TOKEN, "busybox")
         assert not isinstance(exc_info.value, PlanLimitError)
+
+    @patch("sbomify_action._yocto.api.requests.post")
+    def test_failure_surfaces_field_level_errors(self, mock_post):
+        """Per sbomify PR #961 (#952): 400 responses include an `errors` dict
+        with per-field validation messages — surface them in the APIError."""
+        mock_resp = MagicMock()
+        mock_resp.ok = False
+        mock_resp.status_code = 400
+        mock_resp.json.return_value = {
+            "detail": "Validation error",
+            "error_code": "INVALID_DATA",
+            "errors": {"name": ["Component with this Team and Name already exists."]},
+        }
+        mock_post.return_value = mock_resp
+
+        with pytest.raises(APIError) as exc_info:
+            create_component(API_BASE, TOKEN, "busybox")
+        message = str(exc_info.value)
+        assert "Validation error" in message
+        assert "name" in message
+        assert "already exists" in message
 
     @patch("sbomify_action._yocto.api.requests.post")
     def test_no_id_in_response(self, mock_post):
