@@ -122,6 +122,34 @@ def test_plan_workflow_files_writes_when_no_collision(tmp_path):
     assert files[0][2] == "write"
 
 
+def test_plan_workflow_files_dedupes_colliding_slugs(tmp_path):
+    # "My API" and "my api" both slugify to "my-api"; without dedupe the second
+    # component would silently overwrite the first.
+    plan = Plan(
+        create_components=[
+            _planned(name="My API", rel_path="a/poetry.lock"),
+            _planned(name="my api", rel_path="b/poetry.lock"),
+            _planned(name="MY  API", rel_path="c/poetry.lock"),
+        ]
+    )
+    files = ci_emitter.plan_workflow_files(
+        plan=plan,
+        output_dir=tmp_path,
+        api_base_url="https://app.sbomify.com",
+        default_branch="main",
+        product_id="prod_abc",
+    )
+    paths = [path.name for path, _content, _action in files]
+    assert paths == [
+        "sbomify-my-api.yml",
+        "sbomify-my-api-2.yml",
+        "sbomify-my-api-3.yml",
+    ]
+    # The path filter inside each workflow must match its own filename.
+    for path, content, _action in files:
+        assert f"'.github/workflows/{path.name}'" in content
+
+
 def test_plan_workflow_files_substitutes_real_component_id(tmp_path):
     plan = Plan(create_components=[_planned()])
     files = ci_emitter.plan_workflow_files(

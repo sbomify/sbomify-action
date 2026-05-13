@@ -234,6 +234,21 @@ def render_workflow(
     )
 
 
+def _unique_slug(base: str, taken: set[str]) -> str:
+    """Return ``base`` (or ``base-2``, ``base-3``, …) such that it isn't in ``taken``.
+
+    Two distinct component names can collapse to the same slug ("My API" and
+    "my_api"); without dedupe their workflow filenames would silently overwrite
+    each other.
+    """
+    if base not in taken:
+        return base
+    index = 2
+    while f"{base}-{index}" in taken:
+        index += 1
+    return f"{base}-{index}"
+
+
 def plan_workflow_files(
     *,
     plan: Plan,
@@ -252,8 +267,10 @@ def plan_workflow_files(
     """
     component_ids = component_ids or {}
     items: list[tuple[Path, str, WorkflowFileAction]] = []
+    used_slugs: set[str] = set()
     for planned in plan.create_components:
-        slug = slugify(planned.name) or "component"
+        slug = _unique_slug(slugify(planned.name) or "component", used_slugs)
+        used_slugs.add(slug)
         path = output_dir / workflow_filename(planned.name, component_slug=slug)
         content = render_workflow(
             component_name=planned.name,

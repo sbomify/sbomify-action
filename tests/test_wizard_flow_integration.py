@@ -108,8 +108,9 @@ def test_non_tty_exits_with_warning(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("env_var", ["GITHUB_ACTIONS", "CI"])
-def test_aborts_when_run_inside_ci(monkeypatch, tmp_path, env_var):
-    monkeypatch.setenv(env_var, "true")
+@pytest.mark.parametrize("value", ["true", "TRUE", "1", "yes", "on"])
+def test_aborts_when_run_inside_ci(monkeypatch, tmp_path, env_var, value):
+    monkeypatch.setenv(env_var, value)
     _force_tty(monkeypatch)
     rc = run_wizard_flow(
         WizardOptions(

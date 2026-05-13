@@ -167,3 +167,25 @@ def test_profile_augmentation_records_profile_id(monkeypatch):
     component = state.plan.create_components[0]
     assert component.augmentation == "profile"
     assert component.profile_id == "profile_42"
+
+
+def test_profile_augmentation_reprompts_when_esc_returns_none(monkeypatch):
+    # Recording augmentation="profile" with profile_id=None would silently skip
+    # the contact-profile patch during apply. Esc on the profile picker must
+    # re-prompt instead of being accepted.
+    state = _state(
+        [_lockfile("backend/poetry.lock")],
+        profiles=[{"id": "profile_7", "name": "ACME profile"}],
+    )
+
+    text_answers = iter(["backend"])
+    select_answers = iter(["profile", None, "profile_7", "latest"])
+
+    monkeypatch.setattr(mapping, "ask_text", lambda *a, **k: next(text_answers))
+    monkeypatch.setattr(mapping, "ask_select", lambda *a, **k: next(select_answers))
+
+    mapping.configure_components(state)
+
+    component = state.plan.create_components[0]
+    assert component.augmentation == "profile"
+    assert component.profile_id == "profile_7"

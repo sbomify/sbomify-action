@@ -159,6 +159,67 @@ def test_happy_path_runs_git_and_gh(monkeypatch, tmp_path):
     assert "--head" in gh_calls[0] and "sbomify-setup" in gh_calls[0]
 
 
+def _state_on_branch(tmp_path: Path, *, current: str, written: list[Path]) -> WizardState:
+    state = _state(tmp_path, written=written)
+    state.facts = RepoFacts(
+        repo_root=tmp_path,
+        is_git=True,
+        remote_url="git@github.com:acme/repo.git",
+        suggested_repo_name="repo",
+        default_branch="main",
+        current_branch=current,
+        has_release_tags=False,
+    )
+    return state
+
+
+def test_off_target_branch_skip_choice_does_not_invoke_git(monkeypatch, tmp_path):
+    written = [tmp_path / "wrote.yml"]
+    written[0].write_text("yml")
+    state = _state_on_branch(tmp_path, current="feature", written=written)
+
+    monkeypatch.setattr(wizard_runner, "_gh_authenticated", lambda: True)
+    monkeypatch.setattr(wizard_runner, "_has_unrelated_dirty_files", lambda *_: False)
+    monkeypatch.setattr(wizard_runner, "ask_confirm", lambda *a, **k: True)
+    monkeypatch.setattr(wizard_runner, "ask_text", lambda *a, **k: "sbomify-setup")
+    monkeypatch.setattr(wizard_runner, "ask_select", lambda *a, **k: "Skip PR creation")
+
+    def explode(*_a, **_kw):
+        raise AssertionError("git/gh should not run when user picks Skip")
+
+    monkeypatch.setattr(wizard_runner, "_run_subprocess", explode)
+    _phase_open_pr(state, _opts(tmp_path))
+
+
+def test_off_target_branch_switch_choice_checks_out_target(monkeypatch, tmp_path):
+    written = [tmp_path / "wrote.yml"]
+    written[0].write_text("yml")
+    state = _state_on_branch(tmp_path, current="feature", written=written)
+
+    monkeypatch.setattr(wizard_runner, "_gh_authenticated", lambda: True)
+    monkeypatch.setattr(wizard_runner, "_has_unrelated_dirty_files", lambda *_: False)
+    monkeypatch.setattr(wizard_runner, "ask_confirm", lambda *a, **k: True)
+    monkeypatch.setattr(wizard_runner, "ask_text", lambda *a, **k: "sbomify-setup")
+    monkeypatch.setattr(wizard_runner, "ask_select", lambda *a, **k: "Switch to `main` first (recommended)")
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, cwd):
+        calls.append(cmd)
+        result = subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd[0] == "gh":
+            result.stdout = "https://github.com/acme/repo/pull/9\n"
+        return result
+
+    monkeypatch.setattr(wizard_runner, "_run_subprocess", fake_run)
+    _phase_open_pr(state, _opts(tmp_path))
+
+    git_cmds = [c for c in calls if c[0] == "git"]
+    assert ["git", "checkout", "main"] in git_cmds
+    # Branch is still created on top of (now-checked-out) target.
+    assert ["git", "checkout", "-b", "sbomify-setup"] in git_cmds
+
+
 def test_subprocess_failure_is_reported_not_raised(monkeypatch, tmp_path):
     written = [tmp_path / "wrote.yml"]
     written[0].write_text("yml")

@@ -140,7 +140,7 @@ def _print_welcome(facts: RepoFacts) -> None:
         "  5. Show you everything before applying\n"
         "  6. Generate one GitHub Actions workflow per component\n\n"
         "~2-5 min for a single-lockfile repo.\n"
-        "Esc = back · Ctrl-C = exit (nothing is saved until step 6)."
+        "Esc / Ctrl-C = cancel (nothing is saved until step 6)."
     )
     console.print()
     console.print(Panel(body, title="sbomify wizard"))
@@ -628,6 +628,31 @@ def _phase_open_pr(state: WizardState, opts: WizardOptions) -> None:
         print_warning(f"Cannot push directly to `{target}`. Pick a different branch name.")
         return
 
+    # `git checkout -b` branches from HEAD, so if the user ran the wizard on a
+    # feature branch the PR would include any commits ahead of `target`. Warn,
+    # and either switch to `target` first or bail out.
+    if state.facts.current_branch and state.facts.current_branch != target:
+        choice = ask_select(
+            f"You're on `{state.facts.current_branch}`, not `{target}`. Branching from here would "
+            f"include commits ahead of `{target}` in the PR. How do you want to proceed?",
+            choices=[
+                f"Switch to `{target}` first (recommended)",
+                f"Branch from `{state.facts.current_branch}` anyway",
+                "Skip PR creation",
+            ],
+            allow_back=False,
+        )
+        if choice and choice.startswith("Skip"):
+            print_info("Skipped PR creation. Commit and push the wizard's files manually.")
+            return
+        if choice and choice.startswith("Switch"):
+            try:
+                _run_subprocess(["git", "checkout", target], cwd=state.facts.repo_root.resolve())
+            except subprocess.CalledProcessError as e:
+                stderr = (e.stderr or "").strip()
+                print_warning(f"Could not switch to `{target}`: {stderr or e}")
+                return
+
     repo_root = state.facts.repo_root.resolve()
     # Compute git-friendly pathspecs (relative to repo_root, posix separators).
     # Paths outside the repo are silently skipped — `git add` would fail anyway.
@@ -707,12 +732,21 @@ def _print_done(state: WizardState, opts: WizardOptions) -> None:
 # Top-level orchestrator
 
 
+_TRUTHY = {"true", "1", "yes", "on"}
+
+
+def _is_truthy_env(name: str) -> bool:
+    value = os.environ.get(name)
+    return value is not None and value.strip().lower() in _TRUTHY
+
+
 def run_wizard_flow(opts: WizardOptions) -> int:
     # The wizard is a desktop tool — it commits files and opens PRs in a repo
     # the user owns. Running it from inside a GitHub Actions job (or another
     # CI) doesn't make sense, and would silently mutate a checkout in the
-    # runner's workspace.
-    if os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("CI") == "true":
+    # runner's workspace. Accept any truthy value (matches `_in_github_actions`
+    # in cli.main and the broader CI convention of `1`, `yes`, etc.).
+    if _is_truthy_env("GITHUB_ACTIONS") or _is_truthy_env("CI"):
         print_warning(
             "The wizard is for local desktop setup; it should not run inside a "
             "CI runner. Run `sbomify-action wizard` from your machine instead."

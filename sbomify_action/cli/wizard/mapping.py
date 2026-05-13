@@ -160,8 +160,14 @@ def _ask_augmentation(
             )
             for profile in profiles
         ]
-        profile_id = ask_select("Pick a contact profile:", choices=profile_choices)
-        return strategy, profile_id, None
+        # ask_select can return None on Esc; loop until a profile is chosen so we
+        # never record augmentation="profile" with profile_id=None (which would
+        # silently skip the contact-profile patch during apply).
+        while True:
+            profile_id = ask_select("Pick a contact profile:", choices=profile_choices)
+            if profile_id:
+                return strategy, profile_id, None
+            print_info("Pick a contact profile, or press Ctrl-C to cancel.")
 
     if strategy == "local":
         sbomify_json = _collect_sbomify_json()
