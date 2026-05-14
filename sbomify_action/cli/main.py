@@ -2612,8 +2612,12 @@ def _run_wizard_cli(
             param_hint="--output-dir",
         )
 
+    # Match the rest of the CLI: --token wins, then $SBOMIFY_TOKEN, then
+    # $TOKEN. A None here just means the wizard's auth screen will prompt.
+    resolved_token = _resolve_token(token)
+
     opts = WizardOptions(
-        token=token,
+        token=resolved_token,
         api_base_url=api_base_url.rstrip("/"),
         repo_root=repo_root,
         output_dir=output_dir,
