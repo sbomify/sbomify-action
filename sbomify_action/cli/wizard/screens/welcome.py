@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -24,6 +25,8 @@ class WelcomeScreen(WizardScreen):
 
     def compose_body(self) -> ComposeResult:
         with Vertical(classes="wizard-panel-emphasis"):
+            # Banner uses a Rich `Text` (not markup) because the ASCII art
+            # contains backslashes — `\[/]` would be parsed as a literal "[/]".
             yield Static(self._banner(), classes="banner")
             yield Static(self._intro())
             yield Static("")
@@ -49,10 +52,11 @@ class WelcomeScreen(WizardScreen):
 
         self.wizard.push_screen(DiscoverScreen())
 
-    def _banner(self) -> str:
+    def _banner(self) -> Text:
         # Marketing-palette gradient (logo SVG stops): blue → magenta → peach.
-        # Each row picks up the next stop so the banner reads as a gradient
-        # downward.  Colours come from ~/code/sbomify.com SVG `linearGradient`.
+        # Built as a `Text` rather than markup so backslashes in the ASCII art
+        # don't get interpreted as escape sequences (`\[` would render `[/]`
+        # literally at end-of-line).
         lines = [
             ("         __                    _ ____         ___        __  _           ", "#4059D0"),
             ("   _____/ /_  ____  ____ ___  (_) __/_  __   /   | _____/ /_(_)___  ____ ", "#7C5BC8"),
@@ -61,7 +65,12 @@ class WelcomeScreen(WizardScreen):
             ("/____/_.___/\\____/_/ /_/ /_/_/_/  \\__, /  /_/  |_\\___/\\__/_/\\____/_/ /_/ ", "#E0879D"),
             ("                                 /____/                                  ", "#F4B57F"),
         ]
-        return "\n".join(f"[bold {color}]{text}[/]" for text, color in lines)
+        banner = Text()
+        for i, (text, color) in enumerate(lines):
+            if i > 0:
+                banner.append("\n")
+            banner.append(text, style=f"bold {color}")
+        return banner
 
     def _intro(self) -> str:
         return (
