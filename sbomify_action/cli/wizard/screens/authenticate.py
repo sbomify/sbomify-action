@@ -155,9 +155,18 @@ class AuthenticateScreen(WizardScreen):
     def _on_auth_success(self, client: SbomifyClient, workspace: WorkspaceSnapshot) -> None:
         self.wizard.state.api = client
         self.wizard.state.workspace = workspace
-        from sbomify_action.cli.wizard.screens.product import ProductScreen
+        # Branch on the welcome-screen intent: the onboarding flow walks
+        # the user through picking a product + configuring each component,
+        # while the edit flow drops them straight onto the list of
+        # existing workflows.
+        if self.wizard.flow_mode == "edit":
+            from sbomify_action.cli.wizard.screens.edit_existing import EditExistingScreen
 
-        self.wizard.push_screen(ProductScreen())
+            self.wizard.push_screen(EditExistingScreen())
+        else:
+            from sbomify_action.cli.wizard.screens.product import ProductScreen
+
+            self.wizard.push_screen(ProductScreen())
 
     def _on_auth_error(self, message: str) -> None:
         self.query_one("#auth-progress", Container).remove_children()

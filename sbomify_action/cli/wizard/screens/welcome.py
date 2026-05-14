@@ -31,8 +31,12 @@ class WelcomeScreen(WizardScreen):
             yield Static(self._intro())
             yield Static("")
             yield Static(self._repo_summary(), classes="wizard-muted")
+        has_existing = bool(self.wizard.state.existing_workflows)
+        start_label = "Add / set up  ▸" if has_existing else "Start  ▸"
         with Horizontal(classes="button-row"):
-            yield Button("Start  ▸", id="start", variant="primary")
+            yield Button(start_label, id="start", variant="primary")
+            if has_existing:
+                yield Button("Edit existing  ▸", id="edit")
             yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
@@ -44,13 +48,25 @@ class WelcomeScreen(WizardScreen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "start":
             self._advance()
+        elif event.button.id == "edit":
+            self._advance_to_edit()
         elif event.button.id == "cancel":
             self.wizard.action_quit_with_cancel()
 
     def _advance(self) -> None:
+        self.wizard.flow_mode = "onboard"
         from sbomify_action.cli.wizard.screens.discover import DiscoverScreen
 
         self.wizard.push_screen(DiscoverScreen())
+
+    def _advance_to_edit(self) -> None:
+        # The edit flow skips lockfile discovery — we already know which
+        # workflows exist and what they point at. Go straight to auth so we
+        # can resolve component IDs against the user's workspace.
+        self.wizard.flow_mode = "edit"
+        from sbomify_action.cli.wizard.screens.authenticate import AuthenticateScreen
+
+        self.wizard.push_screen(AuthenticateScreen())
 
     def _banner(self) -> Text:
         # Marketing-palette gradient (logo SVG stops): blue → magenta → peach.

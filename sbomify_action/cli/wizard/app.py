@@ -24,6 +24,8 @@ component):
 
 from __future__ import annotations
 
+from typing import Literal
+
 from textual.app import App
 from textual.binding import Binding
 
@@ -32,6 +34,10 @@ from sbomify_action.cli.wizard.existing import detect_existing_workflows
 from sbomify_action.cli.wizard.options import WizardOptions
 from sbomify_action.cli.wizard.repo_facts import gather_repo_facts
 from sbomify_action.cli.wizard.state import WizardState
+
+#: Top-level intent picked on the welcome screen. Authenticate routes to a
+#: different next screen based on which one the user chose.
+FlowMode = Literal["onboard", "edit"]
 
 
 class WizardApp(App[int]):
@@ -64,6 +70,10 @@ class WizardApp(App[int]):
         # Tracks ordinal step for the progress crumb in screen headers.
         # 6 user-facing steps; apply (and generate/pr) share the apply phase.
         self.total_steps = 6
+        # Default flow is the full onboarding wizard. Set to "edit" on the
+        # welcome screen when the user picks "Edit existing workflows" —
+        # AuthenticateScreen reads this to decide where to push next.
+        self.flow_mode: FlowMode = "onboard"
 
     def on_mount(self) -> None:
         # Lazy import keeps screen imports off the hot path during test

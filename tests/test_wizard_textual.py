@@ -334,3 +334,176 @@ async def test_full_dry_run_lands_on_done(tmp_path, monkeypatch):
         # Plan was committed.
         assert len(app.state.plan.create_components) == 1
         assert app.state.plan.create_components[0].name == "my-svc"
+
+
+# ----------------------------------------------------------------- edit flow
+
+
+@pytest.mark.asyncio
+async def test_welcome_shows_edit_button_only_when_workflows_exist(tmp_path, monkeypatch):
+    """No existing workflows → no Edit button; one workflow → Edit button shows."""
+    _stub_discovery(monkeypatch, [])
+
+    # No workflows → button absent.
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from textual.widgets import Button
+
+        with pytest.raises(Exception):
+            app.screen.query_one("#edit", Button)
+
+    # Plant a workflow so detect_existing_workflows finds one.
+    import textwrap
+
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "sbomify-svc.yml").write_text(
+        textwrap.dedent(
+            """
+            name: sbomify - svc
+            on:
+              push:
+                branches: [main]
+            jobs:
+              sbom:
+                steps:
+                  - uses: sbomify/sbomify-action@master
+                    env:
+                      COMPONENT_ID: comp_abc
+                      LOCK_FILE: uv.lock
+            """
+        ).lstrip()
+    )
+    app2 = WizardApp(_opts(tmp_path))
+    async with app2.run_test() as pilot:
+        await pilot.pause()
+        from textual.widgets import Button
+
+        edit_btn = app2.screen.query_one("#edit", Button)
+        assert edit_btn is not None
+
+
+@pytest.mark.asyncio
+async def test_edit_flow_routes_to_edit_existing_screen(tmp_path, monkeypatch):
+    """Clicking Edit on welcome flips flow_mode and lands on EditExistingScreen after auth."""
+    import textwrap
+
+    _stub_discovery(monkeypatch, [])
+    _stub_client(
+        monkeypatch,
+        products=[{"id": "p1", "name": "demo"}],
+        components=[{"id": "comp_abc", "name": "svc"}],
+    )
+
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "sbomify-svc.yml").write_text(
+        textwrap.dedent(
+            """
+            name: sbomify - svc
+            on:
+              push:
+                branches: [main]
+            jobs:
+              sbom:
+                steps:
+                  - uses: sbomify/sbomify-action@master
+                    env:
+                      COMPONENT_ID: comp_abc
+                      LOCK_FILE: uv.lock
+            """
+        ).lstrip()
+    )
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Move focus from Start → Edit → press Enter.
+        await pilot.press("tab")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.flow_mode == "edit"
+
+        # Auth screen kicks off the worker (token was passed via opts).
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.edit_existing import EditExistingScreen
+
+        assert isinstance(app.screen, EditExistingScreen)
+
+
+@pytest.mark.asyncio
+async def test_edit_workflow_saves_re_emits_file(tmp_path, monkeypatch):
+    """Editing a workflow re-emits with current templates and overwrites in place."""
+    import textwrap
+
+    from textual.widgets import RadioButton
+
+    _stub_discovery(monkeypatch, [])
+    _stub_client(
+        monkeypatch,
+        products=[{"id": "p1", "name": "demo"}],
+        components=[{"id": "comp_abc", "name": "svc"}],
+    )
+
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    workflow_path = workflows / "sbomify-svc.yml"
+    workflow_path.write_text(
+        textwrap.dedent(
+            """
+            name: sbomify - svc
+            on:
+              workflow_dispatch:
+                inputs:
+                  version:
+                    required: false
+            jobs:
+              sbom:
+                steps:
+                  - uses: sbomify/sbomify-action@master
+                    env:
+                      COMPONENT_ID: comp_abc
+                      LOCK_FILE: uv.lock
+                      AUGMENT: 'false'
+            """
+        ).lstrip()
+    )
+    original = workflow_path.read_text()
+    assert "workflow_dispatch:" in original
+    assert "branches: [main]" not in original  # currently manual-strategy
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Welcome → Edit (Tab off Start, Enter)
+        await pilot.press("tab")
+        await pilot.press("enter")
+        await pilot.pause()
+        # Auth
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        # EditExistingScreen → Enter on the single row pushes EditWorkflowScreen
+        await pilot.press("enter")
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.edit_workflow import EditWorkflowScreen
+
+        assert isinstance(app.screen, EditWorkflowScreen)
+
+        # Flip release strategy to "latest" (push-on-main).
+        app.screen.query_one("#rel-manual", RadioButton).value = False
+        app.screen.query_one("#rel-latest", RadioButton).value = True
+        # Save via Ctrl-S
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        # File got rewritten in place with the new strategy.
+        new_text = workflow_path.read_text()
+        assert new_text != original
+        assert "branches:" in new_text  # latest template uses push.branches
+        assert "COMPONENT_ID: comp_abc" in new_text  # component preserved
+        # The workflow path remained the same (no rename).
+        assert workflow_path.exists()
