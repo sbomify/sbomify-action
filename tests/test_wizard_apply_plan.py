@@ -7,7 +7,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from sbomify_action.cli.wizard.apply import apply_plan
 from sbomify_action.cli.wizard.client import SbomifyAPIError
+from sbomify_action.cli.wizard.options import WizardOptions
 from sbomify_action.cli.wizard.state import (
     DiscoveredLockfile,
     Plan,
@@ -16,7 +18,6 @@ from sbomify_action.cli.wizard.state import (
     WizardState,
     WorkspaceSnapshot,
 )
-from sbomify_action.cli.wizard.wizard_runner import WizardOptions, apply_plan
 
 
 def _planned(

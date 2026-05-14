@@ -1,11 +1,13 @@
-"""Shared filesystem helpers used by both the init and wizard runners."""
+"""Shared filesystem helpers used by the wizard's apply phase."""
+
+from __future__ import annotations
 
 import json
 import shutil
 from pathlib import Path
 from typing import Any
 
-from sbomify_action.cli.wizard.prompts import print_info, print_warning
+from sbomify_action.logging_config import logger
 
 
 def write_config(config: dict[str, Any], path: Path, *, backup: bool = True) -> bool:
@@ -23,7 +25,7 @@ def write_config(config: dict[str, Any], path: Path, *, backup: bool = True) -> 
         if backup and path.exists():
             backup_path = path.with_suffix(path.suffix + ".bak")
             shutil.copy2(path, backup_path)
-            print_info(f"Backup created: {backup_path}")
+            logger.info(f"Backup created: {backup_path}")
 
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
@@ -32,5 +34,5 @@ def write_config(config: dict[str, Any], path: Path, *, backup: bool = True) -> 
 
         return True
     except OSError as e:
-        print_warning(f"Failed to write config: {e}")
+        logger.warning(f"Failed to write config: {e}")
         return False

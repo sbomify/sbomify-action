@@ -74,21 +74,31 @@ class Plan:
 @dataclass
 class WizardState:
     facts: RepoFacts
-    api: "SbomifyClient"
+    # `api` is set by the authenticate screen once the user's token is
+    # validated. Screens that need it (anything past authenticate) should
+    # assert it isn't None at use-time.
+    api: "SbomifyClient | None" = None
     workspace: WorkspaceSnapshot | None = None
     selected: list[DiscoveredLockfile] = field(default_factory=list)
     plan: Plan = field(default_factory=Plan)
     applied: list[str] = field(default_factory=list)
-    # Populated by apply_plan so Phase 7 (test-generation) can talk to sbomify.
+    # Populated by apply_plan so the generate phase can talk to sbomify.
     created_product_id: str | None = None
     component_ids: dict[Path, str] = field(default_factory=dict)
     # Files that apply_plan wrote — used by the PR phase to know exactly what
     # to stage. Avoids `git add -A` so we never sweep up unrelated changes.
     written_files: list[Path] = field(default_factory=list)
 
+    def require_api(self) -> "SbomifyClient":
+        """Return the API client, raising if the auth screen hasn't run yet."""
+        if self.api is None:
+            raise RuntimeError("WizardState.api accessed before authenticate screen ran")
+        return self.api
+
     def __repr__(self) -> str:
         return (
-            f"WizardState(facts={self.facts!r}, api=<SbomifyClient redacted>, "
+            f"WizardState(facts={self.facts!r}, "
+            f"api={'<set>' if self.api else None}, "
             f"workspace={'<set>' if self.workspace else None}, "
             f"selected={len(self.selected)} lockfiles, plan={self.plan!r}, "
             f"applied={len(self.applied)} steps)"

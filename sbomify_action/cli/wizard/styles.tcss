@@ -1,0 +1,342 @@
+/*
+ * sbomify wizard — Textual stylesheet
+ *
+ * Palette pulled from the marketing site
+ * (~/code/sbomify.com/tailwind.config.js) and the SVG logo gradients:
+ *
+ *   $bg-deep      #141035   primaryBG (deep navy)
+ *   $bg-soft      #1A1B2A   secondaryBG
+ *   $accent       #8A7DFF   purple.DEFAULT (cursor / pointer)
+ *   $accent-hover #7A6DE5   purple.700
+ *   $brand-blue   #4059D0   logo gradient stop 1
+ *   $brand-pink   #CC58BB   logo gradient stop 2
+ *   $brand-peach  #F4B57F   logo gradient stop 3
+ *   $text-muted   #5E5E5E   secondaryText
+ *   $text-subtle  #CBCCCE   tertiaryText
+ *   $fuschia60    #FCDDEC   highlight pastel
+ */
+
+Screen {
+    background: #141035;
+    color: #FFFFFF;
+}
+
+Header {
+    background: #141035;
+    color: #8A7DFF;
+    text-style: bold;
+}
+
+Footer {
+    background: #1A1B2A;
+    color: #CBCCCE;
+}
+
+Footer > .footer--key {
+    background: #1A1B2A;
+    color: #8A7DFF;
+    text-style: bold;
+}
+
+Footer > .footer--description {
+    background: #1A1B2A;
+    color: #CBCCCE;
+}
+
+/* ---------- Layout primitives ---------- */
+
+.wizard-body {
+    layout: vertical;
+    width: 100%;
+    height: 1fr;
+    padding: 1 2;
+    background: #141035;
+}
+
+.wizard-panel {
+    border: round #8A7DFF;
+    background: #1A1B2A;
+    padding: 1 2;
+    margin: 1 0;
+    width: 100%;
+    height: auto;
+}
+
+.wizard-panel-emphasis {
+    border: thick #CC58BB;
+    background: #1A1B2A;
+    padding: 1 2;
+    margin: 1 0;
+    width: 100%;
+    height: auto;
+}
+
+.wizard-title {
+    color: #8A7DFF;
+    text-style: bold;
+    margin: 0 0 1 0;
+}
+
+.wizard-subtitle {
+    color: #CBCCCE;
+    text-style: italic;
+    margin: 0 0 1 0;
+}
+
+.wizard-hint {
+    color: #5E5E5E;
+    text-style: italic;
+}
+
+.wizard-step-crumb {
+    color: #F4B57F;
+    text-style: bold;
+    margin: 0 0 1 0;
+}
+
+.wizard-success {
+    color: #4ADE80;
+    text-style: bold;
+}
+
+.wizard-warning {
+    color: #F4B57F;
+    text-style: bold;
+}
+
+.wizard-error {
+    color: #F87171;
+    text-style: bold;
+}
+
+.wizard-muted {
+    color: #CBCCCE;
+}
+
+/* ---------- Form widgets ---------- */
+
+Input {
+    background: #1A1B2A;
+    color: #FFFFFF;
+    border: tall #4A4276;
+    margin: 0 0 1 0;
+}
+
+Input:focus {
+    border: tall #8A7DFF;
+}
+
+Input.-invalid {
+    border: tall #F87171;
+}
+
+Label {
+    color: #CBCCCE;
+    margin: 0 0 0 0;
+}
+
+Select {
+    background: #1A1B2A;
+    border: tall #4A4276;
+    margin: 0 0 1 0;
+}
+
+Select:focus {
+    border: tall #8A7DFF;
+}
+
+Select > SelectCurrent {
+    background: #1A1B2A;
+    color: #FFFFFF;
+}
+
+SelectOverlay {
+    background: #1A1B2A;
+    border: tall #8A7DFF;
+}
+
+OptionList {
+    background: #1A1B2A;
+    color: #FFFFFF;
+    border: tall #4A4276;
+}
+
+OptionList:focus {
+    border: tall #8A7DFF;
+}
+
+OptionList > .option-list--option-highlighted {
+    background: #37306B;
+    color: #FFFFFF;
+    text-style: bold;
+}
+
+OptionList > .option-list--option-hover {
+    background: #201B4C;
+    color: #FFFFFF;
+}
+
+SelectionList {
+    background: #1A1B2A;
+    color: #FFFFFF;
+    border: tall #4A4276;
+}
+
+SelectionList:focus {
+    border: tall #8A7DFF;
+}
+
+SelectionList > .selection-list--option-highlighted {
+    background: #37306B;
+    text-style: bold;
+}
+
+SelectionList > .selection-list--button-selected {
+    color: #8A7DFF;
+    text-style: bold;
+}
+
+SelectionList > .selection-list--button-selected-highlighted {
+    color: #CC58BB;
+    text-style: bold;
+}
+
+RadioSet {
+    background: #1A1B2A;
+    border: tall #4A4276;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+RadioSet:focus {
+    border: tall #8A7DFF;
+}
+
+RadioButton {
+    color: #FFFFFF;
+}
+
+RadioButton.-on > .toggle--button {
+    color: #8A7DFF;
+    text-style: bold;
+}
+
+Checkbox {
+    color: #FFFFFF;
+    background: transparent;
+}
+
+Checkbox.-on > .toggle--button {
+    color: #8A7DFF;
+    text-style: bold;
+}
+
+/* ---------- Buttons ---------- */
+
+Button {
+    margin: 0 1;
+    min-width: 12;
+    height: 3;
+    background: #201B4C;
+    color: #FFFFFF;
+    border: tall #4A4276;
+}
+
+Button:focus {
+    background: #37306B;
+    border: tall #8A7DFF;
+    text-style: bold;
+}
+
+Button:hover {
+    background: #37306B;
+}
+
+Button.-primary {
+    background: #4059D0;
+    color: #FFFFFF;
+    border: tall #4059D0;
+    text-style: bold;
+}
+
+Button.-primary:focus {
+    background: #4A6BEF;
+    border: tall #8A7DFF;
+}
+
+Button.-danger {
+    background: #1A1B2A;
+    color: #F87171;
+    border: tall #F87171;
+}
+
+.button-row {
+    layout: horizontal;
+    height: auto;
+    align: center middle;
+    margin: 1 0;
+}
+
+/* ---------- DataTable ---------- */
+
+DataTable {
+    background: #1A1B2A;
+    color: #FFFFFF;
+    border: round #4A4276;
+}
+
+DataTable > .datatable--header {
+    background: #201B4C;
+    color: #8A7DFF;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: #37306B;
+    color: #FFFFFF;
+}
+
+DataTable > .datatable--hover {
+    background: #201B4C;
+}
+
+DataTable > .datatable--odd-row {
+    background: #1A1B2A;
+}
+
+DataTable > .datatable--even-row {
+    background: #1F1E32;
+}
+
+/* ---------- RichLog / ProgressBar ---------- */
+
+RichLog {
+    background: #141035;
+    color: #CBCCCE;
+    border: round #4A4276;
+}
+
+ProgressBar > Bar {
+    color: #8A7DFF;
+}
+
+ProgressBar > PercentageStatus {
+    color: #CBCCCE;
+}
+
+/* ---------- Loading / banner ---------- */
+
+LoadingIndicator {
+    color: #CC58BB;
+}
+
+.banner {
+    color: #4059D0;
+    text-style: bold;
+    margin: 0 0 1 0;
+}
+
+.banner-tagline {
+    color: #F4B57F;
+    text-style: italic;
+}

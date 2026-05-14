@@ -2579,7 +2579,19 @@ def _run_wizard_cli(
     output_dir: Path,
     dry_run: bool,
 ) -> None:
-    from sbomify_action.cli.wizard.wizard_runner import WizardOptions, run_wizard_flow
+    from sbomify_action.cli.wizard.app import launch_wizard
+    from sbomify_action.cli.wizard.options import WizardOptions
+
+    # The wizard is a Textual TUI; running it from inside CI (where stdin
+    # isn't a real terminal) silently mutates a runner checkout and produces
+    # garbage output. Bail early with a clear message.
+    if _wizard_in_ci():
+        click.echo(
+            "Refusing to launch the interactive wizard from a CI environment. "
+            "Run `sbomify-action wizard` locally to onboard a repository.",
+            err=True,
+        )
+        sys.exit(1)
 
     # Always work with absolute paths inside the wizard so downstream phases
     # (git add, PR creation, path display) don't depend on the caller's CWD.
@@ -2607,7 +2619,19 @@ def _run_wizard_cli(
         output_dir=output_dir,
         dry_run=dry_run,
     )
-    sys.exit(run_wizard_flow(opts))
+    sys.exit(launch_wizard(opts))
+
+
+_TRUTHY_ENV = {"true", "1", "yes", "on"}
+
+
+def _wizard_in_ci() -> bool:
+    """Refuse to launch the TUI when an obvious CI env var is set."""
+    for name in ("GITHUB_ACTIONS", "CI"):
+        value = os.environ.get(name)
+        if value is not None and value.strip().lower() in _TRUTHY_ENV:
+            return True
+    return False
 
 
 @cli.command("wizard")

@@ -1,5 +1,6 @@
-"""Interactive wizard for onboarding a repository to sbomify."""
+"""Interactive Textual wizard for onboarding a repository to sbomify."""
 
-from sbomify_action.cli.wizard.wizard_runner import WizardOptions, run_wizard_flow
+from sbomify_action.cli.wizard.app import WizardApp, launch_wizard
+from sbomify_action.cli.wizard.options import WizardOptions
 
-__all__ = ["WizardOptions", "run_wizard_flow"]
+__all__ = ["WizardApp", "WizardOptions", "launch_wizard"]
