@@ -8,7 +8,7 @@ users know where they are.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -21,6 +21,9 @@ from sbomify_action.cli.wizard.state import (
     PlannedComponent,
     ReleaseStrategy,
 )
+
+if TYPE_CHECKING:
+    from sbomify_action.cli.wizard.existing import ExistingWorkflow
 
 
 class ConfigureScreen(WizardScreen):
@@ -98,28 +101,76 @@ class ConfigureScreen(WizardScreen):
             self._finalise()
             return
         lf = selected[self._index]
-        existing_names = {
-            c.get("name") for c in (self.wizard.state.workspace.components if self.wizard.state.workspace else [])
-        }
-        suggested = lf.suggested_name
-        # Suffix to avoid collisions with existing components
-        if suggested in existing_names:
-            base = suggested
-            n = 2
-            while f"{base}-{n}" in existing_names:
-                n += 1
-            suggested = f"{base}-{n}"
+        workspace = self.wizard.state.workspace
+        existing_names = {c.get("name") for c in (workspace.components if workspace else [])}
 
+        # If we previously emitted a workflow for this lockfile, pull the
+        # existing component name / augmentation / release strategy out of
+        # it so the user can hit Enter through unchanged components.
+        existing_wf = self.wizard.state.existing_for_lockfile(lf.rel_path)
+        pre_filled_name: str | None = None
+        if existing_wf and existing_wf.component_id and workspace:
+            match = next(
+                (c for c in workspace.components if str(c.get("id")) == existing_wf.component_id),
+                None,
+            )
+            if match and match.get("name"):
+                pre_filled_name = str(match["name"])
+
+        if pre_filled_name:
+            suggested = pre_filled_name
+        else:
+            suggested = lf.suggested_name
+            if suggested in existing_names:
+                base = suggested
+                n = 2
+                while f"{base}-{n}" in existing_names:
+                    n += 1
+                suggested = f"{base}-{n}"
+
+        title_extra = "  [#4ADE80]· pre-filled from existing workflow[/]" if existing_wf else ""
         self.query_one("#component-title", Static).update(
-            f"[b #8A7DFF]Component {self._index + 1} of {total}[/]  [#CBCCCE]·[/]  {lf.rel_path}"
+            f"[b #8A7DFF]Component {self._index + 1} of {total}[/]  [#CBCCCE]·[/]  {lf.rel_path}{title_extra}"
         )
         self.query_one("#component-hint", Static).update(
-            f"[#CBCCCE]Ecosystem: [#F4B57F]{lf.ecosystem}[/]   Suggested name derived from the lockfile path.[/]"
+            f"[#CBCCCE]Ecosystem: [#F4B57F]{lf.ecosystem}[/]   "
+            + (
+                f"Defaults loaded from [#FFFFFF]{existing_wf.path.name}[/]."
+                if existing_wf
+                else "Suggested name derived from the lockfile path."
+            )
+            + "[/]"
         )
         name_input = self.query_one("#name", Input)
         name_input.value = suggested
         name_input.focus()
+
+        if existing_wf:
+            self._apply_existing_defaults(existing_wf)
+
         self._sync_profile_pane()
+
+    def _apply_existing_defaults(self, existing_wf: "ExistingWorkflow") -> None:  # noqa: F821 — forward ref
+        """Seed the augmentation + release-strategy radios from a re-detected workflow."""
+        if existing_wf.augment is False:
+            # The detected workflow had AUGMENT='false' — force the
+            # "skip metadata" radio on. ('augment=true' overlaps with both
+            # "use profile" and "skip", so we leave the workspace-derived
+            # default in place rather than guessing.)
+            self.query_one("#aug-profile", RadioButton).value = False
+            self.query_one("#aug-skip", RadioButton).value = True
+
+        strategy_to_radio = {
+            "latest": "rel-latest",
+            "tag": "rel-tag",
+            "manual": "rel-manual",
+            "none": "rel-none",
+        }
+        if existing_wf.release_strategy in strategy_to_radio:
+            for radio_id in strategy_to_radio.values():
+                self.query_one(f"#{radio_id}", RadioButton).value = False
+            target = strategy_to_radio[existing_wf.release_strategy]
+            self.query_one(f"#{target}", RadioButton).value = True
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
         if event.radio_set.id == "augmentation":

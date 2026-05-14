@@ -81,6 +81,7 @@ class WelcomeScreen(WizardScreen):
 
     def _repo_summary(self) -> str:
         facts = self.wizard.state.facts
+        existing = self.wizard.state.existing_workflows
         rows: list[str] = []
         rows.append(f"  [#8A7DFF]Repo[/]      {facts.repo_root}")
         if facts.is_git:
@@ -92,4 +93,9 @@ class WelcomeScreen(WizardScreen):
                 rows.append("  [#F4B57F]✓[/] git tags detected — will suggest tag-based releases")
         else:
             rows.append("  [#F4B57F]![/] not a git repository — discovery and PR creation will be limited")
+        if existing:
+            rows.append(
+                f"  [#4ADE80]✓[/] found [#FFFFFF]{len(existing)}[/] existing sbomify workflow(s) — "
+                "matching lockfiles will be pre-filled in the configure step"
+            )
         return "\n".join(rows)

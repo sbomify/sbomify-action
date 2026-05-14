@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from sbomify_action.cli.wizard.client import SbomifyClient
+    from sbomify_action.cli.wizard.existing import ExistingWorkflow
 
 
 AugmentationStrategy = Literal["profile", "local", "skip"]
@@ -88,12 +89,23 @@ class WizardState:
     # Files that apply_plan wrote — used by the PR phase to know exactly what
     # to stage. Avoids `git add -A` so we never sweep up unrelated changes.
     written_files: list[Path] = field(default_factory=list)
+    # sbomify workflow files we found in `.github/workflows/` at launch time.
+    # Lets the wizard pre-fill the configure screen on re-runs instead of
+    # asking the user the same questions twice.
+    existing_workflows: list["ExistingWorkflow"] = field(default_factory=list)
 
     def require_api(self) -> "SbomifyClient":
         """Return the API client, raising if the auth screen hasn't run yet."""
         if self.api is None:
             raise RuntimeError("WizardState.api accessed before authenticate screen ran")
         return self.api
+
+    def existing_for_lockfile(self, rel_path: Path) -> "ExistingWorkflow | None":
+        """Find an existing workflow whose LOCK_FILE matches this lockfile."""
+        for workflow in self.existing_workflows:
+            if workflow.lockfile_rel_path == rel_path:
+                return workflow
+        return None
 
     def __repr__(self) -> str:
         return (

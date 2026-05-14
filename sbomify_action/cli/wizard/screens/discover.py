@@ -59,11 +59,22 @@ class DiscoverScreen(WizardScreen):
             )
             self.query_one("#continue", Button).disabled = True
             return
-        summary.update(
-            f"[#CBCCCE]Found [#F4B57F]{len(self._found)}[/] lockfile(s). Each one becomes a Component on sbomify.[/]"
+        pre_configured = sum(
+            1 for lf in self._found if self.wizard.state.existing_for_lockfile(lf.rel_path) is not None
         )
+        if pre_configured:
+            summary.update(
+                f"[#CBCCCE]Found [#F4B57F]{len(self._found)}[/] lockfile(s); "
+                f"[#4ADE80]{pre_configured}[/] already wired up. Each becomes a Component on sbomify.[/]"
+            )
+        else:
+            summary.update(
+                f"[#CBCCCE]Found [#F4B57F]{len(self._found)}[/] lockfile(s). Each one becomes a Component on sbomify.[/]"
+            )
         for lf in self._found:
-            label = f"[b]{lf.rel_path}[/]  [#5E5E5E]·[/] [#8A7DFF]{lf.ecosystem}[/]"
+            existing = self.wizard.state.existing_for_lockfile(lf.rel_path)
+            tag = "  [#4ADE80]· already configured[/]" if existing else ""
+            label = f"[b]{lf.rel_path}[/]  [#5E5E5E]·[/] [#8A7DFF]{lf.ecosystem}[/]{tag}"
             picker.add_option(Selection(label, str(lf.rel_path), initial_state=True))
         picker.focus()
 

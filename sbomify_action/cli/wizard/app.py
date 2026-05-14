@@ -27,6 +27,7 @@ from __future__ import annotations
 from textual.app import App
 from textual.binding import Binding
 
+from sbomify_action.cli.wizard.existing import detect_existing_workflows
 from sbomify_action.cli.wizard.options import WizardOptions
 from sbomify_action.cli.wizard.repo_facts import gather_repo_facts
 from sbomify_action.cli.wizard.state import WizardState
@@ -50,7 +51,8 @@ class WizardApp(App[int]):
         # Facts are gathered synchronously before App.run() so the welcome
         # screen can render the repo name without flashing empty state.
         facts = gather_repo_facts(opts.repo_root)
-        self.state: WizardState = WizardState(facts=facts)
+        existing = detect_existing_workflows(opts.repo_root)
+        self.state: WizardState = WizardState(facts=facts, existing_workflows=existing)
         # Tracks ordinal step for the progress crumb in screen headers.
         # 6 user-facing steps; apply (and generate/pr) share the apply phase.
         self.total_steps = 6

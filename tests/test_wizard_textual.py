@@ -172,6 +172,83 @@ async def test_authenticate_reports_bad_token(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_existing_workflow_prefills_configure_screen(tmp_path, monkeypatch):
+    """A pre-existing sbomify workflow for the discovered lockfile should
+    make the configure screen pre-fill the name + release strategy from it
+    instead of falling back to the lockfile-derived suggestion."""
+    import textwrap
+
+    from textual.widgets import Input, RadioButton
+
+    # Lockfile the wizard will discover.
+    lockfile = DiscoveredLockfile(
+        path=tmp_path / "uv.lock",
+        rel_path=Path("uv.lock"),
+        ecosystem="python",
+        suggested_name="default-suggestion",
+    )
+    _stub_discovery(monkeypatch, [lockfile])
+
+    # Workspace component the workflow points at — name comes from here.
+    components = [{"id": "comp_abc", "name": "service-from-existing-workflow"}]
+    _stub_client(
+        monkeypatch,
+        products=[{"id": "p1", "name": "demo"}],
+        components=components,
+    )
+
+    # Plant a pre-existing tag-strategy workflow on disk before the wizard
+    # gathers state.
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "sbomify-svc.yml").write_text(
+        textwrap.dedent(
+            """
+            name: sbomify - svc
+            on:
+              push:
+                branches: [main]
+                tags: ['v*']
+              workflow_dispatch:
+            jobs:
+              sbom:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: sbomify/sbomify-action@master
+                    env:
+                      COMPONENT_ID: comp_abc
+                      LOCK_FILE: uv.lock
+                      AUGMENT: 'false'
+            """
+        ).lstrip()
+    )
+
+    app = WizardApp(_opts(tmp_path, dry_run=True))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Detection ran at App construction time.
+        assert len(app.state.existing_workflows) == 1
+        await pilot.press("enter")  # welcome → discover
+        await pilot.pause()
+        await pilot.press("enter")  # discover → authenticate
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await pilot.press("enter")  # product → configure
+        await pilot.pause()
+
+        # Name is pre-filled from the workspace component (lookup by ID),
+        # not from the lockfile's suggested name.
+        name_input = app.screen.query_one("#name", Input)
+        assert name_input.value == "service-from-existing-workflow"
+        # Release strategy radio reflects the workflow's `tags: ['v*']` trigger.
+        assert app.screen.query_one("#rel-tag", RadioButton).value is True
+        assert app.screen.query_one("#rel-latest", RadioButton).value is False
+        # AUGMENT='false' in the workflow → "Skip metadata" wins.
+        assert app.screen.query_one("#aug-skip", RadioButton).value is True
+
+
+@pytest.mark.asyncio
 async def test_full_dry_run_lands_on_done(tmp_path, monkeypatch):
     """Walk the entire happy path end-to-end in dry-run mode."""
     lockfile = DiscoveredLockfile(
