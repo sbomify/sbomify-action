@@ -121,8 +121,11 @@ class SbomifyClient:
                     return detail + field_summary
                 if field_summary:
                     return field_summary.strip(" ()")
-                return str(payload)
-            return str(payload)
+                # Bound the fallback so a verbose JSON body doesn't dump
+                # arbitrary internal fields into a user-facing exception.
+                # Matches the non-JSON branch below.
+                return str(payload)[:500]
+            return str(payload)[:500]
         return response.text[:500]
 
     def _paginate(self, path: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:

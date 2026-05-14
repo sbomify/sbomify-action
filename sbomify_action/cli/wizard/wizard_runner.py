@@ -533,15 +533,20 @@ _PR_BODY = (
 )
 
 
-def _run_subprocess(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+def _run_subprocess(cmd: list[str], cwd: Path, *, timeout: int = 60) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
         cwd=cwd,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=timeout,
         check=True,
     )
+
+
+# Network-bound git/gh calls (push, pr create) need more headroom than local
+# ones — slow links + large repos can blow past 60s easily.
+_NETWORK_TIMEOUT = 300
 
 
 def _gh_authenticated() -> bool:
@@ -673,7 +678,7 @@ def _phase_open_pr(state: WizardState, opts: WizardOptions) -> None:
             ["git", "commit", "-m", _PR_TITLE],
             cwd=repo_root,
         )
-        _run_subprocess(["git", "push", "-u", "origin", branch], cwd=repo_root)
+        _run_subprocess(["git", "push", "-u", "origin", branch], cwd=repo_root, timeout=_NETWORK_TIMEOUT)
         result = _run_subprocess(
             [
                 "gh",
@@ -689,10 +694,25 @@ def _phase_open_pr(state: WizardState, opts: WizardOptions) -> None:
                 _PR_BODY,
             ],
             cwd=repo_root,
+            timeout=_NETWORK_TIMEOUT,
         )
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip()
         print_warning(f"Could not open PR: {stderr or e}")
+        print_info(f"Branch `{branch}` may have been created locally — check with `git branch`.")
+        return
+    except subprocess.TimeoutExpired as e:
+        # `git push` / `gh pr create` can exceed the timeout on slow links
+        # or large repos. Degrade to the same friendly warning as a non-zero
+        # exit so we don't surface a raw stack trace from _phase_open_pr.
+        stderr_bytes = e.stderr if isinstance(e.stderr, (bytes, str)) else None
+        stderr = ""
+        if isinstance(stderr_bytes, bytes):
+            stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
+        elif isinstance(stderr_bytes, str):
+            stderr = stderr_bytes.strip()
+        cmd = e.cmd[0] if isinstance(e.cmd, list) and e.cmd else "git/gh"
+        print_warning(f"`{cmd}` timed out after {e.timeout:.0f}s: {stderr or 'no output'}")
         print_info(f"Branch `{branch}` may have been created locally — check with `git branch`.")
         return
 

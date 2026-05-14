@@ -105,6 +105,21 @@ def test_400_field_errors_without_detail():
     assert "Required" in str(excinfo.value)
 
 
+def test_400_dict_fallback_is_truncated():
+    """A 4xx JSON payload with neither `detail`/`message` nor a usable
+    `errors` dict must not dump an arbitrarily large body into the error
+    message — truncate to ~500 chars to avoid leaking verbose internals."""
+    big_blob = {f"internal_field_{i}": "x" * 50 for i in range(50)}
+    session = MagicMock()
+    session.request.return_value = _response(status=400, json_body=big_blob)
+    client = _client(session)
+
+    with pytest.raises(SbomifyAPIError) as excinfo:
+        client.create_component("x")
+    detail = excinfo.value.detail
+    assert len(detail) <= 500
+
+
 def test_pagination_collects_all_pages():
     """Walks pages via sbomify's `pagination.has_next` field."""
     session = MagicMock()
