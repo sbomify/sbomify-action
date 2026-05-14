@@ -80,6 +80,9 @@ class WizardState:
     # assert it isn't None at use-time.
     api: "SbomifyClient | None" = None
     workspace: WorkspaceSnapshot | None = None
+    # Lockfiles found at app start. Populated once so the welcome screen
+    # can show coverage stats and the discover screen doesn't re-scan.
+    discovered: list[DiscoveredLockfile] = field(default_factory=list)
     selected: list[DiscoveredLockfile] = field(default_factory=list)
     plan: Plan = field(default_factory=Plan)
     applied: list[str] = field(default_factory=list)
@@ -106,6 +109,23 @@ class WizardState:
             if workflow.lockfile_rel_path == rel_path:
                 return workflow
         return None
+
+    def coverage(self) -> tuple[int, int, int]:
+        """Return (matched, lockfiles, orphan_workflows) for the welcome banner.
+
+        - `matched` = discovered lockfiles that already have a workflow.
+        - `lockfiles` = total discovered lockfiles.
+        - `orphan_workflows` = existing workflows whose LOCK_FILE doesn't
+          map to a discovered lockfile (workflow points at a file that's
+          since been renamed/removed, etc.).
+        """
+        matched_paths = {lf.rel_path for lf in self.discovered if self.existing_for_lockfile(lf.rel_path) is not None}
+        orphans = sum(
+            1
+            for wf in self.existing_workflows
+            if wf.lockfile_rel_path is None or wf.lockfile_rel_path not in {lf.rel_path for lf in self.discovered}
+        )
+        return len(matched_paths), len(self.discovered), orphans
 
     def __repr__(self) -> str:
         return (

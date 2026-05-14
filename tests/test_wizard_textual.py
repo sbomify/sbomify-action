@@ -36,8 +36,11 @@ def _opts(tmp_path: Path, *, dry_run: bool = True) -> WizardOptions:
 
 
 def _stub_discovery(monkeypatch: pytest.MonkeyPatch, lockfiles: list[DiscoveredLockfile]) -> None:
+    # Patch the canonical location — `WizardApp.__init__` calls
+    # `discovery.discover()` synchronously, so the stub has to be in place
+    # before the app is constructed (which happens in each test).
     monkeypatch.setattr(
-        "sbomify_action.cli.wizard.screens.discover.discovery.discover",
+        "sbomify_action.cli.wizard.discovery.discover",
         lambda _root: lockfiles,
     )
 
@@ -169,6 +172,52 @@ async def test_authenticate_reports_bad_token(tmp_path, monkeypatch):
         status = app.screen.query_one("#auth-status", Static)
         rendered = str(status.render()).lower()
         assert "rejected" in rendered or "token" in rendered
+
+
+@pytest.mark.asyncio
+async def test_welcome_shows_coverage_when_workflows_match_all_lockfiles(tmp_path, monkeypatch):
+    """When every discovered lockfile has a matching existing workflow,
+    the welcome screen reports `found jobs for N/N lockfiles`."""
+    import textwrap
+
+    lockfile = DiscoveredLockfile(
+        path=tmp_path / "uv.lock",
+        rel_path=Path("uv.lock"),
+        ecosystem="python",
+        suggested_name="svc",
+    )
+    _stub_discovery(monkeypatch, [lockfile])
+
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "sbomify-svc.yml").write_text(
+        textwrap.dedent(
+            """
+            name: sbomify - svc
+            on:
+              push:
+                branches: [main]
+            jobs:
+              sbom:
+                steps:
+                  - uses: sbomify/sbomify-action@master
+                    env:
+                      COMPONENT_ID: comp_abc
+                      LOCK_FILE: uv.lock
+            """
+        ).lstrip()
+    )
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Coverage helper sees 1/1 matched, 0 orphans.
+        assert app.state.coverage() == (1, 1, 0)
+        # The welcome screen's repo-summary Static contains the
+        # human-readable coverage message.
+        summary = app.screen.query("Static.wizard-muted")
+        rendered = " ".join(str(s.render()) for s in summary)
+        assert "1/1" in rendered
 
 
 @pytest.mark.asyncio

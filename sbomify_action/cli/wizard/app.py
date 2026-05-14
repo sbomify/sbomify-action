@@ -27,6 +27,7 @@ from __future__ import annotations
 from textual.app import App
 from textual.binding import Binding
 
+from sbomify_action.cli.wizard import discovery
 from sbomify_action.cli.wizard.existing import detect_existing_workflows
 from sbomify_action.cli.wizard.options import WizardOptions
 from sbomify_action.cli.wizard.repo_facts import gather_repo_facts
@@ -48,11 +49,18 @@ class WizardApp(App[int]):
     def __init__(self, opts: WizardOptions) -> None:
         super().__init__()
         self.opts = opts
-        # Facts are gathered synchronously before App.run() so the welcome
-        # screen can render the repo name without flashing empty state.
+        # Facts, lockfile discovery, and existing-workflow detection all run
+        # synchronously before App.run() so the welcome screen can render
+        # accurate coverage stats ("found jobs for N/M lockfiles") without
+        # flashing empty state or waiting on a worker.
         facts = gather_repo_facts(opts.repo_root)
         existing = detect_existing_workflows(opts.repo_root)
-        self.state: WizardState = WizardState(facts=facts, existing_workflows=existing)
+        discovered = discovery.discover(opts.repo_root)
+        self.state: WizardState = WizardState(
+            facts=facts,
+            discovered=discovered,
+            existing_workflows=existing,
+        )
         # Tracks ordinal step for the progress crumb in screen headers.
         # 6 user-facing steps; apply (and generate/pr) share the apply phase.
         self.total_steps = 6

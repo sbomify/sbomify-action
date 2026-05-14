@@ -94,8 +94,29 @@ class WelcomeScreen(WizardScreen):
         else:
             rows.append("  [#F4B57F]![/] not a git repository — discovery and PR creation will be limited")
         if existing:
-            rows.append(
-                f"  [#4ADE80]✓[/] found [#FFFFFF]{len(existing)}[/] existing sbomify workflow(s) — "
-                "matching lockfiles will be pre-filled in the configure step"
-            )
+            matched, lockfiles, orphans = self.wizard.state.coverage()
+            if lockfiles == 0:
+                rows.append(
+                    f"  [#F4B57F]·[/] found [#FFFFFF]{len(existing)}[/] existing sbomify workflow(s) "
+                    "but no lockfiles were discovered to match against"
+                )
+            elif matched == lockfiles:
+                rows.append(
+                    f"  [#4ADE80]✓[/] found jobs for [#FFFFFF]{matched}/{lockfiles}[/] lockfile(s) — "
+                    "every component will be pre-filled in the configure step"
+                )
+            elif matched > 0:
+                rows.append(
+                    f"  [#4ADE80]✓[/] found jobs for [#FFFFFF]{matched}/{lockfiles}[/] lockfile(s) — "
+                    "matched components will be pre-filled, the rest set up fresh"
+                )
+            else:
+                rows.append(
+                    f"  [#F4B57F]·[/] found [#FFFFFF]{len(existing)}[/] existing workflow(s), "
+                    "but none match the discovered lockfiles"
+                )
+            if orphans:
+                rows.append(
+                    f"      [#5E5E5E]({orphans} orphan workflow(s) — point at lockfiles that no longer exist)[/]"
+                )
         return "\n".join(rows)

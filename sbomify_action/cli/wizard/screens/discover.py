@@ -8,7 +8,6 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, SelectionList, Static
 from textual.widgets.selection_list import Selection
 
-from sbomify_action.cli.wizard import discovery
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 from sbomify_action.cli.wizard.state import DiscoveredLockfile
 
@@ -48,7 +47,9 @@ class DiscoverScreen(WizardScreen):
             yield Button("Continue  ▸", id="continue", variant="primary")
 
     def on_mount(self) -> None:
-        self._found = discovery.discover(self.wizard.state.facts.repo_root)
+        # App.__init__ already ran discovery so the welcome screen could
+        # show coverage stats. Reuse that result instead of scanning again.
+        self._found = list(self.wizard.state.discovered)
         picker = self.query_one("#lockfile-picker", SelectionList)
         summary = self.query_one("#discover-summary", Static)
         if not self._found:
