@@ -165,6 +165,13 @@ OptionList:focus {
     border: tall #8A7DFF;
 }
 
+/* Bound the filterable product list so 100+ items scroll cleanly inside
+ * the wizard panel instead of spilling out of the visible area. */
+OptionList.wizard-options {
+    height: 14;
+    max-height: 14;
+}
+
 OptionList > .option-list--option-highlighted {
     background: #37306B;
     color: #FFFFFF;
