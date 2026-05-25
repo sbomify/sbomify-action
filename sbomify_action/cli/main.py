@@ -51,6 +51,7 @@ from ..generation import (
     process_lock_file,
 )
 from ..logging_config import logger
+from ..oidc import OIDCError, exchange_oidc_token, is_oidc_available
 from ..serialization import (
     _add_compositions_if_missing,
     _fix_purl_encoding_bugs_in_json,
@@ -144,6 +145,28 @@ NONE_SENTINEL = "none"
 STEP_1_FILE = "step_1.json"  # Output of generation/validation
 STEP_2_FILE = "step_2.json"  # Output of augmentation
 STEP_3_FILE = "step_3.json"  # Output of enrichment
+
+
+def _try_oidc_exchange(*, component_id: str, api_base_url: str) -> str | None:
+    """Exchange a GitHub OIDC JWT for a short-lived sbomify token.
+
+    Returns the exchanged token on success, ``None`` on failure. We
+    deliberately don't raise: the caller's downstream validation will
+    surface a "TOKEN is required" error with full context, and we'd
+    rather let that path handle the user message than abort early
+    with an OIDC-shaped error before the user even knows the action
+    *tried* OIDC.
+    """
+    logger.info("Attempting GitHub OIDC trusted-publishing exchange (no TOKEN provided)")
+    try:
+        result = exchange_oidc_token(component_id=component_id, api_base_url=api_base_url)
+    except OIDCError as exc:
+        # Surface the exact failure so users can diagnose which side
+        # rejected — server status taxonomy at sbomify_action/oidc.py.
+        logger.error(f"OIDC exchange failed: {exc}")
+        return None
+    logger.info(f"OIDC exchange succeeded (token valid for {result.expires_in_seconds}s)")
+    return result.access_token
 
 
 def _resolve_token(*candidates: str | None) -> str | None:
@@ -544,6 +567,14 @@ def build_config(
         if (lock_file and lock_file.lower() == NONE_SENTINEL)
         else (path_expansion(lock_file) if lock_file else None)
     )
+
+    # If no long-lived token was provided but the workflow has granted
+    # `id-token: write`, exchange a GitHub OIDC JWT for a short-lived
+    # sbomify access token. Skipped when there's nothing to upload (no
+    # component_id) — Config.validate() will raise a clearer error in
+    # that case than the OIDC layer would.
+    if not token and component_id and is_oidc_available():
+        token = _try_oidc_exchange(component_id=component_id, api_base_url=api_base_url)
 
     config = Config(
         token=token or "",

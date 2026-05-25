@@ -53,7 +53,20 @@ def test_render_latest_has_short_sha_and_no_release_tagging():
     assert "PRODUCT_RELEASE" not in out
     assert "tags: ['v*']" not in out
     assert "COMPONENT_ID: comp_001" in out
-    assert "TODO: OIDC token wiring is pending" in out
+    # Default mode (no OIDC) still wires the long-lived secret.
+    assert "TOKEN: ${{ secrets.SBOMIFY_TOKEN }}" in out
+    assert "id-token: write" not in out
+
+
+@pytest.mark.parametrize("strategy", ["latest", "tag", "manual", "none"])
+def test_render_with_oidc_drops_token_secret_and_adds_permissions(strategy):
+    out = _render(strategy, oidc=True)
+    # With OIDC trusted publishing the action mints its own token at runtime
+    # — never reference the long-lived secret in the env block.
+    assert "TOKEN: ${{ secrets.SBOMIFY_TOKEN }}" not in out
+    # Job-level permission is required for GitHub to issue the OIDC JWT.
+    assert "id-token: write" in out
+    assert "contents: read" in out
 
 
 def test_render_tag_emits_dual_triggers_and_release():
