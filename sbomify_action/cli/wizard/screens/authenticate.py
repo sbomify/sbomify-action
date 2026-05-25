@@ -143,7 +143,15 @@ class AuthenticateScreen(WizardScreen):
         if event.worker.name != "authenticate":
             return
         if event.state == WorkerState.SUCCESS:
-            client, workspace, error = event.worker.result
+            # Textual types `worker.result` as `T | None` because workers
+            # *can* return None; ours always returns the 3-tuple by
+            # construction, but the type narrows here so static checkers
+            # don't trip on the unpack.
+            result = event.worker.result
+            if result is None:
+                self._on_auth_error("Authentication worker returned no result")
+                return
+            client, workspace, error = result
             if error:
                 self._on_auth_error(error)
             else:

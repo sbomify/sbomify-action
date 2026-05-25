@@ -146,7 +146,7 @@ def _mint_github_id_token(audience: str) -> str:
             except ValueError as exc:
                 raise OIDCError(f"GitHub OIDC response was not valid JSON: {exc}") from exc
             token = payload.get("value") if isinstance(payload, dict) else None
-            if not token or not isinstance(token, str):
+            if not isinstance(token, str) or not token:
                 raise OIDCError("GitHub OIDC response missing 'value' field")
             return token
 

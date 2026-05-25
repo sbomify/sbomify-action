@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -156,10 +156,13 @@ def _infer_release_strategy(document: dict[str, Any]) -> ReleaseStrategy | None:
       - latest : push.branches + workflow_dispatch
       - manual : workflow_dispatch only (with `inputs.version`)
     """
-    # YAML parses bare `on:` as the boolean key `True` in some edge cases.
+    # YAML parses bare `on:` as the boolean key `True` in some edge cases
+    # (the "Norway problem"-adjacent quirk for the literal `on`). The dict
+    # is typed as ``dict[str, Any]`` but YAML can return ``dict[Any, Any]``,
+    # so the True lookup goes through the cast to keep mypy happy.
     on_block = document.get("on")
     if on_block is None:
-        on_block = document.get(True)
+        on_block = cast("dict[Any, Any]", document).get(True)
     if not isinstance(on_block, dict):
         return None
 

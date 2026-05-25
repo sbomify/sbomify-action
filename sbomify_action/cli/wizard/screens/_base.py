@@ -37,8 +37,11 @@ class WizardScreen(Screen[None]):
     step_index: ClassVar[int] = 0
     #: Short title shown in the progress crumb. Override.
     step_title: ClassVar[str] = ""
-    #: Optional one-line description rendered under the crumb. Override.
-    step_subtitle: ClassVar[str] = ""
+    # Optional one-line description rendered under the crumb. Override
+    # at the class level, or assign to `self.step_subtitle` in `__init__`
+    # for screens that compute it from constructor args. Plain instance
+    # attribute (not ClassVar) so per-instance assignment type-checks.
+    step_subtitle: str = ""
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
