@@ -1,0 +1,23 @@
+# Sample user image built on a Docker Hardened Image (DHI).
+#
+# Scenario: same shape as the Official variant, but the base is a cosign-signed
+# DHI image. sbomify-action should detect dhi.io/python as the base and fetch
+# its SBOM via cosign (with Docker's scout keyring + --insecure-ignore-tlog).
+#
+# Build with:
+#   docker buildx build --sbom=false --provenance=mode=max \
+#     -t localhost:5000/sbomify-test/app-dhi:latest \
+#     --push -f Dockerfile.dhi .
+#
+# NOTE: DHI images require a (free) Docker Hub account with the Hardened
+# Images entitlement to pull. If the pull fails with "repository dhi.io/python
+# not found", this Dockerfile is documentation only — the E2E runner skips
+# it and covers DHI fetch via unit tests.
+
+FROM dhi.io/python:3.11
+
+RUN pip install --no-cache-dir requests==2.32.3 click==8.1.7
+
+WORKDIR /app
+COPY hello.py ./
+CMD ["python", "hello.py"]

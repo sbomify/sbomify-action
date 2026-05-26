@@ -1198,15 +1198,133 @@ def run_pipeline(config: Config) -> None:
                     )
 
                 if not chainguard_info:
-                    logger.info(f"Generating SBOM from Docker image: {config.docker_image}")
-                    result = generate_sbom(
-                        docker_image=config.docker_image,
-                        output_file=STEP_1_FILE,
-                        output_format=config.sbom_format,
-                        spec_version=config.spec_version,
+                    # Try Docker Hub upstream SBOM + Syft merge.
+                    #
+                    # Unlike Chainguard (where we bypass Syft), Docker Hub
+                    # images are routinely extended by users. We fetch the
+                    # publisher's authoritative SBOM for the base layers and
+                    # run Syft to catch anything the Dockerfile installed on
+                    # top, then merge (upstream wins on conflict, Syft fills
+                    # empty upstream fields, Syft-only PURLs are overlaid).
+                    from .._generation.chainguard import convert_spdx_to_cyclonedx
+                    from .._generation.dockerhub import (
+                        DOCKERHUB_MERGE_WARNING,
+                        detect_dockerhub_image,
+                        fetch_dockerhub_sbom,
                     )
-                    if not result.success:
-                        raise SBOMGenerationError(result.error_message or "SBOM generation failed")
+                    from .._generation.sbom_merge import merge_cyclonedx, merge_spdx
+
+                    dockerhub_compatible = True
+                    if config.sbom_format == "spdx" and config.spec_version == "3.0.1":
+                        logger.debug("SPDX 3.0.1 requested; skipping Docker Hub upstream SBOM")
+                        dockerhub_compatible = False
+                    elif config.sbom_format == "cyclonedx":
+                        spec = config.spec_version or "1.6"
+                        spec_parts = tuple(int(x) for x in spec.split("."))
+                        if spec_parts < (1, 3):
+                            logger.debug(f"CycloneDX {spec} requested; skipping Docker Hub upstream SBOM")
+                            dockerhub_compatible = False
+
+                    dockerhub_info = detect_dockerhub_image(config.docker_image) if dockerhub_compatible else None
+                    upstream_spdx = None
+                    if dockerhub_info:
+                        logger.info(
+                            f"Detected Docker Hub base image: {dockerhub_info.image_ref} (tier={dockerhub_info.tier})"
+                        )
+                        try:
+                            upstream_spdx = fetch_dockerhub_sbom(dockerhub_info)
+                        except Exception as e:
+                            logger.warning(f"Docker Hub upstream SBOM fetch failed: {e}")
+                            upstream_spdx = None
+
+                    merge_succeeded = False
+                    if upstream_spdx:
+                        import copy
+                        import tempfile
+
+                        syft_tmp_path: str | None = None
+                        try:
+                            with tempfile.NamedTemporaryFile(
+                                mode="w",
+                                suffix=".json",
+                                delete=False,
+                                dir=Path(STEP_1_FILE).parent,
+                            ) as tmp:
+                                syft_tmp_path = tmp.name
+
+                            logger.info(
+                                f"Running Syft scan of {config.docker_image} to overlay onto Docker Hub upstream SBOM"
+                            )
+                            syft_result = generate_sbom(
+                                docker_image=config.docker_image,
+                                output_file=syft_tmp_path,
+                                output_format=config.sbom_format,
+                                spec_version=config.spec_version,
+                            )
+                            if not syft_result.success:
+                                raise SBOMGenerationError(
+                                    syft_result.error_message or "Syft scan failed for Docker Hub merge"
+                                )
+
+                            with open(syft_tmp_path, encoding="utf-8") as f:
+                                syft_doc = json.load(f)
+
+                            if config.sbom_format == "cyclonedx":
+                                cdx_spec = config.spec_version or "1.6"
+                                upstream_cdx_json = convert_spdx_to_cyclonedx(upstream_spdx, cdx_spec)
+                                upstream_doc = json.loads(upstream_cdx_json)
+                                merged = merge_cyclonedx(upstream_doc, syft_doc)
+                                actual_spec_version = cdx_spec
+                            else:
+                                # merge_spdx mutates its first argument (nested
+                                # lists of packages, relationships, extracted
+                                # licenses). Deep-copy so the fetched upstream
+                                # doc stays reusable if callers later cache it.
+                                merged = merge_spdx(copy.deepcopy(upstream_spdx), syft_doc)
+                                spdx_version = str(merged.get("spdxVersion", "SPDX-2.3"))
+                                actual_spec_version = spdx_version.replace("SPDX-", "")
+                                if config.spec_version and config.spec_version != actual_spec_version:
+                                    logger.warning(
+                                        f"Requested SPDX {config.spec_version} but upstream "
+                                        f"Docker Hub SBOM is SPDX {actual_spec_version}; "
+                                        f"using {actual_spec_version}"
+                                    )
+
+                            with open(STEP_1_FILE, "w", encoding="utf-8") as f:
+                                json.dump(merged, f, ensure_ascii=False)
+
+                            gha_warning(
+                                DOCKERHUB_MERGE_WARNING,
+                                title="Docker Hub Image Detected",
+                            )
+                            result = GenerationResult.success_result(
+                                output_file=STEP_1_FILE,
+                                sbom_format=config.sbom_format,
+                                spec_version=actual_spec_version,
+                                generator_name="dockerhub-sbom+syft",
+                            )
+                            merge_succeeded = True
+                        except Exception as e:
+                            logger.warning(
+                                f"Docker Hub upstream SBOM merge failed, falling back to plain Syft scan: {e}"
+                            )
+                        finally:
+                            if syft_tmp_path:
+                                try:
+                                    os.unlink(syft_tmp_path)
+                                except OSError:
+                                    pass
+
+                    if not merge_succeeded:
+                        logger.info(f"Generating SBOM from Docker image: {config.docker_image}")
+                        result = generate_sbom(
+                            docker_image=config.docker_image,
+                            output_file=STEP_1_FILE,
+                            output_format=config.sbom_format,
+                            spec_version=config.spec_version,
+                        )
+                        if not result.success:
+                            raise SBOMGenerationError(result.error_message or "SBOM generation failed")
             elif FILE_TYPE == "LOCK_FILE":
                 logger.info(f"Generating SBOM from lock file: {FILE}")
                 result = process_lock_file(

@@ -263,13 +263,13 @@ class TestParseDockerPurl:
 
 
 class TestDetectDirectChainguard:
-    @patch("sbomify_action._generation.chainguard.shutil.which", return_value="/usr/local/bin/crane")
-    @patch("sbomify_action._generation.chainguard._run_crane")
+    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_direct_chainguard_image(self, mock_crane, mock_which):
         mock_crane.side_effect = [
             # 1. _is_chainguard_config: crane config
             CHAINGUARD_CONFIG,
-            # 2. _resolve_platform_digest: crane manifest (manifest list)
+            # 2. resolve_platform_digest: crane manifest (manifest list)
             MANIFEST_LIST,
         ]
 
@@ -279,8 +279,8 @@ class TestDetectDirectChainguard:
         # Digest depends on current platform (amd64 or arm64)
         assert result.digest.startswith("sha256:")
 
-    @patch("sbomify_action._generation.chainguard.shutil.which", return_value="/usr/local/bin/crane")
-    @patch("sbomify_action._generation.chainguard._run_crane")
+    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_non_chainguard_returns_none(self, mock_crane, mock_which):
         # Not cgr.dev prefix, so tries provenance path
         # crane manifest for provenance detection — return simple manifest (no attestation)
@@ -302,15 +302,15 @@ class TestDetectDirectChainguard:
         result = detect_chainguard_image("nginx:latest")
         assert result is None
 
-    @patch("sbomify_action._generation.chainguard.shutil.which", return_value=None)
+    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value=None)
     def test_crane_not_available(self, mock_which):
         result = detect_chainguard_image("cgr.dev/chainguard/python:latest")
         assert result is None
 
 
 class TestDetectFromProvenance:
-    @patch("sbomify_action._generation.chainguard.shutil.which", return_value="/usr/local/bin/crane")
-    @patch("sbomify_action._generation.chainguard._run_crane")
+    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_detects_chainguard_base_in_provenance(self, mock_crane, mock_which):
         # Resolve platform digest for the found Chainguard image
         chainguard_manifest_list = json.dumps(
@@ -335,7 +335,7 @@ class TestDetectFromProvenance:
             ATTESTATION_MANIFEST,
             # 3. crane blob (provenance)
             PROVENANCE_WITH_CHAINGUARD,
-            # 4. _resolve_platform_digest: crane manifest for the Chainguard image
+            # 4. resolve_platform_digest: crane manifest for the Chainguard image
             chainguard_manifest_list,
         ]
 
@@ -344,8 +344,8 @@ class TestDetectFromProvenance:
         assert result.image_ref == "cgr.dev/chainguard/python"
         assert result.digest.startswith("sha256:")
 
-    @patch("sbomify_action._generation.chainguard.shutil.which", return_value="/usr/local/bin/crane")
-    @patch("sbomify_action._generation.chainguard._run_crane")
+    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_detects_chainguard_with_registry_port(self, mock_crane, mock_which):
         """Ensure provenance detection works with registry:port image refs."""
         chainguard_manifest_list = json.dumps(
@@ -379,8 +379,8 @@ class TestDetectFromProvenance:
         att_call_args = calls[1][0][0]  # first positional arg is the args list
         assert att_call_args[1].startswith("localhost:5000/myorg/myapp@")
 
-    @patch("sbomify_action._generation.chainguard.shutil.which", return_value="/usr/local/bin/crane")
-    @patch("sbomify_action._generation.chainguard._run_crane")
+    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_no_chainguard_in_provenance(self, mock_crane, mock_which):
         mock_crane.side_effect = [
             MANIFEST_WITH_ATTESTATION,
@@ -391,8 +391,8 @@ class TestDetectFromProvenance:
         result = detect_chainguard_image("myapp:latest")
         assert result is None
 
-    @patch("sbomify_action._generation.chainguard.shutil.which", return_value="/usr/local/bin/crane")
-    @patch("sbomify_action._generation.chainguard._run_crane")
+    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_no_attestation_manifest(self, mock_crane, mock_which):
         # Image index without attestation manifest
         simple_manifest = json.dumps(
@@ -415,8 +415,8 @@ class TestDetectFromProvenance:
 
 
 class TestFetchChainguardSbom:
-    @patch("sbomify_action._generation.chainguard.shutil.which", return_value="/usr/local/bin/cosign")
-    @patch("sbomify_action._generation.chainguard._run_cosign")
+    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/cosign")
+    @patch("sbomify_action._generation.buildkit_provenance.run_cosign")
     def test_fetches_spdx_sbom(self, mock_cosign, mock_which):
         cosign_output = _make_cosign_attestation_output(SAMPLE_SPDX_SBOM)
         mock_cosign.return_value = cosign_output
@@ -430,8 +430,8 @@ class TestFetchChainguardSbom:
         assert result["spdxVersion"] == "SPDX-2.3"
         assert len(result["packages"]) == 3
 
-    @patch("sbomify_action._generation.chainguard.shutil.which", return_value="/usr/local/bin/cosign")
-    @patch("sbomify_action._generation.chainguard._run_cosign")
+    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/cosign")
+    @patch("sbomify_action._generation.buildkit_provenance.run_cosign")
     def test_no_spdx_attestation_raises(self, mock_cosign, mock_which):
         # Return a non-SPDX attestation
         payload = {"predicateType": "https://slsa.dev/provenance/v1", "predicate": {}}
@@ -444,7 +444,7 @@ class TestFetchChainguardSbom:
         with pytest.raises(RuntimeError, match="No SPDX SBOM found"):
             fetch_chainguard_sbom(info)
 
-    @patch("sbomify_action._generation.chainguard.shutil.which", return_value=None)
+    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value=None)
     def test_cosign_not_available_raises(self, mock_which):
         info = ChainguardBaseImage(image_ref="cgr.dev/chainguard/python", digest="sha256:abc")
         with pytest.raises(RuntimeError, match="cosign not found"):
