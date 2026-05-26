@@ -456,8 +456,8 @@ class TestCdxgenFsGenerator(unittest.TestCase):
     @patch("sbomify_action._generation.generators.cdxgen.ensure_java_maven_installed")
     @patch("sbomify_action._generation.generators.cdxgen.run_command")
     @patch("pathlib.Path.exists")
-    def test_generate_uses_required_only_flag_for_all_ecosystems(self, mock_exists, mock_run, mock_java_install):
-        """Test that --required-only flag is passed for all ecosystems to exclude dev dependencies."""
+    def test_generate_uses_required_only_flag_for_dev_aware_ecosystems(self, mock_exists, mock_run, mock_java_install):
+        """Test that --required-only flag is passed for ecosystems with a dev/prod distinction."""
         mock_run.return_value = MagicMock(returncode=0)
         mock_exists.return_value = True
 
@@ -478,6 +478,24 @@ class TestCdxgenFsGenerator(unittest.TestCase):
         self.generator.generate(java_input)
         cmd = mock_run.call_args[0][0]
         self.assertIn("--required-only", cmd)
+
+    @patch("sbomify_action._generation.generators.cdxgen.ensure_go_installed")
+    @patch("sbomify_action._generation.generators.cdxgen.run_command")
+    @patch("pathlib.Path.exists")
+    def test_generate_omits_required_only_for_go(self, mock_exists, mock_run, mock_go_install):
+        """Test that --required-only is NOT passed for Go (issue #231).
+
+        cdxgen marks every `// indirect` line in go.mod as scope=optional, but under
+        Go 1.17+ module-graph pruning the indirect block is the build closure — those
+        modules ship in the binary. --required-only would strip the transitive closure.
+        """
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_exists.return_value = True
+
+        go_input = GenerationInput(lock_file="/path/to/go.mod", output_file="sbom.json")
+        self.generator.generate(go_input)
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("--required-only", cmd)
 
     @patch("sbomify_action._generation.generators.cdxgen.run_command")
     @patch("pathlib.Path.exists")

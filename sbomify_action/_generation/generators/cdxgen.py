@@ -172,8 +172,14 @@ class CdxgenFsGenerator:
 
         # Exclude dev dependencies and local workspace packages across all ecosystems
         # This filters out development-only dependencies, keeping only production dependencies
-        # For JavaScript, this also excludes local packages with path-based versions
-        cmd.append("--required-only")
+        # For JavaScript, this also excludes local packages with path-based versions.
+        #
+        # Skip for Go: cdxgen tags every `// indirect` line in go.mod as scope=optional,
+        # but under Go 1.17+ module-graph pruning the indirect block IS the build closure
+        # (those modules are compiled into the binary). --required-only would strip the
+        # entire transitive closure along with the h1: hashes from go.sum. See issue #231.
+        if ecosystem != "go":
+            cmd.append("--required-only")
 
         # Fail on error to ensure we catch issues early
         cmd.append("--fail-on-error")
