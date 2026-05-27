@@ -1203,8 +1203,10 @@ jobs:
       - name: Generate and Upload SBOM
         uses: sbomify/sbomify-action@master
         env:
-          TOKEN: ${{ secrets.SBOMIFY_STAGE_TOKEN }}
+          # Trusted publishing via GitHub OIDC — no TOKEN secret required.
+          # Binding configured in sbomify UI for this repo + component.
           API_BASE_URL: 'https://stage.sbomify.com'
+          OIDC_AUDIENCE: 'stage.sbomify.com'
           COMPONENT_ID: ${{ matrix.component_id }}
           COMPONENT_NAME: ${{ matrix.component_name }}
           COMPONENT_VERSION: ${{ steps.version.outputs.version }}
@@ -1290,7 +1292,8 @@ jobs:
       - name: Generate and Upload SBOM
         uses: sbomify/sbomify-action@master
         env:
-          TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
+          # Trusted publishing via GitHub OIDC — no TOKEN secret required.
+          # Binding configured in sbomify UI for this repo + component.
           COMPONENT_ID: ${{ matrix.component_id }}
           COMPONENT_NAME: ${{ matrix.component_name }}
           COMPONENT_VERSION: ${{ steps.version.outputs.version }}
@@ -1359,8 +1362,10 @@ jobs:
       - name: Generate and Upload SBOM
         uses: sbomify/sbomify-action@master
         env:
-          TOKEN: ${{ secrets.SBOMIFY_STAGE_TOKEN }}
+          # Trusted publishing via GitHub OIDC — no TOKEN secret required.
+          # Binding configured in sbomify UI for this repo + component.
           API_BASE_URL: 'https://stage.sbomify.com'
+          OIDC_AUDIENCE: 'stage.sbomify.com'
           COMPONENT_ID: ${{ matrix.component_id }}
           COMPONENT_NAME: ${{ matrix.component_name }}
           COMPONENT_VERSION: ${{ steps.version.outputs.version }}
@@ -1430,7 +1435,8 @@ jobs:
       - name: Generate and Upload SBOM
         uses: sbomify/sbomify-action@master
         env:
-          TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
+          # Trusted publishing via GitHub OIDC — no TOKEN secret required.
+          # Binding configured in sbomify UI for this repo + component.
           COMPONENT_ID: ${{ matrix.component_id }}
           COMPONENT_NAME: ${{ matrix.component_name }}
           COMPONENT_VERSION: ${{ steps.version.outputs.version }}

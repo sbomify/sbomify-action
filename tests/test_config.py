@@ -19,7 +19,8 @@ cli_main_module = import_module("sbomify_action.cli.main")
 class TestConfig(unittest.TestCase):
     """Test cases for the Config dataclass and related functionality."""
 
-    def test_config_validation_missing_token(self):
+    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=False)
+    def test_config_validation_missing_token(self, _mock_oidc):
         """Test that Config raises ConfigurationError when token is missing and UPLOAD=true."""
         config = Config(token="", component_id="test-component", sbom_file="/path/to/sbom.json", upload=True)
 
@@ -98,7 +99,8 @@ class TestConfig(unittest.TestCase):
         # Should not raise any exception - sbomify credentials not required
         config.validate()
 
-    def test_config_validation_multi_destination_requires_sbomify_credentials(self):
+    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=False)
+    def test_config_validation_multi_destination_requires_sbomify_credentials(self, _mock_oidc):
         """Test that sbomify credentials ARE required when sbomify is one of multiple destinations."""
         config = Config(
             token="",
@@ -115,7 +117,8 @@ class TestConfig(unittest.TestCase):
         self.assertIn("sbomify API token is not defined", str(cm.exception))
         self.assertIn("uploading to sbomify", str(cm.exception))
 
-    def test_config_validation_upload_requires_token(self):
+    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=False)
+    def test_config_validation_upload_requires_token(self, _mock_oidc):
         """Test that TOKEN is required when uploading to sbomify."""
         config = Config(
             token="",
@@ -143,7 +146,8 @@ class TestConfig(unittest.TestCase):
         # Should not raise - augmentation can use sbomify.json without API credentials
         config.validate()
 
-    def test_config_validation_product_release_requires_token(self):
+    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=False)
+    def test_config_validation_product_release_requires_token(self, _mock_oidc):
         """Test that TOKEN is required when PRODUCT_RELEASE is set even if UPLOAD=false."""
         config = Config(
             token="",
@@ -159,6 +163,76 @@ class TestConfig(unittest.TestCase):
 
         self.assertIn("sbomify API token is not defined", str(cm.exception))
         self.assertIn("PRODUCT_RELEASE is set", str(cm.exception))
+
+    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=True)
+    def test_config_validation_oidc_available_no_token_required(self, _mock_oidc):
+        """When GitHub OIDC is available, validate() should NOT raise for missing TOKEN."""
+        config = Config(
+            token="",
+            component_id="test-component",
+            sbom_file="/path/to/sbom.json",
+            upload=True,
+            upload_destinations=["sbomify"],
+        )
+        # Should not raise — pipeline will perform OIDC exchange at runtime
+        config.validate()
+
+    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=True)
+    def test_config_validation_oidc_available_still_requires_component_id(self, _mock_oidc):
+        """OIDC bypasses the TOKEN requirement but COMPONENT_ID is still required."""
+        config = Config(
+            token="",
+            component_id="",
+            sbom_file="/path/to/sbom.json",
+            upload=True,
+            upload_destinations=["sbomify"],
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("Component ID is not defined", str(cm.exception))
+
+    def test_will_use_sbomify_api_includes_augment(self):
+        """AUGMENT alone (no upload, no PR) marks the run as 'may use sbomify API'."""
+        config = Config(
+            token="",
+            component_id="comp-1",
+            sbom_file="/path/to/sbom.json",
+            upload=False,
+            augment=True,
+        )
+        # validate() doesn't require credentials here (augment can fall back to
+        # sbomify.json) — but will_use_sbomify_api is True so run_pipeline knows
+        # to attempt OIDC exchange if available.
+        self.assertFalse(config.requires_sbomify_api)
+        self.assertTrue(config.will_use_sbomify_api)
+
+    def test_will_use_sbomify_api_equals_requires_when_uploading(self):
+        config = Config(
+            token="t",
+            component_id="c",
+            sbom_file="/path/to/sbom.json",
+            upload=True,
+            upload_destinations=["sbomify"],
+        )
+        self.assertTrue(config.requires_sbomify_api)
+        self.assertTrue(config.will_use_sbomify_api)
+
+    def test_will_use_sbomify_api_false_when_no_sbomify_involvement(self):
+        config = Config(
+            token="",
+            component_id="",
+            sbom_file="/path/to/sbom.json",
+            upload=False,
+            augment=False,
+        )
+        self.assertFalse(config.requires_sbomify_api)
+        self.assertFalse(config.will_use_sbomify_api)
+
+    def test_config_token_excluded_from_repr(self):
+        """field(repr=False) keeps the token out of repr(config) so accidental
+        logging or pytest diffs don't leak the short-lived OIDC-minted JWT."""
+        config = Config(token="super-secret-jwt-value", component_id="c", sbom_file="x")
+        self.assertNotIn("super-secret-jwt-value", repr(config))
 
     def test_config_validation_upload_requires_component_id(self):
         """Test that COMPONENT_ID is required when uploading to sbomify."""
@@ -261,10 +335,15 @@ class TestConfig(unittest.TestCase):
         self.assertFalse(config.upload)
         self.assertTrue(config.augment)
 
+    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=False)
     @patch.dict(os.environ, {"TOKEN": "", "COMPONENT_ID": "test"})
     @patch("sys.exit")
-    def test_load_config_exits_on_invalid_config(self, mock_exit):
-        """Test that load_config exits when configuration is invalid."""
+    def test_load_config_exits_on_invalid_config(self, mock_exit, _mock_oidc):
+        """Test that load_config exits when configuration is invalid.
+
+        is_github_oidc_available is patched to False so the test is
+        deterministic when run under CI workflows that grant id-token: write.
+        """
         load_config()
         mock_exit.assert_called_once_with(1)
 

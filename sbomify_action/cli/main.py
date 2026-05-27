@@ -4,7 +4,7 @@ import os
 import shutil
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -39,6 +39,7 @@ from ..exceptions import (
     ConfigurationError,
     DockerImageNotFoundError,
     FileProcessingError,
+    OIDCError,
     SBOMGenerationError,
     SBOMValidationError,
     ToolNotAvailableError,
@@ -201,7 +202,10 @@ The tool can be configured via environment variables:
 class Config:
     """Configuration settings for the SBOM action."""
 
-    token: str
+    # repr=False so any incidental f"{config}" / pytest assertion diff /
+    # debug log doesn't dump the token. OIDC-minted tokens are short-lived
+    # but CI log lines persist much longer.
+    token: str = field(repr=False)
     component_id: str
     sbom_file: Optional[str] = None
     docker_image: Optional[str] = None
@@ -220,6 +224,11 @@ class Config:
     api_base_url: str = SBOMIFY_PRODUCTION_API
     sbom_format: SBOMFormat = "cyclonedx"
     spec_version: Optional[str] = None
+    oidc_audience: str | None = None
+    # Set to True at runtime when config.token was obtained via OIDC exchange;
+    # signals that the token is short-lived (default TTL 15 min) and should be
+    # re-minted before long-running post-upload work (e.g. processors).
+    token_is_oidc_minted: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
         """Set default values that depend on other fields."""
@@ -233,6 +242,34 @@ class Config:
             self.sbom_file is not None and self.sbom_file.lower() == NONE_SENTINEL
         )
 
+    @property
+    def uploads_to_sbomify(self) -> bool:
+        """True iff the configured upload destinations include sbomify."""
+        return self.upload and self.upload_destinations is not None and "sbomify" in self.upload_destinations
+
+    @property
+    def requires_sbomify_api(self) -> bool:
+        """True iff this run MUST authenticate to the sbomify API.
+
+        Used by validate() to decide whether credentials are mandatory,
+        and by run_pipeline() to decide whether to attempt OIDC exchange.
+        Augmentation does NOT mandate credentials (it can fall back to
+        sbomify.json + VCS providers) — see :py:attr:`will_use_sbomify_api`.
+        """
+        return self.uploads_to_sbomify or bool(self.product_releases)
+
+    @property
+    def will_use_sbomify_api(self) -> bool:
+        """True iff this run will call the sbomify API if credentials exist.
+
+        Superset of :py:attr:`requires_sbomify_api`: also covers augmentation,
+        which uses the API opportunistically when a token is present but
+        falls back to local providers otherwise. The OIDC exchange in
+        run_pipeline() uses this so users who enable AUGMENT with
+        ``id-token: write`` get backend metadata via trusted publishing.
+        """
+        return self.requires_sbomify_api or self.augment
+
     def validate(self) -> None:
         """
         Validate configuration settings.
@@ -243,24 +280,29 @@ class Config:
         # Check if sbomify API access is required:
         # - Uploading to sbomify destination
         # - Managing releases (uses sbomify API)
-        # Note: Augmentation does NOT require API - it can use sbomify.json and VCS metadata
-        uploads_to_sbomify = (
-            self.upload and self.upload_destinations is not None and "sbomify" in self.upload_destinations
-        )
-        requires_sbomify_api = uploads_to_sbomify or self.product_releases
-
-        if requires_sbomify_api:
+        # Augmentation is opportunistic — handled separately at runtime.
+        if self.requires_sbomify_api:
             if not self.token:
-                operations = []
-                if uploads_to_sbomify:
-                    operations.append("uploading to sbomify")
-                if self.product_releases:
-                    operations.append("PRODUCT_RELEASE is set")
-                reason = " or ".join(operations)
-                raise ConfigurationError(f"sbomify API token is not defined (required when {reason})")
+                # Allow missing token when GitHub OIDC trusted publishing is available —
+                # the pipeline will exchange the OIDC JWT for a short-lived token at runtime.
+                from ..oidc import is_github_oidc_available
+
+                if not is_github_oidc_available():
+                    operations = []
+                    if self.uploads_to_sbomify:
+                        operations.append("uploading to sbomify")
+                    if self.product_releases:
+                        operations.append("PRODUCT_RELEASE is set")
+                    reason = " or ".join(operations)
+                    raise ConfigurationError(
+                        f"sbomify API token is not defined (required when {reason}). "
+                        "Either set TOKEN, or in GitHub Actions enable trusted publishing by "
+                        "granting `permissions: id-token: write` in the workflow (and create "
+                        "an OIDC binding for the component in the sbomify UI)."
+                    )
             if not self.component_id:
                 operations = []
-                if uploads_to_sbomify:
+                if self.uploads_to_sbomify:
                     operations.append("uploading to sbomify")
                 if self.product_releases:
                     operations.append("PRODUCT_RELEASE is set")
@@ -474,6 +516,7 @@ def build_config(
     api_base_url: str = SBOMIFY_PRODUCTION_API,
     sbom_format: str = "cyclonedx",
     spec_version: Optional[str] = None,
+    oidc_audience: Optional[str] = None,
 ) -> Config:
     """
     Build and validate configuration from provided arguments.
@@ -552,6 +595,7 @@ def build_config(
         api_base_url=api_base_url,
         sbom_format=sbom_format_lower,
         spec_version=spec_version,
+        oidc_audience=oidc_audience,
     )
 
     try:
@@ -597,6 +641,7 @@ def load_config() -> Config:
         product_releases=os.getenv("PRODUCT_RELEASE"),
         api_base_url=os.getenv("API_BASE_URL", SBOMIFY_PRODUCTION_API),
         sbom_format=os.getenv("SBOM_FORMAT", "cyclonedx"),
+        oidc_audience=os.getenv("OIDC_AUDIENCE"),
     )
 
 
@@ -650,7 +695,16 @@ def initialize_sentry() -> None:
             # SBOMGenerationError and APIError should still be sent (tool/system bugs)
             # DockerImageNotFoundError is a user configuration error (image doesn't exist)
             if isinstance(
-                exc_value, (SBOMValidationError, ConfigurationError, DockerImageNotFoundError, ToolNotAvailableError)
+                exc_value,
+                (
+                    SBOMValidationError,
+                    ConfigurationError,
+                    DockerImageNotFoundError,
+                    ToolNotAvailableError,
+                    # OIDC errors are user/setup issues (missing binding, wrong audience,
+                    # rate limit) — not actionable Sentry events.
+                    OIDCError,
+                ),
             ):
                 return None
 
@@ -669,6 +723,9 @@ def initialize_sentry() -> None:
         profiles_sample_rate=1.0,
         before_send=before_send,  # type: ignore[arg-type]
         release=f"sbomify-action@{SBOMIFY_VERSION}",
+        # Don't capture frame locals — they can hold OIDC JWTs / Bearer tokens
+        # if an unexpected exception fires inside sbomify_action.oidc.
+        include_local_variables=False,
     )
 
     # Set the action version as a tag (always safe to send)
@@ -1079,6 +1136,44 @@ def run_pipeline(config: Config) -> None:
     else:
         logger.info(f"Using production API: {config.api_base_url}")
 
+    # OIDC trusted publishing (GitHub Actions): when TOKEN is missing but the
+    # workflow granted id-token: write and we know which component to scope to,
+    # exchange a GitHub OIDC JWT for a short-lived sbomify access token. The
+    # resulting token then transparently powers upload, augment, and processors.
+    #
+    # Triggered for any run that will call the sbomify API (uploads, product
+    # releases, OR augmentation). For augment-only with no token and no OIDC
+    # env, we skip silently — augmentation falls back to sbomify.json.
+    if config.will_use_sbomify_api and not config.token and config.component_id:
+        from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
+        from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
+
+        if is_github_oidc_available():
+            try:
+                config.token = obtain_sbomify_token_via_oidc(
+                    component_id=config.component_id,
+                    api_base_url=config.api_base_url,
+                    audience=config.oidc_audience,
+                )
+                config.token_is_oidc_minted = True
+            except OIDCBindingMissingError as exc:
+                logger.error(str(exc))
+                sys.exit(1)
+            except OIDCExchangeError as exc:
+                logger.error(f"OIDC trusted publishing failed: {exc}")
+                sys.exit(1)
+        elif config.requires_sbomify_api:
+            # validate() let this config through assuming OIDC would be
+            # available at run-time. Env state drifted (caller bypassed
+            # validate, subprocess scrubbed env, etc.) — fail loud instead
+            # of letting the pipeline hit the API with no Authorization.
+            logger.error(
+                "sbomify API token is required but neither TOKEN nor GitHub OIDC env "
+                "is available at pipeline runtime. Set TOKEN, or ensure the workflow "
+                "grants `permissions: id-token: write` for the runner."
+            )
+            sys.exit(1)
+
     # Step 1: SBOM Generation/Validation
     _log_step_header(1, "SBOM Generation/Input Processing")
 
@@ -1381,8 +1476,10 @@ def run_pipeline(config: Config) -> None:
         if not config.token or not config.component_id:
             gha_notice(
                 "sbomify API augmentation skipped (TOKEN or COMPONENT_ID not set). "
-                "To add metadata, create a sbomify.json file in your project root "
-                "or configure sbomify API credentials.",
+                "To add metadata, either create a sbomify.json file in your project "
+                "root, set TOKEN + COMPONENT_ID, or in GitHub Actions enable trusted "
+                "publishing with `permissions: id-token: write` plus an OIDC binding "
+                "in the sbomify UI.",
                 title="API Augmentation Skipped",
             )
 
@@ -1545,6 +1642,26 @@ def run_pipeline(config: Config) -> None:
         _log_step_header(6, "Post-upload Processing")
         try:
             from sbomify_action._processors import ProcessorInput, ProcessorOrchestrator
+
+            # Re-mint the OIDC token before kicking off processors: long pipelines
+            # (large Docker images, Yocto builds, slow enrichment) can exceed the
+            # 15-minute default TTL on the originally minted token.
+            if config.token_is_oidc_minted:
+                from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
+                from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
+
+                if is_github_oidc_available():
+                    try:
+                        config.token = obtain_sbomify_token_via_oidc(
+                            component_id=config.component_id,
+                            api_base_url=config.api_base_url,
+                            audience=config.oidc_audience,
+                        )
+                    except (OIDCBindingMissingError, OIDCExchangeError) as exc:
+                        logger.warning(
+                            f"Could not refresh OIDC-minted token before processors: {exc}. "
+                            "Continuing with the original token — long-running pipelines may see 401s."
+                        )
 
             orchestrator = ProcessorOrchestrator(
                 api_base_url=config.api_base_url,
@@ -2226,6 +2343,12 @@ def _parse_upload_destinations_callback(
     help="Override the spec version for SBOM generation (e.g., '1.6', '2.3', '3.0.1').",
 )
 @click.option(
+    "--oidc-audience",
+    envvar="OIDC_AUDIENCE",
+    default=None,
+    help="Audience claim for GitHub OIDC trusted publishing (default: sbomify.com; override for self-hosted).",
+)
+@click.option(
     "--telemetry/--no-telemetry",
     envvar="TELEMETRY",
     default=True,
@@ -2274,6 +2397,7 @@ def cli(
     api_base_url: str,
     sbom_format: str,
     spec_version: Optional[str],
+    oidc_audience: Optional[str],
     working_dir: str | None,
     telemetry: bool,
     verbose: bool,
@@ -2394,6 +2518,7 @@ def cli(
         api_base_url=api_base_url,
         sbom_format=sbom_format,
         spec_version=spec_version,
+        oidc_audience=oidc_audience,
     )
 
     # Run the pipeline
