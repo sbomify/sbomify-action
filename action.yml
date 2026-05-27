@@ -10,6 +10,9 @@ inputs:
   component-purl:
     description: 'Override the component PURL in the SBOM (e.g., pkg:npm/@scope/name@1.0.0)'
     required: false
+  oidc-audience:
+    description: 'OIDC audience for trusted publishing (default: sbomify.com; override for self-hosted)'
+    required: false
 runs:
   using: 'docker'
   # Bump/pin this to release
@@ -17,6 +20,7 @@ runs:
   env:
     WORKING_DIR: ${{ inputs['working-dir'] }}
     COMPONENT_PURL: ${{ inputs['component-purl'] }}
+    OIDC_AUDIENCE: ${{ inputs['oidc-audience'] }}
 branding:
   icon: 'upload-cloud'
   color: 'blue'

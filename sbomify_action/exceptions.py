@@ -87,6 +87,23 @@ class PlanLimitError(APIError):
     """Raised when an API operation fails due to plan limits (e.g., max components)."""
 
 
+class OIDCError(APIError):
+    """Base exception for OIDC trusted-publishing failures."""
+
+
+class OIDCBindingMissingError(OIDCError):
+    """Raised when the sbomify backend has no OIDC binding for the (component, repo) pair.
+
+    The user must create an OIDC binding for the component in the sbomify UI before
+    trusted publishing will work from this repository.
+    """
+
+
+class OIDCExchangeError(OIDCError):
+    """Raised when the OIDC -> sbomify token exchange fails for any other reason
+    (invalid OIDC token, rate limit, backend unavailable, etc.)."""
+
+
 class FileProcessingError(SbomifyError):
     """Raised when file operations fail."""
 

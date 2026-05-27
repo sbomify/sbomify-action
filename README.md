@@ -79,6 +79,30 @@ That's it! This generates a CycloneDX SBOM from your lockfile and enriches it wi
     ENRICH: true
 ```
 
+### With sbomify (Trusted Publishing — no token)
+
+Skip the long-lived `TOKEN` secret. When the workflow grants `id-token: write`, the action exchanges a GitHub OIDC token for a short-lived sbomify access token on the fly. **Set up an OIDC binding** for the component in the sbomify UI first (Component → Settings → Trusted Publishing), then:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write   # required for OIDC trusted publishing
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sbomify/sbomify-action@master
+        env:
+          COMPONENT_ID: your-component-id
+          LOCK_FILE: requirements.txt
+          AUGMENT: true
+          ENRICH: true
+```
+
+If `TOKEN` is set, it takes precedence — OIDC is only used as the fallback when no token is provided.
+
 ### Docker Image
 
 ```yaml
@@ -249,6 +273,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `UPLOAD`                   | No       | Upload SBOM (default: true)                                                      |
 | `UPLOAD_DESTINATIONS`      | No       | Comma-separated destinations: `sbomify`, `dependency-track` (default: `sbomify`) |
 | `API_BASE_URL`             | No       | Override sbomify API URL for self-hosted instances                               |
+| `OIDC_AUDIENCE`            | No       | Audience for OIDC trusted publishing (default: `sbomify.com`; override for self-hosted) |
 | `ADDITIONAL_PACKAGES_FILE` | No       | Custom path to additional packages file                                          |
 | `ADDITIONAL_PACKAGES`      | No       | Inline PURLs to inject (comma or newline separated)                              |
 | `DISABLE_VCS_AUGMENTATION` | No       | Set to `true` to disable auto-detection of VCS info from CI environment          |
@@ -257,7 +282,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `SYFT_CACHE_DIR`           | No       | Directory for Syft cache                                                         |
 
 † **One** of `LOCK_FILE`, `SBOM_FILE`, or `DOCKER_IMAGE` is required (pick one)
-‡ Required when uploading to sbomify or using sbomify features (`AUGMENT`, `PRODUCT_RELEASE`)
+‡ Required when uploading to sbomify or using sbomify features (`AUGMENT`, `PRODUCT_RELEASE`). `TOKEN` may be omitted in GitHub Actions when the workflow grants `permissions: id-token: write` — see [Trusted Publishing](#with-sbomify-trusted-publishing--no-token).
 
 <details>
 <summary><strong>Dependency Track configuration</strong></summary>

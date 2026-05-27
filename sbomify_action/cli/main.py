@@ -220,6 +220,7 @@ class Config:
     api_base_url: str = SBOMIFY_PRODUCTION_API
     sbom_format: SBOMFormat = "cyclonedx"
     spec_version: Optional[str] = None
+    oidc_audience: Optional[str] = None
 
     def __post_init__(self) -> None:
         """Set default values that depend on other fields."""
@@ -251,13 +252,22 @@ class Config:
 
         if requires_sbomify_api:
             if not self.token:
-                operations = []
-                if uploads_to_sbomify:
-                    operations.append("uploading to sbomify")
-                if self.product_releases:
-                    operations.append("PRODUCT_RELEASE is set")
-                reason = " or ".join(operations)
-                raise ConfigurationError(f"sbomify API token is not defined (required when {reason})")
+                # Allow missing token when GitHub OIDC trusted publishing is available —
+                # the pipeline will exchange the OIDC JWT for a short-lived token at runtime.
+                from ..oidc import is_github_oidc_available
+
+                if not is_github_oidc_available():
+                    operations = []
+                    if uploads_to_sbomify:
+                        operations.append("uploading to sbomify")
+                    if self.product_releases:
+                        operations.append("PRODUCT_RELEASE is set")
+                    reason = " or ".join(operations)
+                    raise ConfigurationError(
+                        f"sbomify API token is not defined (required when {reason}). "
+                        "Either set TOKEN, or in GitHub Actions enable trusted publishing by "
+                        "granting `permissions: id-token: write` in the workflow."
+                    )
             if not self.component_id:
                 operations = []
                 if uploads_to_sbomify:
@@ -474,6 +484,7 @@ def build_config(
     api_base_url: str = SBOMIFY_PRODUCTION_API,
     sbom_format: str = "cyclonedx",
     spec_version: Optional[str] = None,
+    oidc_audience: Optional[str] = None,
 ) -> Config:
     """
     Build and validate configuration from provided arguments.
@@ -552,6 +563,7 @@ def build_config(
         api_base_url=api_base_url,
         sbom_format=sbom_format_lower,
         spec_version=spec_version,
+        oidc_audience=oidc_audience,
     )
 
     try:
@@ -597,6 +609,7 @@ def load_config() -> Config:
         product_releases=os.getenv("PRODUCT_RELEASE"),
         api_base_url=os.getenv("API_BASE_URL", SBOMIFY_PRODUCTION_API),
         sbom_format=os.getenv("SBOM_FORMAT", "cyclonedx"),
+        oidc_audience=os.getenv("OIDC_AUDIENCE"),
     )
 
 
@@ -1078,6 +1091,28 @@ def run_pipeline(config: Config) -> None:
         logger.info(f"Using custom API base URL: {config.api_base_url}")
     else:
         logger.info(f"Using production API: {config.api_base_url}")
+
+    # OIDC trusted publishing (GitHub Actions): when TOKEN is missing but the
+    # workflow granted id-token: write and we know which component to scope to,
+    # exchange a GitHub OIDC JWT for a short-lived sbomify access token.
+    # The resulting token then transparently powers upload, augment, and processors.
+    if not config.token and config.component_id:
+        from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
+        from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
+
+        if is_github_oidc_available():
+            try:
+                config.token = obtain_sbomify_token_via_oidc(
+                    component_id=config.component_id,
+                    api_base_url=config.api_base_url,
+                    audience=config.oidc_audience,
+                )
+            except OIDCBindingMissingError as exc:
+                logger.error(str(exc))
+                sys.exit(1)
+            except OIDCExchangeError as exc:
+                logger.error(f"OIDC trusted publishing failed: {exc}")
+                sys.exit(1)
 
     # Step 1: SBOM Generation/Validation
     _log_step_header(1, "SBOM Generation/Input Processing")
@@ -2226,6 +2261,12 @@ def _parse_upload_destinations_callback(
     help="Override the spec version for SBOM generation (e.g., '1.6', '2.3', '3.0.1').",
 )
 @click.option(
+    "--oidc-audience",
+    envvar="OIDC_AUDIENCE",
+    default=None,
+    help="Audience claim for GitHub OIDC trusted publishing (default: sbomify.com; override for self-hosted).",
+)
+@click.option(
     "--telemetry/--no-telemetry",
     envvar="TELEMETRY",
     default=True,
@@ -2274,6 +2315,7 @@ def cli(
     api_base_url: str,
     sbom_format: str,
     spec_version: Optional[str],
+    oidc_audience: Optional[str],
     working_dir: str | None,
     telemetry: bool,
     verbose: bool,
@@ -2394,6 +2436,7 @@ def cli(
         api_base_url=api_base_url,
         sbom_format=sbom_format,
         spec_version=spec_version,
+        oidc_audience=oidc_audience,
     )
 
     # Run the pipeline
