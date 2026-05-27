@@ -121,12 +121,25 @@ class TestCreateComponent:
         assert call_kwargs.kwargs["json"] == {"name": "busybox", "component_type": "sbom"}
 
     @patch("sbomify_action._yocto.api.requests.post")
-    def test_generic_400_raises(self, mock_post):
-        # 400 without DUPLICATE_NAME error_code still raises
+    def test_400_with_invalid_data_raises(self, mock_post):
+        # 400 with error_code != DUPLICATE_NAME still raises (no recovery)
         mock_resp = MagicMock()
         mock_resp.ok = False
         mock_resp.status_code = 400
         mock_resp.json.return_value = {"detail": "Validation error", "error_code": "INVALID_DATA"}
+        mock_post.return_value = mock_resp
+
+        with pytest.raises(APIError, match="Failed to create component"):
+            create_component(API_BASE, TOKEN, "busybox")
+
+    @patch("sbomify_action._yocto.api.requests.post")
+    def test_400_without_error_code_raises(self, mock_post):
+        # Regression pin: a 400 whose body OMITS error_code (older API
+        # version, proxy stripping fields, etc.) must NOT trigger recovery.
+        mock_resp = MagicMock()
+        mock_resp.ok = False
+        mock_resp.status_code = 400
+        mock_resp.json.return_value = {"detail": "Duplicate name"}
         mock_post.return_value = mock_resp
 
         with pytest.raises(APIError, match="Failed to create component"):
@@ -158,6 +171,33 @@ class TestCreateComponent:
         comp_id, was_created = create_component(API_BASE, TOKEN, "busybox")
         assert comp_id == "existing-id"
         assert was_created is False  # signals recovered, not newly created
+
+    @patch("sbomify_action._yocto.api.requests.get")
+    @patch("sbomify_action._yocto.api.requests.post")
+    def test_409_duplicate_name_recovers_existing_id(self, mock_post, mock_get):
+        # Future-proofing: API may migrate to REST-canonical 409 Conflict
+        # (matching the DUPLICATE_ARTIFACT shape) while preserving error_code.
+        post_resp = MagicMock()
+        post_resp.ok = False
+        post_resp.status_code = 409
+        post_resp.json.return_value = {
+            "detail": "A component with this name already exists in this team",
+            "error_code": "DUPLICATE_NAME",
+        }
+        mock_post.return_value = post_resp
+
+        get_resp = MagicMock()
+        get_resp.ok = True
+        get_resp.status_code = 200
+        get_resp.json.return_value = {
+            "items": [{"id": "existing-id", "name": "busybox"}],
+            "next": None,
+        }
+        mock_get.return_value = get_resp
+
+        comp_id, was_created = create_component(API_BASE, TOKEN, "busybox")
+        assert comp_id == "existing-id"
+        assert was_created is False
 
     @patch("sbomify_action._yocto.api.requests.get")
     @patch("sbomify_action._yocto.api.requests.post")
@@ -258,13 +298,17 @@ class TestGetComponentIdByName:
         assert get_component_id_by_name(API_BASE, TOKEN, "busybox") is None
 
     @patch("sbomify_action._yocto.api.requests.get")
-    def test_404_returns_none(self, mock_get):
+    def test_404_raises(self, mock_get):
+        # 404 on a collection endpoint signals misconfiguration (wrong base URL,
+        # endpoint removed), not "no such component" — surface the real cause
+        # rather than mask it as "could not be found via lookup".
         mock_resp = MagicMock()
         mock_resp.ok = False
         mock_resp.status_code = 404
         mock_get.return_value = mock_resp
 
-        assert get_component_id_by_name(API_BASE, TOKEN, "busybox") is None
+        with pytest.raises(APIError, match="Failed to look up component"):
+            get_component_id_by_name(API_BASE, TOKEN, "busybox")
 
     @patch("sbomify_action._yocto.api.requests.get")
     def test_500_raises(self, mock_get):
@@ -274,6 +318,31 @@ class TestGetComponentIdByName:
         mock_get.return_value = mock_resp
 
         with pytest.raises(APIError, match="Failed to look up component"):
+            get_component_id_by_name(API_BASE, TOKEN, "busybox")
+
+    @patch("sbomify_action._yocto.api.requests.get")
+    def test_invalid_json_raises(self, mock_get):
+        # Matches list_components behavior — don't silently swallow malformed
+        # JSON as "not found", because that produces a misleading downstream
+        # error in create_component's recovery path.
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_resp.json.side_effect = ValueError("Expecting value")
+        mock_get.return_value = mock_resp
+
+        with pytest.raises(APIError, match="invalid JSON"):
+            get_component_id_by_name(API_BASE, TOKEN, "busybox")
+
+    @patch("sbomify_action._yocto.api.requests.get")
+    def test_non_dict_response_raises(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = ["not", "a", "dict"]
+        mock_get.return_value = mock_resp
+
+        with pytest.raises(APIError, match="unexpected response type"):
             get_component_id_by_name(API_BASE, TOKEN, "busybox")
 
 

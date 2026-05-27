@@ -1,16 +1,72 @@
 """Component CRUD API calls for Yocto pipeline."""
 
+from typing import Iterator
+
 import requests
 
 from sbomify_action.exceptions import APIError, PlanLimitError
 from sbomify_action.http_client import get_default_headers
 from sbomify_action.logging_config import logger
 
+_PAGE_SIZE = 100
+_MAX_PAGES = 500  # Safety limit against runaway pagination
+
+
+def _iter_components(api_base_url: str, token: str, error_context: str) -> Iterator[dict]:
+    """Yield every component item from /api/v1/components, paginating as needed.
+
+    Raises APIError for any HTTP/transport/JSON-shape failure so callers see
+    the real cause instead of a misleading downstream error. Caller can
+    short-circuit by breaking out of the iteration.
+
+    Args:
+        api_base_url: Base URL for the sbomify API
+        token: API authentication token
+        error_context: Phrase used in error messages (e.g. "list components",
+            "look up component 'foo'")
+
+    Yields:
+        Each item dict from the paginated response.
+
+    Raises:
+        APIError: On network/timeout/HTTP error, or malformed/truncated response.
+    """
+    url = api_base_url + "/api/v1/components"
+    headers = get_default_headers(token)
+    page = 1
+
+    while page <= _MAX_PAGES:
+        try:
+            response = requests.get(url, headers=headers, params={"page": page, "page_size": _PAGE_SIZE}, timeout=60)
+        except requests.exceptions.ConnectionError:
+            raise APIError("Failed to connect to sbomify API")
+        except requests.exceptions.Timeout:
+            raise APIError("API request timed out")
+
+        if not response.ok:
+            raise APIError(f"Failed to {error_context}. [{response.status_code}]")
+
+        try:
+            data = response.json()
+        except (ValueError, requests.exceptions.JSONDecodeError):
+            raise APIError(f"Failed to {error_context}: invalid JSON response from API")
+
+        if not isinstance(data, dict):
+            raise APIError(f"Failed to {error_context}: unexpected response type ({type(data).__name__})")
+
+        yield from data.get("items", [])
+
+        if not data.get("next"):
+            return
+        page += 1
+
+    raise APIError(
+        f"Failed to {error_context}: pagination safety limit reached ({_MAX_PAGES} pages × {_PAGE_SIZE} items)"
+    )
+
 
 def list_components(api_base_url: str, token: str) -> dict[str, str]:
     """Fetch all components and return a name-to-id mapping.
-
-    Paginates through all results to build a complete cache.
 
     Args:
         api_base_url: Base URL for the sbomify API
@@ -22,48 +78,12 @@ def list_components(api_base_url: str, token: str) -> dict[str, str]:
     Raises:
         APIError: If API call fails
     """
-    url = api_base_url + "/api/v1/components"
-    headers = get_default_headers(token)
     components: dict[str, str] = {}
-    page = 1
-    max_pages = 500  # Safety limit against infinite pagination
-
-    while page <= max_pages:
-        try:
-            response = requests.get(url, headers=headers, params={"page": page, "page_size": 100}, timeout=60)
-        except requests.exceptions.ConnectionError:
-            raise APIError("Failed to connect to sbomify API")
-        except requests.exceptions.Timeout:
-            raise APIError("API request timed out")
-
-        if not response.ok:
-            raise APIError(f"Failed to list components. [{response.status_code}]")
-
-        try:
-            data = response.json()
-        except (ValueError, requests.exceptions.JSONDecodeError):
-            raise APIError("Failed to list components: invalid JSON response from API")
-
-        if not isinstance(data, dict):
-            raise APIError(f"Failed to list components: unexpected response type ({type(data).__name__})")
-
-        for item in data.get("items", []):
-            name = item.get("name")
-            comp_id = item.get("id")
-            if name and comp_id:
-                components[name] = str(comp_id)
-
-        # Paginate based on 'next' link, not empty items
-        if not data.get("next"):
-            break
-        page += 1
-
-    if page > max_pages and data.get("next"):
-        logger.warning(
-            f"Pagination safety limit reached ({max_pages} pages). "
-            f"Component cache may be incomplete ({len(components)} components fetched)."
-        )
-
+    for item in _iter_components(api_base_url, token, "list components"):
+        name = item.get("name")
+        comp_id = item.get("id")
+        if name and comp_id:
+            components[name] = str(comp_id)
     logger.info(f"Cached {len(components)} existing components")
     return components
 
@@ -83,46 +103,17 @@ def get_component_id_by_name(api_base_url: str, token: str, name: str) -> str | 
         name: Component name to look up
 
     Returns:
-        Component ID if found, None otherwise
+        Component ID if found, None if walked all pages without a match.
 
     Raises:
-        APIError: If API call fails (network/timeout/non-404 HTTP error)
+        APIError: On network/HTTP/JSON failure (callers see the real cause
+            rather than a misleading "could not be found" error).
     """
-    url = api_base_url + "/api/v1/components"
-    headers = get_default_headers(token)
-    page = 1
-    max_pages = 500  # Safety limit against runaway pagination
-
-    while page <= max_pages:
-        try:
-            response = requests.get(url, headers=headers, params={"page": page, "page_size": 100}, timeout=60)
-        except requests.exceptions.ConnectionError:
-            raise APIError("Failed to connect to sbomify API")
-        except requests.exceptions.Timeout:
-            raise APIError("API request timed out")
-
-        if response.status_code == 404:
-            return None
-        if not response.ok:
-            raise APIError(f"Failed to look up component '{name}'. [{response.status_code}]")
-
-        try:
-            data = response.json()
-        except (ValueError, requests.exceptions.JSONDecodeError):
-            return None
-        if not isinstance(data, dict):
-            return None
-
-        for item in data.get("items", []):
-            if item.get("name") == name:
-                comp_id = item.get("id")
-                if comp_id is not None:
-                    return str(comp_id)
-
-        if not data.get("next"):
-            return None
-        page += 1
-
+    for item in _iter_components(api_base_url, token, f"look up component '{name}'"):
+        if item.get("name") == name:
+            comp_id = item.get("id")
+            if comp_id is not None:
+                return str(comp_id)
     return None
 
 
@@ -160,26 +151,29 @@ def create_component(api_base_url: str, token: str, name: str) -> tuple[str, boo
 
     if not response.ok:
         err_msg = f"Failed to create component '{name}'. [{response.status_code}]"
-        detail = ""
-        error_code = ""
+        body: dict = {}
         try:
-            body = response.json()
-            if isinstance(body, dict):
-                detail = body.get("detail", "") or ""
-                error_code = body.get("error_code", "") or ""
-            if detail:
-                err_msg += f" - {detail}"
+            parsed = response.json()
+            if isinstance(parsed, dict):
+                body = parsed
         except ValueError:
             pass
+        detail = body.get("detail") or ""
+        error_code = body.get("error_code") or ""
+        if detail:
+            err_msg += f" - {detail}"
 
-        if response.status_code == 400 and error_code == "DUPLICATE_NAME":
+        # Recover from DUPLICATE_NAME (stale cache or concurrent create).
+        # Accept both 400 and 409: 409 is REST-canonical for conflicts and
+        # matches the DUPLICATE_ARTIFACT shape in _upload/destinations/sbomify.py.
+        if response.status_code in (400, 409) and error_code == "DUPLICATE_NAME":
             logger.info(f"Component '{name}' already exists, retrieving existing component ID")
             existing_id = get_component_id_by_name(api_base_url, token, name)
-            if existing_id:
+            if existing_id is not None:
                 return existing_id, False
             raise APIError(f"Component '{name}' reported as duplicate by API but could not be found via lookup")
 
-        if response.status_code == 403 and "maximum" in detail.lower():
+        if response.status_code == 403 and isinstance(detail, str) and "maximum" in detail.lower():
             raise PlanLimitError(err_msg)
 
         raise APIError(err_msg)
