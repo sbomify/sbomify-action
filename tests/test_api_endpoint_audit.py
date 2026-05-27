@@ -105,18 +105,15 @@ def test_get_release_details_endpoint(mock_session_request: MagicMock) -> None:
     assert urls == ["https://app.sbomify.com/api/v1/releases"]
 
 
-def test_sbomify_api_provider_endpoint() -> None:
-    """Augmentation still uses module-level requests.get pending commit #5;
-    once it migrates, this test will move to the client-session pattern."""
-    with patch("sbomify_action._augmentation.providers.sbomify_api.requests.get") as mock_get:
-        mock_get.return_value = _ok_response({"supplier": {}, "authors": [], "licenses": []})
+def test_sbomify_api_provider_endpoint(mock_session_request: MagicMock) -> None:
+    """Augmentation now routes through SbomifyApiClient; verify the URL it asks for."""
+    mock_session_request.return_value = _ok_response({"supplier": {}, "authors": [], "licenses": []})
 
-        provider = SbomifyApiProvider()
-        provider.fetch(api_base_url=API_BASE, token=TOKEN, component_id=COMPONENT_ID)
+    provider = SbomifyApiProvider()
+    provider.fetch(api_base_url=API_BASE, token=TOKEN, component_id=COMPONENT_ID)
 
-        mock_get.assert_called_once()
-        actual_url = mock_get.call_args[0][0]
-        assert actual_url == "https://app.sbomify.com/api/v1/sboms/component/test-component/meta"
+    urls = _captured_urls(mock_session_request)
+    assert urls == ["https://app.sbomify.com/api/v1/sboms/component/test-component/meta"]
 
 
 def test_sbom_upload_url_construction() -> None:

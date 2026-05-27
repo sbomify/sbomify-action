@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -413,16 +413,13 @@ class TestSbomifyApiProvider:
         # Missing token
         assert provider.fetch(component_id="test-id", api_base_url="https://api.test.com") is None
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_success(self, mock_get):
         """Test successful API fetch."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "supplier": {"name": "API Supplier"},
             "lifecycle_phase": "post-build",
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -436,14 +433,12 @@ class TestSbomifyApiProvider:
         assert result.lifecycle_phase == "post-build"
         assert result.source == "sbomify-api"
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_api_error(self, mock_get):
         """Test returns None on API error."""
-        mock_response = Mock()
-        mock_response.ok = False
-        mock_response.status_code = 500
-        mock_response.headers = {}
-        mock_get.return_value = mock_response
+        from sbomify_action.exceptions import APIError
+
+        mock_get.side_effect = APIError("Failed to retrieve component metadata from sbomify. [500]")
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -554,12 +549,10 @@ class TestSbomifyApiProvider:
 
         assert result == "mailto:security@example.com"
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_extracts_security_contact_from_contact_profile(self, mock_get):
         """Test that fetch() extracts security_contact from contact_profile."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "supplier": {"name": "Test Supplier"},
             "contact_profile": {
                 "contacts": [
@@ -567,7 +560,6 @@ class TestSbomifyApiProvider:
                 ]
             },
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -579,12 +571,10 @@ class TestSbomifyApiProvider:
         assert result is not None
         assert result.security_contact == "mailto:security@test.com"
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_preserves_explicit_security_contact(self, mock_get):
         """Test that explicit security_contact takes precedence over contact_profile."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "supplier": {"name": "Test Supplier"},
             "security_contact": "https://example.com/security.txt",
             "contact_profile": {
@@ -593,7 +583,6 @@ class TestSbomifyApiProvider:
                 ]
             },
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -735,12 +724,10 @@ class TestSbomifyApiProvider:
 
         assert result is None
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_extracts_supplier_from_contact_profile(self, mock_get):
         """Test that fetch() extracts supplier from contact_profile when not directly provided."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "contact_profile": {
                 "entities": [
                     {
@@ -754,7 +741,6 @@ class TestSbomifyApiProvider:
                 "contacts": [],
             }
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -768,12 +754,10 @@ class TestSbomifyApiProvider:
         assert result.supplier["name"] == "Contact Profile Supplier"
         assert result.supplier["url"] == ["https://supplier.com"]
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_preserves_explicit_supplier(self, mock_get):
         """Test that explicit supplier takes precedence over contact_profile."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "supplier": {"name": "Direct Supplier"},
             "contact_profile": {
                 "entities": [{"name": "Contact Profile Supplier", "is_supplier": True}],
@@ -781,7 +765,6 @@ class TestSbomifyApiProvider:
                 "contacts": [],
             },
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -794,12 +777,10 @@ class TestSbomifyApiProvider:
         # Explicit supplier should be preserved
         assert result.supplier["name"] == "Direct Supplier"
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_extracts_manufacturer_from_contact_profile(self, mock_get):
         """Test that fetch() extracts manufacturer from contact_profile when not directly provided."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "contact_profile": {
                 "entities": [
                     {
@@ -812,7 +793,6 @@ class TestSbomifyApiProvider:
                 "contacts": [],
             }
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -825,19 +805,16 @@ class TestSbomifyApiProvider:
         assert result.manufacturer is not None
         assert result.manufacturer["name"] == "Contact Profile Manufacturer"
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_extracts_authors_from_contact_profile(self, mock_get):
         """Test that fetch() extracts authors from contact_profile when not directly provided."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "contact_profile": {
                 "entities": [],
                 "authors": [{"name": "Jane Developer", "email": "jane@dev.com"}],
                 "contacts": [],
             }
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -882,17 +859,14 @@ class TestProviderRegistry:
         assert providers[0].priority == 10
         assert providers[1].priority == 50
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_metadata_merges_results(self, mock_get):
         """Test that metadata from multiple providers is merged."""
         # Setup API mock
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "supplier": {"name": "API Supplier"},
             "authors": [{"name": "API Author"}],
         }
-        mock_get.return_value = mock_response
 
         # Create config file with lifecycle_phase
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1421,17 +1395,14 @@ class TestCliDockerImageEnvMirror:
 class TestJsonConfigProviderIntegration:
     """Integration tests for JSON config provider with augmentation."""
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_json_config_lifecycle_takes_precedence(self, mock_get):
         """Test that lifecycle_phase from JSON config takes precedence over API."""
         # Setup API mock with different lifecycle
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "lifecycle_phase": "operations",  # API says operations
             "supplier": {"name": "API Supplier"},
         }
-        mock_get.return_value = mock_response
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # JSON config says build
