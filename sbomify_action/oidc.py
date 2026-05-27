@@ -21,7 +21,9 @@ publishing will work — otherwise the exchange returns 403.
 """
 
 import os
+import re
 import time
+from urllib.parse import urlparse
 
 import requests
 
@@ -30,21 +32,53 @@ from .http_client import get_default_headers
 from .logging_config import logger
 
 DEFAULT_OIDC_AUDIENCE = "sbomify.com"
+SBOMIFY_PRODUCTION_API = "https://app.sbomify.com"
 OIDC_REQUEST_TIMEOUT = 30
 EXCHANGE_TIMEOUT = 30
 EXCHANGE_RETRY_DELAY_SECONDS = 2
+
+# Redact Bearer tokens and JWT-shaped substrings from upstream error bodies
+# before we embed them in exception messages. Upstreams occasionally echo
+# request payloads or include credentials in debug responses; CI log lines
+# outlive the 15-minute token TTL.
+_BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-+/=]+")
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b")
+
+
+def _scrub_secrets(text: str) -> str:
+    """Replace anything that looks like a Bearer token or JWT with [REDACTED]."""
+    text = _BEARER_RE.sub("Bearer [REDACTED]", text)
+    text = _JWT_RE.sub("[REDACTED-JWT]", text)
+    return text
 
 
 def is_github_oidc_available() -> bool:
     """True iff the runner exposes a GitHub Actions OIDC token request endpoint.
 
-    Requires `GITHUB_ACTIONS=true` plus both `ACTIONS_ID_TOKEN_REQUEST_URL`
+    Requires `GITHUB_ACTIONS=true` (any truthy form: 'true'/'1'/'yes'/'on',
+    case- and whitespace-insensitive) plus both `ACTIONS_ID_TOKEN_REQUEST_URL`
     and `ACTIONS_ID_TOKEN_REQUEST_TOKEN`. The latter two are only present
     when the workflow declares `permissions: id-token: write`.
     """
-    if os.environ.get("GITHUB_ACTIONS", "").lower() not in ("true", "1"):
+    if os.environ.get("GITHUB_ACTIONS", "").strip().lower() not in ("true", "1", "yes", "on"):
         return False
     return bool(os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL") and os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN"))
+
+
+def default_audience_for(api_base_url: str | None) -> str:
+    """Pick a sensible OIDC audience default for the given sbomify deployment.
+
+    - Production (https://app.sbomify.com) → 'sbomify.com' (legacy convention)
+    - Any other deployment → the hostname of api_base_url (matches what
+      operators conventionally set OIDC_GITHUB_AUDIENCE to on stage/self-hosted)
+    - Missing/unparseable → 'sbomify.com' (final fallback)
+    """
+    if not api_base_url:
+        return DEFAULT_OIDC_AUDIENCE
+    if api_base_url.rstrip("/") == SBOMIFY_PRODUCTION_API:
+        return DEFAULT_OIDC_AUDIENCE
+    hostname = urlparse(api_base_url).hostname
+    return hostname or DEFAULT_OIDC_AUDIENCE
 
 
 def request_github_oidc_token(audience: str) -> str:
@@ -68,11 +102,13 @@ def request_github_oidc_token(audience: str) -> str:
             "Ensure the workflow grants `permissions: id-token: write`."
         )
 
+    headers = get_default_headers(token=bearer)
+    headers["Accept"] = "application/json"
     try:
         response = requests.get(
             url,
             params={"audience": audience},
-            headers={"Authorization": f"Bearer {bearer}", "Accept": "application/json"},
+            headers=headers,
             timeout=OIDC_REQUEST_TIMEOUT,
         )
     except requests.RequestException as exc:
@@ -80,7 +116,7 @@ def request_github_oidc_token(audience: str) -> str:
 
     if not response.ok:
         raise OIDCExchangeError(
-            f"GitHub OIDC token endpoint returned HTTP {response.status_code}: {response.text[:200]}"
+            f"GitHub OIDC token endpoint returned HTTP {response.status_code}: {_scrub_secrets(response.text[:200])}"
         )
 
     try:
@@ -119,10 +155,10 @@ def exchange_for_sbomify_token(
     """
     url = f"{api_base_url.rstrip('/')}/api/v1/auth/oidc/github/exchange"
     headers = get_default_headers(token=oidc_jwt, content_type="application/json")
-    body = {"component_id": component_id}
+    request_body = {"component_id": component_id}
 
     try:
-        response = requests.post(url, headers=headers, json=body, timeout=EXCHANGE_TIMEOUT)
+        response = requests.post(url, headers=headers, json=request_body, timeout=EXCHANGE_TIMEOUT)
     except requests.RequestException as exc:
         raise OIDCExchangeError(f"Failed to reach sbomify OIDC exchange endpoint: {exc}") from exc
 
@@ -132,7 +168,7 @@ def exchange_for_sbomify_token(
         logger.warning("sbomify OIDC exchange returned 503; retrying once")
         time.sleep(EXCHANGE_RETRY_DELAY_SECONDS)
         try:
-            response = requests.post(url, headers=headers, json=body, timeout=EXCHANGE_TIMEOUT)
+            response = requests.post(url, headers=headers, json=request_body, timeout=EXCHANGE_TIMEOUT)
         except requests.RequestException as exc:
             raise OIDCExchangeError(f"Failed to reach sbomify OIDC exchange endpoint on retry: {exc}") from exc
 
@@ -142,19 +178,26 @@ def exchange_for_sbomify_token(
         except ValueError as exc:
             raise OIDCExchangeError("sbomify OIDC exchange returned non-JSON response") from exc
         access_token = payload.get("access_token")
-        expires_in = int(payload.get("expires_in", 0) or 0)
-        if not access_token:
+        if not isinstance(access_token, str) or not access_token:
             raise OIDCExchangeError("sbomify OIDC exchange response did not contain access_token")
+        # Be tolerant of non-int expires_in (string, float, missing) — the
+        # access_token itself is what matters; TTL is only used for logging.
+        try:
+            expires_in = int(payload.get("expires_in") or 0)
+        except (TypeError, ValueError):
+            expires_in = 0
         return access_token, expires_in
 
-    # Best-effort detail extraction from the error body
+    # Best-effort detail extraction from the error body. Scrub secrets in
+    # case the backend ever echoes the JWT or another credential.
     detail = ""
     try:
-        body = response.json()
-        if isinstance(body, dict):
-            detail = body.get("detail") or body.get("error") or ""
+        error_body = response.json()
+        if isinstance(error_body, dict):
+            detail = error_body.get("detail") or error_body.get("error") or ""
     except ValueError:
         detail = response.text[:200]
+    detail = _scrub_secrets(str(detail)) if detail else ""
 
     if response.status_code == 403:
         raise OIDCBindingMissingError(
@@ -191,11 +234,12 @@ def obtain_sbomify_token_via_oidc(
 ) -> str:
     """Convenience: request a GitHub OIDC JWT and exchange it for a sbomify token.
 
-    Logs progress (without leaking the token). The audience defaults to
-    `sbomify.com`, which matches the production backend's
-    `OIDC_GITHUB_AUDIENCE`. Override for self-hosted instances.
+    Logs progress (without leaking the token). When ``audience`` is unset,
+    the default is derived from ``api_base_url`` so stage/self-hosted
+    deployments work without the user having to set OIDC_AUDIENCE. The
+    production deployment keeps the legacy `sbomify.com` value.
     """
-    requested_audience = audience or DEFAULT_OIDC_AUDIENCE
+    requested_audience = audience or default_audience_for(api_base_url)
     logger.info(f"Authenticating to sbomify via GitHub OIDC (component={component_id}, audience={requested_audience})")
     oidc_jwt = request_github_oidc_token(requested_audience)
     access_token, expires_in = exchange_for_sbomify_token(oidc_jwt, component_id, api_base_url)

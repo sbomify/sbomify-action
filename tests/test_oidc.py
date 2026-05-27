@@ -8,6 +8,8 @@ import requests
 from sbomify_action.exceptions import OIDCBindingMissingError, OIDCExchangeError
 from sbomify_action.oidc import (
     DEFAULT_OIDC_AUDIENCE,
+    _scrub_secrets,
+    default_audience_for,
     exchange_for_sbomify_token,
     is_github_oidc_available,
     obtain_sbomify_token_via_oidc,
@@ -34,6 +36,16 @@ class TestIsGithubOidcAvailable(unittest.TestCase):
     def test_github_actions_unset(self):
         with patch.dict("os.environ", _gha_env(GITHUB_ACTIONS=""), clear=True):
             self.assertFalse(is_github_oidc_available())
+
+    def test_github_actions_with_whitespace(self):
+        """GITHUB_ACTIONS=' true ' (leading/trailing whitespace) is still truthy."""
+        with patch.dict("os.environ", _gha_env(GITHUB_ACTIONS=" true "), clear=True):
+            self.assertTrue(is_github_oidc_available())
+
+    def test_github_actions_yes(self):
+        """GITHUB_ACTIONS='yes' should be accepted (some self-hosted runners use this)."""
+        with patch.dict("os.environ", _gha_env(GITHUB_ACTIONS="yes"), clear=True):
+            self.assertTrue(is_github_oidc_available())
 
     def test_request_url_missing(self):
         env = _gha_env()
@@ -299,6 +311,126 @@ class TestObtainSbomifyTokenViaOidc(unittest.TestCase):
             )
 
         self.assertEqual(mock_get.call_args.kwargs["params"]["audience"], "self-hosted.example.com")
+
+
+class TestDefaultAudienceFor(unittest.TestCase):
+    def test_production_keeps_legacy_audience(self):
+        self.assertEqual(default_audience_for("https://app.sbomify.com"), "sbomify.com")
+        self.assertEqual(default_audience_for("https://app.sbomify.com/"), "sbomify.com")
+
+    def test_stage_derives_from_hostname(self):
+        self.assertEqual(default_audience_for("https://stage.sbomify.com"), "stage.sbomify.com")
+
+    def test_self_hosted_derives_from_hostname(self):
+        self.assertEqual(default_audience_for("https://sbom.example.com"), "sbom.example.com")
+
+    def test_missing_url_falls_back_to_constant(self):
+        self.assertEqual(default_audience_for(None), DEFAULT_OIDC_AUDIENCE)
+        self.assertEqual(default_audience_for(""), DEFAULT_OIDC_AUDIENCE)
+
+
+class TestScrubSecrets(unittest.TestCase):
+    def test_bearer_redacted(self):
+        out = _scrub_secrets("got Bearer abc123.def456")
+        self.assertNotIn("abc123", out)
+        self.assertIn("[REDACTED]", out)
+
+    def test_jwt_redacted(self):
+        jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature_part"
+        out = _scrub_secrets(f"token leaked: {jwt} oops")
+        self.assertNotIn(jwt, out)
+        self.assertIn("[REDACTED-JWT]", out)
+
+    def test_no_secret_unchanged(self):
+        self.assertEqual(_scrub_secrets("plain error message"), "plain error message")
+
+
+class TestExpiresInTolerance(unittest.TestCase):
+    @patch("sbomify_action.oidc.requests.post")
+    def test_non_numeric_expires_in_does_not_crash(self, mock_post):
+        """If backend returns expires_in='15m' or similar, we still extract the token."""
+        mock_post.return_value = Mock(
+            status_code=200,
+            json=Mock(return_value={"access_token": "t", "expires_in": "15m"}),
+        )
+        token, ttl = exchange_for_sbomify_token("jwt", "comp-1", "https://app.sbomify.com")
+        self.assertEqual(token, "t")
+        self.assertEqual(ttl, 0)  # Falls back to 0 rather than raising ValueError.
+
+    @patch("sbomify_action.oidc.requests.post")
+    def test_missing_expires_in(self, mock_post):
+        mock_post.return_value = Mock(
+            status_code=200,
+            json=Mock(return_value={"access_token": "t"}),
+        )
+        token, ttl = exchange_for_sbomify_token("jwt", "comp-1", "https://app.sbomify.com")
+        self.assertEqual(token, "t")
+        self.assertEqual(ttl, 0)
+
+    @patch("sbomify_action.oidc.requests.post")
+    def test_non_string_access_token_rejected(self, mock_post):
+        """A numeric access_token should be rejected rather than silently coerced."""
+        mock_post.return_value = Mock(
+            status_code=200,
+            json=Mock(return_value={"access_token": 12345, "expires_in": 900}),
+        )
+        with self.assertRaises(OIDCExchangeError):
+            exchange_for_sbomify_token("jwt", "comp-1", "https://app.sbomify.com")
+
+
+class TestErrorBodyRedaction(unittest.TestCase):
+    @patch("sbomify_action.oidc.requests.post")
+    def test_jwt_in_error_detail_is_redacted(self, mock_post):
+        leaky_jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.sig"
+        mock_post.return_value = Mock(
+            status_code=403,
+            json=Mock(return_value={"detail": f"rejected token {leaky_jwt}"}),
+        )
+        with self.assertRaises(OIDCBindingMissingError) as ctx:
+            exchange_for_sbomify_token("jwt", "comp-1", "https://app.sbomify.com")
+        self.assertNotIn(leaky_jwt, str(ctx.exception))
+        self.assertIn("[REDACTED-JWT]", str(ctx.exception))
+
+    @patch("sbomify_action.oidc.requests.get")
+    def test_bearer_in_gh_response_text_is_redacted(self, mock_get):
+        mock_get.return_value = Mock(
+            ok=False,
+            status_code=500,
+            text="Internal error: header was 'Bearer runner.secret.value'",
+        )
+        with patch.dict("os.environ", _gha_env(), clear=True):
+            with self.assertRaises(OIDCExchangeError) as ctx:
+                request_github_oidc_token("sbomify.com")
+        self.assertNotIn("runner.secret.value", str(ctx.exception))
+        self.assertIn("[REDACTED]", str(ctx.exception))
+
+
+class TestGithubOidcHeaders(unittest.TestCase):
+    @patch("sbomify_action.oidc.requests.get")
+    def test_uses_project_user_agent(self, mock_get):
+        mock_get.return_value = Mock(ok=True, json=Mock(return_value={"value": "jwt"}))
+        with patch.dict("os.environ", _gha_env(), clear=True):
+            request_github_oidc_token("sbomify.com")
+        headers = mock_get.call_args.kwargs["headers"]
+        self.assertIn("User-Agent", headers)
+        self.assertIn("sbomify-action", headers["User-Agent"])
+        self.assertEqual(headers["Authorization"], "Bearer runner-bearer")
+        self.assertEqual(headers["Accept"], "application/json")
+
+
+class TestObtainAudienceDefault(unittest.TestCase):
+    @patch("sbomify_action.oidc.requests.post")
+    @patch("sbomify_action.oidc.requests.get")
+    def test_audience_derived_from_api_base_url_when_unset(self, mock_get, mock_post):
+        mock_get.return_value = Mock(ok=True, json=Mock(return_value={"value": "jwt"}))
+        mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"access_token": "t", "expires_in": 900}))
+        with patch.dict("os.environ", _gha_env(), clear=True):
+            obtain_sbomify_token_via_oidc(
+                component_id="comp-x",
+                api_base_url="https://stage.sbomify.com",
+                audience=None,
+            )
+        self.assertEqual(mock_get.call_args.kwargs["params"]["audience"], "stage.sbomify.com")
 
 
 if __name__ == "__main__":
