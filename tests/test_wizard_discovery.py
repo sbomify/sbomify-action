@@ -13,7 +13,6 @@ from sbomify_action.cli.wizard.existing import wizard_workflow_exists, workflow_
 from sbomify_action.cli.wizard.io import WIZARD_HEADER_SENTINEL
 from sbomify_action.cli.wizard.repo_facts import _parse_owner_repo_slug, gather_repo_facts
 
-
 # ----------------------------------------------------------------------
 # discovery
 

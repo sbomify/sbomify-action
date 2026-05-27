@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Optional, TypeVar, cast
 
 import click
 import sentry_sdk
@@ -624,7 +624,7 @@ def load_config() -> Config:
     upload_destinations = _parse_upload_destinations(os.getenv("UPLOAD_DESTINATIONS"))
 
     return build_config(
-        token=os.getenv("TOKEN"),
+        token=_resolve_token(),
         component_id=os.getenv("COMPONENT_ID"),
         sbom_file=os.getenv("SBOM_FILE"),
         docker_image=os.getenv("DOCKER_IMAGE"),
@@ -821,6 +821,21 @@ def _in_github_actions() -> bool:
     """Return True when running inside GitHub Actions."""
     value = os.environ.get("GITHUB_ACTIONS")
     return value is not None and value.lower() in {"true", "1"}
+
+
+def _resolve_token(explicit: Optional[str] = None) -> Optional[str]:
+    """Resolve the sbomify API token, in precedence order.
+
+    1. ``explicit`` (eg. ``--token`` on the CLI).
+    2. ``$SBOMIFY_TOKEN``.
+    3. ``$TOKEN`` (legacy / matches the GitHub Action's env input).
+
+    Returns ``None`` if none of the above produced a non-empty value.
+    The wizard's auth screen treats ``None`` as "prompt the user".
+    """
+    if explicit:
+        return explicit
+    return os.environ.get("SBOMIFY_TOKEN") or os.environ.get("TOKEN") or None
 
 
 def _github_workspace() -> Path:
@@ -2409,7 +2424,9 @@ def cli(
 
     \b
     Commands:
-      init    Interactive wizard to create sbomify.json configuration
+      wizard  Interactive wizard to onboard a repository to sbomify
+      init    Alias for `wizard` (backwards compatible)
+      yocto   Process Yocto/OpenEmbedded SPDX SBOMs
 
     \b
     Examples:
@@ -2422,8 +2439,8 @@ def cli(
       # Generate from Docker image with SPDX format
       sbomify-action --docker-image nginx:latest -f spdx -o sbom.spdx.json
 
-      # Create sbomify.json configuration interactively
-      sbomify-action init
+      # Run the onboarding wizard interactively
+      sbomify-action wizard
     """
     # Configure logging level early so all messages respect --verbose/--quiet
     if verbose and quiet:
@@ -2595,13 +2612,12 @@ def yocto_cmd(
 
         logging.getLogger("sbomify_action").setLevel(logging.DEBUG)
 
-    # Get token from parent CLI group (--token on the root command or TOKEN env var)
-    yocto_token = ctx.parent.params.get("token") if ctx.parent else None
+    # Token precedence: --token on the root group, then $SBOMIFY_TOKEN / $TOKEN.
+    yocto_token = _resolve_token(ctx.parent.params.get("token") if ctx.parent else None)
     if not yocto_token:
-        # Also check env var directly as fallback
-        yocto_token = os.getenv("TOKEN")
-    if not yocto_token:
-        raise click.UsageError("Missing required option '--token' (provide via root command or TOKEN env var).")
+        raise click.UsageError(
+            "Missing required option '--token' (provide via root command, $SBOMIFY_TOKEN, or $TOKEN)."
+        )
 
     # Get api-base-url from parent CLI group (--api-base-url on the root command or API_BASE_URL env var)
     api_base_url = (ctx.parent.params.get("api_base_url") if ctx.parent else None) or SBOMIFY_PRODUCTION_API
@@ -2639,32 +2655,128 @@ def yocto_cmd(
         sys.exit(1)
 
 
-@cli.command("init")
-@click.option(
-    "-o",
-    "--output",
-    default="sbomify.json",
-    show_default=True,
-    help="Output path for the configuration file.",
-)
-def init_cmd(output: str) -> None:
-    """Interactive wizard to create sbomify.json configuration.
+_FC = TypeVar("_FC", bound=Callable[..., Any])
 
-    This wizard helps you create a sbomify.json file that provides metadata
-    for SBOM augmentation. All fields are optional.
 
-    \b
-    The configuration includes:
-      - Organization info (supplier, manufacturer)
-      - Authors
-      - Licenses (SPDX identifiers)
-      - Security contact (CRA compliance)
-      - Lifecycle phase and dates
-      - VCS overrides (for self-hosted git servers)
+def _wizard_options(func: _FC) -> _FC:
+    """Apply the option set shared by ``wizard`` and ``init`` (its alias)."""
+    decorators: list[Callable[[Callable[..., Any]], Callable[..., Any]]] = [
+        click.option(
+            "--token",
+            default=None,
+            help="sbomify API token. Falls back to $SBOMIFY_TOKEN, then $TOKEN.",
+        ),
+        click.option(
+            "--api-base-url",
+            envvar="API_BASE_URL",
+            default=SBOMIFY_PRODUCTION_API,
+            show_default=True,
+            help="Base URL for the sbomify API.",
+        ),
+        click.option(
+            "--repo-root",
+            type=click.Path(file_okay=False, exists=True, path_type=Path),
+            default=Path("."),
+            show_default=True,
+            help="Repository root to scan for lockfiles.",
+        ),
+        click.option(
+            "--output-dir",
+            type=click.Path(file_okay=False, path_type=Path),
+            default=Path(".github/workflows"),
+            show_default=True,
+            help="Directory where the generated workflow file will be written.",
+        ),
+        click.option(
+            "--dry-run",
+            is_flag=True,
+            default=False,
+            help="Walk the wizard and render the plan, but make no API calls and write no files.",
+        ),
+    ]
+    for decorator in reversed(decorators):
+        func = decorator(func)  # type: ignore[assignment]
+    return func
+
+
+def _wizard_in_ci() -> bool:
+    """Refuse to launch the TUI under a non-interactive CI environment."""
+    for name in ("GITHUB_ACTIONS", "CI"):
+        value = os.environ.get(name)
+        if value is not None and value.strip().lower() in {"true", "1", "yes", "on"}:
+            return True
+    return False
+
+
+def _run_wizard_cli(
+    token: Optional[str],
+    api_base_url: str,
+    repo_root: Path,
+    output_dir: Path,
+    dry_run: bool,
+) -> None:
+    """Validate options, build WizardOptions, and launch the Textual wizard."""
+    from sbomify_action.cli.wizard.app import launch_wizard
+    from sbomify_action.cli.wizard.options import WizardOptions
+
+    if _wizard_in_ci():
+        click.echo(
+            "Refusing to launch the interactive wizard from a CI environment. "
+            "Run `sbomify-action wizard` locally to onboard a repository.",
+            err=True,
+        )
+        sys.exit(1)
+
+    # Always work in absolute paths so downstream phases don't depend on CWD.
+    repo_root = repo_root.resolve()
+    if not output_dir.is_absolute():
+        output_dir = repo_root / output_dir
+    output_dir = output_dir.resolve()
+
+    # GitHub Actions only loads workflow files from .github/workflows, and the
+    # generated workflow's `paths:` filter is pinned to that directory.
+    # Reject anything else early — silently writing non-functional workflows
+    # is worse than failing fast.
+    expected = (repo_root / ".github" / "workflows").resolve()
+    if output_dir != expected:
+        raise click.BadParameter(
+            f"--output-dir must be {expected} (GitHub Actions only loads workflows "
+            "from .github/workflows). Got: " + str(output_dir),
+            param_hint="--output-dir",
+        )
+
+    opts = WizardOptions(
+        token=_resolve_token(token),
+        api_base_url=api_base_url.rstrip("/"),
+        repo_root=repo_root,
+        output_dir=output_dir,
+        dry_run=dry_run,
+    )
+    sys.exit(launch_wizard(opts))
+
+
+@cli.command("wizard")
+@_wizard_options
+def wizard_cmd(token: Optional[str], api_base_url: str, repo_root: Path, output_dir: Path, dry_run: bool) -> None:
+    """Interactive wizard to onboard a repository to sbomify.
+
+    Scans for lockfiles, authenticates against sbomify, registers
+    matching components, and writes ``.github/workflows/sboms.yml``.
     """
-    from sbomify_action.cli.wizard import run_wizard
+    _run_wizard_cli(token, api_base_url, repo_root, output_dir, dry_run)
 
-    sys.exit(run_wizard(output))
+
+@cli.command("init")
+@_wizard_options
+def init_cmd(token: Optional[str], api_base_url: str, repo_root: Path, output_dir: Path, dry_run: bool) -> None:
+    """Alias for ``sbomify-action wizard``. Kept for backwards compatibility.
+
+    Note: previous versions of ``init`` generated only a ``sbomify.json``
+    configuration file. As of this release, ``init`` is an alias for
+    the full onboarding wizard.
+    """
+    click.echo("Note: `init` is an alias for `wizard`. Prefer `sbomify-action wizard`.", err=True)
+    _run_wizard_cli(token, api_base_url, repo_root, output_dir, dry_run)
 
 
 def main() -> None:
