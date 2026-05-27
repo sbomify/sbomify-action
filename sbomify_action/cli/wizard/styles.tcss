@@ -1,0 +1,70 @@
+/* Wizard layout — applied to every screen via WizardScreen.compose. */
+
+.wizard-body {
+    padding: 1 2;
+    height: 1fr;
+}
+
+.wizard-step-crumb {
+    color: $accent;
+    margin-bottom: 1;
+}
+
+.wizard-subtitle {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+.wizard-panel {
+    border: round $primary-background;
+    padding: 1 2;
+    margin-bottom: 1;
+    height: auto;
+}
+
+.wizard-panel-emphasis {
+    border: thick $accent;
+    padding: 1 2;
+    margin-bottom: 1;
+    height: auto;
+}
+
+.wizard-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.wizard-muted {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+.button-row {
+    align: center middle;
+    height: auto;
+    padding-top: 1;
+}
+
+.button-row Button {
+    margin: 0 1;
+}
+
+DataTable {
+    height: 1fr;
+    margin: 1 0;
+}
+
+ListView {
+    height: 1fr;
+    margin: 1 0;
+}
+
+Input {
+    margin: 0 0 1 0;
+}
+
+RichLog {
+    background: $panel;
+    border: round $primary-background;
+    height: 1fr;
+}
