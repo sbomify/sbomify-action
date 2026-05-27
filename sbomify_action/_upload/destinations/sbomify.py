@@ -6,10 +6,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-import requests
-
-from sbomify_action.http_client import get_default_headers
+from sbomify_action.exceptions import APIError
 from sbomify_action.logging_config import logger
+from sbomify_action.sbomify_api import SbomifyApiClient
 
 from ..protocol import UploadInput
 from ..result import UploadResult
@@ -91,12 +90,6 @@ class SbomifyDestination:
                 validation_error = "SBOM validation failed"
                 logger.warning("SBOM validation failed, but proceeding with upload")
 
-        # Build the upload URL
-        url = f"{self._api_base_url}/api/v1/sboms/artifact/{input.sbom_format}/{self._component_id}"
-
-        # Prepare headers
-        headers = get_default_headers(self._token, content_type="application/json")
-
         # Read SBOM file
         try:
             with Path(input.sbom_file).open("rb") as f:
@@ -119,13 +112,14 @@ class SbomifyDestination:
         format_display = "CycloneDX" if input.sbom_format == "cyclonedx" else "SPDX"
         logger.info(f"Uploading {format_display} SBOM to component: {self._component_id}")
 
-        # Gzip-compress large payloads to avoid upstream timeouts
+        # Gzip-compress large payloads to avoid upstream timeouts.
         upload_data: bytes = sbom_bytes
+        content_encoding: str | None = None
         if len(sbom_bytes) > GZIP_THRESHOLD:
             compressed = gzip.compress(sbom_bytes)
             if len(compressed) < len(sbom_bytes):
                 upload_data = compressed
-                headers["Content-Encoding"] = "gzip"
+                content_encoding = "gzip"
                 logger.info(
                     f"Compressed upload: {len(sbom_bytes):,} -> {len(upload_data):,} bytes "
                     f"({len(sbom_bytes) / len(upload_data):.1f}x)"
@@ -133,25 +127,18 @@ class SbomifyDestination:
             else:
                 logger.debug("Gzip compression did not reduce size, sending uncompressed")
 
-        # Execute the upload
+        client = SbomifyApiClient(self._api_base_url, self._token, timeout=UPLOAD_TIMEOUT)
         try:
-            response = requests.post(
-                url,
-                headers=headers,
-                data=upload_data,
-                timeout=UPLOAD_TIMEOUT,
+            response = client.upload_sbom(
+                component_id=str(self._component_id),
+                sbom_payload=upload_data,
+                sbom_format=input.sbom_format,
+                content_encoding=content_encoding,
             )
-        except requests.exceptions.ConnectionError:
+        except APIError as e:
             return UploadResult.failure_result(
                 destination_name=self.name,
-                error_message="Failed to connect to sbomify API for upload",
-                validated=validated,
-                validation_error=validation_error,
-            )
-        except requests.exceptions.Timeout:
-            return UploadResult.failure_result(
-                destination_name=self.name,
-                error_message="SBOM upload timed out",
+                error_message=str(e),
                 validated=validated,
                 validation_error=validation_error,
             )
