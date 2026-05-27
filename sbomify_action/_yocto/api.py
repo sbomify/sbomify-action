@@ -1,6 +1,6 @@
 """Component CRUD API calls for Yocto pipeline."""
 
-from typing import Iterator
+from typing import Any, Iterator
 
 import requests
 
@@ -12,7 +12,7 @@ _PAGE_SIZE = 100
 _MAX_PAGES = 500  # Safety limit against runaway pagination
 
 
-def _iter_components(api_base_url: str, token: str, error_context: str) -> Iterator[dict]:
+def _iter_components(api_base_url: str, token: str, error_context: str) -> Iterator[dict[str, Any]]:
     """Yield every component item from /api/v1/components, paginating as needed.
 
     Raises APIError for any HTTP/transport/JSON-shape failure so callers see
@@ -151,7 +151,7 @@ def create_component(api_base_url: str, token: str, name: str) -> tuple[str, boo
 
     if not response.ok:
         err_msg = f"Failed to create component '{name}'. [{response.status_code}]"
-        body: dict = {}
+        body: dict[str, Any] = {}
         try:
             parsed = response.json()
             if isinstance(parsed, dict):
