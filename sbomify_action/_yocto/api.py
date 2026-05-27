@@ -68,8 +68,72 @@ def list_components(api_base_url: str, token: str) -> dict[str, str]:
     return components
 
 
-def create_component(api_base_url: str, token: str, name: str) -> str:
+def get_component_id_by_name(api_base_url: str, token: str, name: str) -> str | None:
+    """Look up a component ID by exact name match.
+
+    Used to recover from DUPLICATE_NAME errors when the local cache is stale
+    (e.g. another concurrent run created the component, or it predates our
+    initial snapshot). The /api/v1/components endpoint doesn't support
+    server-side name filtering, so this paginates until the name is found
+    (short-circuits on first match).
+
+    Args:
+        api_base_url: Base URL for the sbomify API
+        token: API authentication token
+        name: Component name to look up
+
+    Returns:
+        Component ID if found, None otherwise
+
+    Raises:
+        APIError: If API call fails (network/timeout/non-404 HTTP error)
+    """
+    url = api_base_url + "/api/v1/components"
+    headers = get_default_headers(token)
+    page = 1
+    max_pages = 500  # Safety limit against runaway pagination
+
+    while page <= max_pages:
+        try:
+            response = requests.get(url, headers=headers, params={"page": page, "page_size": 100}, timeout=60)
+        except requests.exceptions.ConnectionError:
+            raise APIError("Failed to connect to sbomify API")
+        except requests.exceptions.Timeout:
+            raise APIError("API request timed out")
+
+        if response.status_code == 404:
+            return None
+        if not response.ok:
+            raise APIError(f"Failed to look up component '{name}'. [{response.status_code}]")
+
+        try:
+            data = response.json()
+        except (ValueError, requests.exceptions.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+
+        for item in data.get("items", []):
+            if item.get("name") == name:
+                comp_id = item.get("id")
+                if comp_id is not None:
+                    return str(comp_id)
+
+        if not data.get("next"):
+            return None
+        page += 1
+
+    return None
+
+
+def create_component(api_base_url: str, token: str, name: str) -> tuple[str, bool]:
     """Create a new component.
+
+    If a component with the same name already exists (DUPLICATE_NAME error
+    from sbomify API), the existing component's ID is returned with
+    ``was_created=False`` instead of failing — get-or-create semantics.
+    This guards against stale caches and concurrent runs racing on the
+    same name.
 
     Args:
         api_base_url: Base URL for the sbomify API
@@ -77,7 +141,8 @@ def create_component(api_base_url: str, token: str, name: str) -> str:
         name: Component name
 
     Returns:
-        Component ID
+        Tuple of (component_id, was_created). ``was_created`` is False when
+        an existing component was recovered via DUPLICATE_NAME.
 
     Raises:
         APIError: If API call fails
@@ -96,12 +161,23 @@ def create_component(api_base_url: str, token: str, name: str) -> str:
     if not response.ok:
         err_msg = f"Failed to create component '{name}'. [{response.status_code}]"
         detail = ""
+        error_code = ""
         try:
-            detail = response.json().get("detail", "")
+            body = response.json()
+            if isinstance(body, dict):
+                detail = body.get("detail", "") or ""
+                error_code = body.get("error_code", "") or ""
             if detail:
                 err_msg += f" - {detail}"
         except ValueError:
             pass
+
+        if response.status_code == 400 and error_code == "DUPLICATE_NAME":
+            logger.info(f"Component '{name}' already exists, retrieving existing component ID")
+            existing_id = get_component_id_by_name(api_base_url, token, name)
+            if existing_id:
+                return existing_id, False
+            raise APIError(f"Component '{name}' reported as duplicate by API but could not be found via lookup")
 
         if response.status_code == 403 and "maximum" in detail.lower():
             raise PlanLimitError(err_msg)
@@ -115,7 +191,7 @@ def create_component(api_base_url: str, token: str, name: str) -> str:
     comp_id = data.get("id")
     if comp_id is None:
         raise APIError(f"Invalid response when creating component '{name}': no id returned")
-    return str(comp_id)
+    return str(comp_id), True
 
 
 def patch_component_visibility(api_base_url: str, token: str, component_id: str, visibility: str) -> None:
@@ -165,7 +241,10 @@ def get_or_create_component(api_base_url: str, token: str, name: str, cache: dic
     if name in cache:
         return cache[name], False
 
-    comp_id = create_component(api_base_url, token, name)
+    comp_id, was_created = create_component(api_base_url, token, name)
     cache[name] = comp_id
-    logger.info(f"Created component '{name}' -> {comp_id}")
-    return comp_id, True
+    if was_created:
+        logger.info(f"Created component '{name}' -> {comp_id}")
+    else:
+        logger.info(f"Recovered existing component '{name}' -> {comp_id}")
+    return comp_id, was_created
