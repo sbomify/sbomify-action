@@ -21,7 +21,7 @@ publishing will work — otherwise the exchange returns 403.
 """
 
 import os
-from typing import Optional
+import time
 
 import requests
 
@@ -32,6 +32,7 @@ from .logging_config import logger
 DEFAULT_OIDC_AUDIENCE = "sbomify.com"
 OIDC_REQUEST_TIMEOUT = 30
 EXCHANGE_TIMEOUT = 30
+EXCHANGE_RETRY_DELAY_SECONDS = 2
 
 
 def is_github_oidc_available() -> bool:
@@ -118,16 +119,22 @@ def exchange_for_sbomify_token(
     """
     url = f"{api_base_url.rstrip('/')}/api/v1/auth/oidc/github/exchange"
     headers = get_default_headers(token=oidc_jwt, content_type="application/json")
+    body = {"component_id": component_id}
 
     try:
-        response = requests.post(
-            url,
-            headers=headers,
-            json={"component_id": component_id},
-            timeout=EXCHANGE_TIMEOUT,
-        )
+        response = requests.post(url, headers=headers, json=body, timeout=EXCHANGE_TIMEOUT)
     except requests.RequestException as exc:
         raise OIDCExchangeError(f"Failed to reach sbomify OIDC exchange endpoint: {exc}") from exc
+
+    # 503 typically means the backend couldn't fetch GitHub's JWKS (rare, transient).
+    # Retry once after a short delay before giving up.
+    if response.status_code == 503:
+        logger.warning("sbomify OIDC exchange returned 503; retrying once")
+        time.sleep(EXCHANGE_RETRY_DELAY_SECONDS)
+        try:
+            response = requests.post(url, headers=headers, json=body, timeout=EXCHANGE_TIMEOUT)
+        except requests.RequestException as exc:
+            raise OIDCExchangeError(f"Failed to reach sbomify OIDC exchange endpoint on retry: {exc}") from exc
 
     if response.status_code == 200:
         try:
@@ -180,7 +187,7 @@ def exchange_for_sbomify_token(
 def obtain_sbomify_token_via_oidc(
     component_id: str,
     api_base_url: str,
-    audience: Optional[str] = None,
+    audience: str | None = None,
 ) -> str:
     """Convenience: request a GitHub OIDC JWT and exchange it for a sbomify token.
 

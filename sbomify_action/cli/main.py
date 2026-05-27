@@ -220,7 +220,7 @@ class Config:
     api_base_url: str = SBOMIFY_PRODUCTION_API
     sbom_format: SBOMFormat = "cyclonedx"
     spec_version: Optional[str] = None
-    oidc_audience: Optional[str] = None
+    oidc_audience: str | None = None
 
     def __post_init__(self) -> None:
         """Set default values that depend on other fields."""
@@ -1096,7 +1096,13 @@ def run_pipeline(config: Config) -> None:
     # workflow granted id-token: write and we know which component to scope to,
     # exchange a GitHub OIDC JWT for a short-lived sbomify access token.
     # The resulting token then transparently powers upload, augment, and processors.
-    if not config.token and config.component_id:
+    # Only run when the pipeline actually needs to call the sbomify API — mirrors
+    # the requires_sbomify_api logic in Config.validate().
+    uploads_to_sbomify = (
+        config.upload and config.upload_destinations is not None and "sbomify" in config.upload_destinations
+    )
+    needs_sbomify_api = uploads_to_sbomify or bool(config.product_releases)
+    if needs_sbomify_api and not config.token and config.component_id:
         from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
         from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
 

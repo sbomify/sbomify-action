@@ -3,6 +3,8 @@
 import unittest
 from unittest.mock import Mock, patch
 
+import requests
+
 from sbomify_action.exceptions import OIDCBindingMissingError, OIDCExchangeError
 from sbomify_action.oidc import (
     DEFAULT_OIDC_AUDIENCE,
@@ -95,6 +97,14 @@ class TestRequestGithubOidcToken(unittest.TestCase):
             with self.assertRaises(OIDCExchangeError):
                 request_github_oidc_token("sbomify.com")
 
+    @patch("sbomify_action.oidc.requests.get")
+    def test_connection_error_raises_exchange_error(self, mock_get):
+        mock_get.side_effect = requests.ConnectionError("dns failure")
+        with patch.dict("os.environ", _gha_env(), clear=True):
+            with self.assertRaises(OIDCExchangeError) as ctx:
+                request_github_oidc_token("sbomify.com")
+        self.assertIn("Failed to reach", str(ctx.exception))
+
 
 class TestExchangeForSbomifyToken(unittest.TestCase):
     @patch("sbomify_action.oidc.requests.post")
@@ -183,15 +193,49 @@ class TestExchangeForSbomifyToken(unittest.TestCase):
             exchange_for_sbomify_token("jwt", "comp-1", "https://app.sbomify.com")
         self.assertIn("rate-limited", str(ctx.exception))
 
+    @patch("sbomify_action.oidc.time.sleep")
     @patch("sbomify_action.oidc.requests.post")
-    def test_503_raises_exchange_error(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 503
-        mock_response.json.return_value = {"detail": "JWKS unreachable"}
-        mock_post.return_value = mock_response
+    def test_503_retries_then_raises(self, mock_post, _mock_sleep):
+        """Two consecutive 503s — give up after one retry."""
+        five_oh_three = Mock()
+        five_oh_three.status_code = 503
+        five_oh_three.json.return_value = {"detail": "JWKS unreachable"}
+        mock_post.return_value = five_oh_three
 
         with self.assertRaises(OIDCExchangeError):
             exchange_for_sbomify_token("jwt", "comp-1", "https://app.sbomify.com")
+        self.assertEqual(mock_post.call_count, 2)
+
+    @patch("sbomify_action.oidc.time.sleep")
+    @patch("sbomify_action.oidc.requests.post")
+    def test_503_then_success_recovers(self, mock_post, _mock_sleep):
+        """503 followed by 200 on retry — should succeed."""
+        five_oh_three = Mock(status_code=503, json=Mock(return_value={"detail": "JWKS unreachable"}))
+        ok = Mock(status_code=200, json=Mock(return_value={"access_token": "t", "expires_in": 900}))
+        mock_post.side_effect = [five_oh_three, ok]
+
+        token, ttl = exchange_for_sbomify_token("jwt", "comp-1", "https://app.sbomify.com")
+        self.assertEqual(token, "t")
+        self.assertEqual(ttl, 900)
+        self.assertEqual(mock_post.call_count, 2)
+
+    @patch("sbomify_action.oidc.time.sleep")
+    @patch("sbomify_action.oidc.requests.post")
+    def test_503_then_request_exception_on_retry_raises(self, mock_post, _mock_sleep):
+        """503 then a transport-level failure on retry should be reported."""
+        five_oh_three = Mock(status_code=503, json=Mock(return_value={}))
+        mock_post.side_effect = [five_oh_three, requests.ConnectionError("dns")]
+
+        with self.assertRaises(OIDCExchangeError) as ctx:
+            exchange_for_sbomify_token("jwt", "comp-1", "https://app.sbomify.com")
+        self.assertIn("retry", str(ctx.exception).lower())
+
+    @patch("sbomify_action.oidc.requests.post")
+    def test_connection_error_raises_exchange_error(self, mock_post):
+        mock_post.side_effect = requests.ConnectionError("nope")
+        with self.assertRaises(OIDCExchangeError) as ctx:
+            exchange_for_sbomify_token("jwt", "comp-1", "https://app.sbomify.com")
+        self.assertIn("Failed to reach", str(ctx.exception))
 
     @patch("sbomify_action.oidc.requests.post")
     def test_response_without_access_token_raises(self, mock_post):
