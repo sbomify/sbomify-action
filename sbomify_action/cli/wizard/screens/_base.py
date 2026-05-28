@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from sbomify_action.cli.wizard.app import WizardApp
 
 
-TOTAL_STEPS = 7
+TOTAL_STEPS = 8
 
 
 class WizardScreen(Screen[None]):

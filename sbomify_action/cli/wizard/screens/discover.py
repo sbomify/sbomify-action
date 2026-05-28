@@ -21,6 +21,10 @@ class DiscoverScreen(WizardScreen):
         Binding("enter", "submit", "Next ▸", show=True, priority=True),
         Binding("escape", "app.pop_screen", "Back", show=True),
         Binding("space", "toggle_selection", "Toggle", show=True),
+        # Bulk operations for users with many lockfiles — Tab-and-Space
+        # through 20 rows gets old fast.
+        Binding("a", "select_all", "All", show=True),
+        Binding("n", "select_none", "None", show=True),
     ]
 
     def compose_body(self) -> ComposeResult:
@@ -29,10 +33,12 @@ class DiscoverScreen(WizardScreen):
         panel.border_subtitle = f"{len(self.wizard.state.discovered)} found"
         with panel:
             yield Static(
-                "Use [b]Space[/] to toggle each lockfile, [b]Enter[/] when you're done.",
+                "Use [b]Space[/] to toggle each lockfile, [b]a[/] to select all, "
+                "[b]n[/] to select none, [b]Enter[/] when you're done.",
                 classes="wizard-muted",
             )
             yield SelectionList[int](id="lockfile-list")
+            yield Static("", id="discover-status", markup=True)
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")
@@ -47,6 +53,15 @@ class DiscoverScreen(WizardScreen):
     def action_toggle_selection(self) -> None:
         """Custom toggle action — Textual's built-in `action_toggle` is generic."""
         self.query_one("#lockfile-list", SelectionList).action_select()
+        self._clear_status()
+
+    def action_select_all(self) -> None:
+        self.query_one("#lockfile-list", SelectionList).select_all()
+        self._clear_status()
+
+    def action_select_none(self) -> None:
+        self.query_one("#lockfile-list", SelectionList).deselect_all()
+        self._clear_status()
 
     def action_submit(self) -> None:
         self._advance()
@@ -61,9 +76,22 @@ class DiscoverScreen(WizardScreen):
         sel = self.query_one("#lockfile-list", SelectionList)
         indices = list(sel.selected)
         if not indices:
+            # Replace the silent bell with a visible hint so the user
+            # knows why nothing happened.
+            status = self.query_one("#discover-status", Static)
+            status.update(
+                "[#F87171]Pick at least one lockfile to continue — "
+                "press [b]Space[/] to toggle, [b]a[/] to select all.[/]"
+            )
             self.app.bell()
             return
         self.wizard.state.selected = [self.wizard.state.discovered[i] for i in indices]
         from sbomify_action.cli.wizard.screens.authenticate import AuthenticateScreen
 
         self.wizard.push_screen(AuthenticateScreen())
+
+    def _clear_status(self) -> None:
+        try:
+            self.query_one("#discover-status", Static).update("")
+        except Exception:  # noqa: BLE001
+            pass

@@ -112,7 +112,7 @@ class WelcomeScreen(WizardScreen):
         if self.wizard.state.discovered:
             steps = Vertical(classes="wizard-panel")
             steps.border_title = "What we'll do"
-            steps.border_subtitle = "7 steps · ~3 minutes"
+            steps.border_subtitle = "8 steps · ~3 minutes"
             with steps:
                 yield Static("\n".join(self._steps_list()))
 
@@ -158,9 +158,10 @@ class WelcomeScreen(WizardScreen):
             "[#8A7DFF]02[/]  Authenticate against sbomify",
             "[#8A7DFF]03[/]  Pick a product",
             "[#8A7DFF]04[/]  Reuse or create a component per lockfile",
-            "[#8A7DFF]05[/]  Configure the workflow (format / credentials / provenance)",
-            "[#8A7DFF]06[/]  Review the plan",
-            "[#8A7DFF]07[/]  Apply — write the workflow file & finalise components",
+            "[#8A7DFF]05[/]  Configure the workflow shape (release / credentials / metadata)",
+            "[#8A7DFF]06[/]  Configure SBOM content (enrichment / formats / provenance)",
+            "[#8A7DFF]07[/]  Review the plan",
+            "[#8A7DFF]08[/]  Apply — write the workflow file & finalise components",
         ]
 
     def _repo_lines(self) -> list[str]:

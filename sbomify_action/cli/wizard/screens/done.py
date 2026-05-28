@@ -13,7 +13,7 @@ from sbomify_action.cli.wizard.screens._base import WizardScreen
 class DoneScreen(WizardScreen):
     """Phase 6c — summary + next steps."""
 
-    step_index = 7
+    step_index = 8
     step_title = "Done"
     step_subtitle = "All set. Here's what you'll want to do next."
 
@@ -64,9 +64,27 @@ class DoneScreen(WizardScreen):
         if state.created_product_id:
             lines.append(f"[#86EFAC]✓[/]  [#CBCCCE]Product[/]    {state.created_product_id}")
         if state.component_ids:
+            # Reused components don't deserve the same green-checkmark
+            # weight as newly-created ones — re-running the wizard
+            # against an already-onboarded workspace should feel quiet,
+            # not like every line is an "event". Cross-reference each
+            # entry against the plan to figure out which is which.
+            reused_ids = {
+                str(c.existing_id)
+                for c in state.plan.create_components
+                if c.existing_id is not None
+            }
             lines.append("[#86EFAC]✓[/]  [#CBCCCE]Components[/]")
             for rel, cid in state.component_ids.items():
-                lines.append(f"     [#5E5E5E]│[/]  {rel}  [#5E5E5E]→[/]  [b]{cid}[/]")
+                if cid in reused_ids:
+                    glyph = "[#5E5E5E]·[/]"   # muted dot — reused, nothing changed
+                    label = "[#5E5E5E]reused[/]"
+                    cid_style = f"[#5E5E5E]{cid}[/]"
+                else:
+                    glyph = "[#86EFAC]+[/]"   # green plus — newly created
+                    label = "[#86EFAC]created[/]"
+                    cid_style = f"[b]{cid}[/]"
+                lines.append(f"     {glyph}  {rel}  [#5E5E5E]→[/]  {cid_style}  {label}")
         for path in state.written_files:
             lines.append(f"[#86EFAC]✓[/]  [#CBCCCE]Wrote[/]      {path}")
         if not lines:

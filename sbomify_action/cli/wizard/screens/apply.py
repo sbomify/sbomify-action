@@ -25,7 +25,7 @@ _COLOR_BY_KIND = {
 class ApplyScreen(WizardScreen):
     """Phase 6b — actually do the work, log line by line as it happens."""
 
-    step_index = 7
+    step_index = 8
     step_title = "Apply"
     step_subtitle = "Creating components and writing the workflow…"
 

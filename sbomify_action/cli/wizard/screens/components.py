@@ -120,6 +120,6 @@ class ComponentsScreen(WizardScreen):
                     lockfile.rel_path,
                 )
 
-        from sbomify_action.cli.wizard.screens.configure import ConfigureScreen
+        from sbomify_action.cli.wizard.screens.configure_workflow import ConfigureWorkflowScreen
 
-        self.wizard.push_screen(ConfigureScreen())
+        self.wizard.push_screen(ConfigureWorkflowScreen())
