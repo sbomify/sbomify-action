@@ -76,7 +76,7 @@ class AuthenticateScreen(WizardScreen):
 
     def _start_auth(self, token: str) -> None:
         if not token:
-            self._set_status("[red]Token is required.[/]")
+            self._set_status("[#F87171]Token is required.[/]")
             self.query_one("#token", Input).focus()
             return
         self._set_status("")
@@ -161,7 +161,7 @@ class AuthenticateScreen(WizardScreen):
         self.query_one("#submit", Button).disabled = False
         self.query_one("#token", Input).disabled = False
         self.query_one("#token", Input).focus()
-        self._set_status(f"[red]{message}[/]")
+        self._set_status(f"[#F87171]{message}[/]")
 
     def _set_status(self, markup: str) -> None:
         self.query_one("#auth-status", Static).update(markup)

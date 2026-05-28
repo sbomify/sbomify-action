@@ -1,4 +1,58 @@
-/* Wizard layout — applied to every screen via WizardScreen.compose. */
+/* ---------------------------------------------------------------------
+ * sbomify brand palette — mirrors sbomify.com/tailwind.config.js +
+ * the @theme tokens in sbomify.com/_assets/css/tailwind.css.
+ * Keep these in sync if marketing rebrands.
+ * --------------------------------------------------------------------- */
+
+$sbom-primary: #141035;          /* primaryBG — deep purple-blue base */
+$sbom-primary-light: #201B4C;    /* primary.light — panel fill        */
+$sbom-primary-600: #37306B;      /* primary.600 — borders, dividers   */
+$sbom-primary-700: #4A4276;      /* primary.700 — button stroke       */
+$sbom-purple: #8A7DFF;           /* purple — accent / CTA             */
+$sbom-purple-hover: #7A6DE5;     /* purple.700 — CTA hover            */
+$sbom-secondary-bg: #1A1B2A;     /* secondaryBG — sunken surfaces     */
+$sbom-text-muted: #CBCCCE;       /* tertiaryText                      */
+$sbom-text-dim: #5E5E5E;         /* secondaryText                     */
+$sbom-fuschia: #FCDDEC;
+
+/* Signature blue → magenta → peach gradient. Used in markup, not CSS. */
+$sbom-grad-blue: #4059D0;
+$sbom-grad-magenta: #CC58BB;
+$sbom-grad-peach: #F4B57F;
+
+/* NOTE: we intentionally do NOT redefine Textual's built-in design
+ * tokens ($accent, $primary, $panel, …). Those are referenced by
+ * Textual's own internal stylesheet (e.g. ``hatch: right $panel;``)
+ * with shape expectations that don't accept arbitrary hex colours.
+ * Instead, every selector below uses our $sbom-* variables directly. */
+
+/* ---------------------------------------------------------------------
+ * App chrome
+ * --------------------------------------------------------------------- */
+
+Screen {
+    background: $sbom-primary;
+}
+
+Header {
+    background: $sbom-primary-light;
+    color: $sbom-purple;
+    text-style: bold;
+}
+
+Footer {
+    background: $sbom-primary-light;
+    color: $sbom-text-muted;
+}
+
+Footer > .footer--key {
+    color: $sbom-purple;
+    text-style: bold;
+}
+
+/* ---------------------------------------------------------------------
+ * Wizard layout — applied by WizardScreen.compose
+ * --------------------------------------------------------------------- */
 
 .wizard-body {
     padding: 1 2;
@@ -6,38 +60,51 @@
 }
 
 .wizard-step-crumb {
-    color: $accent;
+    color: $sbom-purple;
     margin-bottom: 1;
 }
 
 .wizard-subtitle {
-    color: $text-muted;
+    color: $sbom-text-muted;
     margin-bottom: 1;
 }
 
 .wizard-panel {
-    border: round $primary-background;
+    border: round $sbom-primary-600;
     padding: 1 2;
     margin-bottom: 1;
     height: auto;
+    background: $sbom-primary-light;
 }
 
 .wizard-panel-emphasis {
-    border: thick $accent;
+    border: thick $sbom-purple;
     padding: 1 2;
     margin-bottom: 1;
     height: auto;
+    background: $sbom-primary-light;
 }
 
 .wizard-title {
+    color: $sbom-purple;
     text-style: bold;
     margin-bottom: 1;
 }
 
 .wizard-muted {
-    color: $text-muted;
+    color: $sbom-text-muted;
     margin-bottom: 1;
 }
+
+.banner {
+    color: $sbom-purple;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+/* ---------------------------------------------------------------------
+ * Buttons
+ * --------------------------------------------------------------------- */
 
 .button-row {
     align: center middle;
@@ -49,22 +116,145 @@
     margin: 0 1;
 }
 
-DataTable {
-    height: 1fr;
-    margin: 1 0;
+Button {
+    background: $sbom-primary-600;
+    color: $sbom-text-muted;
+    border: tall $sbom-primary-700;
 }
 
-ListView {
-    height: 1fr;
-    margin: 1 0;
+Button:hover {
+    background: $sbom-primary-700;
+    color: white;
 }
+
+Button:focus {
+    border: tall $sbom-purple;
+}
+
+Button.-primary {
+    background: $sbom-purple;
+    color: $sbom-primary;
+    border: tall $sbom-purple-hover;
+    text-style: bold;
+}
+
+Button.-primary:hover {
+    background: $sbom-purple-hover;
+    color: $sbom-primary;
+}
+
+/* ---------------------------------------------------------------------
+ * Inputs + form controls
+ * --------------------------------------------------------------------- */
 
 Input {
     margin: 0 0 1 0;
+    background: $sbom-secondary-bg;
+    border: tall $sbom-primary-600;
+    color: white;
+}
+
+Input:focus {
+    border: tall $sbom-purple;
+}
+
+Input.-invalid {
+    border: tall #F87171;
+}
+
+Label {
+    color: $sbom-text-muted;
+    margin-top: 1;
+}
+
+RadioSet {
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+
+RadioButton {
+    background: transparent;
+    padding: 0 1;
+}
+
+RadioButton.-selected {
+    color: $sbom-purple;
+    text-style: bold;
+}
+
+RadioButton:hover {
+    background: $sbom-primary-700;
+}
+
+/* ---------------------------------------------------------------------
+ * Lists + tables
+ * --------------------------------------------------------------------- */
+
+SelectionList, OptionList, ListView {
+    background: $sbom-secondary-bg;
+    border: tall $sbom-primary-600;
+    height: 1fr;
+    margin: 1 0;
+    color: $sbom-text-muted;
+}
+
+SelectionList:focus, OptionList:focus, ListView:focus {
+    border: tall $sbom-purple;
+}
+
+SelectionList > .selection-list--button-selected,
+OptionList > .option-list--option-highlighted {
+    background: $sbom-purple;
+    color: $sbom-primary;
+    text-style: bold;
+}
+
+DataTable {
+    height: 1fr;
+    margin: 1 0;
+    background: $sbom-secondary-bg;
+}
+
+DataTable > .datatable--header {
+    background: $sbom-primary-light;
+    color: $sbom-purple;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $sbom-purple;
+    color: $sbom-primary;
+}
+
+DataTable > .datatable--odd-row {
+    background: $sbom-secondary-bg;
+}
+
+DataTable > .datatable--even-row {
+    background: $sbom-primary-light;
+}
+
+/* ---------------------------------------------------------------------
+ * Progress + log surfaces
+ * --------------------------------------------------------------------- */
+
+LoadingIndicator {
+    color: $sbom-purple;
+    background: transparent;
+}
+
+ProgressBar Bar > .bar--bar {
+    color: $sbom-purple;
+}
+
+ProgressBar Bar > .bar--complete {
+    color: $sbom-grad-peach;
 }
 
 RichLog {
-    background: $panel;
-    border: round $primary-background;
+    background: $sbom-secondary-bg;
+    border: round $sbom-primary-600;
     height: 1fr;
+    color: $sbom-text-muted;
 }

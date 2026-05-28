@@ -24,7 +24,12 @@ class WelcomeScreen(WizardScreen):
 
     def compose_body(self) -> ComposeResult:
         with Vertical(classes="wizard-panel-emphasis"):
-            yield Static("[b]sbomify wizard[/b]", classes="wizard-title")
+            # Title uses the sbomify marketing gradient (blue → magenta → peach)
+            # so the wizard's first impression matches sbomify.com.
+            yield Static(
+                "[b][#4059D0]sbom[/][#CC58BB]ify[/][#F4B57F] wizard[/][/b]",
+                classes="banner",
+            )
             yield Static(self._intro())
             yield Static("")
             yield Static(self._repo_summary(), classes="wizard-muted")

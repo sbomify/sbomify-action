@@ -80,5 +80,5 @@ class ReviewScreen(WizardScreen):
     def _files_summary(self) -> str:
         target = workflow_path(self.wizard.state.facts.repo_root)
         if self.wizard.state.workflow_exists:
-            return f"{target}  [yellow]→ overwrite (backup as {target.name}.bak)[/]"
-        return f"{target}  [green]→ create[/]"
+            return f"{target}  [#F4B57F]→ overwrite (backup as {target.name}.bak)[/]"
+        return f"{target}  [#86EFAC]→ create[/]"

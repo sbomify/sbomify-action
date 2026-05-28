@@ -11,11 +11,14 @@ from textual.worker import Worker, WorkerState
 from sbomify_action.cli.wizard import apply as apply_mod
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 
+# Log-line colours pulled from the sbomify marketing palette so they
+# read naturally against the wizard's dark background. See styles.tcss
+# for the source-of-truth token names.
 _COLOR_BY_KIND = {
-    "info": "white",
-    "success": "green",
-    "warning": "yellow",
-    "error": "red",
+    "info": "#CBCCCE",  # tertiaryText
+    "success": "#86EFAC",  # brand-coherent mint
+    "warning": "#F4B57F",  # gradient peach
+    "error": "#F87171",  # soft red, pairs with the dark theme
 }
 
 
@@ -65,7 +68,7 @@ class ApplyScreen(WizardScreen):
             self.query_one("#continue", Button).disabled = False
             self.query_one("#continue", Button).focus()
         elif event.state == WorkerState.ERROR:
-            self.query_one("#apply-log", RichLog).write(f"[red]worker error: {event.worker.error}[/]")
+            self.query_one("#apply-log", RichLog).write(f"[#F87171]worker error: {event.worker.error}[/]")
             self.query_one("#continue", Button).disabled = False
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
