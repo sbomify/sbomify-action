@@ -231,7 +231,7 @@ class SbomifyApiClient:
         self,
         name: str,
         *,
-        component_type: str = "sbom",
+        component_type: str = "bom",
     ) -> tuple[str, bool]:
         """Create a component with get-or-create semantics.
 
@@ -278,7 +278,7 @@ class SbomifyApiClient:
         name: str,
         cache: dict[str, str],
         *,
-        component_type: str = "sbom",
+        component_type: str = "bom",
     ) -> tuple[str, bool]:
         """Look the name up in ``cache``; on miss, create it (updating cache)."""
         if name in cache:
