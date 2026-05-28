@@ -17,30 +17,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: sbomify-action-cyclonedx
-            component_name: sbomify Action
-            component_id: Gu9wem8mkX
+          - name: ca-certificates-dbg
+            component_name: ca-certificates-dbg
+            component_id: OTb3yBG4r3eW
             lockfile: uv.lock
             sbom_format: cyclonedx
-            output_file: sbomify-action.cdx.json
-          - name: sbomify-action-spdx
-            component_name: sbomify Action
-            component_id: Gu9wem8mkX
-            lockfile: uv.lock
-            sbom_format: spdx
-            output_file: sbomify-action.spdx.json
-          - name: javascript-dependencies-cyclonedx
-            component_name: JavaScript Dependencies
-            component_id: IxwrYSb9rGql
-            lockfile: bun.lock
+            output_file: ca-certificates-dbg.cdx.json
+          - name: ca-certificates-dev
+            component_name: ca-certificates-dev
+            component_id: QBnigktZvJ7W
+            lockfile: tests/test-data/uv.lock
             sbom_format: cyclonedx
-            output_file: javascript-dependencies.cdx.json
-          - name: javascript-dependencies-spdx
-            component_name: JavaScript Dependencies
-            component_id: IxwrYSb9rGql
-            lockfile: bun.lock
-            sbom_format: spdx
-            output_file: javascript-dependencies.spdx.json
+            output_file: ca-certificates-dev.cdx.json
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
@@ -56,14 +44,14 @@ jobs:
           COMPONENT_VERSION: ${{ steps.ver.outputs.v }}
           LOCK_FILE: ${{ matrix.lockfile }}
           UPLOAD: 'true'
-          AUGMENT: 'true'
+          AUGMENT: 'false'
           ENRICH: 'true'
           SBOM_FORMAT: ${{ matrix.sbom_format }}
           OUTPUT_FILE: ${{ matrix.output_file }}
-          API_BASE_URL: https://app.sbomify.com
+          API_BASE_URL: https://stage.sbomify.com
           SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
           SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
-          PRODUCT_RELEASE: 'IeIn1dGJXULh:${{ steps.ver.outputs.v }}'
+          PRODUCT_RELEASE: 'gV0qHZCzYZDu:${{ steps.ver.outputs.v }}'
       # ---------------------------------------------------------------------
       # Build-provenance attestation (SLSA v1)
       # ---------------------------------------------------------------------

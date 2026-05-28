@@ -19,6 +19,12 @@ class DoneScreen(WizardScreen):
 
     BINDINGS = [
         Binding("enter", "finish", "Finish", show=True, priority=True),
+        # Done is terminal — there's nothing useful to go 'back' to,
+        # since apply already committed the plan. Treat Escape as a
+        # synonym for Finish so it exits the wizard instead of
+        # popping back to the Apply screen (which would just re-show
+        # the success log from the run that already happened).
+        Binding("escape", "finish", "Finish", show=True, priority=True),
     ]
 
     def compose_body(self) -> ComposeResult:
