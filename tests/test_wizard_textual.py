@@ -67,6 +67,47 @@ async def test_app_starts_and_renders_welcome(tmp_path: Path, monkeypatch: pytes
         await pilot.pause()
 
 
+async def test_escape_from_authenticate_returns_to_discover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the password Input on AuthenticateScreen must not eat
+    Escape. Without priority=True on the screen's Escape binding the
+    user gets stuck with no way back to Discover."""
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "uv.lock",
+            rel_path=Path("uv.lock"),
+            ecosystem="python",
+            suggested_name="widget-py",
+        )
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+
+    # No token in opts so authenticate doesn't auto-start the worker.
+    opts = WizardOptions(
+        token=None,
+        api_base_url="https://app.sbomify.test",
+        repo_root=tmp_path,
+        output_dir=tmp_path / ".github" / "workflows",
+        dry_run=True,
+    )
+    app = WizardApp(opts)
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # welcome → discover
+        await pilot.pause()
+        await pilot.press("enter")  # discover → authenticate
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.authenticate import AuthenticateScreen
+        from sbomify_action.cli.wizard.screens.discover import DiscoverScreen
+
+        assert isinstance(app.screen, AuthenticateScreen)
+        # Escape with the password Input focused — must still go back.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, DiscoverScreen)
+
+
 async def test_welcome_to_discover_navigates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lockfiles = [
         DiscoveredLockfile(

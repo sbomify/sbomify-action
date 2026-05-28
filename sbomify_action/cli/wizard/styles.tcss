@@ -279,6 +279,15 @@ DataTable > .datatable--even-row {
  * Progress + log surfaces
  * --------------------------------------------------------------------- */
 
+/* Empty placeholder container on the authenticate screen — collapses
+ * to zero height until a LoadingIndicator is mounted inside it,
+ * otherwise it inherits Container's default 1fr and renders the empty
+ * widget's repr as visible text. */
+#auth-progress {
+    height: auto;
+    min-height: 0;
+}
+
 LoadingIndicator {
     color: $sbom-purple;
     background: transparent;

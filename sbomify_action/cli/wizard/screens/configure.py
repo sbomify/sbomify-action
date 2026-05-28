@@ -34,7 +34,8 @@ class ConfigureScreen(WizardScreen):
 
     BINDINGS = [
         Binding("enter", "submit", "Next ▸", show=True, priority=True),
-        Binding("escape", "app.pop_screen", "Back", show=True),
+        # Priority so the per-component name Inputs don't swallow Escape.
+        Binding("escape", "app.pop_screen", "Back", show=True, priority=True),
     ]
 
     def compose_body(self) -> ComposeResult:

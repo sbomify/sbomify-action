@@ -6,8 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.widget import Widget
+from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import Button, Input, LoadingIndicator, Static
 from textual.worker import Worker, WorkerState
 
@@ -15,14 +14,6 @@ from sbomify_action.cli.wizard.screens._base import WizardScreen
 from sbomify_action.cli.wizard.state import WorkspaceSnapshot
 from sbomify_action.exceptions import APIError, AuthError
 from sbomify_action.sbomify_api import SbomifyApiClient
-
-
-class Container(Widget):
-    """Bare container used to swap a LoadingIndicator in / out."""
-
-    DEFAULT_CSS = """
-    Container { height: auto; width: 100%; }
-    """
 
 
 class AuthenticateScreen(WizardScreen):
@@ -34,7 +25,10 @@ class AuthenticateScreen(WizardScreen):
 
     BINDINGS = [
         Binding("enter", "submit", "Submit", show=True, priority=True),
-        Binding("escape", "app.pop_screen", "Back", show=True),
+        # priority=True ensures Escape pops the screen even when an Input
+        # has focus — without it the password Input swallows the keypress
+        # and the user can't get back to Discover from here.
+        Binding("escape", "app.pop_screen", "Back", show=True, priority=True),
     ]
 
     def compose_body(self) -> ComposeResult:

@@ -20,7 +20,8 @@ class ProductScreen(WizardScreen):
 
     BINDINGS = [
         Binding("enter", "submit", "Next ▸", show=True, priority=True),
-        Binding("escape", "app.pop_screen", "Back", show=True),
+        # Priority so the new-product Input doesn't swallow Escape.
+        Binding("escape", "app.pop_screen", "Back", show=True, priority=True),
     ]
 
     def compose_body(self) -> ComposeResult:
