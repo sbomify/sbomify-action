@@ -17,25 +17,33 @@ TAGLINE = "Zero to SBOM Hero"
 # marketing site uses for the homepage title.
 HERO_TITLE = "[b][#4059D0]sbom[/][#CC58BB]ify[/][#F4B57F] wizard[/][/]"
 
-# ASCII wizard mascot. Rendered with the sbomify signature gradient
-# layered across rows — peach at the hat tip, magenta around the
-# sparkles, blue down the robe — so the figure echoes the gradient
-# title sitting beneath it. Pure ASCII (no box-drawing) so it renders
-# uniformly across terminals and SSH sessions.
+# ASCII wizard mascot. The shape leans on the four things that
+# unmistakably read as "wizard": pointed hat with a couple of stars,
+# eyes peering out, a flowing white beard (the WWW pattern is a
+# decades-old ASCII convention for a beard), and a robe widening at
+# the base. Pure ASCII (no box-drawing) so it renders uniformly
+# across terminals and SSH sessions.
+#
+# Rows are coloured to echo the sbomify gradient sitting under it:
+#   - peach sparkles + hat tip
+#   - magenta hat base
+#   - muted purple face
+#   - silvery beard (Gandalf cue)
+#   - blue robe deepening to brand-primary at the hem
 ASCII_WIZARD = (
-    "[#F4B57F]              .   *   .[/]\n"
-    "[#F4B57F]                 _o_[/]\n"
-    "[#F4B57F]                / _ \\[/]\n"
-    "[#CC58BB]               / * * \\[/]\n"
-    "[#CC58BB]              /  ___  \\[/]\n"
-    "[#8A7DFF]             /  /   \\  \\[/]\n"
-    "[#8A7DFF]            /__/_____\\__\\[/]\n"
-    "[#CBCCCE]              ( o   o )[/]\n"
-    "[#CBCCCE]               \\  _  /[/]\n"
-    "[#4059D0]              /-/   \\-\\[/]\n"
-    "[#4059D0]             /  |   |  \\[/]\n"
-    "[#4059D0]            /   |   |   \\[/]\n"
-    "[#37306B]           (____|___|____)[/]"
+    "[#F4B57F]                .  *  .[/]\n"
+    "[#F4B57F]                   /\\[/]\n"
+    "[#F4B57F]                  /  \\[/]\n"
+    "[#CC58BB]                 / *  \\[/]\n"
+    "[#CC58BB]                /  *   \\[/]\n"
+    "[#CC58BB]               /________\\[/]\n"
+    "[#CBCCCE]                | o  o |[/]\n"
+    "[#CBCCCE]                |  __  |[/]\n"
+    "[#E0E0E5]               / \\WWWW/ \\[/]\n"
+    "[#E0E0E5]              /  WWWWWW  \\[/]\n"
+    "[#8A7DFF]             /  WWWWWWWW  \\[/]\n"
+    "[#4059D0]            /  WWWWWWWWWW  \\[/]\n"
+    "[#37306B]           /__________________\\[/]"
 )
 
 
