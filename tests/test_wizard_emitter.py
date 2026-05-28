@@ -211,6 +211,24 @@ def test_emit_attestation_adds_step_and_permission(tmp_path: Path) -> None:
     assert "subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'" in yaml
 
 
+def test_emit_attestation_carries_support_matrix_annotation(tmp_path: Path) -> None:
+    """The attest step must be preceded by the four-condition support
+    annotation so anyone reading the generated workflow knows the
+    GHEC / GHES gating without leaving the file."""
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        attestation=True,
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+    assert "Public repository on any GitHub plan" in yaml
+    assert "Private / internal repository on GitHub Enterprise Cloud" in yaml
+    assert "Private / internal repository on GitHub Free, Pro, or Team" in yaml
+    assert "GitHub Enterprise Server" in yaml
+    assert "github.com/actions/attest-build-provenance" in yaml
+
+
 def test_emit_no_attestation_by_default(tmp_path: Path) -> None:
     facts = _facts(tmp_path)
     plan = Plan(

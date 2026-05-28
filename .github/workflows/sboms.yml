@@ -64,8 +64,20 @@ jobs:
           SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
           SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
           PRODUCT_RELEASE: 'IeIn1dGJXULh:${{ steps.ver.outputs.v }}'
-      # attest-build-provenance: works on public repos on any plan;
-      # private/internal repos require GitHub Enterprise Cloud.
+      # ---------------------------------------------------------------------
+      # Build-provenance attestation (SLSA v1)
+      # ---------------------------------------------------------------------
+      # Where this step is supported:
+      #   * Public repository on any GitHub plan (Free, Pro, Team, Enterprise)
+      #     — uses the public-good Sigstore instance (Fulcio + Rekor public log).
+      #   * Private / internal repository on GitHub Enterprise Cloud
+      #     — uses GitHub's private Sigstore instance (scoped to the repo).
+      # Where it is NOT supported and the workflow will fail:
+      #   * Private / internal repository on GitHub Free, Pro, or Team.
+      #   * Any repository on GitHub Enterprise Server (self-hosted).
+      # If you hit one of the unsupported configurations, either upgrade to
+      # GitHub Enterprise Cloud, make the repo public, or remove this step.
+      # Reference: https://github.com/actions/attest-build-provenance
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
         with:
           subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'

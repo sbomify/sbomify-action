@@ -86,10 +86,13 @@ class ConfigureScreen(WizardScreen):
         with Vertical(classes="wizard-panel"):
             yield Static("[b]Build provenance[/]", classes="wizard-title")
             yield Static(
-                "[#F4B57F]Note:[/] artifact attestations work on any public repo,"
-                " but [b]private repos need GitHub Enterprise Cloud[/]. They are"
-                " not supported on Free/Pro/Team private repos or on GitHub"
-                " Enterprise Server.",
+                "[#F4B57F]Supported on:[/]\n"
+                "  • Public repos on any GitHub plan (signs via public-good Sigstore)\n"
+                "  • Private/internal repos on [b]GitHub Enterprise Cloud[/] (private Sigstore)\n"
+                "[#F4B57F]Not supported on:[/]\n"
+                "  • Private/internal repos on Free, Pro, or Team — the workflow will fail\n"
+                "  • Any repo on GitHub Enterprise Server (self-hosted)\n"
+                "The same note is emitted as a comment in the generated workflow.",
                 classes="wizard-muted",
             )
             with RadioSet(id="attestation"):
