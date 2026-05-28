@@ -90,9 +90,9 @@ class ProductScreen(WizardScreen):
             self.wizard.state.plan.use_product_id = option.id
             self.wizard.state.plan.create_product = None
             logger.debug("Product screen: will use existing product id=%s", option.id)
-        from sbomify_action.cli.wizard.screens.configure import ConfigureScreen
+        from sbomify_action.cli.wizard.screens.components import ComponentsScreen
 
-        self.wizard.push_screen(ConfigureScreen())
+        self.wizard.push_screen(ComponentsScreen())
 
     def _help_text(self) -> str:
         count = len(self.wizard.state.workspace.products) if self.wizard.state.workspace else 0

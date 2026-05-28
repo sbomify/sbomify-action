@@ -351,6 +351,46 @@ def test_apply_plan_creates_components_and_attaches(tmp_path: Path) -> None:
     assert workflow in state.written_files
 
 
+def test_apply_plan_reuses_existing_component_without_create(tmp_path: Path) -> None:
+    """When the user picked an existing component on the Components screen,
+    apply_plan must skip the create_component API call and use the stored
+    id directly."""
+    state = _state(tmp_path)
+    api = state.api
+    assert api is not None
+    # Sentinel — should never be called for the existing-id path.
+    api.get_or_create_component.side_effect = AssertionError(
+        "get_or_create_component must not run for existing-id components"
+    )
+
+    lockfile = _python_lockfile(tmp_path)
+    state.plan = Plan(
+        use_product_id="prod-existing",
+        create_components=[
+            PlannedComponent(lockfile=lockfile, name="widget-py", existing_id="comp-existing"),
+        ],
+    )
+
+    opts = WizardOptions(
+        token="t",
+        api_base_url="https://app.sbomify.com",
+        repo_root=tmp_path,
+        output_dir=tmp_path / ".github" / "workflows",
+        dry_run=False,
+    )
+    apply_mod.apply_plan(state, opts)
+
+    # Existing id was used as-is.
+    assert state.component_ids[lockfile.rel_path] == "comp-existing"
+    # The product attach call still fires, and the existing id is in the set.
+    api.attach_components_to_product.assert_called_once()
+    args = api.attach_components_to_product.call_args.args
+    assert args[1] == ["comp-existing"]
+    # Workflow file reflects the existing id.
+    workflow = tmp_path / ".github" / "workflows" / "sboms.yml"
+    assert "comp-existing" in workflow.read_text(encoding="utf-8")
+
+
 def test_apply_plan_create_new_product(tmp_path: Path) -> None:
     state = _state(tmp_path)
     api = state.api

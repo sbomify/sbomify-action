@@ -200,6 +200,14 @@ Button.-primary:hover {
     color: $sbom-primary;
 }
 
+/* Primary button focus indicator. The generic `Button:focus { border:
+ * tall $sbom-purple }` rule is invisible on the primary button because
+ * its background is already purple. Use the gradient peach instead so
+ * the focused 'Next' button reads clearly against the brand purple. */
+Button.-primary:focus {
+    border: tall $sbom-grad-peach;
+}
+
 /* ---------------------------------------------------------------------
  * Inputs + form controls
  * --------------------------------------------------------------------- */

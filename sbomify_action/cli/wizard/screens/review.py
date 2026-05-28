@@ -14,7 +14,7 @@ from sbomify_action.cli.wizard.screens._base import WizardScreen
 class ReviewScreen(WizardScreen):
     """Phase 6 — show what apply will do, then confirm."""
 
-    step_index = 6
+    step_index = 7
     step_title = "Review"
     step_subtitle = "Apply nothing yet. Confirm the plan below to commit."
 

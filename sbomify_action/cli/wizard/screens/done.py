@@ -13,7 +13,7 @@ from sbomify_action.cli.wizard.screens._base import WizardScreen
 class DoneScreen(WizardScreen):
     """Phase 6c — summary + next steps."""
 
-    step_index = 6
+    step_index = 7
     step_title = "Done"
     step_subtitle = "All set. Here's what you'll want to do next."
 

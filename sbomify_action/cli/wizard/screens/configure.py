@@ -13,24 +13,28 @@ from typing import cast
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Input, Label, RadioButton, RadioSet, Static
+from textual.widgets import Button, RadioButton, RadioSet, Static
 
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 from sbomify_action.cli.wizard.state import (
     AugmentationStrategy,
     CredentialMode,
-    PlannedComponent,
     ReleaseStrategy,
     SbomFormat,
 )
 
 
 class ConfigureScreen(WizardScreen):
-    """Phase 5 — file-wide settings + component names."""
+    """Phase 6 — file-wide settings (release / credentials / formats / etc).
 
-    step_index = 5
+    Per-component names + existing-component selection have moved to
+    ``ComponentsScreen`` (Phase 5). This screen handles everything
+    that's shared across the whole emitted workflow.
+    """
+
+    step_index = 6
     step_title = "Configure"
-    step_subtitle = "Pick the workflow's release strategy, credentials, and name each component."
+    step_subtitle = "Pick the workflow's release strategy, credentials, formats, and provenance settings."
 
     BINDINGS = [
         Binding("enter", "submit", "Next ▸", show=True, priority=True),
@@ -125,18 +129,6 @@ class ConfigureScreen(WizardScreen):
                     value=not attest_default_yes,
                 )
 
-        names = Vertical(classes="wizard-panel")
-        names.border_title = "◆  Component names"
-        names.border_subtitle = f"{len(self.wizard.state.selected)} component(s)"
-        with names:
-            yield Static(
-                "Each lockfile maps to one sbomify component. Defaults are derived from the repo + ecosystem.",
-                classes="wizard-muted",
-            )
-            for idx, lockfile in enumerate(self.wizard.state.selected):
-                yield Label(f"[#CBCCCE]{lockfile.rel_path}[/]  [#5E5E5E]({lockfile.ecosystem})[/]")
-                yield Input(value=lockfile.suggested_name, id=f"name-{idx}")
-
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")
@@ -172,8 +164,8 @@ class ConfigureScreen(WizardScreen):
         )
 
     def on_mount(self) -> None:
-        if self.wizard.state.selected:
-            self.query_one("#name-0", Input).focus()
+        # Focus the first radio group so the user can start picking immediately.
+        self.query_one("#release", RadioSet).focus()
 
     def action_submit(self) -> None:
         self._advance()
@@ -185,6 +177,9 @@ class ConfigureScreen(WizardScreen):
             self.app.pop_screen()
 
     def _advance(self) -> None:
+        # Per-component name + existing-component selection were collected
+        # by ComponentsScreen and are already on plan.create_components.
+        # All we set here is the file-wide configuration.
         plan = self.wizard.state.plan
         plan.release_strategy = self._selected_release_strategy()
         plan.credential_mode = self._selected_credential_mode()
@@ -192,10 +187,6 @@ class ConfigureScreen(WizardScreen):
         plan.enrich = self._selected_enrich()
         plan.sbom_formats = self._selected_formats()
         plan.attestation = self._selected_attestation()
-        plan.create_components = []
-        for idx, lockfile in enumerate(self.wizard.state.selected):
-            name = self.query_one(f"#name-{idx}", Input).value.strip() or lockfile.suggested_name
-            plan.create_components.append(PlannedComponent(lockfile=lockfile, name=name))
 
         from sbomify_action.cli.wizard.screens.review import ReviewScreen
 

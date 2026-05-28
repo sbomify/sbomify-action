@@ -125,9 +125,10 @@ class WelcomeScreen(WizardScreen):
             "[#8A7DFF]01[/]  Pick which lockfiles to track",
             "[#8A7DFF]02[/]  Authenticate against sbomify",
             "[#8A7DFF]03[/]  Pick a product",
-            "[#8A7DFF]04[/]  Configure the workflow (format / credentials / provenance)",
-            "[#8A7DFF]05[/]  Review the plan",
-            "[#8A7DFF]06[/]  Apply — create components & write the workflow file",
+            "[#8A7DFF]04[/]  Reuse or create a component per lockfile",
+            "[#8A7DFF]05[/]  Configure the workflow (format / credentials / provenance)",
+            "[#8A7DFF]06[/]  Review the plan",
+            "[#8A7DFF]07[/]  Apply — write the workflow file & finalise components",
         ]
 
     def _repo_lines(self) -> list[str]:

@@ -47,9 +47,20 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
     # 1. Resolve or create the product.
     product = _resolve_product(state, log)
 
-    # 2. Create components (get-or-create) and remember their IDs.
+    # 2. Resolve component IDs. If the user picked an existing component
+    # on the Components screen, `existing_id` is set and we use it
+    # directly — no API call needed. Otherwise we get-or-create by name
+    # (recovers from DUPLICATE_NAME on the backend).
     component_ids: dict[str, str] = {}
     for planned in plan.create_components:
+        if planned.existing_id is not None:
+            comp_id = planned.existing_id
+            component_ids[str(planned.lockfile.rel_path)] = comp_id
+            state.component_ids[planned.lockfile.rel_path] = comp_id
+            state.applied.append(f"reused existing component {planned.name}")
+            log("info", f"Reused existing component {planned.name} ({comp_id})")
+            continue
+
         comp_id, was_created = api.get_or_create_component(planned.name, cache={})
         component_ids[str(planned.lockfile.rel_path)] = comp_id
         state.component_ids[planned.lockfile.rel_path] = comp_id
