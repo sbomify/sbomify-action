@@ -86,6 +86,15 @@ class RepoFacts:
     owner_repo_slug: str | None
     """``"owner/repo"`` parsed from the git remote, or None when unknown.
     Used to render the OIDC binding instructions on the Done screen."""
+    visibility: Literal["public", "private", "unknown"] = "unknown"
+    """Detected GitHub visibility — ``public`` if the unauthenticated
+    GitHub API returned 200 with ``private: false``, ``private`` if it
+    returned 404 (meaning the repo is not visible to anonymous callers,
+    which on github.com effectively means private/internal). Anything
+    else — non-GitHub remote, no remote, rate-limited, no network —
+    falls back to ``unknown``. Used to gate the attestation warning
+    on the configure screen and surface the visibility line on the
+    welcome screen."""
 
 
 @dataclass

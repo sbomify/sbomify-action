@@ -11,7 +11,12 @@ import pytest
 from sbomify_action.cli.wizard.discovery import discover, slugify
 from sbomify_action.cli.wizard.existing import wizard_workflow_exists, workflow_path
 from sbomify_action.cli.wizard.io import WIZARD_HEADER_SENTINEL
-from sbomify_action.cli.wizard.repo_facts import _parse_owner_repo_slug, gather_repo_facts
+from sbomify_action.cli.wizard.repo_facts import (
+    _is_github_remote,
+    _parse_owner_repo_slug,
+    detect_visibility,
+    gather_repo_facts,
+)
 
 # ----------------------------------------------------------------------
 # discovery
@@ -70,6 +75,20 @@ def test_slugify_strips_and_trims() -> None:
 
 # ----------------------------------------------------------------------
 # repo_facts
+
+
+@pytest.fixture(autouse=True)
+def _stub_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent gather_repo_facts from hitting the real GitHub API.
+
+    Tests using fake remotes (acme/widget) would otherwise trigger a
+    live network call into api.github.com on every run — slow and
+    flaky. The autouse here neutralises it for the entire module.
+    """
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.repo_facts.detect_visibility",
+        lambda _remote, _slug: "unknown",
+    )
 
 
 def _init_git_repo(path: Path, *, remote: str = "git@github.com:acme/widget.git") -> None:
@@ -153,3 +172,80 @@ def test_wizard_workflow_exists_false_for_handwritten(tmp_path: Path) -> None:
 
 def test_wizard_workflow_exists_false_when_missing(tmp_path: Path) -> None:
     assert wizard_workflow_exists(tmp_path) is False
+
+
+# ----------------------------------------------------------------------
+# detect_visibility
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("git@github.com:acme/widget.git", True),
+        ("https://github.com/acme/widget.git", True),
+        ("https://x:y@github.com/acme/widget", True),
+        ("git@gitlab.com:acme/widget.git", False),
+        ("https://bitbucket.org/acme/widget.git", False),
+        ("git@github-enterprise.example.com:acme/widget.git", False),
+        ("not-a-url", False),
+    ],
+)
+def test_is_github_remote(url: str, expected: bool) -> None:
+    assert _is_github_remote(url) is expected
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int, body: object) -> None:
+        self.status_code = status_code
+        self._body = body
+
+    def json(self) -> object:
+        if isinstance(self._body, Exception):
+            raise self._body
+        return self._body
+
+
+def test_detect_visibility_public(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.repo_facts.requests.get",
+        lambda *args, **kwargs: _FakeResponse(200, {"private": False}),
+    )
+    assert detect_visibility("git@github.com:acme/widget.git", "acme/widget") == "public"
+
+
+def test_detect_visibility_404_means_private(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.repo_facts.requests.get",
+        lambda *args, **kwargs: _FakeResponse(404, {}),
+    )
+    assert detect_visibility("git@github.com:acme/widget.git", "acme/widget") == "private"
+
+
+def test_detect_visibility_non_github_short_circuits(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: dict[str, bool] = {"hit": False}
+
+    def fail(*_args: object, **_kwargs: object) -> object:
+        called["hit"] = True
+        raise AssertionError("requests.get must not be called for non-github remotes")
+
+    monkeypatch.setattr("sbomify_action.cli.wizard.repo_facts.requests.get", fail)
+    assert detect_visibility("git@gitlab.com:acme/widget.git", "acme/widget") == "unknown"
+    assert called["hit"] is False
+
+
+def test_detect_visibility_network_failure_returns_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    import requests
+
+    def boom(*_args: object, **_kwargs: object) -> object:
+        raise requests.ConnectionError("offline")
+
+    monkeypatch.setattr("sbomify_action.cli.wizard.repo_facts.requests.get", boom)
+    assert detect_visibility("git@github.com:acme/widget.git", "acme/widget") == "unknown"
+
+
+def test_detect_visibility_rate_limit_returns_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.repo_facts.requests.get",
+        lambda *args, **kwargs: _FakeResponse(403, {"message": "rate limit"}),
+    )
+    assert detect_visibility("git@github.com:acme/widget.git", "acme/widget") == "unknown"

@@ -136,6 +136,7 @@ class WelcomeScreen(WizardScreen):
         lines = [
             f"[#CBCCCE]Repository[/]  [b]{facts.suggested_repo_name}[/]",
             f"[#CBCCCE]Branch    [/]  {facts.current_branch or facts.default_branch}",
+            f"[#CBCCCE]Visibility[/]  {self._visibility_chip(facts.visibility)}",
             f"[#CBCCCE]Lockfiles [/]  [b]{lockfile_count}[/] found",
         ]
         if self.wizard.state.workflow_exists:
@@ -145,3 +146,15 @@ class WelcomeScreen(WizardScreen):
         if facts.has_release_tags:
             lines.append("[#86EFAC]✓  Release tags detected (v*) — tag-based strategy recommended.[/]")
         return lines
+
+    @staticmethod
+    def _visibility_chip(visibility: str) -> str:
+        """One-liner chip describing the detected GitHub repo visibility."""
+        if visibility == "public":
+            return "[#86EFAC]✓ public[/]  [#5E5E5E](attestation works on any plan)[/]"
+        if visibility == "private":
+            return (
+                "[#F4B57F]⚠ private[/]  [#5E5E5E]"
+                "(attestation needs GitHub Enterprise Cloud)[/]"
+            )
+        return "[#5E5E5E]◌ unknown[/]  [#5E5E5E](non-github remote or no network)[/]"

@@ -95,16 +95,7 @@ class ConfigureScreen(WizardScreen):
         attest.border_title = "◆  Build provenance"
         attest.border_subtitle = "signed attestations via sigstore"
         with attest:
-            yield Static(
-                "[#86EFAC]✓  Supported[/]\n"
-                "    • Public repos on any GitHub plan  (public-good Sigstore)\n"
-                "    • Private/internal repos on [b]GitHub Enterprise Cloud[/]  (private Sigstore)\n"
-                "[#F87171]✗  Not supported[/]\n"
-                "    • Private/internal repos on Free, Pro, or Team — the workflow will fail\n"
-                "    • Any repo on GitHub Enterprise Server\n"
-                "[#5E5E5E]The same note is emitted as a comment in the generated workflow.[/]",
-                classes="wizard-muted",
-            )
+            yield Static(self._attestation_note(), classes="wizard-muted")
             with RadioSet(id="attestation"):
                 yield RadioButton("Skip provenance attestation", id="attest-no", value=True)
                 yield RadioButton(
@@ -127,6 +118,36 @@ class ConfigureScreen(WizardScreen):
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")
+
+    def _attestation_note(self) -> str:
+        """Render the attestation panel note, gated by detected repo visibility.
+
+        - Public repo → one-line "✓ supported" so the user isn't scared
+          off by an irrelevant warning.
+        - Private repo → the full GHEC requirement note (the workflow
+          will fail on Free/Pro/Team private repos).
+        - Unknown (non-github remote, no network, rate-limited) → the
+          same conservative warning, because we can't rule out the
+          unsupported case.
+        """
+        visibility = self.wizard.state.facts.visibility
+        if visibility == "public":
+            return (
+                "[#86EFAC]✓  Public repository[/] — attestation is supported on any GitHub plan, "
+                "signed via the public-good Sigstore instance.\n"
+                "[#5E5E5E]The same note is emitted as a comment in the generated workflow.[/]"
+            )
+        warning_tone = "[#F4B57F]⚠  Private repository[/]" if visibility == "private" else "[#5E5E5E]◌  Visibility unknown[/]"
+        return (
+            f"{warning_tone} — attestation has plan-tier requirements:\n"
+            "[#86EFAC]✓  Supported[/]\n"
+            "    • Public repos on any GitHub plan  (public-good Sigstore)\n"
+            "    • Private/internal repos on [b]GitHub Enterprise Cloud[/]  (private Sigstore)\n"
+            "[#F87171]✗  Not supported[/]\n"
+            "    • Private/internal repos on Free, Pro, or Team — the workflow will fail\n"
+            "    • Any repo on GitHub Enterprise Server\n"
+            "[#5E5E5E]The same note is emitted as a comment in the generated workflow.[/]"
+        )
 
     def on_mount(self) -> None:
         if self.wizard.state.selected:

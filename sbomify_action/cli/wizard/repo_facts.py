@@ -10,6 +10,9 @@ from __future__ import annotations
 import re
 import subprocess
 from pathlib import Path
+from typing import Literal
+
+import requests
 
 from sbomify_action.cli.wizard.state import RepoFacts
 
@@ -25,6 +28,7 @@ def gather_repo_facts(repo_root: Path) -> RepoFacts:
     current_branch: str | None = None
     has_release_tags = False
     owner_repo_slug: str | None = None
+    visibility: Literal["public", "private", "unknown"] = "unknown"
 
     if is_git:
         remote_url = _git(["config", "--get", "remote.origin.url"], cwd=repo_root) or None
@@ -37,6 +41,8 @@ def gather_repo_facts(repo_root: Path) -> RepoFacts:
         current_branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_root) or None
         tags = _git(["tag", "--list", "v*"], cwd=repo_root)
         has_release_tags = bool(tags)
+        if remote_url and owner_repo_slug:
+            visibility = detect_visibility(remote_url, owner_repo_slug)
 
     if not suggested_repo_name:
         suggested_repo_name = repo_root.name
@@ -50,6 +56,7 @@ def gather_repo_facts(repo_root: Path) -> RepoFacts:
         current_branch=current_branch,
         has_release_tags=has_release_tags,
         owner_repo_slug=owner_repo_slug,
+        visibility=visibility,
     )
 
 
@@ -84,3 +91,66 @@ def _parse_owner_repo_slug(remote_url: str) -> str | None:
     if not match:
         return None
     return f"{match.group('owner')}/{match.group('repo')}"
+
+
+# Matches both SSH (git@github.com:...) and HTTPS
+# (https://github.com/..., https://user:token@github.com/...) forms.
+# Anything else (gitlab, bitbucket, self-hosted GHES) misses on purpose
+# — visibility detection only works against the public github.com API.
+_GITHUB_REMOTE_RE = re.compile(r"^(git@github\.com:|https?://([^@/]+@)?github\.com/)")
+
+
+def _is_github_remote(remote_url: str) -> bool:
+    """True iff the remote URL points at github.com (not GHES, GitLab, etc.)."""
+    return bool(_GITHUB_REMOTE_RE.match(remote_url.strip()))
+
+
+# How long we'll wait for the GitHub API before giving up and treating
+# the visibility as unknown. The call is on the hot path of wizard
+# startup, so this needs to stay tight.
+_VISIBILITY_TIMEOUT = 2.0
+
+
+def detect_visibility(remote_url: str, owner_repo_slug: str) -> Literal["public", "private", "unknown"]:
+    """Ask github.com whether ``owner_repo_slug`` is publicly visible.
+
+    Unauthenticated, so it only distinguishes "anonymously visible"
+    (= public) from "not anonymously visible" (= private OR non-
+    existent — same UX outcome). Rate-limited at 60/hr per IP which
+    is fine for typical wizard usage.
+
+    - 200 + ``private: false`` → ``"public"``
+    - 200 + ``private: true``  → ``"private"`` (defensive — this branch
+      only fires if a future API change starts returning private repo
+      metadata to anonymous callers)
+    - 404 → ``"private"`` (could also be non-existent; same UX)
+    - Anything else (network down, rate-limited, non-github remote, no
+      slug) → ``"unknown"``
+
+    Pure helper — no side effects, no logging — so it can be called
+    from ``gather_repo_facts`` without polluting the launch path.
+    """
+    if not _is_github_remote(remote_url):
+        return "unknown"
+    url = f"https://api.github.com/repos/{owner_repo_slug}"
+    try:
+        response = requests.get(
+            url,
+            timeout=_VISIBILITY_TIMEOUT,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+    except requests.RequestException:
+        return "unknown"
+    if response.status_code == 404:
+        return "private"
+    if response.status_code != 200:
+        return "unknown"
+    try:
+        body = response.json()
+    except ValueError:
+        return "unknown"
+    if isinstance(body, dict) and body.get("private") is False:
+        return "public"
+    if isinstance(body, dict) and body.get("private") is True:
+        return "private"
+    return "unknown"
