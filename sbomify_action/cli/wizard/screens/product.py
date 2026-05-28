@@ -68,7 +68,6 @@ class ProductScreen(WizardScreen):
 
     def _advance(self) -> None:
         new_name = self.query_one("#new-product", Input).value.strip()
-        status = self.query_one("#product-status", Static)
         if new_name:
             self.wizard.state.plan.create_product = new_name
             self.wizard.state.plan.use_product_id = None
@@ -76,19 +75,18 @@ class ProductScreen(WizardScreen):
         else:
             listing = self.query_one("#product-list", OptionList)
             if listing.highlighted is None:
-                # Defensive — on_mount pre-highlights the first row when
-                # any products exist, so we should only reach this with
-                # an empty product list AND an empty new-product input.
+                # We get here only if the workspace had zero products
+                # AND the user hit Next/Enter without typing a name —
+                # on_mount pre-highlights the first row when any
+                # products exist. Surface a visible hint instead of
+                # silently dinging.
+                status = self.query_one("#product-status", Static)
                 status.update(
-                    "[#F87171]Pick a product from the list, or type a new product name below.[/]"
+                    "[#F87171]Type a new product name below — your workspace has no existing products.[/]"
                 )
                 self.app.bell()
                 return
             option = listing.get_option_at_index(listing.highlighted)
-            if option.id is None:
-                status.update("[#F87171]Selected product has no id; please pick another.[/]")
-                self.app.bell()
-                return
             self.wizard.state.plan.use_product_id = option.id
             self.wizard.state.plan.create_product = None
             logger.debug("Product screen: will use existing product id=%s", option.id)
