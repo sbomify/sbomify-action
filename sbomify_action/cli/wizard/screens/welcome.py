@@ -151,7 +151,7 @@ class WelcomeScreen(WizardScreen):
     def _visibility_chip(visibility: str) -> str:
         """One-liner chip describing the detected GitHub repo visibility."""
         if visibility == "public":
-            return "[#86EFAC]✓ public[/]  [#5E5E5E](attestation works on any plan)[/]"
+            return "[#86EFAC]✓ public[/]"
         if visibility == "private":
             return (
                 "[#F4B57F]⚠ private[/]  [#5E5E5E]"
