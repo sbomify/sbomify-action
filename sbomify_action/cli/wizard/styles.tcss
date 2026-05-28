@@ -265,6 +265,14 @@ SelectionList, OptionList, ListView {
     max-height: 20;
 }
 
+/* Product screen — same content-sized treatment for the OptionList of
+ * existing products. Larger workspaces get capped at 20 visible rows
+ * with a scrollbar; small workspaces stay compact. */
+#product-list {
+    height: auto;
+    max-height: 20;
+}
+
 SelectionList:focus, OptionList:focus, ListView:focus {
     border: tall $sbom-purple;
 }
