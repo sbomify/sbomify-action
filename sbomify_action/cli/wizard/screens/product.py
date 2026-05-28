@@ -24,11 +24,14 @@ class ProductScreen(WizardScreen):
     ]
 
     def compose_body(self) -> ComposeResult:
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]Products[/]", classes="wizard-title")
+        product_count = len(self.wizard.state.workspace.products) if self.wizard.state.workspace else 0
+        panel = Vertical(classes="wizard-panel")
+        panel.border_title = "◆  Pick a product"
+        panel.border_subtitle = f"{product_count} existing"
+        with panel:
             yield Static(self._help_text(), classes="wizard-muted")
             yield OptionList(id="product-list")
-            yield Static("Or create a new one:", classes="wizard-muted")
+            yield Static("[#5E5E5E]Or create a new one:[/]", classes="wizard-muted")
             yield Input(placeholder="New product name (leave blank to use selection)", id="new-product")
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")

@@ -39,77 +39,90 @@ class ConfigureScreen(WizardScreen):
 
     def compose_body(self) -> ComposeResult:
         has_tags = self.wizard.state.facts.has_release_tags
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]Release strategy[/]", classes="wizard-title")
+
+        release = Vertical(classes="wizard-panel")
+        release.border_title = "◆  Release strategy"
+        release.border_subtitle = "when the workflow fires"
+        with release:
             with RadioSet(id="release"):
                 yield RadioButton(
-                    "Trunk (every push to the default branch)",
+                    "Trunk — every push to the default branch",
                     id="rel-trunk",
                     value=not has_tags,
                 )
                 yield RadioButton(
-                    f"Tag (v* git tags){' — recommended' if has_tags else ''}",
+                    "Tag — v* git tags" + ("  [#86EFAC]✓ recommended[/]" if has_tags else ""),
                     id="rel-tag",
                     value=has_tags,
                 )
-                yield RadioButton("Manual (workflow_dispatch only)", id="rel-manual")
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]Credentials[/]", classes="wizard-title")
+                yield RadioButton("Manual — workflow_dispatch only", id="rel-manual")
+
+        cred = Vertical(classes="wizard-panel")
+        cred.border_title = "◆  Credentials"
+        cred.border_subtitle = "how the workflow authenticates"
+        with cred:
             with RadioSet(id="credential"):
                 yield RadioButton(
-                    "OIDC trusted publishing — no token secret needed (recommended)",
+                    "OIDC trusted publishing — no token secret  [#86EFAC]✓ recommended[/]",
                     id="cred-oidc",
                     value=True,
                 )
-                yield RadioButton(
-                    "Token (uses SBOMIFY_TOKEN secret)",
-                    id="cred-token",
-                )
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]Augmentation[/]", classes="wizard-title")
+                yield RadioButton("Token — uses SBOMIFY_TOKEN secret", id="cred-token")
+
+        aug = Vertical(classes="wizard-panel")
+        aug.border_title = "◆  Augmentation"
+        aug.border_subtitle = "supplier / contacts metadata"
+        with aug:
             with RadioSet(id="augmentation"):
+                yield RadioButton("Skip — leave metadata blank for now", id="aug-skip", value=True)
+                yield RadioButton("Use a contact profile  (AUGMENT=true)", id="aug-profile")
+
+        fmt = Vertical(classes="wizard-panel")
+        fmt.border_title = "◆  SBOM formats"
+        fmt.border_subtitle = "one matrix row per format"
+        with fmt:
+            with RadioSet(id="formats"):
                 yield RadioButton(
-                    "Skip — leave metadata blank for now",
-                    id="aug-skip",
+                    "CycloneDX  [#86EFAC]✓ recommended[/]",
+                    id="fmt-cdx",
                     value=True,
                 )
-                yield RadioButton(
-                    "Use a contact profile (set AUGMENT=true)",
-                    id="aug-profile",
-                )
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]SBOM formats[/]", classes="wizard-title")
-            with RadioSet(id="formats"):
-                yield RadioButton("CycloneDX (recommended)", id="fmt-cdx", value=True)
                 yield RadioButton("SPDX", id="fmt-spdx")
                 yield RadioButton("Both CycloneDX and SPDX", id="fmt-both")
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]Build provenance[/]", classes="wizard-title")
+
+        attest = Vertical(classes="wizard-panel")
+        attest.border_title = "◆  Build provenance"
+        attest.border_subtitle = "signed attestations via sigstore"
+        with attest:
             yield Static(
-                "[#F4B57F]Supported on:[/]\n"
-                "  • Public repos on any GitHub plan (signs via public-good Sigstore)\n"
-                "  • Private/internal repos on [b]GitHub Enterprise Cloud[/] (private Sigstore)\n"
-                "[#F4B57F]Not supported on:[/]\n"
-                "  • Private/internal repos on Free, Pro, or Team — the workflow will fail\n"
-                "  • Any repo on GitHub Enterprise Server (self-hosted)\n"
-                "The same note is emitted as a comment in the generated workflow.",
+                "[#86EFAC]✓  Supported[/]\n"
+                "    • Public repos on any GitHub plan  (public-good Sigstore)\n"
+                "    • Private/internal repos on [b]GitHub Enterprise Cloud[/]  (private Sigstore)\n"
+                "[#F87171]✗  Not supported[/]\n"
+                "    • Private/internal repos on Free, Pro, or Team — the workflow will fail\n"
+                "    • Any repo on GitHub Enterprise Server\n"
+                "[#5E5E5E]The same note is emitted as a comment in the generated workflow.[/]",
                 classes="wizard-muted",
             )
             with RadioSet(id="attestation"):
                 yield RadioButton("Skip provenance attestation", id="attest-no", value=True)
                 yield RadioButton(
-                    "Sign SBOMs with attest-build-provenance (recommended for releases)",
+                    "Sign SBOMs with attest-build-provenance  [#86EFAC]✓ recommended for releases[/]",
                     id="attest-yes",
                 )
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]Component names[/]", classes="wizard-title")
+
+        names = Vertical(classes="wizard-panel")
+        names.border_title = "◆  Component names"
+        names.border_subtitle = f"{len(self.wizard.state.selected)} component(s)"
+        with names:
             yield Static(
                 "Each lockfile maps to one sbomify component. Defaults are derived from the repo + ecosystem.",
                 classes="wizard-muted",
             )
             for idx, lockfile in enumerate(self.wizard.state.selected):
-                yield Label(f"{lockfile.rel_path} ({lockfile.ecosystem})")
+                yield Label(f"[#CBCCCE]{lockfile.rel_path}[/]  [#5E5E5E]({lockfile.ecosystem})[/]")
                 yield Input(value=lockfile.suggested_name, id=f"name-{idx}")
+
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")

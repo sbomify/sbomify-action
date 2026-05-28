@@ -2,8 +2,13 @@
 
 ``WizardScreen`` provides the consistent visual frame every screen
 uses: a Textual ``Header``, a body region the subclass fills, and a
-``Footer`` with the keybind hints. Subclasses override
+``Footer`` with keybind hints. Subclasses override
 ``compose_body`` and the ``step_index`` / ``step_title`` class vars.
+
+The crumb at the top of every screen renders the wizard's progress
+as a connected segmented track + a numbered position chip + the
+current step title. Keeping it consistent across screens means users
+always see where they are without needing to re-orient.
 """
 
 from __future__ import annotations
@@ -20,8 +25,6 @@ if TYPE_CHECKING:
 
 
 TOTAL_STEPS = 6
-"""Number of user-facing wizard steps (the apply / done phases share
-the last step in the crumb, so we display 6 not 8)."""
 
 
 class WizardScreen(Screen[None]):
@@ -48,9 +51,37 @@ class WizardScreen(Screen[None]):
         return iter(())
 
     def _crumb_markup(self) -> str:
-        # 6-dot progress bar: filled past + current, empty future.
-        dots = "".join("[#8A7DFF]●[/]" if i <= self.step_index else "[#37306B]○[/]" for i in range(1, TOTAL_STEPS + 1))
-        return f"{dots}  [b]Step {self.step_index} of {TOTAL_STEPS}[/b]  ·  {self.step_title}"
+        """Numbered position chip + connected segment track + step title.
+
+        Visually:
+
+            01 / 06  │  ●━━━○━━━○━━━○━━━○━━━○  │  Welcome
+            03 / 06  │  ●━━━●━━━●━━━○━━━○━━━○  │  Authenticate
+
+        - Filled purple dots are completed steps.
+        - The current dot is bolded so it stands out from past steps.
+        - Connector glyphs darken between unfinished steps to hint at
+          progress direction.
+        """
+        chips: list[str] = []
+        for i in range(1, TOTAL_STEPS + 1):
+            if i < self.step_index:
+                chips.append("[#8A7DFF]●[/]")
+            elif i == self.step_index:
+                chips.append("[b #8A7DFF]●[/]")
+            else:
+                chips.append("[#37306B]○[/]")
+        connector_done = "[#8A7DFF]━━[/]"
+        connector_pending = "[#37306B]━━[/]"
+        track_parts: list[str] = []
+        for i, chip in enumerate(chips, start=1):
+            track_parts.append(chip)
+            if i < TOTAL_STEPS:
+                track_parts.append(connector_done if i < self.step_index else connector_pending)
+        track = "".join(track_parts)
+        position = f"[b #8A7DFF]{self.step_index:02d}[/][#5E5E5E] / {TOTAL_STEPS:02d}[/]"
+        divider = "[#37306B]│[/]"
+        return f"  {position}  {divider}  {track}  {divider}  [b]{self.step_title}[/]"
 
     @property
     def wizard(self) -> "WizardApp":

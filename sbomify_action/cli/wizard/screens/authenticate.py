@@ -38,8 +38,10 @@ class AuthenticateScreen(WizardScreen):
     ]
 
     def compose_body(self) -> ComposeResult:
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]API token[/]", classes="wizard-title")
+        panel = Vertical(classes="wizard-panel")
+        panel.border_title = "◆  API token"
+        panel.border_subtitle = self.wizard.opts.api_base_url
+        with panel:
             yield Static(self._token_help(), classes="wizard-muted")
             yield Input(
                 placeholder="sbom_xxxxxxxxxxxxxxxxxxxxxxxx",

@@ -69,12 +69,21 @@ Footer > .footer--key {
     margin-bottom: 1;
 }
 
+/* Card panels — modern devsecops-CLI shape: rounded border with a
+ * named title bar (set via widget.border_title). Padding gives the
+ * content room to breathe; bottom margin keeps stacked cards from
+ * butting up against each other. */
 .wizard-panel {
     border: round $sbom-primary-600;
     padding: 1 2;
     margin-bottom: 1;
     height: auto;
     background: $sbom-primary-light;
+    border-title-color: $sbom-purple;
+    border-title-style: bold;
+    border-title-align: left;
+    border-subtitle-color: $sbom-text-muted;
+    border-subtitle-align: right;
 }
 
 .wizard-panel-emphasis {
@@ -83,6 +92,9 @@ Footer > .footer--key {
     margin-bottom: 1;
     height: auto;
     background: $sbom-primary-light;
+    border-title-color: $sbom-grad-peach;
+    border-title-style: bold;
+    border-title-align: left;
 }
 
 .wizard-title {
@@ -100,6 +112,34 @@ Footer > .footer--key {
     color: $sbom-purple;
     text-style: bold;
     margin-bottom: 1;
+}
+
+/* Hero card — only used on the Welcome screen. Bigger padding,
+ * thick gradient border, title-bar uses the gradient peach so it
+ * pops against the deep purple background. */
+.wizard-hero {
+    border: thick $sbom-purple;
+    padding: 2 4;
+    margin-bottom: 1;
+    height: auto;
+    background: $sbom-primary-light;
+    border-title-color: $sbom-grad-peach;
+    border-title-style: bold;
+    border-title-align: left;
+}
+
+.wizard-hero-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.wizard-hero-tagline {
+    text-style: italic;
+    margin-bottom: 1;
+}
+
+.wizard-hero-strap {
+    color: $sbom-text-muted;
 }
 
 /* ---------------------------------------------------------------------

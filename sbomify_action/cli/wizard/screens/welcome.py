@@ -1,4 +1,4 @@
-"""Welcome screen — banner, repo summary, start button."""
+"""Welcome screen — hero, tagline, what-we'll-do, repo summary, start CTA."""
 
 from __future__ import annotations
 
@@ -9,13 +9,21 @@ from textual.widgets import Button, Static
 
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 
+# The sbomify marketing tagline. Same words as the home page hero.
+TAGLINE = "Zero to SBOM Hero"
+
+# Headline hero rendered with the sbomify signature gradient. Each
+# segment is a slice of the blue → magenta → peach gradient that the
+# marketing site uses for the homepage title.
+HERO_TITLE = "[b][#4059D0]sbom[/][#CC58BB]ify[/][#F4B57F] wizard[/][/]"
+
 
 class WelcomeScreen(WizardScreen):
-    """Phase 1 — intro + repo summary."""
+    """Phase 1 — hero + repo summary + start CTA."""
 
     step_index = 1
     step_title = "Welcome"
-    step_subtitle = "Get this repo set up for SBOM generation in a few minutes."
+    step_subtitle = ""
 
     BINDINGS = [
         Binding("enter", "start", "Continue", show=True),
@@ -23,16 +31,34 @@ class WelcomeScreen(WizardScreen):
     ]
 
     def compose_body(self) -> ComposeResult:
-        with Vertical(classes="wizard-panel-emphasis"):
-            # Title uses the sbomify marketing gradient (blue → magenta → peach)
-            # so the wizard's first impression matches sbomify.com.
+        # Hero card — the wizard's first impression. Gradient title +
+        # tagline + a thin underline; no other chrome inside.
+        hero = Vertical(classes="wizard-hero")
+        hero.border_title = "◆  sbomify"
+        with hero:
+            yield Static(HERO_TITLE, classes="wizard-hero-title")
+            yield Static(f"[#CC58BB]{TAGLINE}[/]", classes="wizard-hero-tagline")
             yield Static(
-                "[b][#4059D0]sbom[/][#CC58BB]ify[/][#F4B57F] wizard[/][/b]",
-                classes="banner",
+                "Scans your repo for lockfiles, registers the matching components in "
+                "sbomify, and writes a release-ready GitHub Actions workflow.",
+                classes="wizard-hero-strap",
             )
-            yield Static(self._intro())
-            yield Static("")
-            yield Static(self._repo_summary(), classes="wizard-muted")
+
+        # What-we'll-do — six iconified steps, one per upcoming screen.
+        # Mirrors the step indicator at the top of every screen so the
+        # mental model is consistent throughout the wizard.
+        steps = Vertical(classes="wizard-panel")
+        steps.border_title = "What we'll do"
+        steps.border_subtitle = "6 steps · ~3 minutes"
+        with steps:
+            yield Static("\n".join(self._steps_list()))
+
+        # Repo summary — observations from the current working tree.
+        repo = Vertical(classes="wizard-panel")
+        repo.border_title = "This repository"
+        with repo:
+            yield Static("\n".join(self._repo_lines()))
+
         with Horizontal(classes="button-row"):
             yield Button("Start  ▸", id="start", variant="primary")
             yield Button("Cancel", id="cancel")
@@ -54,32 +80,28 @@ class WelcomeScreen(WizardScreen):
 
         self.wizard.push_screen(DiscoverScreen())
 
-    def _intro(self) -> str:
-        return (
-            "This wizard scans your repository for lockfiles, registers the "
-            "matching components in sbomify, and writes a GitHub Actions workflow "
-            "that publishes an SBOM on every push.\n\n"
-            "[b]What we'll do:[/b]\n"
-            "  1. Pick which lockfiles to track\n"
-            "  2. Authenticate against sbomify\n"
-            "  3. Pick a product\n"
-            "  4. Name each component & choose a release strategy\n"
-            "  5. Review the plan\n"
-            "  6. Apply — create components & write the workflow file"
-        )
+    def _steps_list(self) -> list[str]:
+        return [
+            "[#8A7DFF]01[/]  Pick which lockfiles to track",
+            "[#8A7DFF]02[/]  Authenticate against sbomify",
+            "[#8A7DFF]03[/]  Pick a product",
+            "[#8A7DFF]04[/]  Configure the workflow (format / credentials / provenance)",
+            "[#8A7DFF]05[/]  Review the plan",
+            "[#8A7DFF]06[/]  Apply — create components & write the workflow file",
+        ]
 
-    def _repo_summary(self) -> str:
+    def _repo_lines(self) -> list[str]:
         facts = self.wizard.state.facts
         lockfile_count = len(self.wizard.state.discovered)
         lines = [
-            f"Repository: [b]{facts.suggested_repo_name}[/b]",
-            f"Branch: {facts.current_branch or facts.default_branch}",
-            f"Lockfiles found: {lockfile_count}",
+            f"[#CBCCCE]Repository[/]  [b]{facts.suggested_repo_name}[/]",
+            f"[#CBCCCE]Branch    [/]  {facts.current_branch or facts.default_branch}",
+            f"[#CBCCCE]Lockfiles [/]  [b]{lockfile_count}[/] found",
         ]
         if self.wizard.state.workflow_exists:
             lines.append(
-                "[#F4B57F]A wizard-managed sboms.yml already exists — it will be backed up before overwrite.[/]"
+                "[#F4B57F]⚠  A wizard-managed sboms.yml already exists — it'll be backed up before overwrite.[/]"
             )
         if facts.has_release_tags:
-            lines.append("Release tags detected (v*) — tag-based release strategy will be suggested.")
-        return "\n".join(lines)
+            lines.append("[#86EFAC]✓  Release tags detected (v*) — tag-based strategy recommended.[/]")
+        return lines

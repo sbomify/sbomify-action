@@ -24,15 +24,23 @@ class ReviewScreen(WizardScreen):
     ]
 
     def compose_body(self) -> ComposeResult:
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]Plan summary[/]", classes="wizard-title")
+        summary = Vertical(classes="wizard-panel")
+        summary.border_title = "◆  Plan summary"
+        summary.border_subtitle = "what apply will do"
+        with summary:
             yield Static(self._summary(), classes="wizard-muted")
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]Components to create / reuse[/]", classes="wizard-title")
+
+        components = Vertical(classes="wizard-panel")
+        components.border_title = "◆  Components"
+        components.border_subtitle = f"{len(self.wizard.state.plan.create_components)} planned"
+        with components:
             yield DataTable(id="components-table", cursor_type="none", zebra_stripes=True)
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]Files to write[/]", classes="wizard-title")
+
+        files = Vertical(classes="wizard-panel")
+        files.border_title = "◆  Files to write"
+        with files:
             yield Static(self._files_summary(), classes="wizard-muted")
+
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Apply  ▸", id="apply", variant="primary")

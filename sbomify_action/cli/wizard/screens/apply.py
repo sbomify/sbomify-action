@@ -5,7 +5,7 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, RichLog, Static
+from textual.widgets import Button, RichLog
 from textual.worker import Worker, WorkerState
 
 from sbomify_action.cli.wizard import apply as apply_mod
@@ -34,8 +34,10 @@ class ApplyScreen(WizardScreen):
     ]
 
     def compose_body(self) -> ComposeResult:
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]Apply log[/]", classes="wizard-title")
+        panel = Vertical(classes="wizard-panel")
+        panel.border_title = "⏳  Applying"
+        panel.border_subtitle = "live log"
+        with panel:
             yield RichLog(id="apply-log", wrap=True, markup=True, highlight=False)
         with Horizontal(classes="button-row"):
             yield Button("Continue ▸", id="continue", variant="primary", disabled=True)

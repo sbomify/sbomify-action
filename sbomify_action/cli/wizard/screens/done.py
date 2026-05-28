@@ -22,17 +22,23 @@ class DoneScreen(WizardScreen):
     ]
 
     def compose_body(self) -> ComposeResult:
-        with Vertical(classes="wizard-panel-emphasis"):
-            yield Static("[b]Applied[/]", classes="wizard-title")
+        applied = Vertical(classes="wizard-panel-emphasis")
+        applied.border_title = "✓  Applied"
+        applied.border_subtitle = "From zero to SBOM hero"
+        with applied:
             yield Static(self._applied_summary(), classes="wizard-muted")
+
         if self.wizard.state.plan.credential_mode == "oidc":
-            with Vertical(classes="wizard-panel"):
-                yield Static("[b]Set up OIDC trusted publishing[/]", classes="wizard-title")
+            oidc = Vertical(classes="wizard-panel")
+            oidc.border_title = "⚠  One more step — set up OIDC trusted publishing"
+            with oidc:
                 yield Static(self._oidc_instructions(), classes="wizard-muted")
         else:
-            with Vertical(classes="wizard-panel"):
-                yield Static("[b]Add the SBOMIFY_TOKEN secret[/]", classes="wizard-title")
+            tok = Vertical(classes="wizard-panel")
+            tok.border_title = "⚠  Add the SBOMIFY_TOKEN secret"
+            with tok:
                 yield Static(self._token_instructions(), classes="wizard-muted")
+
         with Horizontal(classes="button-row"):
             yield Button("Finish", id="finish", variant="primary")
 
@@ -50,14 +56,15 @@ class DoneScreen(WizardScreen):
         state = self.wizard.state
         lines: list[str] = []
         if state.created_product_id:
-            lines.append(f"Product: {state.created_product_id}")
+            lines.append(f"[#86EFAC]✓[/]  [#CBCCCE]Product[/]    {state.created_product_id}")
         if state.component_ids:
+            lines.append("[#86EFAC]✓[/]  [#CBCCCE]Components[/]")
             for rel, cid in state.component_ids.items():
-                lines.append(f"  · {rel}  →  component {cid}")
+                lines.append(f"     [#5E5E5E]│[/]  {rel}  [#5E5E5E]→[/]  [b]{cid}[/]")
         for path in state.written_files:
-            lines.append(f"Wrote: {path}")
+            lines.append(f"[#86EFAC]✓[/]  [#CBCCCE]Wrote[/]      {path}")
         if not lines:
-            lines.append("(nothing applied)")
+            lines.append("[#5E5E5E]◌  (nothing applied)[/]")
         return "\n".join(lines)
 
     def _oidc_instructions(self) -> str:

@@ -24,8 +24,10 @@ class DiscoverScreen(WizardScreen):
     ]
 
     def compose_body(self) -> ComposeResult:
-        with Vertical(classes="wizard-panel"):
-            yield Static("[b]Lockfiles[/]", classes="wizard-title")
+        panel = Vertical(classes="wizard-panel")
+        panel.border_title = "◆  Lockfiles"
+        panel.border_subtitle = f"{len(self.wizard.state.discovered)} found"
+        with panel:
             yield Static(
                 "Use [b]Space[/] to toggle each lockfile, [b]Enter[/] when you're done.",
                 classes="wizard-muted",
