@@ -128,6 +128,12 @@ Footer > .footer--key {
     border-title-align: left;
 }
 
+.wizard-hero-mascot {
+    text-align: center;
+    margin-bottom: 1;
+    height: auto;
+}
+
 .wizard-hero-title {
     text-style: bold;
     margin-bottom: 1;

@@ -17,6 +17,27 @@ TAGLINE = "Zero to SBOM Hero"
 # marketing site uses for the homepage title.
 HERO_TITLE = "[b][#4059D0]sbom[/][#CC58BB]ify[/][#F4B57F] wizard[/][/]"
 
+# ASCII wizard mascot. Rendered with the sbomify signature gradient
+# layered across rows — peach at the hat tip, magenta around the
+# sparkles, blue down the robe — so the figure echoes the gradient
+# title sitting beneath it. Pure ASCII (no box-drawing) so it renders
+# uniformly across terminals and SSH sessions.
+ASCII_WIZARD = (
+    "[#F4B57F]              .   *   .[/]\n"
+    "[#F4B57F]                 _o_[/]\n"
+    "[#F4B57F]                / _ \\[/]\n"
+    "[#CC58BB]               / * * \\[/]\n"
+    "[#CC58BB]              /  ___  \\[/]\n"
+    "[#8A7DFF]             /  /   \\  \\[/]\n"
+    "[#8A7DFF]            /__/_____\\__\\[/]\n"
+    "[#CBCCCE]              ( o   o )[/]\n"
+    "[#CBCCCE]               \\  _  /[/]\n"
+    "[#4059D0]              /-/   \\-\\[/]\n"
+    "[#4059D0]             /  |   |  \\[/]\n"
+    "[#4059D0]            /   |   |   \\[/]\n"
+    "[#37306B]           (____|___|____)[/]"
+)
+
 
 class WelcomeScreen(WizardScreen):
     """Phase 1 — hero + repo summary + start CTA."""
@@ -36,6 +57,7 @@ class WelcomeScreen(WizardScreen):
         hero = Vertical(classes="wizard-hero")
         hero.border_title = "◆  sbomify"
         with hero:
+            yield Static(ASCII_WIZARD, classes="wizard-hero-mascot")
             yield Static(HERO_TITLE, classes="wizard-hero-title")
             yield Static(f"[#CC58BB]{TAGLINE}[/]", classes="wizard-hero-tagline")
             yield Static(
