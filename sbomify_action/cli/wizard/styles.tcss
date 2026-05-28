@@ -256,6 +256,15 @@ SelectionList, OptionList, ListView {
     color: $sbom-text-muted;
 }
 
+/* Discover screen — size the lockfile list to its content (one row per
+ * lockfile + a row of padding top/bottom) rather than taking 1fr. A
+ * scrollbar still kicks in if a user has an unreasonable number of
+ * lockfiles, but for typical repos (1–5) the panel stays compact. */
+#lockfile-list {
+    height: auto;
+    max-height: 20;
+}
+
 SelectionList:focus, OptionList:focus, ListView:focus {
     border: tall $sbom-purple;
 }
