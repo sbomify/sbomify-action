@@ -85,6 +85,13 @@ class ConfigureScreen(WizardScreen):
                 yield RadioButton("Both CycloneDX and SPDX", id="fmt-both")
         with Vertical(classes="wizard-panel"):
             yield Static("[b]Build provenance[/]", classes="wizard-title")
+            yield Static(
+                "[#F4B57F]Note:[/] artifact attestations work on any public repo,"
+                " but [b]private repos need GitHub Enterprise Cloud[/]. They are"
+                " not supported on Free/Pro/Team private repos or on GitHub"
+                " Enterprise Server.",
+                classes="wizard-muted",
+            )
             with RadioSet(id="attestation"):
                 yield RadioButton("Skip provenance attestation", id="attest-no", value=True)
                 yield RadioButton(

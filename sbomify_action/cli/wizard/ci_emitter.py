@@ -195,8 +195,15 @@ def _attest_step() -> str:
     Takes the just-written SBOM file as the subject and uploads a
     signed attestation to GitHub. Pairs with
     ``permissions: attestations: write``.
+
+    Constraints (per actions/attest-build-provenance README):
+      - Works on any public repo, on any GitHub plan.
+      - Requires GitHub Enterprise Cloud on private / internal repos.
+      - Not supported on GitHub Enterprise Server.
     """
     return (
+        "      # attest-build-provenance: works on public repos on any plan;\n"
+        "      # private/internal repos require GitHub Enterprise Cloud.\n"
         f"      - uses: actions/attest-build-provenance@{PINNED_ATTEST_SHA}  # {PINNED_ATTEST_VERSION}\n"
         "        with:\n"
         "          subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'\n"

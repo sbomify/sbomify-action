@@ -2,6 +2,8 @@
 # sbomify-action wizard v1
 name: sboms
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
 jobs:
   sbom:
@@ -46,7 +48,7 @@ jobs:
           path: .sbomify-cache
           key: sbomify-${{ runner.os }}
       - id: ver
-        run: echo "v=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+        run: echo "v=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
       - uses: sbomify/sbomify-action@ac8b0d423c90447f3011ef8ab5f9ff2e854c6931  # v26.2.0
         env:
           COMPONENT_ID: ${{ matrix.component_id }}
@@ -61,6 +63,9 @@ jobs:
           API_BASE_URL: https://app.sbomify.com
           SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
           SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
+          PRODUCT_RELEASE: 'IeIn1dGJXULh:${{ steps.ver.outputs.v }}'
+      # attest-build-provenance: works on public repos on any plan;
+      # private/internal repos require GitHub Enterprise Cloud.
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
         with:
           subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'
