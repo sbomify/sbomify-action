@@ -38,7 +38,7 @@ class AuthenticateScreen(WizardScreen):
         with panel:
             yield Static(self._token_help(), classes="wizard-muted")
             yield Input(
-                placeholder="sbom_xxxxxxxxxxxxxxxxxxxxxxxx",
+                placeholder="eyJ…  (JWT-shaped sbomify API token)",
                 password=True,
                 id="token",
             )

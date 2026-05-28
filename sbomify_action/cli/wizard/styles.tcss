@@ -273,6 +273,15 @@ SelectionList, OptionList, ListView {
     max-height: 20;
 }
 
+/* Review screen — DataTable of planned components defaults to 1fr
+ * from the generic `DataTable` rule above. Override for #components-
+ * table so it sizes to "header row + one row per component", same
+ * principle as the list pickers. */
+#components-table {
+    height: auto;
+    max-height: 20;
+}
+
 SelectionList:focus, OptionList:focus, ListView:focus {
     border: tall $sbom-purple;
 }
