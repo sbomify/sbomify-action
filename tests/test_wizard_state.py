@@ -120,20 +120,20 @@ def test_file_has_wizard_header_returns_false_for_no_sentinel(tmp_path: Path) ->
 
 def test_write_workflow_creates_new_file(tmp_path: Path) -> None:
     path = tmp_path / ".github" / "workflows" / "sboms.yml"
-    backup = write_workflow(path, f"# header\n{WIZARD_HEADER_SENTINEL}\nname: sboms\n")
-    assert backup is None
+    write_workflow(path, f"# header\n{WIZARD_HEADER_SENTINEL}\nname: sboms\n")
     assert path.read_text(encoding="utf-8").startswith("# header\n")
 
 
-def test_write_workflow_backs_up_existing_sentinel_file(tmp_path: Path) -> None:
+def test_write_workflow_overwrites_existing_sentinel_file_without_bak(tmp_path: Path) -> None:
+    """Sentinel-tagged files get overwritten in place — no .bak, git tracks the diff."""
     path = tmp_path / "sboms.yml"
     path.write_text(f"# old\n{WIZARD_HEADER_SENTINEL}\nname: old\n", encoding="utf-8")
 
-    backup = write_workflow(path, f"# new\n{WIZARD_HEADER_SENTINEL}\nname: new\n")
+    write_workflow(path, f"# new\n{WIZARD_HEADER_SENTINEL}\nname: new\n")
 
-    assert backup is not None
-    assert backup.read_text(encoding="utf-8").startswith("# old\n")
     assert path.read_text(encoding="utf-8").startswith("# new\n")
+    # We do NOT create .bak files — the previous version is recoverable via git.
+    assert not path.with_suffix(path.suffix + ".bak").exists()
 
 
 def test_write_workflow_refuses_to_overwrite_handauthored(tmp_path: Path) -> None:
@@ -143,7 +143,6 @@ def test_write_workflow_refuses_to_overwrite_handauthored(tmp_path: Path) -> Non
     with pytest.raises(WorkflowOwnershipError, match="missing"):
         write_workflow(path, f"# new\n{WIZARD_HEADER_SENTINEL}\nname: new\n")
 
-    # Original file unchanged.
+    # Original file unchanged; no .bak either way.
     assert path.read_text(encoding="utf-8").startswith("name: hand-authored")
-    # No backup created when we refuse.
     assert not path.with_suffix(path.suffix + ".bak").exists()

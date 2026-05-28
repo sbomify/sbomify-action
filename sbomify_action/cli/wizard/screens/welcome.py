@@ -142,7 +142,7 @@ class WelcomeScreen(WizardScreen):
         ]
         if self.wizard.state.workflow_exists:
             lines.append(
-                "[#F4B57F]⚠  A wizard-managed sboms.yml already exists — it'll be backed up before overwrite.[/]"
+                "[#F4B57F]⚠  A wizard-managed sboms.yml already exists — Review shows the diff before apply overwrites it.[/]"
             )
         if facts.has_release_tags:
             lines.append("[#86EFAC]✓  Release tags detected (v*) — tag-based strategy recommended.[/]")

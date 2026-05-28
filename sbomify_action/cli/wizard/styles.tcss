@@ -312,6 +312,15 @@ ComponentsScreen OptionList {
     margin: 0 0 1 0;
 }
 
+/* Review screen — RichLog rendering the unified diff between the
+ * existing workflow file (if any) and what apply will write. Cap
+ * height so a large diff scrolls inside the panel instead of pushing
+ * the Apply / Back buttons off-screen. */
+#workflow-diff {
+    height: auto;
+    max-height: 20;
+}
+
 SelectionList:focus, OptionList:focus, ListView:focus {
     border: tall $sbom-purple;
 }

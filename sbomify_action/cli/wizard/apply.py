@@ -91,16 +91,13 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
     )
     target = workflow_path(opts.repo_root)
     try:
-        backup = write_workflow(target, rendered)
+        write_workflow(target, rendered)
     except WorkflowOwnershipError as e:
         log("error", str(e))
         raise
     state.written_files.append(target)
     state.applied.append(f"wrote {target}")
-    if backup is not None:
-        log("success", f"Wrote {target} (backup: {backup.name})")
-    else:
-        log("success", f"Wrote {target}")
+    log("success", f"Wrote {target}")
 
 
 def _resolve_product(state: WizardState, log: LogFn) -> dict[str, Any] | None:

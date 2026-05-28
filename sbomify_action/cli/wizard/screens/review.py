@@ -1,12 +1,16 @@
-"""Review screen — show the staged plan + confirm before apply."""
+"""Review screen — show the staged plan + diff before apply."""
 
 from __future__ import annotations
+
+import difflib
+from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, DataTable, Static
+from textual.widgets import Button, DataTable, RichLog, Static
 
+from sbomify_action.cli.wizard import ci_emitter
 from sbomify_action.cli.wizard.existing import workflow_path
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 
@@ -36,10 +40,13 @@ class ReviewScreen(WizardScreen):
         with components:
             yield DataTable(id="components-table", cursor_type="none", zebra_stripes=True)
 
-        files = Vertical(classes="wizard-panel")
-        files.border_title = "◆  Files to write"
-        with files:
-            yield Static(self._files_summary(), classes="wizard-muted")
+        diff_panel = Vertical(classes="wizard-panel")
+        target = workflow_path(self.wizard.state.facts.repo_root)
+        verb = "overwrite" if self.wizard.state.workflow_exists else "create"
+        diff_panel.border_title = f"◆  Diff — {verb} {target}"
+        diff_panel.border_subtitle = "preview of what apply will write"
+        with diff_panel:
+            yield RichLog(id="workflow-diff", wrap=False, markup=True, highlight=False)
 
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
@@ -50,6 +57,7 @@ class ReviewScreen(WizardScreen):
         table.add_columns("Lockfile", "Ecosystem", "Component name")
         for c in self.wizard.state.plan.create_components:
             table.add_row(str(c.lockfile.rel_path), c.lockfile.ecosystem, c.name)
+        self._render_diff()
         self.query_one("#apply", Button).focus()
 
     def action_apply(self) -> None:
@@ -73,7 +81,10 @@ class ReviewScreen(WizardScreen):
         if plan.create_product:
             product_label = f"new: {plan.create_product}"
         elif plan.use_product_id and workspace:
-            match = next((p for p in workspace.products if str(p.get("id")) == plan.use_product_id), None)
+            match = next(
+                (p for p in workspace.products if str(p.get("id")) == plan.use_product_id),
+                None,
+            )
             if match:
                 product_label = f"existing: {match.get('name')} ({plan.use_product_id})"
             else:
@@ -85,8 +96,79 @@ class ReviewScreen(WizardScreen):
             f"Augmentation: {plan.augmentation}"
         )
 
-    def _files_summary(self) -> str:
+    def _render_diff(self) -> None:
+        """Compute and paint the unified diff between the existing file
+        (if any) and what apply will write.
+
+        Component IDs that we already know about — existing components
+        the user picked on the Components screen — are baked into the
+        preview. Components scheduled to be *created* during apply
+        appear as ``REPLACE_WITH_COMPONENT_ID`` placeholders since we
+        don't have their real ids yet; a note above the diff calls
+        that out so the user isn't surprised.
+        """
         target = workflow_path(self.wizard.state.facts.repo_root)
-        if self.wizard.state.workflow_exists:
-            return f"{target}  [#F4B57F]→ overwrite (backup as {target.name}.bak)[/]"
-        return f"{target}  [#86EFAC]→ create[/]"
+        plan = self.wizard.state.plan
+        component_ids = {
+            str(c.lockfile.rel_path): c.existing_id
+            for c in plan.create_components
+            if c.existing_id is not None
+        }
+        new_content = ci_emitter.emit_workflow(
+            plan,
+            facts=self.wizard.state.facts,
+            api_base_url=self.wizard.opts.api_base_url,
+            component_ids=component_ids,
+        )
+        old_content = self._read_existing(target)
+
+        log = self.query_one("#workflow-diff", RichLog)
+        any_new_placeholders = "REPLACE_WITH_COMPONENT_ID" in new_content
+        if any_new_placeholders:
+            log.write(
+                "[#5E5E5E]Note: REPLACE_WITH_COMPONENT_ID rows are placeholders "
+                "for components apply will create. They'll be substituted with "
+                "real ids in the file actually written to disk.[/]"
+            )
+            log.write("")
+
+        diff_lines = list(
+            difflib.unified_diff(
+                old_content.splitlines(keepends=False),
+                new_content.splitlines(keepends=False),
+                fromfile=f"a/{target.name}" if old_content else "/dev/null",
+                tofile=f"b/{target.name}",
+                lineterm="",
+            )
+        )
+
+        if not diff_lines:
+            log.write("[#86EFAC]✓  No changes — the workflow file on disk already matches.[/]")
+            return
+
+        for line in diff_lines:
+            log.write(self._stylise(line))
+
+    @staticmethod
+    def _read_existing(path: Path) -> str:
+        if not path.exists():
+            return ""
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    @staticmethod
+    def _stylise(line: str) -> str:
+        """Colour a single unified-diff line, escaping Rich markup."""
+        # Escape stray '[' that might be Rich markup in the file content.
+        escaped = line.replace("[", r"\[")
+        if line.startswith("+++") or line.startswith("---"):
+            return f"[b #8A7DFF]{escaped}[/]"
+        if line.startswith("@@"):
+            return f"[b #F4B57F]{escaped}[/]"
+        if line.startswith("+"):
+            return f"[#86EFAC]{escaped}[/]"
+        if line.startswith("-"):
+            return f"[#F87171]{escaped}[/]"
+        return f"[#5E5E5E]{escaped}[/]"
