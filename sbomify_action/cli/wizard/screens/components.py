@@ -14,7 +14,7 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Label, Rule, Static
+from textual.widgets import Button, Static
 
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 from sbomify_action.cli.wizard.state import PlannedComponent
@@ -43,12 +43,12 @@ class ComponentsScreen(WizardScreen):
         ]
         existing_by_name = {label: item_id for label, item_id in existing_pairs}
 
-        panel = Vertical(classes="wizard-panel")
-        panel.border_title = "◆  Components"
-        panel.border_subtitle = (
+        intro = Vertical(classes="wizard-panel")
+        intro.border_title = "◆  Components"
+        intro.border_subtitle = (
             f"{len(self.wizard.state.selected)} lockfile(s) · {len(existing_pairs)} existing"
         )
-        with panel:
+        with intro:
             yield Static(
                 "One component per lockfile. Use [b]↑/↓[/] to highlight an "
                 "existing component (or leave on [b]Create new[/]), then "
@@ -56,12 +56,16 @@ class ComponentsScreen(WizardScreen):
                 "[b]Next[/] when done.",
                 classes="wizard-muted",
             )
-            for idx, lockfile in enumerate(self.wizard.state.selected):
-                if idx > 0:
-                    yield Rule()
-                yield Label(
-                    f"[#CBCCCE]{lockfile.rel_path}[/]  [#5E5E5E]({lockfile.ecosystem})[/]"
-                )
+
+        # Each lockfile gets its own card so the relationship between
+        # the picker and the file it maps to is structural, not just
+        # positional. The card's title bar carries the lockfile path
+        # and the subtitle carries the ecosystem badge.
+        for idx, lockfile in enumerate(self.wizard.state.selected):
+            card = Vertical(classes="wizard-panel")
+            card.border_title = f"◇  {lockfile.rel_path}"
+            card.border_subtitle = lockfile.ecosystem
+            with card:
                 yield PickOrCreate(
                     existing=existing_pairs,
                     create_label="[#86EFAC]➕  Create a new component[/]",

@@ -24,7 +24,7 @@ class ReviewScreen(WizardScreen):
 
     BINDINGS = [
         Binding("enter", "apply", "Apply ▸", show=True, priority=True),
-        Binding("escape", "app.pop_screen", "Back", show=True),
+        Binding("escape", "app.pop_screen", "Back", show=True, priority=True),
     ]
 
     def compose_body(self) -> ComposeResult:

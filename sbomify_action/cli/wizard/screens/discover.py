@@ -19,7 +19,8 @@ class DiscoverScreen(WizardScreen):
 
     BINDINGS = [
         Binding("enter", "submit", "Next ▸", show=True, priority=True),
-        Binding("escape", "app.pop_screen", "Back", show=True),
+        # priority so the SelectionList can't swallow Escape.
+        Binding("escape", "app.pop_screen", "Back", show=True, priority=True),
         Binding("space", "toggle_selection", "Toggle", show=True),
         # Bulk operations for users with many lockfiles — Tab-and-Space
         # through 20 rows gets old fast.

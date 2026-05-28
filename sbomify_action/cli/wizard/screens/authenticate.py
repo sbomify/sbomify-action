@@ -148,6 +148,16 @@ class AuthenticateScreen(WizardScreen):
     def _on_auth_success(self, client: SbomifyApiClient, workspace: WorkspaceSnapshot) -> None:
         self.wizard.state.api = client
         self.wizard.state.workspace = workspace
+        # Surface what the prefetch actually loaded so the user knows
+        # what's coming on the next two screens — otherwise Product /
+        # Components arrive with no context for "how many existing
+        # things will I see?".
+        self._set_status(
+            f"[#86EFAC]✓  Authenticated.[/]  Loaded "
+            f"[b]{len(workspace.products)}[/] product(s), "
+            f"[b]{len(workspace.components)}[/] component(s), "
+            f"[b]{len(workspace.contact_profiles)}[/] contact profile(s)."
+        )
         from sbomify_action.cli.wizard.screens.product import ProductScreen
 
         self.wizard.push_screen(ProductScreen())

@@ -5,7 +5,7 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, RichLog
+from textual.widgets import Button, RichLog, Static
 from textual.worker import Worker, WorkerState
 
 from sbomify_action.cli.wizard import apply as apply_mod
@@ -44,12 +44,25 @@ class ApplyScreen(WizardScreen):
         self._worker_error = False
 
     def compose_body(self) -> ComposeResult:
+        # Error banner sits ABOVE the log so it stays visible even when
+        # the log has scrolled past the line that caused the failure.
+        # Hidden until on_worker_state_changed populates it.
+        error_banner = Static("", id="apply-error-banner", markup=True)
+        error_banner.display = False
+
         panel = Vertical(classes="wizard-panel")
         panel.border_title = "⏳  Applying"
         panel.border_subtitle = "live log"
         with panel:
+            yield error_banner
             yield RichLog(id="apply-log", wrap=True, markup=True, highlight=False)
         with Horizontal(classes="button-row"):
+            # Back is disabled during apply (you can't bail mid-API-
+            # mutation) and enabled by on_worker_state_changed when
+            # the worker finishes. Continue is the primary path after
+            # success; it stays disabled on error and Back becomes
+            # the only viable option.
+            yield Button("◂ Back", id="back", disabled=True)
             yield Button("Continue ▸", id="continue", variant="primary", disabled=True)
 
     def on_mount(self) -> None:
@@ -83,43 +96,63 @@ class ApplyScreen(WizardScreen):
         if event.state == WorkerState.SUCCESS:
             self._worker_done = True
             result = event.worker.result
-            btn = self.query_one("#continue", Button)
+            back_btn = self.query_one("#back", Button)
+            continue_btn = self.query_one("#continue", Button)
+            back_btn.disabled = False
             if result is None:
                 # apply_plan returned cleanly.
-                btn.label = "Continue ▸"
-                btn.disabled = False
-                btn.focus()
+                continue_btn.label = "Continue ▸"
+                continue_btn.disabled = False
+                continue_btn.focus()
             else:
                 # _apply_worker caught an exception and returned its
                 # message. The user can't usefully continue to Done
-                # from a half-applied state — send them back to Review
-                # to retry instead.
+                # from a half-applied state — surface the error in
+                # the pinned banner so it doesn't scroll past, and
+                # leave only the Back button enabled.
                 self._worker_error = True
-                btn.label = "◂ Back to fix"
-                btn.variant = "default"
-                btn.disabled = False
-                btn.focus()
-                self.query_one("#apply-log", RichLog).write(
-                    "[#F4B57F]Apply did not complete. Escape or 'Back to fix' "
-                    "returns to Review so you can retry.[/]"
-                )
+                self._show_error_banner(result)
+                continue_btn.label = "(apply failed)"
+                continue_btn.disabled = True
+                back_btn.variant = "primary"
+                back_btn.focus()
         elif event.state == WorkerState.ERROR:
             self._worker_done = True
             self._worker_error = True
+            back_btn = self.query_one("#back", Button)
+            continue_btn = self.query_one("#continue", Button)
+            self._show_error_banner(str(event.worker.error))
             self.query_one("#apply-log", RichLog).write(
                 f"[#F87171]worker error: {event.worker.error}[/]"
             )
-            btn = self.query_one("#continue", Button)
-            btn.label = "◂ Back to fix"
-            btn.variant = "default"
-            btn.disabled = False
-            btn.focus()
+            continue_btn.label = "(apply failed)"
+            continue_btn.disabled = True
+            back_btn.variant = "primary"
+            back_btn.disabled = False
+            back_btn.focus()
+
+    def _show_error_banner(self, message: str) -> None:
+        """Surface the error in a pinned banner above the log so it
+        survives the log scrolling past."""
+        try:
+            banner = self.query_one("#apply-error-banner", Static)
+        except Exception:  # noqa: BLE001
+            return
+        banner.update(
+            f"[#F87171]✗  Apply failed.[/]  [#CBCCCE]{message}[/]\n"
+            "[#5E5E5E]Press [b]◂ Back[/] (or [b]Esc[/]) to return to Review and retry.[/]"
+        )
+        banner.display = True
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back":
+            if self._worker_done:
+                self.app.pop_screen()
+            return
         if event.button.id == "continue":
             if self._worker_error:
-                # Pop straight back so the user can change their plan
-                # or fix the upstream condition that caused the error.
+                # Shouldn't happen — Continue is disabled on error —
+                # but defend in depth.
                 self.app.pop_screen()
                 return
             from sbomify_action.cli.wizard.screens.done import DoneScreen
