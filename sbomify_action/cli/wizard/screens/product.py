@@ -5,10 +5,10 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Input, OptionList, Static
-from textual.widgets.option_list import Option
+from textual.widgets import Button, Static
 
 from sbomify_action.cli.wizard.screens._base import WizardScreen
+from sbomify_action.cli.wizard.widgets import NEW_SENTINEL, PickOrCreate
 from sbomify_action.logging_config import logger
 
 
@@ -21,41 +21,41 @@ class ProductScreen(WizardScreen):
 
     BINDINGS = [
         Binding("enter", "submit", "Next ▸", show=True, priority=True),
-        # Priority so the new-product Input doesn't swallow Escape.
         Binding("escape", "app.pop_screen", "Back", show=True, priority=True),
     ]
 
     def compose_body(self) -> ComposeResult:
-        product_count = len(self.wizard.state.workspace.products) if self.wizard.state.workspace else 0
+        products = self.wizard.state.workspace.products if self.wizard.state.workspace else []
         panel = Vertical(classes="wizard-panel")
         panel.border_title = "◆  Pick a product"
-        panel.border_subtitle = f"{product_count} existing"
+        panel.border_subtitle = f"{len(products)} existing"
         with panel:
-            yield Static(self._help_text(), classes="wizard-muted")
-            yield OptionList(id="product-list")
-            yield Static("[#5E5E5E]Or create a new one:[/]", classes="wizard-muted")
-            yield Input(placeholder="New product name (leave blank to use selection)", id="new-product")
-            yield Static("", id="product-status", markup=True)
+            yield Static(
+                "Use [b]↑/↓[/] to highlight a product (or leave on "
+                "[b]Create new[/]), then [b]Tab[/] to edit the new-product "
+                "name. [b]Enter[/] when done.",
+                classes="wizard-muted",
+            )
+            yield PickOrCreate(
+                existing=[
+                    (str(p.get("name") or p.get("id") or "(unnamed)"), str(p.get("id")))
+                    for p in products
+                ],
+                create_label="[#86EFAC]➕  Create a new product[/]",
+                placeholder="New product name (used only when 'Create new' is highlighted)",
+                # Pre-select the first existing product when the
+                # workspace has any. Re-running the wizard against an
+                # already-onboarded workspace shouldn't nudge the user
+                # toward creating a duplicate.
+                pre_select_id=str(products[0].get("id")) if products else None,
+                id="product-picker",
+            )
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")
 
     def on_mount(self) -> None:
-        listing = self.query_one("#product-list", OptionList)
-        products = self.wizard.state.workspace.products if self.wizard.state.workspace else []
-        for product in products:
-            label = str(product.get("name") or product.get("id") or "(unnamed)")
-            listing.add_option(Option(label, id=str(product.get("id"))))
-        if products:
-            # Pre-highlight the first row so the user can press Enter
-            # immediately without an arrow keypress. Without this, the
-            # OptionList focuses with no cursor, _advance() sees
-            # highlighted=None, hits app.bell(), and the screen looks
-            # frozen.
-            listing.highlighted = 0
-            listing.focus()
-        else:
-            self.query_one("#new-product", Input).focus()
+        self.query_one("#product-picker", PickOrCreate).focus_list()
 
     def action_submit(self) -> None:
         self._advance()
@@ -67,33 +67,24 @@ class ProductScreen(WizardScreen):
             self.app.pop_screen()
 
     def _advance(self) -> None:
-        new_name = self.query_one("#new-product", Input).value.strip()
-        if new_name:
+        picker = self.query_one("#product-picker", PickOrCreate)
+        picked_id = picker.picked_id
+        if picked_id is None:
+            self.app.bell()
+            return
+        if picked_id == NEW_SENTINEL:
+            new_name = picker.new_value
+            if not new_name:
+                self.app.bell()
+                return
             self.wizard.state.plan.create_product = new_name
             self.wizard.state.plan.use_product_id = None
             logger.debug("Product screen: will create new product %r", new_name)
         else:
-            listing = self.query_one("#product-list", OptionList)
-            if listing.highlighted is None:
-                # We get here only if the workspace had zero products
-                # AND the user hit Next/Enter without typing a name —
-                # on_mount pre-highlights the first row when any
-                # products exist. Surface a visible hint instead of
-                # silently dinging.
-                status = self.query_one("#product-status", Static)
-                status.update(
-                    "[#F87171]Type a new product name below — your workspace has no existing products.[/]"
-                )
-                self.app.bell()
-                return
-            option = listing.get_option_at_index(listing.highlighted)
-            self.wizard.state.plan.use_product_id = option.id
+            self.wizard.state.plan.use_product_id = picked_id
             self.wizard.state.plan.create_product = None
-            logger.debug("Product screen: will use existing product id=%s", option.id)
+            logger.debug("Product screen: will use existing product id=%s", picked_id)
+
         from sbomify_action.cli.wizard.screens.components import ComponentsScreen
 
         self.wizard.push_screen(ComponentsScreen())
-
-    def _help_text(self) -> str:
-        count = len(self.wizard.state.workspace.products) if self.wizard.state.workspace else 0
-        return f"{count} existing product(s). Use [b]↑/↓[/] to navigate, [b]Enter[/] to pick."

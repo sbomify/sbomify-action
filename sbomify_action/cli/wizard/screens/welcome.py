@@ -84,14 +84,37 @@ class WelcomeScreen(WizardScreen):
                     )
                 yield Static(ASCII_WIZARD, classes="wizard-hero-mascot")
 
-        # What-we'll-do — six iconified steps, one per upcoming screen.
-        # Mirrors the step indicator at the top of every screen so the
-        # mental model is consistent throughout the wizard.
-        steps = Vertical(classes="wizard-panel")
-        steps.border_title = "What we'll do"
-        steps.border_subtitle = "6 steps · ~3 minutes"
-        with steps:
-            yield Static("\n".join(self._steps_list()))
+        # No lockfiles → no point walking the rest of the wizard.
+        # Surface a clear dead-end card and skip the "What we'll do"
+        # preview so the user isn't promised six more steps that lead
+        # nowhere.
+        if not self.wizard.state.discovered:
+            empty = Vertical(classes="wizard-panel")
+            empty.border_title = "✗  No lockfiles found"
+            empty.border_subtitle = "this wizard needs at least one"
+            with empty:
+                yield Static(
+                    "[#F4B57F]The wizard scanned this repo and didn't find any "
+                    "lockfiles it knows how to read.[/]\n\n"
+                    "Supported lockfiles include [b]uv.lock[/], [b]poetry.lock[/], "
+                    "[b]package-lock.json[/], [b]pnpm-lock.yaml[/], [b]bun.lock[/], "
+                    "[b]yarn.lock[/], [b]go.sum[/], [b]Cargo.lock[/], "
+                    "[b]composer.lock[/], [b]Gemfile.lock[/], "
+                    "[b]Package.resolved[/], and a handful of manifests.\n\n"
+                    "Full list: [#8A7DFF u]https://github.com/sbomify/"
+                    "sbomify-action#supported-lockfiles[/]",
+                    classes="wizard-muted",
+                )
+
+        # What-we'll-do — only when there's a path forward. Mirrors the
+        # step indicator at the top of every screen so the mental model
+        # is consistent throughout the wizard.
+        if self.wizard.state.discovered:
+            steps = Vertical(classes="wizard-panel")
+            steps.border_title = "What we'll do"
+            steps.border_subtitle = "7 steps · ~3 minutes"
+            with steps:
+                yield Static("\n".join(self._steps_list()))
 
         # Repo summary — observations from the current working tree.
         repo = Vertical(classes="wizard-panel")
@@ -100,14 +123,23 @@ class WelcomeScreen(WizardScreen):
             yield Static("\n".join(self._repo_lines()))
 
         with Horizontal(classes="button-row"):
-            yield Button("Start  ▸", id="start", variant="primary")
-            yield Button("Cancel", id="cancel")
+            if self.wizard.state.discovered:
+                yield Button("Start  ▸", id="start", variant="primary")
+            yield Button("Cancel", id="cancel", variant="primary" if not self.wizard.state.discovered else "default")
 
     def on_mount(self) -> None:
-        self.query_one("#start", Button).focus()
+        # When there's nothing to do, Start isn't rendered — focus the
+        # Cancel button so Enter quits cleanly instead of dinging.
+        try:
+            self.query_one("#start", Button).focus()
+        except Exception:
+            self.query_one("#cancel", Button).focus()
 
     def action_start(self) -> None:
-        self._advance()
+        if self.wizard.state.discovered:
+            self._advance()
+        else:
+            self.wizard.action_quit_with_cancel()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "start":

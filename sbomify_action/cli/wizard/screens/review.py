@@ -54,9 +54,14 @@ class ReviewScreen(WizardScreen):
 
     def on_mount(self) -> None:
         table = self.query_one("#components-table", DataTable)
-        table.add_columns("Lockfile", "Ecosystem", "Component name")
+        table.add_columns("Lockfile", "Ecosystem", "Component", "Action")
         for c in self.wizard.state.plan.create_components:
-            table.add_row(str(c.lockfile.rel_path), c.lockfile.ecosystem, c.name)
+            action = (
+                "[#CBCCCE]reuse[/]"
+                if c.existing_id is not None
+                else "[#86EFAC]create[/]"
+            )
+            table.add_row(str(c.lockfile.rel_path), c.lockfile.ecosystem, c.name, action)
         self._render_diff()
         self.query_one("#apply", Button).focus()
 
@@ -89,11 +94,17 @@ class ReviewScreen(WizardScreen):
                 product_label = f"existing: {match.get('name')} ({plan.use_product_id})"
             else:
                 product_label = f"existing: {plan.use_product_id}"
+        formats_label = " + ".join(plan.sbom_formats) or "cyclonedx"
+        attest_label = "on" if plan.attestation else "off"
+        enrich_label = "on" if plan.enrich else "off"
         return (
-            f"Product: {product_label}\n"
-            f"Release strategy: {plan.release_strategy}\n"
-            f"Credentials: {plan.credential_mode}\n"
-            f"Augmentation: {plan.augmentation}"
+            f"[#CBCCCE]Product           [/]  {product_label}\n"
+            f"[#CBCCCE]Release strategy  [/]  {plan.release_strategy}\n"
+            f"[#CBCCCE]Credentials       [/]  {plan.credential_mode}\n"
+            f"[#CBCCCE]Augmentation      [/]  {plan.augmentation}\n"
+            f"[#CBCCCE]Enrichment        [/]  {enrich_label}\n"
+            f"[#CBCCCE]SBOM formats      [/]  {formats_label}\n"
+            f"[#CBCCCE]Build provenance  [/]  {attest_label}"
         )
 
     def _render_diff(self) -> None:

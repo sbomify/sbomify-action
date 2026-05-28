@@ -67,6 +67,22 @@ class WizardApp(App[int]):
         """Ctrl-C / Ctrl-Q: cancel cleanly with a non-zero exit code."""
         self.exit(130)
 
+    def action_open_url(self, url: str) -> None:
+        """Hand a URL off to the user's default browser.
+
+        Used by ``@click=app.open_url('…')`` markup on Static widgets
+        so docs links in the wizard are actually clickable. If we
+        can't reach a browser (headless box, no DISPLAY, etc.) this
+        silently no-ops — the URL itself is still rendered as text so
+        the user can copy it.
+        """
+        import webbrowser
+
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001
+            pass
+
 
 def launch_wizard(opts: WizardOptions) -> int:
     """Run the Textual wizard. Returns the process exit code."""
