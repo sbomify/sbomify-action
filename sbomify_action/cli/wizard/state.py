@@ -48,6 +48,13 @@ CredentialMode = Literal["oidc", "token"]
 - ``token`` — backwards-compatible. Emits ``TOKEN: ${{ secrets.SBOMIFY_TOKEN }}``.
 """
 
+SbomFormat = Literal["cyclonedx", "spdx"]
+"""One of the two SBOM formats sbomify-action emits.
+
+Each format becomes its own matrix entry per lockfile — a single
+component publishing in both formats produces two artifacts.
+"""
+
 
 @dataclass(frozen=True)
 class DiscoveredLockfile:
@@ -116,6 +123,11 @@ class Plan:
     release_strategy: ReleaseStrategy = "trunk"
     credential_mode: CredentialMode = "oidc"
     augmentation: AugmentationStrategy = "skip"
+    sbom_formats: list[SbomFormat] = field(default_factory=lambda: ["cyclonedx"])
+    """Which formats to emit per lockfile. One matrix entry per (lockfile, format)."""
+    attestation: bool = False
+    """When True, the workflow appends an ``actions/attest-build-provenance``
+    step after each SBOM upload to produce a signed build attestation."""
 
 
 @dataclass

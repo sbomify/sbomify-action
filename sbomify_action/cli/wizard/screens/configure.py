@@ -21,6 +21,7 @@ from sbomify_action.cli.wizard.state import (
     CredentialMode,
     PlannedComponent,
     ReleaseStrategy,
+    SbomFormat,
 )
 
 
@@ -77,6 +78,20 @@ class ConfigureScreen(WizardScreen):
                     id="aug-profile",
                 )
         with Vertical(classes="wizard-panel"):
+            yield Static("[b]SBOM formats[/]", classes="wizard-title")
+            with RadioSet(id="formats"):
+                yield RadioButton("CycloneDX (recommended)", id="fmt-cdx", value=True)
+                yield RadioButton("SPDX", id="fmt-spdx")
+                yield RadioButton("Both CycloneDX and SPDX", id="fmt-both")
+        with Vertical(classes="wizard-panel"):
+            yield Static("[b]Build provenance[/]", classes="wizard-title")
+            with RadioSet(id="attestation"):
+                yield RadioButton("Skip provenance attestation", id="attest-no", value=True)
+                yield RadioButton(
+                    "Sign SBOMs with attest-build-provenance (recommended for releases)",
+                    id="attest-yes",
+                )
+        with Vertical(classes="wizard-panel"):
             yield Static("[b]Component names[/]", classes="wizard-title")
             yield Static(
                 "Each lockfile maps to one sbomify component. Defaults are derived from the repo + ecosystem.",
@@ -107,6 +122,8 @@ class ConfigureScreen(WizardScreen):
         plan.release_strategy = self._selected_release_strategy()
         plan.credential_mode = self._selected_credential_mode()
         plan.augmentation = self._selected_augmentation()
+        plan.sbom_formats = self._selected_formats()
+        plan.attestation = self._selected_attestation()
         plan.create_components = []
         for idx, lockfile in enumerate(self.wizard.state.selected):
             name = self.query_one(f"#name-{idx}", Input).value.strip() or lockfile.suggested_name
@@ -133,3 +150,15 @@ class ConfigureScreen(WizardScreen):
         if pressed is None:
             return "skip"
         return cast(AugmentationStrategy, pressed.id.split("-", 1)[1] if pressed.id else "skip")
+
+    def _selected_formats(self) -> list[SbomFormat]:
+        pressed = self.query_one("#formats", RadioSet).pressed_button
+        if pressed is None or pressed.id == "fmt-cdx":
+            return ["cyclonedx"]
+        if pressed.id == "fmt-spdx":
+            return ["spdx"]
+        return ["cyclonedx", "spdx"]
+
+    def _selected_attestation(self) -> bool:
+        pressed = self.query_one("#attestation", RadioSet).pressed_button
+        return pressed is not None and pressed.id == "attest-yes"

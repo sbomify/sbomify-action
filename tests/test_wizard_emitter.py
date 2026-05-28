@@ -135,8 +135,14 @@ def test_emit_matrix_includes_each_lockfile(tmp_path: Path) -> None:
     )
     component_ids = {"uv.lock": "comp-1", "package.json": "comp-2"}
     yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com", component_ids=component_ids)
-    assert "- name: widget-py\n            component_id: comp-1\n            lockfile: uv.lock" in yaml
-    assert "- name: widget-js\n            component_id: comp-2\n            lockfile: package.json" in yaml
+    assert "name: widget-py" in yaml
+    assert "component_id: comp-1" in yaml
+    assert "lockfile: uv.lock" in yaml
+    assert "name: widget-js" in yaml
+    assert "component_id: comp-2" in yaml
+    assert "lockfile: package.json" in yaml
+    assert "component_name: widget-py" in yaml
+    assert "component_name: widget-js" in yaml
 
 
 def test_emit_custom_api_base_url(tmp_path: Path) -> None:
@@ -147,6 +153,124 @@ def test_emit_custom_api_base_url(tmp_path: Path) -> None:
     )
     yaml = emit_workflow(plan, facts=facts, api_base_url="https://stage.sbomify.com")
     assert "API_BASE_URL: https://stage.sbomify.com" in yaml
+
+
+def test_emit_default_format_is_cyclonedx_only(tmp_path: Path) -> None:
+    """Default plan emits one matrix row per lockfile, in cyclonedx format."""
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+    assert yaml.count("sbom_format:") == 1
+    assert "sbom_format: cyclonedx" in yaml
+    assert "sbom_format: spdx" not in yaml
+    assert "output_file: widget-py.cdx.json" in yaml
+
+
+def test_emit_both_formats_emits_two_rows_per_lockfile(tmp_path: Path) -> None:
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        sbom_formats=["cyclonedx", "spdx"],
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+    assert "name: widget-py-cyclonedx" in yaml
+    assert "name: widget-py-spdx" in yaml
+    assert "sbom_format: cyclonedx" in yaml
+    assert "sbom_format: spdx" in yaml
+    assert "output_file: widget-py.cdx.json" in yaml
+    assert "output_file: widget-py.spdx.json" in yaml
+
+
+def test_emit_spdx_only(tmp_path: Path) -> None:
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        sbom_formats=["spdx"],
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+    assert "sbom_format: spdx" in yaml
+    assert "sbom_format: cyclonedx" not in yaml
+    assert "output_file: widget-py.spdx.json" in yaml
+
+
+def test_emit_attestation_adds_step_and_permission(tmp_path: Path) -> None:
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        attestation=True,
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+    assert "attestations: write" in yaml
+    assert "attest-build-provenance" in yaml
+    assert "subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'" in yaml
+
+
+def test_emit_no_attestation_by_default(tmp_path: Path) -> None:
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+    assert "attestations: write" not in yaml
+    assert "attest-build-provenance" not in yaml
+
+
+def test_emit_cache_step_always_present(tmp_path: Path) -> None:
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+    assert "actions/cache@" in yaml
+    assert "path: .sbomify-cache" in yaml
+    assert "SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache" in yaml
+    assert "SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft" in yaml
+
+
+def test_emit_component_name_env_uses_matrix(tmp_path: Path) -> None:
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="My Widget Py")],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+    assert "COMPONENT_NAME: ${{ matrix.component_name }}" in yaml
+    assert "component_name: My Widget Py" in yaml
+
+
+def test_emit_token_mode_with_attestation_permissions(tmp_path: Path) -> None:
+    """Token + attestation needs a permissions block (no id-token, but attestations: write)."""
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        credential_mode="token",
+        attestation=True,
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+    assert "id-token: write" not in yaml
+    assert "attestations: write" in yaml
+    assert "TOKEN: ${{ secrets.SBOMIFY_TOKEN }}" in yaml
+
+
+def test_emit_token_mode_no_attestation_no_permissions_block(tmp_path: Path) -> None:
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        credential_mode="token",
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+    assert "permissions:" not in yaml
+    assert "TOKEN: ${{ secrets.SBOMIFY_TOKEN }}" in yaml
 
 
 # ----------------------------------------------------------------------

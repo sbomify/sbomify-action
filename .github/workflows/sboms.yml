@@ -10,27 +10,57 @@ jobs:
     permissions:
       id-token: write   # required to mint the GitHub OIDC JWT
       contents: read
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: sbomify-action
+          - name: sbomify-action-cyclonedx
+            component_name: sbomify Action
             component_id: Gu9wem8mkX
             lockfile: uv.lock
-          - name: sbomify-action-frontend
+            sbom_format: cyclonedx
+            output_file: sbomify-action.cdx.json
+          - name: sbomify-action-spdx
+            component_name: sbomify Action
+            component_id: Gu9wem8mkX
+            lockfile: uv.lock
+            sbom_format: spdx
+            output_file: sbomify-action.spdx.json
+          - name: javascript-dependencies-cyclonedx
+            component_name: JavaScript Dependencies
             component_id: IxwrYSb9rGql
             lockfile: bun.lock
+            sbom_format: cyclonedx
+            output_file: javascript-dependencies.cdx.json
+          - name: javascript-dependencies-spdx
+            component_name: JavaScript Dependencies
+            component_id: IxwrYSb9rGql
+            lockfile: bun.lock
+            sbom_format: spdx
+            output_file: javascript-dependencies.spdx.json
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: .sbomify-cache
+          key: sbomify-${{ runner.os }}
       - id: ver
         run: echo "v=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
       - uses: sbomify/sbomify-action@ac8b0d423c90447f3011ef8ab5f9ff2e854c6931  # v26.2.0
         env:
           COMPONENT_ID: ${{ matrix.component_id }}
+          COMPONENT_NAME: ${{ matrix.component_name }}
           COMPONENT_VERSION: ${{ steps.ver.outputs.v }}
           LOCK_FILE: ${{ matrix.lockfile }}
           UPLOAD: 'true'
           AUGMENT: 'true'
           ENRICH: 'true'
-          SBOM_FORMAT: cyclonedx
+          SBOM_FORMAT: ${{ matrix.sbom_format }}
+          OUTPUT_FILE: ${{ matrix.output_file }}
           API_BASE_URL: https://app.sbomify.com
+          SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
+          SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
+      - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        with:
+          subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'
