@@ -40,11 +40,17 @@ class WizardApp(App[int]):
     BINDINGS = [
         Binding("ctrl+c", "quit_with_cancel", "Cancel", priority=True, show=True),
         Binding("ctrl+q", "quit_with_cancel", "Cancel", show=False),
+        Binding("question_mark", "show_help", "Help", priority=True, show=True),
     ]
 
     def __init__(self, opts: WizardOptions) -> None:
         super().__init__()
         self.opts = opts
+        # Track Ctrl-C presses for double-tap-to-quit confirmation.
+        # A single press shows a notification; a second within the
+        # window actually exits. Stops accidental keypresses from
+        # killing a wizard mid-API-call.
+        self._last_cancel_press: float = 0.0
         # Read-only observations are gathered synchronously *before* the app
         # mounts, so the welcome screen can render accurate coverage stats
         # without flashing empty state or waiting on a worker.
@@ -64,8 +70,34 @@ class WizardApp(App[int]):
         self.push_screen(WelcomeScreen())
 
     def action_quit_with_cancel(self) -> None:
-        """Ctrl-C / Ctrl-Q: cancel cleanly with a non-zero exit code."""
-        self.exit(130)
+        """Double-tap quit. First press shows a notification; a second
+        press within ``_CANCEL_WINDOW`` seconds actually exits.
+
+        Stops accidental Ctrl-C keypresses from killing a wizard mid-
+        API-call. The 3-second window is short enough that confirming
+        feels intentional but long enough that the user has time to
+        read the notification.
+        """
+        import time
+
+        cancel_window = 3.0
+        now = time.monotonic()
+        if now - self._last_cancel_press < cancel_window:
+            self.exit(130)
+            return
+        self._last_cancel_press = now
+        self.notify(
+            "Press Ctrl-C again within 3 seconds to quit.",
+            title="◆  Quit the wizard?",
+            severity="warning",
+            timeout=cancel_window,
+        )
+
+    def action_show_help(self) -> None:
+        """Push the global keybind cheat sheet over the current screen."""
+        from sbomify_action.cli.wizard.screens.help import HelpScreen
+
+        self.push_screen(HelpScreen())
 
     def action_open_url(self, url: str) -> None:
         """Hand a URL off to the user's default browser.

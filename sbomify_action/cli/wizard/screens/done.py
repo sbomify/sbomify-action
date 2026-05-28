@@ -25,6 +25,11 @@ class DoneScreen(WizardScreen):
         # popping back to the Apply screen (which would just re-show
         # the success log from the run that already happened).
         Binding("escape", "finish", "Finish", show=True, priority=True),
+        # One-keystroke 'copy first OIDC settings URL to clipboard' so
+        # users don't have to drag-select a multi-line URL inside the
+        # TUI. Only useful when there's at least one URL to copy; the
+        # action no-ops cleanly when there isn't.
+        Binding("c", "copy_first_url", "Copy URL", show=True),
     ]
 
     def compose_body(self) -> ComposeResult:
@@ -53,6 +58,21 @@ class DoneScreen(WizardScreen):
 
     def action_finish(self) -> None:
         self.wizard.exit(0)
+
+    def action_copy_first_url(self) -> None:
+        """Copy the OIDC settings URL for the first applied component."""
+        state = self.wizard.state
+        if not state.component_ids:
+            self.notify(
+                "No components were applied — nothing to copy.",
+                severity="warning",
+            )
+            return
+        api_base = self.wizard.opts.api_base_url
+        first_cid = next(iter(state.component_ids.values()))
+        url = f"{api_base}/components/{first_cid}/settings"
+        self.app.copy_to_clipboard(url)
+        self.notify(f"Copied {url} to clipboard.", severity="information")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "finish":
