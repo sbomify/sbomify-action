@@ -17,33 +17,33 @@ TAGLINE = "Zero to SBOM Hero"
 # marketing site uses for the homepage title.
 HERO_TITLE = "[b][#4059D0]sbom[/][#CC58BB]ify[/][#F4B57F] wizard[/][/]"
 
-# ASCII wizard mascot. The shape leans on the four things that
-# unmistakably read as "wizard": pointed hat with a couple of stars,
-# eyes peering out, a flowing white beard (the WWW pattern is a
-# decades-old ASCII convention for a beard), and a robe widening at
-# the base. Pure ASCII (no box-drawing) so it renders uniformly
-# across terminals and SSH sessions.
+# ASCII wizard mascot. Built from common ASCII art conventions (the
+# /\ hat outline, WWW beard pattern, ( o o ) face) rather than copied
+# from any one artist — a real wizard hat is at least as tall as the
+# face + beard, which is what the previous draft was missing.
 #
-# Rows are coloured to echo the sbomify gradient sitting under it:
-#   - peach sparkles + hat tip
-#   - magenta hat base
-#   - muted purple face
-#   - silvery beard (Gandalf cue)
-#   - blue robe deepening to brand-primary at the hem
+# Rows are coloured to echo the sbomify gradient: peach hat tip,
+# magenta hat base with stars, silvery beard (Gandalf cue), blue
+# robe deepening to brand-primary at the hem. Pure ASCII (no
+# box-drawing or exotic Unicode) so the figure renders uniformly
+# across terminals and SSH sessions.
 ASCII_WIZARD = (
-    "[#F4B57F]                .  *  .[/]\n"
-    "[#F4B57F]                   /\\[/]\n"
-    "[#F4B57F]                  /  \\[/]\n"
-    "[#CC58BB]                 / *  \\[/]\n"
-    "[#CC58BB]                /  *   \\[/]\n"
-    "[#CC58BB]               /________\\[/]\n"
-    "[#CBCCCE]                | o  o |[/]\n"
-    "[#CBCCCE]                |  __  |[/]\n"
-    "[#E0E0E5]               / \\WWWW/ \\[/]\n"
-    "[#E0E0E5]              /  WWWWWW  \\[/]\n"
-    "[#8A7DFF]             /  WWWWWWWW  \\[/]\n"
-    "[#4059D0]            /  WWWWWWWWWW  \\[/]\n"
-    "[#37306B]           /__________________\\[/]"
+    "[#F4B57F]      /\\[/]\n"
+    "[#F4B57F]     /  \\[/]\n"
+    "[#F4B57F]    /    \\[/]\n"
+    "[#F4B57F]   /  *   \\[/]\n"
+    "[#CC58BB]  /        \\[/]\n"
+    "[#CC58BB] /    *     \\[/]\n"
+    "[#CC58BB]/____________\\[/]\n"
+    "[#8A7DFF]==============[/]\n"
+    "[#CBCCCE] ( o      o )[/]\n"
+    "[#CBCCCE] (     _    )[/]\n"
+    "[#E0E0E5]  \\  WWWWW  /[/]\n"
+    "[#E0E0E5]   \\WWWWWWW/[/]\n"
+    "[#E0E0E5]   /WWWWWWW\\[/]\n"
+    "[#8A7DFF]  /WWWWWWWWW\\[/]\n"
+    "[#4059D0] /WWWWWWWWWWW\\[/]\n"
+    "[#37306B]/_____________\\[/]"
 )
 
 
@@ -60,19 +60,23 @@ class WelcomeScreen(WizardScreen):
     ]
 
     def compose_body(self) -> ComposeResult:
-        # Hero card — the wizard's first impression. Gradient title +
-        # tagline + a thin underline; no other chrome inside.
+        # Hero card — the wizard's first impression. Two columns:
+        # gradient title + tagline + strap on the left, ASCII wizard
+        # mascot on the right.
         hero = Vertical(classes="wizard-hero")
         hero.border_title = "◆  sbomify"
         with hero:
-            yield Static(ASCII_WIZARD, classes="wizard-hero-mascot")
-            yield Static(HERO_TITLE, classes="wizard-hero-title")
-            yield Static(f"[#CC58BB]{TAGLINE}[/]", classes="wizard-hero-tagline")
-            yield Static(
-                "Scans your repo for lockfiles, registers the matching components in "
-                "sbomify, and writes a release-ready GitHub Actions workflow.",
-                classes="wizard-hero-strap",
-            )
+            with Horizontal(classes="wizard-hero-row"):
+                with Vertical(classes="wizard-hero-text"):
+                    yield Static(HERO_TITLE, classes="wizard-hero-title")
+                    yield Static(f"[#CC58BB]{TAGLINE}[/]", classes="wizard-hero-tagline")
+                    yield Static(
+                        "Scans your repo for lockfiles, registers the matching "
+                        "components in sbomify, and writes a release-ready GitHub "
+                        "Actions workflow.",
+                        classes="wizard-hero-strap",
+                    )
+                yield Static(ASCII_WIZARD, classes="wizard-hero-mascot")
 
         # What-we'll-do — six iconified steps, one per upcoming screen.
         # Mirrors the step indicator at the top of every screen so the

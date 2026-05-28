@@ -128,10 +128,21 @@ Footer > .footer--key {
     border-title-align: left;
 }
 
-.wizard-hero-mascot {
-    text-align: center;
-    margin-bottom: 1;
+/* Two-column hero — text on the left, ASCII wizard on the right. */
+.wizard-hero-row {
     height: auto;
+}
+
+.wizard-hero-text {
+    width: 1fr;
+    height: auto;
+    padding-right: 2;
+}
+
+.wizard-hero-mascot {
+    width: auto;
+    height: auto;
+    padding-left: 2;
 }
 
 .wizard-hero-title {
