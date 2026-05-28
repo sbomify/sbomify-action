@@ -302,6 +302,16 @@ SelectionList, OptionList, ListView {
     max-height: 20;
 }
 
+/* Components screen — one OptionList per lockfile listing 'Create new'
+ * + every existing component in the workspace. Cap height so a
+ * workspace with hundreds of components doesn't push the buttons off-
+ * screen; the list scrolls beyond that. */
+ComponentsScreen OptionList {
+    height: auto;
+    max-height: 10;
+    margin: 0 0 1 0;
+}
+
 SelectionList:focus, OptionList:focus, ListView:focus {
     border: tall $sbom-purple;
 }

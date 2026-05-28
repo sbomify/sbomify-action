@@ -13,6 +13,14 @@ Whichever they choose lands on the matching ``PlannedComponent`` —
 reused label either way. ``apply.apply_plan`` reads ``existing_id``
 to decide whether to call the create API or just attach the existing
 component to the product.
+
+UI shape: per lockfile, we render an inline ``OptionList`` showing
+"Create new" as the first row followed by every existing component
+in the workspace. The list is pre-highlighted on the new-component
+row, and we cap its height so a workspace with hundreds of
+components stays scrollable instead of dwarfing the screen. Below
+the list sits an ``Input`` for the new component name — only read
+when the user leaves the highlight on the "Create new" row.
 """
 
 from __future__ import annotations
@@ -20,11 +28,16 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Input, Label, Select, Static
+from textual.widgets import Button, Input, Label, OptionList, Rule, Static
+from textual.widgets.option_list import Option
 
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 from sbomify_action.cli.wizard.state import PlannedComponent
 from sbomify_action.logging_config import logger
+
+# Sentinel id used for the "Create new component" row at the top of
+# each OptionList. Anything else is the actual component's id.
+_NEW = "__new__"
 
 
 class ComponentsScreen(WizardScreen):
@@ -49,48 +62,53 @@ class ComponentsScreen(WizardScreen):
         )
         with panel:
             yield Static(
-                "One component per lockfile. Reuse an existing one or create a "
-                "new one — the suggested name is derived from the repo + ecosystem.",
+                "One component per lockfile. Use [b]↑/↓[/] to highlight an "
+                "existing component (or leave on [b]Create new[/]), then "
+                "[b]Tab[/] to edit the new-component name. [b]Enter[/] / "
+                "[b]Next[/] when done.",
                 classes="wizard-muted",
             )
             for idx, lockfile in enumerate(self.wizard.state.selected):
+                if idx > 0:
+                    yield Rule()
                 yield Label(
                     f"[#CBCCCE]{lockfile.rel_path}[/]  [#5E5E5E]({lockfile.ecosystem})[/]"
                 )
-                if existing:
-                    options: list[tuple[str, str]] = [
-                        ("➕  Create a new component", "__new__"),
-                    ]
-                    options.extend(
-                        (str(c.get("name") or c.get("id") or "(unnamed)"), str(c.get("id")))
-                        for c in existing
+                opts: list[Option] = [
+                    Option("[#86EFAC]➕  Create a new component[/]", id=_NEW),
+                ]
+                opts.extend(
+                    Option(
+                        str(c.get("name") or c.get("id") or "(unnamed)"),
+                        id=str(c.get("id")),
                     )
-                    yield Select(
-                        options,
-                        value="__new__",
-                        allow_blank=False,
-                        id=f"component-{idx}",
-                    )
+                    for c in existing
+                )
+                yield OptionList(*opts, id=f"component-{idx}")
                 yield Input(
                     value=lockfile.suggested_name,
-                    placeholder=(
-                        "New component name (ignored if you picked an existing one above)"
-                    ),
+                    placeholder="New component name (used only when 'Create new' is highlighted)",
                     id=f"name-{idx}",
                 )
-        yield Static("", id="components-status", markup=True)
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")
 
     def on_mount(self) -> None:
-        if not self.wizard.state.selected:
-            return
-        existing = self.wizard.state.workspace.components if self.wizard.state.workspace else []
-        if existing:
-            self.query_one("#component-0", Select).focus()
-        else:
-            self.query_one("#name-0", Input).focus()
+        # Pre-highlight the "Create new" row on every OptionList so a
+        # user who just hits Enter ends up creating components with the
+        # auto-suggested names. Same fix as ProductScreen.
+        for idx in range(len(self.wizard.state.selected)):
+            try:
+                listing = self.query_one(f"#component-{idx}", OptionList)
+            except Exception:
+                continue
+            listing.highlighted = 0
+        if self.wizard.state.selected:
+            try:
+                self.query_one("#component-0", OptionList).focus()
+            except Exception:
+                pass
 
     def action_submit(self) -> None:
         self._advance()
@@ -106,25 +124,32 @@ class ComponentsScreen(WizardScreen):
         existing = self.wizard.state.workspace.components if self.wizard.state.workspace else []
         plan.create_components = []
         for idx, lockfile in enumerate(self.wizard.state.selected):
-            if existing:
-                select_value = str(self.query_one(f"#component-{idx}", Select).value)
+            listing = self.query_one(f"#component-{idx}", OptionList)
+            highlighted = listing.highlighted
+            picked_id: str | None
+            if highlighted is None:
+                picked_id = _NEW
             else:
-                select_value = "__new__"
+                option = listing.get_option_at_index(highlighted)
+                picked_id = option.id
 
-            if select_value == "__new__":
-                name = self.query_one(f"#name-{idx}", Input).value.strip() or lockfile.suggested_name
+            if picked_id is None or picked_id == _NEW:
+                name = (
+                    self.query_one(f"#name-{idx}", Input).value.strip()
+                    or lockfile.suggested_name
+                )
                 plan.create_components.append(PlannedComponent(lockfile=lockfile, name=name))
                 logger.debug("Components: will create %r for %s", name, lockfile.rel_path)
             else:
-                comp = next(c for c in existing if str(c.get("id")) == select_value)
+                comp = next(c for c in existing if str(c.get("id")) == picked_id)
                 name = str(comp.get("name") or comp.get("id") or "(unnamed)")
                 plan.create_components.append(
-                    PlannedComponent(lockfile=lockfile, name=name, existing_id=select_value)
+                    PlannedComponent(lockfile=lockfile, name=name, existing_id=picked_id)
                 )
                 logger.debug(
                     "Components: will reuse %s (id=%s) for %s",
                     name,
-                    select_value,
+                    picked_id,
                     lockfile.rel_path,
                 )
 
