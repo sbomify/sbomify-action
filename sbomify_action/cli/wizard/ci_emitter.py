@@ -132,6 +132,7 @@ def _env_block(
     api_base_url: str,
     credential_mode: CredentialMode,
     augmentation: str,
+    enrich: bool,
     release_strategy: ReleaseStrategy,
     product_id: str | None,
 ) -> str:
@@ -156,7 +157,7 @@ def _env_block(
             "          LOCK_FILE: ${{ matrix.lockfile }}",
             "          UPLOAD: 'true'",
             f"          AUGMENT: '{augmentation_to_env(augmentation)}'",
-            "          ENRICH: 'true'",
+            f"          ENRICH: '{'true' if enrich else 'false'}'",
             "          SBOM_FORMAT: ${{ matrix.sbom_format }}",
             "          OUTPUT_FILE: ${{ matrix.output_file }}",
             f"          API_BASE_URL: {api_base_url}",
@@ -249,6 +250,7 @@ def emit_workflow(
         api_base_url=api_base_url,
         credential_mode=plan.credential_mode,
         augmentation=plan.augmentation,
+        enrich=plan.enrich,
         release_strategy=plan.release_strategy,
         product_id=plan.use_product_id,
     )

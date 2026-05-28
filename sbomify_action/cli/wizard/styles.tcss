@@ -235,13 +235,25 @@ RadioButton {
     padding: 0 1;
 }
 
+/* Selected radio buttons stay readable on every background. Previously
+ * the rule was `color: $sbom-purple` which gave purple text — and the
+ * hover background is also a purple shade, so a selected-and-hovered
+ * button rendered purple-on-purple and was effectively invisible.
+ * Use white text for selected so we keep contrast across the
+ * default / focus / hover states, and lean on the bold + Textual's
+ * own (●) indicator to mark the selection. */
 RadioButton.-selected {
-    color: $sbom-purple;
+    color: white;
     text-style: bold;
 }
 
+/* Don't restyle the background when hovering an already-selected radio
+ * button — Textual's own focus / selected styling is enough, and the
+ * dark-purple hover background was the other half of the purple-on-
+ * purple readability bug. */
 RadioButton:hover {
     background: $sbom-primary-700;
+    color: white;
 }
 
 /* ---------------------------------------------------------------------

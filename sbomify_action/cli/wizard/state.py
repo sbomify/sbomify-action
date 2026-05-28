@@ -134,6 +134,11 @@ class Plan:
     augmentation: AugmentationStrategy = "skip"
     sbom_formats: list[SbomFormat] = field(default_factory=lambda: ["cyclonedx"])
     """Which formats to emit per lockfile. One matrix entry per (lockfile, format)."""
+    enrich: bool = True
+    """When True, the action calls external metadata sources (PyPI, deps.dev,
+    Repology, etc.) to fill in package licenses, descriptions, and lifecycle
+    fields the lockfile itself doesn't carry. On by default — there's almost
+    no scenario where you want a less informative SBOM."""
     attestation: bool = False
     """When True, the workflow appends an ``actions/attest-build-provenance``
     step after each SBOM upload to produce a signed build attestation."""

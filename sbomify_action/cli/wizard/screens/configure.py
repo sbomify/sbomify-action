@@ -78,6 +78,18 @@ class ConfigureScreen(WizardScreen):
                 yield RadioButton("Skip — leave metadata blank for now", id="aug-skip", value=True)
                 yield RadioButton("Use a contact profile  (AUGMENT=true)", id="aug-profile")
 
+        enrich = Vertical(classes="wizard-panel")
+        enrich.border_title = "◆  Enrichment"
+        enrich.border_subtitle = "external metadata (licenses, descriptions, …)"
+        with enrich:
+            with RadioSet(id="enrich"):
+                yield RadioButton(
+                    "Enrich packages from PyPI / deps.dev / Repology  [#86EFAC]✓ recommended[/]",
+                    id="enrich-yes",
+                    value=True,
+                )
+                yield RadioButton("Skip enrichment — lockfile data only", id="enrich-no")
+
         fmt = Vertical(classes="wizard-panel")
         fmt.border_title = "◆  SBOM formats"
         fmt.border_subtitle = "one matrix row per format"
@@ -91,16 +103,26 @@ class ConfigureScreen(WizardScreen):
                 yield RadioButton("SPDX", id="fmt-spdx")
                 yield RadioButton("Both CycloneDX and SPDX", id="fmt-both")
 
+        # Attestation default tracks repo visibility: public/unknown
+        # repos default to "yes attest" (the recommended path actually
+        # works), private repos default to "skip" because attestation
+        # will fail on Free/Pro/Team without GHEC.
+        attest_default_yes = self.wizard.state.facts.visibility != "private"
         attest = Vertical(classes="wizard-panel")
         attest.border_title = "◆  Build provenance"
         attest.border_subtitle = "signed attestations via sigstore"
         with attest:
             yield Static(self._attestation_note(), classes="wizard-muted")
             with RadioSet(id="attestation"):
-                yield RadioButton("Skip provenance attestation", id="attest-no", value=True)
                 yield RadioButton(
                     "Sign SBOMs with attest-build-provenance  [#86EFAC]✓ recommended for releases[/]",
                     id="attest-yes",
+                    value=attest_default_yes,
+                )
+                yield RadioButton(
+                    "Skip provenance attestation",
+                    id="attest-no",
+                    value=not attest_default_yes,
                 )
 
         names = Vertical(classes="wizard-panel")
@@ -167,6 +189,7 @@ class ConfigureScreen(WizardScreen):
         plan.release_strategy = self._selected_release_strategy()
         plan.credential_mode = self._selected_credential_mode()
         plan.augmentation = self._selected_augmentation()
+        plan.enrich = self._selected_enrich()
         plan.sbom_formats = self._selected_formats()
         plan.attestation = self._selected_attestation()
         plan.create_components = []
@@ -195,6 +218,15 @@ class ConfigureScreen(WizardScreen):
         if pressed is None:
             return "skip"
         return cast(AugmentationStrategy, pressed.id.split("-", 1)[1] if pressed.id else "skip")
+
+    def _selected_enrich(self) -> bool:
+        pressed = self.query_one("#enrich", RadioSet).pressed_button
+        # No pressed button (shouldn't happen — we pre-select enrich-yes)
+        # falls back to the recommended default rather than silently
+        # disabling enrichment.
+        if pressed is None:
+            return True
+        return pressed.id == "enrich-yes"
 
     def _selected_formats(self) -> list[SbomFormat]:
         pressed = self.query_one("#formats", RadioSet).pressed_button
