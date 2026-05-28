@@ -20,3 +20,8 @@ class WizardOptions:
     repo_root: Path
     output_dir: Path
     dry_run: bool
+    debug: bool = False
+    """True when ``--debug`` was passed. The CLI layer captures DEBUG
+    logs to an in-memory buffer that's dumped to stdout once the TUI
+    exits — screens can read this flag to show extra detail in their
+    UI if they want."""

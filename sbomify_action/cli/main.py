@@ -7,7 +7,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Optional, TypeVar, cast
+
+if TYPE_CHECKING:
+    import io
 
 import click
 import sentry_sdk
@@ -2693,10 +2696,52 @@ def _wizard_options(func: _FC) -> _FC:
             default=False,
             help="Walk the wizard and render the plan, but make no API calls and write no files.",
         ),
+        click.option(
+            "--debug",
+            is_flag=True,
+            default=False,
+            help=(
+                "Stream DEBUG-level logs to a file (Textual eats stdout while "
+                "running, so console logging won't help). The path is printed "
+                "before the TUI launches."
+            ),
+        ),
     ]
     for decorator in reversed(decorators):
         func = decorator(func)  # type: ignore[assignment]
     return func
+
+
+def _install_debug_buffer() -> "io.StringIO":
+    """Attach a DEBUG-level handler that buffers logs in memory.
+
+    Textual takes over stdout while the TUI is running, so writing
+    logs directly to stdout in real time is useless (they'd interfere
+    with rendering at best, get swallowed at worst). Buffer everything
+    instead and dump the buffer to stdout after the TUI exits — the
+    invocation stays pipeable (eg ``sbomify-action wizard --debug 2>&1
+    | tee debug.log``).
+    """
+    import io
+    import logging
+
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s.%(msecs)03d  %(levelname)-7s  %(name)s  %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+    # Attach to the sbomify_action root (captures everything the
+    # wizard, API client, and apply phase log) AND to textual itself
+    # so workflow/worker events land in the same buffer.
+    for name in ("sbomify_action", "textual"):
+        target = logging.getLogger(name)
+        target.setLevel(logging.DEBUG)
+        target.addHandler(handler)
+    return buffer
 
 
 def _wizard_in_ci() -> bool:
@@ -2714,6 +2759,7 @@ def _run_wizard_cli(
     repo_root: Path,
     output_dir: Path,
     dry_run: bool,
+    debug: bool,
 ) -> None:
     """Validate options, build WizardOptions, and launch the Textual wizard."""
     from sbomify_action.cli.wizard.app import launch_wizard
@@ -2745,30 +2791,62 @@ def _run_wizard_cli(
             param_hint="--output-dir",
         )
 
+    debug_buffer = None
+    if debug:
+        debug_buffer = _install_debug_buffer()
+        click.echo(
+            "[--debug] Capturing DEBUG logs; full transcript will print to "
+            "stdout after the wizard exits.",
+            err=True,
+        )
+
     opts = WizardOptions(
         token=_resolve_token(token),
         api_base_url=api_base_url.rstrip("/"),
         repo_root=repo_root,
         output_dir=output_dir,
         dry_run=dry_run,
+        debug=debug,
     )
-    sys.exit(launch_wizard(opts))
+    exit_code = launch_wizard(opts)
+    if debug_buffer is not None:
+        # Textual has restored stdout by now; flush the buffered
+        # transcript so users can pipe / tee / grep it.
+        sys.stdout.write("\n=== sbomify wizard DEBUG log ===\n")
+        sys.stdout.write(debug_buffer.getvalue())
+        sys.stdout.write("=== end DEBUG log ===\n")
+        sys.stdout.flush()
+    sys.exit(exit_code)
 
 
 @cli.command("wizard")
 @_wizard_options
-def wizard_cmd(token: Optional[str], api_base_url: str, repo_root: Path, output_dir: Path, dry_run: bool) -> None:
+def wizard_cmd(
+    token: Optional[str],
+    api_base_url: str,
+    repo_root: Path,
+    output_dir: Path,
+    dry_run: bool,
+    debug: bool,
+) -> None:
     """Interactive wizard to onboard a repository to sbomify.
 
     Scans for lockfiles, authenticates against sbomify, registers
     matching components, and writes ``.github/workflows/sboms.yml``.
     """
-    _run_wizard_cli(token, api_base_url, repo_root, output_dir, dry_run)
+    _run_wizard_cli(token, api_base_url, repo_root, output_dir, dry_run, debug)
 
 
 @cli.command("init")
 @_wizard_options
-def init_cmd(token: Optional[str], api_base_url: str, repo_root: Path, output_dir: Path, dry_run: bool) -> None:
+def init_cmd(
+    token: Optional[str],
+    api_base_url: str,
+    repo_root: Path,
+    output_dir: Path,
+    dry_run: bool,
+    debug: bool,
+) -> None:
     """Alias for ``sbomify-action wizard``. Kept for backwards compatibility.
 
     Note: previous versions of ``init`` generated only a ``sbomify.json``
@@ -2776,7 +2854,7 @@ def init_cmd(token: Optional[str], api_base_url: str, repo_root: Path, output_di
     the full onboarding wizard.
     """
     click.echo("Note: `init` is an alias for `wizard`. Prefer `sbomify-action wizard`.", err=True)
-    _run_wizard_cli(token, api_base_url, repo_root, output_dir, dry_run)
+    _run_wizard_cli(token, api_base_url, repo_root, output_dir, dry_run, debug)
 
 
 def main() -> None:
