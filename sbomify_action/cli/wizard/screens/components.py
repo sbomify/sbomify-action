@@ -104,11 +104,36 @@ class ComponentsScreen(WizardScreen):
             except Exception:
                 continue
             listing.highlighted = 0
+            # The name Input is visible by default in compose_body, so
+            # nothing to do for the pre-highlighted "Create new" row.
         if self.wizard.state.selected:
             try:
                 self.query_one("#component-0", OptionList).focus()
             except Exception:
                 pass
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        """Show the new-component name Input only when 'Create new' is highlighted.
+
+        Existing-component rows hide their matching Input so it can't
+        be mistaken for an editable label for the selected component
+        (the existing component's real name is shown in the row above).
+        This also keeps the screen shorter when picking existing
+        components for several lockfiles in a row.
+        """
+        list_id = event.option_list.id or ""
+        if not list_id.startswith("component-"):
+            return
+        try:
+            idx = int(list_id.split("-", 1)[1])
+        except ValueError:
+            return
+        try:
+            input_widget = self.query_one(f"#name-{idx}", Input)
+        except Exception:
+            return
+        option_id = event.option.id
+        input_widget.display = option_id == _NEW
 
     def action_submit(self) -> None:
         self._advance()
