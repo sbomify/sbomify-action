@@ -85,9 +85,9 @@ class ConfigureSbomScreen(WizardScreen):
             picker.display = False
             yield picker
             help_text = Static(
-                "[#5E5E5E]Pick which profile binds to every applied component. "
-                "AUGMENT=true at workflow run time reads contact_profile_id off "
-                "the component on the backend.[/]",
+                "[#5E5E5E]The selected profile's supplier, contacts, and authors will be "
+                "attached to every SBOM this workflow generates. Same profile applies to every "
+                "component — re-run the wizard to change it.[/]",
                 id="profile-help",
                 markup=True,
             )
