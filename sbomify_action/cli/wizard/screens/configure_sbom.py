@@ -70,13 +70,22 @@ class ConfigureSbomScreen(WizardScreen):
         ]
         aug = Vertical(classes="wizard-panel")
         aug.border_title = "◆  Augmentation"
-        aug.border_subtitle = "organisational metadata (supplier, contacts) from sbomify"
+        aug.border_subtitle = "organisational metadata (supplier, contacts, authors)"
         with aug:
+            yield Static(
+                "[#5E5E5E]Lockfiles never carry organisational metadata — who the supplier is, "
+                "who authored the SBOM, how to contact security. Both [b]Supplier Name[/] and "
+                "[b]Author of SBOM Data[/] are minimum elements under [b]NTIA[/], [b]CISA[/], "
+                "and the [b]EU Cyber Resilience Act[/], so SBOMs without them fail compliance "
+                "checks. A sbomify contact profile fills these in for every SBOM the workflow "
+                "produces.[/]",
+                classes="wizard-muted",
+            )
             with RadioSet(id="augmentation"):
                 yield RadioButton("Skip — leave metadata blank for now", id="aug-skip", value=True)
                 if self._profiles:
                     yield RadioButton(
-                        "Use a contact profile  (AUGMENT=true, bound to every component)",
+                        "Use a contact profile  [#86EFAC]✓ recommended[/]",
                         id="aug-profile",
                     )
                 else:
@@ -93,11 +102,7 @@ class ConfigureSbomScreen(WizardScreen):
             picker.display = False
             yield picker
             help_text = Static(
-                "[#5E5E5E]The selected profile contributes supplier and author metadata to "
-                "every SBOM this workflow generates — both are minimum elements under "
-                "[b]NTIA[/], [b]CISA[/], and the [b]EU Cyber Resilience Act[/], so SBOMs without "
-                "them fail compliance checks. Same profile applies to every component; re-run "
-                "the wizard to change it.[/]",
+                "[#5E5E5E]Same profile binds to every component; re-run the wizard to change it.[/]",
                 id="profile-help",
                 markup=True,
             )
