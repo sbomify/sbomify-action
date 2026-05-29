@@ -115,7 +115,31 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
             state.applied.append(f"bound contact profile to {bound} component(s)")
             log("success", f"Bound contact profile {plan.contact_profile_id} to {bound} component(s)")
 
-    # 5. Emit the workflow file. Last step so an API failure above never
+    # 5. Write sbomify.json when the user chose the json_config
+    # augmentation strategy. The action's json_config provider reads
+    # this file at workflow run time (AUGMENT=true triggers it) and
+    # injects the supplier / manufacturer / authors / lifecycle fields
+    # into every SBOM the matrix generates.
+    if plan.augmentation == "json_config" and plan.sbomify_json_data is not None:
+        if opts.dry_run:
+            log("info", "Dry-run: skipping sbomify.json write")
+        else:
+            import json
+
+            json_path = opts.repo_root / "sbomify.json"
+            try:
+                json_path.write_text(
+                    json.dumps(plan.sbomify_json_data, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                state.written_files.append(json_path)
+                state.applied.append(f"wrote {json_path}")
+                log("success", f"Wrote {json_path}")
+            except OSError as e:
+                log("error", f"Could not write {json_path}: {e}")
+                raise
+
+    # 6. Emit the workflow file. Last step so an API failure above never
     # leaves a broken .yml on disk that points at non-existent components.
     if opts.dry_run:
         log("info", "Dry-run: skipping workflow write")

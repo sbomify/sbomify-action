@@ -23,13 +23,18 @@ if TYPE_CHECKING:
     from sbomify_action.sbomify_api import SbomifyApiClient
 
 
-AugmentationStrategy = Literal["profile", "skip"]
+AugmentationStrategy = Literal["profile", "skip", "json_config"]
 """How the emitted workflow should source component metadata.
 
-- ``profile`` — set ``AUGMENT: 'true'`` so the action fetches the contact
-  profile + lifecycle fields from sbomify at run time.
+- ``profile`` — set ``AUGMENT: 'true'`` so the action fetches the
+  contact profile + lifecycle fields from sbomify at run time. The
+  contact profile is bound to every component during apply.
+- ``json_config`` — set ``AUGMENT: 'true'``; metadata comes from a
+  ``sbomify.json`` file in the repo root that apply writes from the
+  fields the user fills in on the Configure (sbomify.json) screen.
+  The action's ``json_config`` provider reads it at workflow run time.
 - ``skip`` — set ``AUGMENT: 'false'``; the user will manage metadata
-  out-of-band.
+  out-of-band (or accept blank organisational fields).
 """
 
 ReleaseStrategy = Literal["trunk", "tag", "manual"]
@@ -145,6 +150,12 @@ class Plan:
     actually has something to look up — without this, the action sets
     AUGMENT=true but the component has no profile bound on the backend
     and augmentation silently no-ops."""
+    sbomify_json_data: dict[str, Any] | None = None
+    """JSON payload written to ``<repo_root>/sbomify.json`` when
+    ``augmentation == 'json_config'``. Populated by
+    ConfigureSbomifyJsonScreen with the supplier / manufacturer /
+    authors / lifecycle fields the action's ``json_config`` provider
+    expects."""
     sbom_formats: list[SbomFormat] = field(default_factory=lambda: ["cyclonedx"])
     """Which formats to emit per lockfile. One matrix entry per (lockfile, format)."""
     enrich: bool = True

@@ -84,8 +84,12 @@ class ConfigureSbomScreen(WizardScreen):
             with RadioSet(id="augmentation"):
                 yield RadioButton("Skip — leave metadata blank for now", id="aug-skip", value=True)
                 yield RadioButton(
-                    "Use a contact profile  [#86EFAC]✓ recommended[/]",
+                    "Use a contact profile (saved to sbomify)  [#86EFAC]✓ recommended[/]",
                     id="aug-profile",
+                )
+                yield RadioButton(
+                    "Write a sbomify.json file (saved to the repo)",
+                    id="aug-json_config",
                 )
             picker = OptionList(
                 *self._picker_options(),
@@ -101,6 +105,16 @@ class ConfigureSbomScreen(WizardScreen):
             )
             help_text.display = False
             yield help_text
+            # Status / "Edit fields…" affordance shown only when the
+            # user has selected the json_config radio. Tells them
+            # whether the form has been filled out yet.
+            json_status = Static(
+                "",
+                id="json-config-status",
+                markup=True,
+            )
+            json_status.display = False
+            yield json_status
 
         fmt = Vertical(classes="wizard-panel")
         fmt.border_title = "◆  SBOM formats"
@@ -220,28 +234,47 @@ class ConfigureSbomScreen(WizardScreen):
             picker.display = True
             self.query_one("#profile-help", Static).display = True
 
+        # Refresh the json_config status row whenever we come back from
+        # the sbomify.json form screen — without this the user sees the
+        # stale "not configured" hint even after saving the form.
+        try:
+            aug = self.query_one("#augmentation", RadioSet)
+            pressed = aug.pressed_button
+            if pressed is not None and pressed.id == "aug-json_config":
+                self.query_one("#json-config-status", Static).display = True
+                self._refresh_json_status()
+        except Exception:  # noqa: BLE001
+            pass
+
     def action_submit(self) -> None:
         self.route_enter(self._advance)
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
-        """Show / hide the profile picker as the augmentation radio toggles.
+        """Reveal the inputs that match the chosen augmentation strategy.
 
-        The picker would otherwise be visible and focusable even when the
-        user has 'Skip' highlighted — promising an action the wizard
-        won't actually take. Toggling visibility keeps the screen honest
-        about what the current selection does.
+        Each strategy has its own follow-up: the profile picker for
+        ``aug-profile``, a status row pointing at the sbomify.json
+        config screen for ``aug-json_config``. Hiding the unused
+        controls keeps the screen honest about what the current
+        selection does — a visible picker under a ``Skip`` selection
+        would be a UI lie.
         """
         if event.radio_set.id != "augmentation":
             return
         is_profile = event.pressed.id == "aug-profile"
+        is_json = event.pressed.id == "aug-json_config"
         picker = self.query_one("#profile-picker", OptionList)
         help_text = self.query_one("#profile-help", Static)
+        json_status = self.query_one("#json-config-status", Static)
         picker.display = is_profile
         help_text.display = is_profile
+        json_status.display = is_json
         if is_profile:
             if picker.highlighted is None:
                 picker.highlighted = 0
             picker.focus()
+        if is_json:
+            self._refresh_json_status()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         """Hand off to CreateProfileScreen when the user picks the
@@ -263,20 +296,40 @@ class ConfigureSbomScreen(WizardScreen):
         plan = self.wizard.state.plan
         plan.enrich = self._selected_enrich()
         plan.augmentation = self._selected_augmentation()
-        # contact_profile_id is only meaningful when we're actually
-        # binding a profile; clear it on every advance so a user who
-        # toggles Profile -> Skip doesn't leave a stale id on the plan.
-        if plan.augmentation == "profile":
-            plan.contact_profile_id = self._selected_profile_id()
-            if plan.contact_profile_id is None:
-                # The radio said 'profile' but the picker had no selection.
-                # Fall back to skip rather than emit AUGMENT=true with no
-                # binding — silent no-op at workflow time would be worse.
-                plan.augmentation = "skip"
-        else:
-            plan.contact_profile_id = None
         plan.sbom_formats = self._selected_formats()
         plan.attestation = self._selected_attestation()
+
+        # contact_profile_id / sbomify_json_data are only meaningful
+        # when we're actually using that strategy; clear stale state
+        # on every advance so toggling between Skip / Profile /
+        # JsonConfig doesn't leak data from a previous selection.
+        if plan.augmentation == "profile":
+            plan.contact_profile_id = self._selected_profile_id()
+            plan.sbomify_json_data = None
+            if plan.contact_profile_id is None:
+                # The radio said 'profile' but the picker had no
+                # selection (or it sat on the + Create new sentinel).
+                # Fall back to skip rather than emit AUGMENT=true with
+                # no binding — silent no-op at workflow time would be
+                # worse.
+                plan.augmentation = "skip"
+        elif plan.augmentation == "json_config":
+            plan.contact_profile_id = None
+            if plan.sbomify_json_data is None:
+                # User picked the sbomify.json radio but hasn't filled
+                # in the form yet. Push the configure screen here
+                # instead of falling back to Skip — the form is the
+                # point of the radio. The form pops back to this
+                # screen on save; we re-advance via the saved data.
+                from sbomify_action.cli.wizard.screens.configure_sbomify_json import (
+                    ConfigureSbomifyJsonScreen,
+                )
+
+                self.wizard.push_screen(ConfigureSbomifyJsonScreen())
+                return
+        else:
+            plan.contact_profile_id = None
+            plan.sbomify_json_data = None
 
         from sbomify_action.cli.wizard.screens.review import ReviewScreen
 
@@ -290,9 +343,33 @@ class ConfigureSbomScreen(WizardScreen):
 
     def _selected_augmentation(self) -> AugmentationStrategy:
         pressed = self.query_one("#augmentation", RadioSet).pressed_button
-        if pressed is None:
+        if pressed is None or not pressed.id:
             return "skip"
-        return cast(AugmentationStrategy, pressed.id.split("-", 1)[1] if pressed.id else "skip")
+        # Radio ids are ``aug-<strategy>`` — strategy may contain an
+        # underscore (``json_config``), so split on the first dash only.
+        return cast(AugmentationStrategy, pressed.id.split("-", 1)[1])
+
+    def _refresh_json_status(self) -> None:
+        """Render the inline status under the json_config radio.
+
+        Tells the user whether the sbomify.json fields have been
+        captured yet, and how to get to the form.
+        """
+        status = self.query_one("#json-config-status", Static)
+        data = self.wizard.state.plan.sbomify_json_data
+        if data:
+            supplier = data.get("supplier") if isinstance(data, dict) else None
+            sup_name = supplier.get("name") if isinstance(supplier, dict) and supplier.get("name") else "(unnamed)"
+            status.update(
+                f"[#86EFAC]✓  Configured.[/] Supplier: [b]{sup_name}[/]. "
+                "[#5E5E5E]Press [b]Next[/] to review, or pick the radio again to edit.[/]"
+            )
+        else:
+            status.update(
+                "[#5E5E5E]◌  Not configured yet — press [b]Next[/] to open the "
+                "sbomify.json form. Fields will be written to "
+                "[b]<repo>/sbomify.json[/] when apply runs.[/]"
+            )
 
     def _selected_profile_id(self) -> str | None:
         """Read the picker's highlighted profile id, or None when nothing

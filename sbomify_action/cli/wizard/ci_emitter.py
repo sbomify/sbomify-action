@@ -188,8 +188,14 @@ def _env_block(
 
 
 def augmentation_to_env(value: str) -> str:
-    """Map the wizard's AugmentationStrategy literal to the action env flag."""
-    return "true" if value == "profile" else "false"
+    """Map the wizard's AugmentationStrategy literal to the action env flag.
+
+    Both ``profile`` and ``json_config`` resolve to ``AUGMENT=true`` at
+    runtime — the action then chooses its source via provider priority
+    (the json_config provider beats the sbomify_api provider when a
+    local sbomify.json exists, per `_augmentation/registry.py`).
+    """
+    return "true" if value in ("profile", "json_config") else "false"
 
 
 def _cache_step() -> str:
