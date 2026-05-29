@@ -8,8 +8,9 @@ YAML parsing, no grep over arbitrary workflow files, no inference of
 intent from ``on:`` triggers.
 
 If the file exists with the sentinel → the apply phase will overwrite
-it (after .bak backup). If it exists *without* the sentinel → the
-apply phase will refuse with a clear error.
+it in place (git tracks the previous version; the wizard deliberately
+writes no ``.bak`` — see ``io.py``). If it exists *without* the
+sentinel → the apply phase will refuse with a clear error.
 """
 
 from __future__ import annotations
