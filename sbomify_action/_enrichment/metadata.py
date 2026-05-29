@@ -179,4 +179,5 @@ class NormalizedMetadata:
             or self.hashes
             or self.cle_eos
             or self.cle_eol
+            or self.cle_release_date
         )

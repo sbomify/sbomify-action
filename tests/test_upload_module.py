@@ -1009,6 +1009,35 @@ class TestDependencyTrackErrors(unittest.TestCase):
             Path(sbom_file).unlink()
 
     @patch("sbomify_action._upload.destinations.dependency_track.requests.put")
+    def test_upload_other_request_exception_returns_failure(self, mock_put):
+        """A non-ConnectionError/Timeout transport failure (eg SSLError) must
+        return a clean UploadResult.failure_result, not propagate and crash
+        the upload step."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
+            sbom_file = f.name
+
+        try:
+            import requests
+
+            mock_put.side_effect = requests.exceptions.SSLError("certificate verify failed")
+
+            config = DependencyTrackConfig(
+                api_key="test-key",
+                api_url="https://dtrack.example.com/api",
+                project_id="project-uuid",
+            )
+            dest = DependencyTrackDestination(config=config)
+            input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
+
+            result = dest.upload(input)  # must not raise
+
+            self.assertFalse(result.success)
+            self.assertIn("failed", result.error_message.lower())
+        finally:
+            Path(sbom_file).unlink()
+
+    @patch("sbomify_action._upload.destinations.dependency_track.requests.put")
     def test_upload_timeout_error(self, mock_put):
         """Test upload with timeout error."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:

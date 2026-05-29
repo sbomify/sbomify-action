@@ -10,6 +10,7 @@ from sbomify_action._generation.chainguard import (
     ChainguardBaseImage,
     _extract_repo,
     _parse_purl_docker_uri,
+    _resolve_platform_digest,
     convert_spdx_to_cyclonedx,
     detect_chainguard_image,
     fetch_chainguard_sbom,
@@ -306,6 +307,34 @@ class TestDetectDirectChainguard:
     def test_crane_not_available(self, mock_which):
         result = detect_chainguard_image("cgr.dev/chainguard/python:latest")
         assert result is None
+
+    @patch("sbomify_action._generation.chainguard._run_crane")
+    def test_resolve_platform_digest_tolerates_missing_digest(self, mock_crane):
+        """A manifest-list entry that matches the platform but lacks a 'digest'
+        key must NOT raise KeyError — _resolve_platform_digest returns None and
+        the caller treats it as 'no resolvable digest'. (OCI mandates digest;
+        this guards against a malformed/non-spec registry response.) Both
+        common linux platforms are present and digest-less so the test is
+        deterministic regardless of the runner's architecture."""
+        manifest_list_no_digest = json.dumps(
+            {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.index.v1+json",
+                "manifests": [
+                    {
+                        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                        "platform": {"architecture": "amd64", "os": "linux"},
+                    },
+                    {
+                        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                        "platform": {"architecture": "arm64", "os": "linux"},
+                    },
+                ],
+            }
+        )
+        mock_crane.return_value = manifest_list_no_digest
+        # Must not raise; returns None because no matching entry carries a digest.
+        assert _resolve_platform_digest("cgr.dev/chainguard/python:latest") is None
 
 
 class TestDetectFromProvenance:
