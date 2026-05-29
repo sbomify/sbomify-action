@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Callable, ClassVar
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Static
+from textual.widgets import Button, Footer, Header, RadioSet, Static
 
 if TYPE_CHECKING:
     from sbomify_action.cli.wizard.app import WizardApp
@@ -51,28 +51,36 @@ class WizardScreen(Screen[None]):
         return iter(())
 
     def route_enter(self, forward: Callable[[], None]) -> None:
-        """Route a screen-level Enter keystroke to the right action.
+        """Route a screen-level Enter to the right action based on focus.
 
-        The Enter binding on most wizard screens is ``priority=True`` so an
-        ``Input`` field can't swallow it (the user types a token, hits Enter,
-        the screen submits). But ``priority=True`` ALSO means the screen's
-        action wins when the user has Tabbed over to a non-primary button
-        (Back, Cancel) — Enter would then fire ``_advance`` and the user
-        would jump forward instead of back. Route Enter to whatever Button
-        currently holds focus so the visible "I'm about to press this button"
-        affordance matches what actually happens; only fall through to
-        ``forward`` when no non-primary Button has focus.
+        Every wizard screen declares ``Binding("enter", "submit", priority=True)``
+        so an ``Input`` or ``SelectionList`` can't swallow Enter and strand
+        the user (eg the password Input on Authenticate). But that same
+        priority binding hijacks Enter from focused widgets that DO want
+        to own it:
 
-        Primary buttons (the screen's forward action — Next, Authenticate,
-        Apply, Continue) get the fall-through path so Enter on the focused
-        primary button still triggers the same forward action it would have
-        anyway, and the screen behaviour stays unchanged for users who
-        haven't Tabbed away from the default.
+        - Focused non-primary ``Button`` (Back, Cancel) → press it
+          instead of advancing forward.
+        - Focused ``RadioSet`` → commit the highlighted radio. Without
+          this, Enter inside a RadioSet skips past the radio selection
+          entirely and jumps to the next screen (see the profile-picker
+          regression: pressing Enter on the augmentation RadioSet to
+          select 'Use a contact profile' advanced the screen before the
+          radio could change).
+        - Anything else → run ``forward`` (the screen's advance action).
+
+        Primary buttons fall through too, so Enter on a focused primary
+        button still does what the same screen action does anyway.
         """
         focused = self.focused
         if isinstance(focused, Button) and focused.variant != "primary":
             focused.press()
             return
+        if isinstance(focused, RadioSet):
+            action = getattr(focused, "action_toggle_button", None)
+            if callable(action):
+                action()
+                return
         forward()
 
     def _crumb_markup(self) -> str:

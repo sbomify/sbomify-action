@@ -128,6 +128,83 @@ async def test_welcome_to_discover_navigates(tmp_path: Path, monkeypatch: pytest
         assert len(app.state.discovered) == 1
 
 
+async def test_enter_on_focused_radio_set_toggles_radio(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: Enter while a RadioSet has focus must commit the
+    highlighted radio (not skip past the whole screen).
+
+    Hitting this on the augmentation RadioSet was the symptom that
+    exposed the priority-Enter bug: pressing Enter to pick 'Use a
+    contact profile' advanced the screen without ever changing the
+    radio, so the inline profile picker never appeared. ``route_enter``
+    on ``WizardScreen`` now detects RadioSet focus and toggles the
+    highlighted button instead of forwarding.
+    """
+    from textual.widgets import OptionList, RadioSet
+
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "uv.lock",
+            rel_path=Path("uv.lock"),
+            ecosystem="python",
+            suggested_name="widget-py",
+        )
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+    _stub_client(
+        monkeypatch,
+        products=[{"id": "p1", "name": "alpha"}],
+        components=[{"id": "c1", "name": "widget-py"}],
+        profiles=[
+            {"id": "cp1", "name": "Acme Engineering"},
+            {"id": "cp2", "name": "Acme Security"},
+        ],
+    )
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        # Walk to ConfigureWorkflow.
+        await pilot.press("enter")  # Welcome -> Discover
+        await pilot.pause()
+        await pilot.press("space")  # select lockfile
+        await pilot.pause()
+        await pilot.press("enter")  # Discover -> Authenticate
+        await pilot.pause(1.0)  # auto-auth uses stubbed client
+        await pilot.press("enter")  # Authenticate -> Product
+        await pilot.pause()
+        await pilot.press("enter")  # Product -> Components
+        await pilot.pause()
+        await pilot.press("enter")  # Components -> ConfigureWorkflow
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.configure_workflow import (
+            ConfigureWorkflowScreen,
+        )
+
+        assert isinstance(app.screen, ConfigureWorkflowScreen)
+
+        # Focus the augmentation RadioSet; arrow down to highlight the
+        # profile radio; press Enter to commit. Without route_enter's
+        # RadioSet branch this advances to ConfigureSbom and the
+        # profile picker never becomes visible.
+        aug = app.screen.query_one("#augmentation", RadioSet)
+        aug.focus()
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ConfigureWorkflowScreen), (
+            "Enter on focused RadioSet must NOT advance — should toggle radio"
+        )
+        pressed = aug.pressed_button
+        assert pressed is not None and pressed.id == "aug-profile"
+
+        picker = app.screen.query_one("#profile-picker", OptionList)
+        assert picker.display is True, "Profile picker must appear after selecting profile radio"
+        assert picker.option_count == 2
+
+
 async def test_enter_on_focused_back_button_goes_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: pressing Enter while the Back button is focused must
     pop the screen, not trigger the screen's forward ``action_submit``.
