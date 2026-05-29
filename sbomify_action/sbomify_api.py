@@ -450,6 +450,28 @@ class SbomifyApiClient:
             return []
         return [item for item in data if isinstance(item, dict)]
 
+    def create_contact_profile(self, team_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a contact profile in a workspace.
+
+        Hits ``POST /api/v1/workspaces/{team_key}/contact-profiles``.
+        ``payload`` is the CycloneDX-aligned ``ContactProfileCreateSchema``
+        — at minimum ``name`` is required; ``entities`` (with at least
+        one of ``is_manufacturer``/``is_supplier``/``is_author`` set)
+        and ``authors`` cover the supplier + author metadata that NTIA /
+        CISA / EU CRA list as minimum elements. Returns the created
+        profile dict (with the new ``id``) on 201; raises ``APIError``
+        on validation / permission failure.
+        """
+        response = self._request(
+            "POST",
+            f"/api/v1/workspaces/{team_key}/contact-profiles",
+            json_body=payload,
+        )
+        if not response.ok:
+            raise APIError(self._build_error("Failed to create contact profile.", response))
+        data = self._safe_json_dict(response)
+        return data or {}
+
     # ------------------------------------------------------------------
     # releases
 

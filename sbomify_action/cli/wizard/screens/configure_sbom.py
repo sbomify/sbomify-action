@@ -59,11 +59,11 @@ class ConfigureSbomScreen(WizardScreen):
                 yield RadioButton("Skip enrichment — lockfile data only", id="enrich-no")
 
         # Augmentation: skip vs bind a contact profile to every component.
-        # When the workspace has no contact profiles the profile option
-        # is disabled — there's nothing for the wizard to bind, and
-        # AUGMENT=true with no bound profile silently no-ops at workflow
-        # run time. The picker beneath only matters when the user picks
-        # the profile radio.
+        # The picker always shows existing workspace profiles plus a
+        # "+ Create new" sentinel at the top — selecting the sentinel
+        # pushes CreateProfileScreen which POSTs to the API and returns
+        # with the new profile auto-selected. This lets a user with
+        # zero profiles bootstrap one from inside the wizard.
         profiles = self.wizard.state.workspace.contact_profiles if self.wizard.state.workspace else []
         self._profiles = [
             (str(p.get("name") or p.get("id") or "(unnamed)"), str(p.get("id"))) for p in profiles if p.get("id")
@@ -83,42 +83,24 @@ class ConfigureSbomScreen(WizardScreen):
             )
             with RadioSet(id="augmentation"):
                 yield RadioButton("Skip — leave metadata blank for now", id="aug-skip", value=True)
-                if self._profiles:
-                    yield RadioButton(
-                        "Use a contact profile  [#86EFAC]✓ recommended[/]",
-                        id="aug-profile",
-                    )
-                else:
-                    rb = RadioButton(
-                        "[#5E5E5E]Use a contact profile — none configured in this workspace[/]",
-                        id="aug-profile",
-                    )
-                    rb.disabled = True
-                    yield rb
+                yield RadioButton(
+                    "Use a contact profile  [#86EFAC]✓ recommended[/]",
+                    id="aug-profile",
+                )
             picker = OptionList(
-                *[Option(label, id=pid) for label, pid in self._profiles],
+                *self._picker_options(),
                 id="profile-picker",
             )
             picker.display = False
             yield picker
             help_text = Static(
-                "[#5E5E5E]Same profile binds to every component; re-run the wizard to change it.[/]",
+                "[#5E5E5E]Same profile binds to every component; re-run the wizard to change it. "
+                "Pick [b]+ Create new[/] to add one without leaving the wizard.[/]",
                 id="profile-help",
                 markup=True,
             )
             help_text.display = False
             yield help_text
-            # Shown only when the workspace has zero profiles — points
-            # the user at the sbomify UI path where they can create
-            # one. Without it the disabled radio leaves them with no
-            # obvious next step.
-            if not self._profiles:
-                yield Static(
-                    "[#5E5E5E]◌  Create a contact profile in the sbomify UI under "
-                    "[b]Settings → Contacts[/], then re-run the wizard to bind it.[/]",
-                    id="profile-empty-hint",
-                    markup=True,
-                )
 
         fmt = Vertical(classes="wizard-panel")
         fmt.border_title = "◆  SBOM formats"
@@ -180,8 +162,63 @@ class ConfigureSbomScreen(WizardScreen):
             "[#5E5E5E]The same note is emitted as a comment in the generated workflow.[/]"
         )
 
+    # Sentinel id used by the "+ Create a new profile" row at the top
+    # of the picker. Anything else is a real workspace profile id.
+    _CREATE_PROFILE_SENTINEL = "__create_new__"
+
+    def _picker_options(self) -> list[Option]:
+        """Build the OptionList rows: + Create new + every workspace profile."""
+        options: list[Option] = [
+            Option(
+                "[#86EFAC]+ Create a new profile[/]",
+                id=self._CREATE_PROFILE_SENTINEL,
+            )
+        ]
+        options.extend(Option(label, id=pid) for label, pid in self._profiles)
+        return options
+
     def on_mount(self) -> None:
         self.query_one("#enrich", RadioSet).focus()
+
+    def on_screen_resume(self) -> None:
+        """Called when the screen becomes active again after a sub-screen
+        pops. If CreateProfileScreen succeeded, the workspace snapshot
+        gained a new profile — rebuild the picker so it appears, and
+        auto-select it via the id CreateProfileScreen stashed on the
+        plan."""
+        workspace = self.wizard.state.workspace
+        if workspace is None:
+            return
+        # Re-derive the picker contents from the current snapshot.
+        self._profiles = [
+            (str(p.get("name") or p.get("id") or "(unnamed)"), str(p.get("id")))
+            for p in workspace.contact_profiles
+            if p.get("id")
+        ]
+        try:
+            picker = self.query_one("#profile-picker", OptionList)
+        except Exception:  # noqa: BLE001
+            return
+        picker.clear_options()
+        picker.add_options(self._picker_options())
+        # Auto-select the freshly-created profile if CreateProfileScreen
+        # stashed its id.
+        target_id = self.wizard.state.plan.contact_profile_id
+        if target_id:
+            for idx, opt in enumerate(self._picker_options()):
+                if opt.id == target_id:
+                    picker.highlighted = idx
+                    break
+            # Make sure the profile radio is selected + picker is visible
+            # so the user sees the success directly.
+            try:
+                aug = self.query_one("#augmentation", RadioSet)
+                for rb in aug.query(RadioButton):
+                    rb.value = rb.id == "aug-profile"
+            except Exception:  # noqa: BLE001
+                pass
+            picker.display = True
+            self.query_one("#profile-help", Static).display = True
 
     def action_submit(self) -> None:
         self.route_enter(self._advance)
@@ -196,7 +233,7 @@ class ConfigureSbomScreen(WizardScreen):
         """
         if event.radio_set.id != "augmentation":
             return
-        is_profile = event.pressed.id == "aug-profile" and bool(self._profiles)
+        is_profile = event.pressed.id == "aug-profile"
         picker = self.query_one("#profile-picker", OptionList)
         help_text = self.query_one("#profile-help", Static)
         picker.display = is_profile
@@ -205,6 +242,16 @@ class ConfigureSbomScreen(WizardScreen):
             if picker.highlighted is None:
                 picker.highlighted = 0
             picker.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Hand off to CreateProfileScreen when the user picks the
+        '+ Create new' sentinel row."""
+        if event.option_list.id != "profile-picker":
+            return
+        if event.option.id == self._CREATE_PROFILE_SENTINEL:
+            from sbomify_action.cli.wizard.screens.create_profile import CreateProfileScreen
+
+            self.wizard.push_screen(CreateProfileScreen())
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "next":
@@ -250,11 +297,14 @@ class ConfigureSbomScreen(WizardScreen):
     def _selected_profile_id(self) -> str | None:
         """Read the picker's highlighted profile id, or None when nothing
         is highlighted (eg the user toggled to 'profile' but never moved
-        focus into the picker)."""
+        focus into the picker) — also None when the highlight sits on
+        the '+ Create new' sentinel, which isn't a real profile."""
         picker = self.query_one("#profile-picker", OptionList)
         if picker.highlighted is None:
             return None
         option = picker.get_option_at_index(picker.highlighted)
+        if option.id == self._CREATE_PROFILE_SENTINEL:
+            return None
         return option.id
 
     def _selected_formats(self) -> list[SbomFormat]:

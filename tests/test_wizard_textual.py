@@ -231,7 +231,9 @@ async def test_enter_on_focused_radio_set_toggles_radio(tmp_path: Path, monkeypa
 
         picker = app.screen.query_one("#profile-picker", OptionList)
         assert picker.display is True, "Profile picker must appear after selecting profile radio"
-        assert picker.option_count == 2
+        # Picker shows the two stub profiles plus the "+ Create new"
+        # sentinel row that hands off to CreateProfileScreen.
+        assert picker.option_count == 3
 
 
 async def test_escape_from_components_goes_back_in_any_focus_state(
