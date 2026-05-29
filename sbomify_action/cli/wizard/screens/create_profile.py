@@ -134,11 +134,11 @@ class CreateProfileScreen(WizardScreen):
         self.query_one("#profile-name", Input).focus()
 
     def action_submit(self) -> None:
+        # Enter is handled here only — the priority=True binding on
+        # this screen consumes Enter before any focused Input can fire
+        # Input.Submitted, so an on_input_submitted handler would be
+        # unreachable dead code.
         self.route_enter(self._submit)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Enter on any Input advances submission, same as 'Create profile'."""
-        self._submit()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back":
@@ -233,6 +233,18 @@ class CreateProfileScreen(WizardScreen):
             return
         if event.state == WorkerState.SUCCESS:
             result = event.worker.result
+            # _create_worker's contract is `dict | str`: a dict is the
+            # API success payload, a str is the APIError message. A
+            # successful POST whose body doesn't parse (or which the
+            # API client could not coerce into a dict-with-id) lands
+            # in the dict branch with no id — surface it as an API
+            # anomaly rather than rendering the empty dict as the
+            # error message, which is both confusing and re-prompts
+            # the user to submit a duplicate.
+            if isinstance(result, str):
+                self._set_status(f"[#F87171]✗  {result}[/]")
+                self.query_one("#submit", Button).disabled = False
+                return
             if isinstance(result, dict) and result.get("id"):
                 # Append to the workspace snapshot so ConfigureSbom's
                 # compose_body picks up the new profile on re-render.
@@ -242,10 +254,17 @@ class CreateProfileScreen(WizardScreen):
                 # Stash the id so ConfigureSbom can pre-select it.
                 self.wizard.state.plan.contact_profile_id = str(result.get("id"))
                 self.app.pop_screen()
-            else:
-                # Worker returned an error string.
-                self._set_status(f"[#F87171]✗  {result}[/]")
-                self.query_one("#submit", Button).disabled = False
+                return
+            # Successful 2xx but unexpected body shape — the profile
+            # may or may not exist on the backend. Surface enough
+            # context for the user to check the sbomify UI before
+            # re-trying.
+            self._set_status(
+                "[#F87171]✗  Profile may have been created but the API response was "
+                "unexpected. Check the sbomify UI under Settings → Contacts before "
+                "re-submitting to avoid creating a duplicate.[/]"
+            )
+            self.query_one("#submit", Button).disabled = False
         elif event.state == WorkerState.ERROR:
             self._set_status(f"[#F87171]✗  Unexpected error: {event.worker.error}[/]")
             self.query_one("#submit", Button).disabled = False

@@ -409,6 +409,22 @@ class SbomifyApiClient:
         Returns a bare JSON list (no pagination envelope) directly from
         the API. The route is mounted at ``/workspaces`` (not
         ``/teams``) despite the legacy ``team_key`` parameter naming.
+
+        Note: this is the ONLY workspaces-router endpoint where a
+        trailing slash is REQUIRED — verified against stage,
+        ``/api/v1/workspaces`` returns 301 (redirect, may drop bodies on
+        non-GET). The nested routes (``/{key}/contact-profiles`` etc.)
+        do NOT accept a trailing slash; they 404 when one is present.
+        Do not "normalise" the slashes here — each route's shape is
+        dictated by the backend's mount config and verified by
+        integration probing.
+
+        Accepts both shapes the API might return: a bare list (current
+        production shape) OR a paginated envelope (``{items: [...],
+        pagination: {...}}``) — the latter is the shape every other
+        list endpoint already uses, so a future migration of this
+        route would otherwise silently return [] and break team_key
+        resolution.
         """
         response = self._request("GET", "/api/v1/workspaces/")
         if not response.ok:
@@ -417,9 +433,13 @@ class SbomifyApiClient:
             data = response.json()
         except ValueError:
             raise APIError("Failed to list workspaces: invalid JSON response from API")
-        if not isinstance(data, list):
-            return []
-        return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            items = data.get("items")
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+        return []
 
     def list_contact_profiles(self, team_key: str) -> list[dict[str, Any]]:
         """List contact profiles for a workspace.

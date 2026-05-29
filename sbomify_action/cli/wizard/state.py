@@ -110,10 +110,13 @@ class WorkspaceSnapshot:
     components: list[dict[str, Any]] = field(default_factory=list)
     contact_profiles: list[dict[str, Any]] = field(default_factory=list)
     team_key: str | None = None
-    """Workspace identifier returned by ``GET /api/v1/teams/``. Required
-    to scope endpoints like contact-profiles which the backend nests
-    under ``/teams/{team_key}/``. ``None`` when the token couldn't
-    enumerate any team."""
+    """Workspace identifier returned by ``GET /api/v1/workspaces/``.
+    Required to scope endpoints like contact-profiles which the backend
+    nests under ``/api/v1/workspaces/{team_key}/``. ``None`` when the
+    token couldn't enumerate any workspace. (The legacy ``team_key``
+    field name is preserved for backward compatibility — the route
+    moved from ``/teams/`` to ``/workspaces/`` in the backend rename
+    but the URL parameter still uses the old name.)"""
 
 
 @dataclass

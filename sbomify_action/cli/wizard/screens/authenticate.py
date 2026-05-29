@@ -17,6 +17,35 @@ from sbomify_action.logging_config import logger
 from sbomify_action.sbomify_api import SbomifyApiClient
 
 
+def _pick_default_workspace_key(workspaces: list[dict[str, object]]) -> str | None:
+    """Return the ``key`` of the workspace the wizard should bind to.
+
+    The backend scopes ``list_products`` / ``list_components`` to the
+    token's bound team (scoped tokens) or the authenticating user's
+    *default* workspace (PATs). Mirror that by reading the
+    ``is_default_team`` flag on the current user's membership entry —
+    that's the same signal the backend uses. When no entry is marked
+    default (or the response omits the membership block), fall back
+    to the first usable key.
+    """
+    fallback: str | None = None
+    for ws in workspaces:
+        key = ws.get("key")
+        if not isinstance(key, str) or not key:
+            continue
+        if fallback is None:
+            fallback = key
+        members = ws.get("members")
+        if not isinstance(members, list):
+            continue
+        for member in members:
+            if not isinstance(member, dict):
+                continue
+            if member.get("is_me") and member.get("is_default_team"):
+                return key
+    return fallback
+
+
 class AuthenticateScreen(WizardScreen):
     """Phase 3 — validate token + prefetch products/components/profiles."""
 
@@ -113,21 +142,46 @@ class AuthenticateScreen(WizardScreen):
         # endpoint is nested under ``/api/v1/workspaces/{team_key}/``
         # and there's no "current workspace" alias — we have to know
         # the key explicitly. ``list_workspaces`` returns one or more
-        # entries for the token (typically one for scoped tokens; the
-        # user's full membership list for personal-access tokens). We
-        # take the first one with a usable key and surface a non-fatal
-        # warning on failure so the rest of the prefetch still runs.
+        # entries: a scoped token returns the one workspace it's bound
+        # to; a personal-access token returns every workspace the
+        # user belongs to.
+        #
+        # For multi-workspace tokens we MUST pick the workspace where
+        # list_products / list_components are actually scoped — those
+        # endpoints have no team_key parameter and resolve via the
+        # token's bound team (scoped) or the user's default workspace
+        # (PAT). Picking the wrong workspace silently binds profiles
+        # to components that live elsewhere — the exact failure mode
+        # apply.py's profile-binding step exists to avoid.
+        #
+        # Strategy: prefer the workspace whose membership entry has
+        # ``is_default_team=True`` for the current user (the same
+        # signal the backend uses to scope component listings). Fall
+        # back to the first usable entry, and surface a warning when
+        # the token spans multiple workspaces so the user notices.
         try:
             workspaces = SbomifyApiClient(base_url, token).list_workspaces()
         except APIError as e:
             logger.warning("Could not list workspaces: %s", e)
             workspaces = []
-        team_key: str | None = None
-        for ws in workspaces:
-            key = ws.get("key")
-            if isinstance(key, str) and key:
-                team_key = key
-                break
+        team_key = _pick_default_workspace_key(workspaces)
+        if len(workspaces) > 1:
+            picked_name = next(
+                (
+                    str(ws.get("name") or ws.get("key"))
+                    for ws in workspaces
+                    if isinstance(ws.get("key"), str) and ws.get("key") == team_key
+                ),
+                "(unknown)",
+            )
+            logger.warning(
+                "Token spans %d workspaces; the wizard will use %r (key=%s) — the "
+                "user's default workspace. If you intended to onboard a different "
+                "workspace, change the default in the sbomify UI and re-run.",
+                len(workspaces),
+                picked_name,
+                team_key,
+            )
 
         def _list_products() -> list[dict[str, object]]:
             return SbomifyApiClient(base_url, token).list_products()

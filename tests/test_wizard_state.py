@@ -8,8 +8,12 @@ import pytest
 
 from sbomify_action.cli.wizard.io import (
     WIZARD_HEADER_SENTINEL,
+    WIZARD_JSON_SENTINEL_KEY,
+    SbomifyJsonOwnershipError,
     WorkflowOwnershipError,
     file_has_wizard_header,
+    sbomify_json_has_wizard_sentinel,
+    write_sbomify_json,
     write_workflow,
 )
 from sbomify_action.cli.wizard.options import WizardOptions
@@ -69,6 +73,15 @@ def test_plan_defaults_oidc_and_skip_augmentation() -> None:
     assert plan.augmentation == "skip"
     assert plan.release_strategy == "trunk"
     assert plan.create_components == []
+    # Regression guard: apply.py writes sbomify.json when
+    # sbomify_json_data is not None, and patch_component binds the
+    # profile when contact_profile_id is truthy. Flipping either
+    # default to a default_factory(dict) / default-id string would
+    # silently produce data-loss / cross-workspace-bind bugs. Pin
+    # both so a refactor can't introduce these failure modes
+    # without test surgery.
+    assert plan.sbomify_json_data is None
+    assert plan.contact_profile_id is None
 
 
 def test_planned_component_keeps_existing_id_optional(tmp_path: Path) -> None:
@@ -146,3 +159,126 @@ def test_write_workflow_refuses_to_overwrite_handauthored(tmp_path: Path) -> Non
     # Original file unchanged; no .bak either way.
     assert path.read_text(encoding="utf-8").startswith("name: hand-authored")
     assert not path.with_suffix(path.suffix + ".bak").exists()
+
+
+def test_write_sbomify_json_creates_new_file(tmp_path: Path) -> None:
+    """Writing a fresh sbomify.json stamps it with the wizard sentinel."""
+    import json as _json
+
+    path = tmp_path / "sbomify.json"
+    write_sbomify_json(path, {"supplier": {"name": "Acme"}})
+
+    data = _json.loads(path.read_text(encoding="utf-8"))
+    assert data["supplier"] == {"name": "Acme"}
+    assert WIZARD_JSON_SENTINEL_KEY in data
+    assert data[WIZARD_JSON_SENTINEL_KEY]["managed"] is True
+
+
+def test_write_sbomify_json_overwrites_existing_sentinel_file(tmp_path: Path) -> None:
+    """A wizard-stamped sbomify.json gets overwritten cleanly."""
+    import json as _json
+
+    path = tmp_path / "sbomify.json"
+    write_sbomify_json(path, {"supplier": {"name": "v1"}})
+    write_sbomify_json(path, {"supplier": {"name": "v2"}})
+
+    data = _json.loads(path.read_text(encoding="utf-8"))
+    assert data["supplier"] == {"name": "v2"}
+
+
+def test_write_sbomify_json_refuses_to_overwrite_handauthored(tmp_path: Path) -> None:
+    """A hand-crafted sbomify.json (no wizard sentinel) must NOT be clobbered.
+
+    Mirrors the write_workflow ownership contract — protects users
+    who carried over a sbomify.json from the pre-wizard ``init``
+    flow (full licenses / multi-entity suppliers / vcs_* overrides)
+    against silent data loss when they re-run the wizard.
+    """
+    import json as _json
+
+    path = tmp_path / "sbomify.json"
+    original = {"supplier": {"name": "Handcrafted Inc"}, "licenses": ["MIT"]}
+    path.write_text(_json.dumps(original), encoding="utf-8")
+
+    with pytest.raises(SbomifyJsonOwnershipError, match="missing"):
+        write_sbomify_json(path, {"supplier": {"name": "Wizard"}})
+
+    # Original file untouched.
+    assert _json.loads(path.read_text(encoding="utf-8")) == original
+
+
+def test_write_sbomify_json_refuses_malformed_json(tmp_path: Path) -> None:
+    """A pre-existing sbomify.json that doesn't parse is treated as 'not ours'."""
+    path = tmp_path / "sbomify.json"
+    path.write_text("{ not json", encoding="utf-8")
+
+    with pytest.raises(SbomifyJsonOwnershipError):
+        write_sbomify_json(path, {"supplier": {"name": "Wizard"}})
+
+    # Original byte content untouched.
+    assert path.read_text(encoding="utf-8") == "{ not json"
+
+
+def test_pick_default_workspace_key_prefers_user_default() -> None:
+    """Multi-workspace PATs land on the user's default workspace,
+    matching the backend's component / product scoping.
+    """
+    from sbomify_action.cli.wizard.screens.authenticate import _pick_default_workspace_key
+
+    workspaces = [
+        {
+            "key": "sandbox",
+            "name": "Sandbox",
+            "members": [{"is_me": True, "is_default_team": False}],
+        },
+        {
+            "key": "prod",
+            "name": "Prod",
+            "members": [{"is_me": True, "is_default_team": True}],
+        },
+    ]
+    assert _pick_default_workspace_key(workspaces) == "prod"
+
+
+def test_pick_default_workspace_key_falls_back_to_first_when_no_default() -> None:
+    """When no workspace is marked default for the current user, the
+    first usable key wins — the picker must always return SOMETHING
+    when there's a workspace to pick.
+    """
+    from sbomify_action.cli.wizard.screens.authenticate import _pick_default_workspace_key
+
+    workspaces = [
+        {"key": "alpha", "members": [{"is_me": True, "is_default_team": False}]},
+        {"key": "beta", "members": [{"is_me": True, "is_default_team": False}]},
+    ]
+    assert _pick_default_workspace_key(workspaces) == "alpha"
+
+
+def test_pick_default_workspace_key_handles_empty_and_missing_members() -> None:
+    from sbomify_action.cli.wizard.screens.authenticate import _pick_default_workspace_key
+
+    assert _pick_default_workspace_key([]) is None
+    assert _pick_default_workspace_key([{"key": "lone"}]) == "lone"  # no members block
+    # Non-string key entries are skipped.
+    assert _pick_default_workspace_key([{"key": 42}, {"key": "real"}]) == "real"
+
+
+def test_sbomify_json_has_wizard_sentinel_helpers(tmp_path: Path) -> None:
+    """sbomify_json_has_wizard_sentinel covers absent / malformed / list / dict."""
+    assert sbomify_json_has_wizard_sentinel(tmp_path / "absent.json") is False
+
+    bad = tmp_path / "bad.json"
+    bad.write_text("not json", encoding="utf-8")
+    assert sbomify_json_has_wizard_sentinel(bad) is False
+
+    list_top = tmp_path / "list.json"
+    list_top.write_text('["not", "an", "object"]', encoding="utf-8")
+    assert sbomify_json_has_wizard_sentinel(list_top) is False
+
+    no_sentinel = tmp_path / "no-sent.json"
+    no_sentinel.write_text('{"supplier": {"name": "x"}}', encoding="utf-8")
+    assert sbomify_json_has_wizard_sentinel(no_sentinel) is False
+
+    with_sentinel = tmp_path / "sent.json"
+    with_sentinel.write_text('{"' + WIZARD_JSON_SENTINEL_KEY + '": {}}', encoding="utf-8")
+    assert sbomify_json_has_wizard_sentinel(with_sentinel) is True

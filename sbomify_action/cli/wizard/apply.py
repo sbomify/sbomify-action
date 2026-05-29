@@ -16,7 +16,12 @@ from typing import Any, Callable, Literal
 
 from sbomify_action.cli.wizard import ci_emitter
 from sbomify_action.cli.wizard.existing import workflow_path
-from sbomify_action.cli.wizard.io import WorkflowOwnershipError, write_workflow
+from sbomify_action.cli.wizard.io import (
+    SbomifyJsonOwnershipError,
+    WorkflowOwnershipError,
+    write_sbomify_json,
+    write_workflow,
+)
 from sbomify_action.cli.wizard.options import WizardOptions
 from sbomify_action.cli.wizard.state import WizardState
 from sbomify_action.exceptions import APIError
@@ -120,24 +125,29 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
     # this file at workflow run time (AUGMENT=true triggers it) and
     # injects the supplier / manufacturer / authors / lifecycle fields
     # into every SBOM the matrix generates.
+    #
+    # write_sbomify_json applies the same ownership check that
+    # write_workflow uses for the YAML file: it refuses to overwrite a
+    # pre-existing sbomify.json that lacks the wizard sentinel key, so
+    # a hand-authored config (carrying fields the wizard form doesn't
+    # surface — eg licenses, multi-entity suppliers, vcs_* overrides)
+    # is never silently clobbered.
     if plan.augmentation == "json_config" and plan.sbomify_json_data is not None:
         if opts.dry_run:
             log("info", "Dry-run: skipping sbomify.json write")
         else:
-            import json
-
             json_path = opts.repo_root / "sbomify.json"
             try:
-                json_path.write_text(
-                    json.dumps(plan.sbomify_json_data, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
-                state.written_files.append(json_path)
-                state.applied.append(f"wrote {json_path}")
-                log("success", f"Wrote {json_path}")
+                write_sbomify_json(json_path, plan.sbomify_json_data)
+            except SbomifyJsonOwnershipError as e:
+                log("error", str(e))
+                raise
             except OSError as e:
                 log("error", f"Could not write {json_path}: {e}")
                 raise
+            state.written_files.append(json_path)
+            state.applied.append(f"wrote {json_path}")
+            log("success", f"Wrote {json_path}")
 
     # 6. Emit the workflow file. Last step so an API failure above never
     # leaves a broken .yml on disk that points at non-existent components.

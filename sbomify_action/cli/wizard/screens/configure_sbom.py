@@ -18,6 +18,7 @@ from typing import cast
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.widgets import Button, OptionList, RadioButton, RadioSet, Static
 from textual.widgets.option_list import Option
 
@@ -36,6 +37,15 @@ class ConfigureSbomScreen(WizardScreen):
         Binding("enter", "submit", "Next ▸", show=True, priority=True),
         Binding("escape", "app.pop_screen", "Back", show=True, priority=True),
     ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        # True after _advance has pushed ConfigureSbomifyJsonScreen at
+        # least once. on_screen_resume reads this to detect cancel-
+        # without-save and flip the augmentation radio back to Skip,
+        # breaking the Enter→Escape→Enter loop documented in the
+        # earlier code review.
+        self._json_form_visited = False
 
     def compose_body(self) -> ComposeResult:
         enrich = Vertical(classes="wizard-panel")
@@ -199,7 +209,10 @@ class ConfigureSbomScreen(WizardScreen):
         pops. If CreateProfileScreen succeeded, the workspace snapshot
         gained a new profile — rebuild the picker so it appears, and
         auto-select it via the id CreateProfileScreen stashed on the
-        plan."""
+        plan. If ConfigureSbomifyJsonScreen was pushed and the user
+        cancelled (no data on the plan), flip the augmentation back
+        to Skip so the user isn't trapped in a re-push loop.
+        """
         workspace = self.wizard.state.workspace
         if workspace is None:
             return
@@ -211,40 +224,78 @@ class ConfigureSbomScreen(WizardScreen):
         ]
         try:
             picker = self.query_one("#profile-picker", OptionList)
-        except Exception:  # noqa: BLE001
+            aug = self.query_one("#augmentation", RadioSet)
+        except NoMatches:
             return
+        # Snapshot the previous selection so we can preserve it across
+        # the clear+add rebuild when there's no fresh auto-select
+        # target. Without this, a cancelled CreateProfileScreen leaves
+        # picker.highlighted=None and the next Enter silently downgrades
+        # augmentation to "skip".
+        previous_highlighted_id: str | None = None
+        if picker.highlighted is not None:
+            try:
+                previous_highlighted_id = picker.get_option_at_index(picker.highlighted).id
+            except Exception:  # noqa: BLE001
+                previous_highlighted_id = None
         picker.clear_options()
         picker.add_options(self._picker_options())
-        # Auto-select the freshly-created profile if CreateProfileScreen
-        # stashed its id.
         target_id = self.wizard.state.plan.contact_profile_id
         if target_id:
+            # Auto-select the freshly-created profile if CreateProfile
+            # stashed its id; flip the augmentation radio so the user
+            # sees the success directly.
             for idx, opt in enumerate(self._picker_options()):
                 if opt.id == target_id:
                     picker.highlighted = idx
                     break
-            # Make sure the profile radio is selected + picker is visible
-            # so the user sees the success directly.
-            try:
-                aug = self.query_one("#augmentation", RadioSet)
-                for rb in aug.query(RadioButton):
-                    rb.value = rb.id == "aug-profile"
-            except Exception:  # noqa: BLE001
-                pass
+            self._set_radio_value(aug, target_id="aug-profile")
             picker.display = True
             self.query_one("#profile-help", Static).display = True
+        elif previous_highlighted_id is not None:
+            # No fresh target → restore the previous selection so the
+            # user's prior pick isn't silently wiped by the rebuild.
+            for idx, opt in enumerate(self._picker_options()):
+                if opt.id == previous_highlighted_id:
+                    picker.highlighted = idx
+                    break
 
-        # Refresh the json_config status row whenever we come back from
-        # the sbomify.json form screen — without this the user sees the
-        # stale "not configured" hint even after saving the form.
-        try:
-            aug = self.query_one("#augmentation", RadioSet)
-            pressed = aug.pressed_button
-            if pressed is not None and pressed.id == "aug-json_config":
-                self.query_one("#json-config-status", Static).display = True
-                self._refresh_json_status()
-        except Exception:  # noqa: BLE001
-            pass
+        # Handle the sbomify.json form return: detect cancel-without-
+        # save and flip back to Skip so the user isn't trapped in a
+        # form-push loop on subsequent Enter presses.
+        pressed = aug.pressed_button
+        if (
+            self._json_form_visited
+            and pressed is not None
+            and pressed.id == "aug-json_config"
+            and self.wizard.state.plan.sbomify_json_data is None
+        ):
+            self._json_form_visited = False
+            self._set_radio_value(aug, target_id="aug-skip")
+            self.notify(
+                "Cancelled — augmentation reverted to Skip. Pick the radio again to retry.",
+                title="sbomify.json",
+                severity="information",
+            )
+        elif pressed is not None and pressed.id == "aug-json_config":
+            self.query_one("#json-config-status", Static).display = True
+            self._refresh_json_status()
+            if self.wizard.state.plan.sbomify_json_data is not None:
+                # Save succeeded → consume the visited flag so a later
+                # cancel-cycle isn't misread as the FIRST cancellation.
+                self._json_form_visited = False
+
+    @staticmethod
+    def _set_radio_value(rs: RadioSet, *, target_id: str) -> None:
+        """Force exactly one radio in ``rs`` to be selected by id.
+
+        Iterates RadioButton children and assigns ``value`` — Textual
+        fires RadioSet.Changed synchronously per assignment, and the
+        intermediate states may briefly leave event.pressed None.
+        on_radio_set_changed guards for that case.
+        """
+        for rb in rs.query(RadioButton):
+            rb.value = rb.id == target_id
 
     def action_submit(self) -> None:
         self.route_enter(self._advance)
@@ -259,7 +310,14 @@ class ConfigureSbomScreen(WizardScreen):
         selection does — a visible picker under a ``Skip`` selection
         would be a UI lie.
         """
-        if event.radio_set.id != "augmentation":
+        # Programmatic mutations (on_screen_resume forcing the radio
+        # state to match plan.contact_profile_id) iterate the buttons
+        # and assign ``rb.value = …`` for each. Textual fires
+        # RadioSet.Changed synchronously per assignment, and the
+        # intermediate states can briefly leave event.pressed = None.
+        # Guard so a transient None during programmatic toggling
+        # doesn't crash the screen.
+        if event.radio_set.id != "augmentation" or event.pressed is None:
             return
         is_profile = event.pressed.id == "aug-profile"
         is_json = event.pressed.id == "aug-json_config"
@@ -270,8 +328,15 @@ class ConfigureSbomScreen(WizardScreen):
         help_text.display = is_profile
         json_status.display = is_json
         if is_profile:
+            # Default highlight to the first REAL profile when one
+            # exists, so a quick Tab-to-Next-Enter advances with the
+            # most-likely intended selection instead of jumping into
+            # CreateProfileScreen. Sentinel is reserved for a
+            # deliberate up-arrow choice. When the workspace has zero
+            # profiles, index 0 IS the sentinel — landing on it is
+            # both correct and unavoidable.
             if picker.highlighted is None:
-                picker.highlighted = 0
+                picker.highlighted = 1 if self._profiles else 0
             picker.focus()
         if is_json:
             self._refresh_json_status()
@@ -339,6 +404,12 @@ class ConfigureSbomScreen(WizardScreen):
                 # instead of falling back to Skip — the form is the
                 # point of the radio. The form pops back to this
                 # screen on save; we re-advance via the saved data.
+                # ``_json_form_visited`` records that we pushed the
+                # form at least once — on_screen_resume reads it to
+                # detect a user cancellation (Escape from the form
+                # without saving) and silently flips the radio back
+                # to Skip, breaking the Enter→Escape→Enter loop.
+                self._json_form_visited = True
                 from sbomify_action.cli.wizard.screens.configure_sbomify_json import (
                     ConfigureSbomifyJsonScreen,
                 )

@@ -22,6 +22,7 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.widgets import Button, Input, RadioButton, RadioSet, Static
 
 from sbomify_action.cli.wizard.screens._base import WizardScreen
@@ -155,11 +156,11 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
         self.query_one("#sup-name", Input).focus()
 
     def action_submit(self) -> None:
+        # Enter is handled here only — the priority=True binding on
+        # this screen consumes Enter before any focused Input can fire
+        # Input.Submitted, so an on_input_submitted handler would be
+        # unreachable dead code.
         self.route_enter(self._save)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Enter on any Input saves the form (mirrors the Save button)."""
-        self._save()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back":
@@ -287,12 +288,16 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
 
         phase = data.get("lifecycle_phase")
         if isinstance(phase, str):
+            # NoMatches is the only legitimate failure here (DOM not
+            # mounted, id renamed) — narrow to it so a real bug in the
+            # radio iteration surfaces in tests instead of leaving the
+            # screen quietly displaying the wrong lifecycle.
             try:
                 rs = self.query_one("#lifecycle", RadioSet)
-                for rb in rs.query(RadioButton):
-                    rb.value = rb.id == f"phase-{phase}"
-            except Exception:  # noqa: BLE001
-                pass
+            except NoMatches:
+                return
+            for rb in rs.query(RadioButton):
+                rb.value = rb.id == f"phase-{phase}"
 
         for input_id, key in (
             ("release-date", "release_date"),

@@ -298,14 +298,16 @@ SelectionList, OptionList, ListView {
     max-height: 20;
 }
 
-/* ConfigureWorkflow profile picker — inline OptionList that appears
+/* ConfigureSbom profile picker — inline OptionList that appears
  * beneath the augmentation radio when "Use a contact profile" is
- * chosen. Without an explicit constraint it inherits the generic
- * OptionList `height: 1fr` rule and balloons to 20+ rows for two
- * profile entries, pushing the Next button off the visible terminal
- * area. Size to content (typical workspaces have a handful of
- * profiles) and cap so a workspace with dozens still scrolls inside
- * the panel rather than dominating it. */
+ * chosen. (The augmentation panel moved from ConfigureWorkflow to
+ * ConfigureSbom; the picker lives there now alongside Enrichment.)
+ * Without an explicit constraint it inherits the generic OptionList
+ * `height: 1fr` rule and balloons to 20+ rows for two profile
+ * entries, pushing the Next button off the visible terminal area.
+ * Size to content (typical workspaces have a handful of profiles)
+ * and cap so a workspace with dozens still scrolls inside the panel
+ * rather than dominating it. */
 #profile-picker {
     height: auto;
     max-height: 8;

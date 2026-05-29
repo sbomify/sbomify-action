@@ -76,20 +76,27 @@ class ReviewScreen(WizardScreen):
         self.wizard.push_screen(ApplyScreen())
 
     def _summary(self) -> str:
+        from rich.markup import escape as _esc
+
         plan = self.wizard.state.plan
         workspace = self.wizard.state.workspace
         product_label = "(no product)"
         if plan.create_product:
-            product_label = f"new: {plan.create_product}"
+            product_label = f"new: {_esc(plan.create_product)}"
         elif plan.use_product_id and workspace:
             match = next(
                 (p for p in workspace.products if str(p.get("id")) == plan.use_product_id),
                 None,
             )
             if match:
-                product_label = f"existing: {match.get('name')} ({plan.use_product_id})"
+                # User-typed / API-supplied names can contain '[' which
+                # Rich would parse as a markup tag — escape so the
+                # summary renders verbatim instead of crashing or
+                # silently emitting garbled output on the Review
+                # screen.
+                product_label = f"existing: {_esc(str(match.get('name')))} ({_esc(plan.use_product_id)})"
             else:
-                product_label = f"existing: {plan.use_product_id}"
+                product_label = f"existing: {_esc(plan.use_product_id)}"
         formats_label = " + ".join(plan.sbom_formats) or "cyclonedx"
         attest_label = "on" if plan.attestation else "off"
         enrich_label = "on" if plan.enrich else "off"
@@ -102,14 +109,16 @@ class ReviewScreen(WizardScreen):
                 None,
             )
             if match:
-                augmentation_label = f"profile · [b]{match.get('name')}[/]  ({plan.contact_profile_id})"
+                augmentation_label = (
+                    f"profile · [b]{_esc(str(match.get('name')))}[/]  ({_esc(plan.contact_profile_id)})"
+                )
             else:
-                augmentation_label = f"profile · {plan.contact_profile_id}"
+                augmentation_label = f"profile · {_esc(plan.contact_profile_id)}"
         elif plan.augmentation == "json_config" and plan.sbomify_json_data:
             data = plan.sbomify_json_data
             supplier = data.get("supplier") if isinstance(data.get("supplier"), dict) else None
             sup_name = supplier.get("name") if isinstance(supplier, dict) and supplier.get("name") else "(unnamed)"
-            augmentation_label = f"sbomify.json · supplier [b]{sup_name}[/]"
+            augmentation_label = f"sbomify.json · supplier [b]{_esc(str(sup_name))}[/]"
         return (
             f"[#CBCCCE]Product           [/]  {product_label}\n"
             f"[#CBCCCE]Release strategy  [/]  {plan.release_strategy}\n"
