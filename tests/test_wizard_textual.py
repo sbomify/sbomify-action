@@ -305,6 +305,91 @@ async def test_escape_from_components_goes_back_in_any_focus_state(
         assert isinstance(app.screen, ProductScreen), "Escape on Input must pop to Product"
 
 
+async def test_enter_on_create_profile_sentinel_pushes_create_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: highlighting the '+ Create new' sentinel on the
+    profile picker and pressing Enter must push CreateProfileScreen,
+    not advance to Review.
+
+    The screen's priority Enter binding consumes the keystroke before
+    Textual fires OptionList.OptionSelected, so the sentinel detection
+    happens in _advance via _picker_sentinel_highlighted — this test
+    pins that path.
+    """
+    from textual.widgets import Button, OptionList, RadioSet
+
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "uv.lock",
+            rel_path=Path("uv.lock"),
+            ecosystem="python",
+            suggested_name="widget-py",
+        )
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+    _stub_client(
+        monkeypatch,
+        products=[{"id": "p1", "name": "alpha"}],
+        components=[{"id": "c1", "name": "widget-py"}],
+        profiles=[{"id": "cp1", "name": "Acme Engineering"}],
+    )
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(120, 60)) as pilot:
+        # Walk to ConfigureSbom.
+        await pilot.press("enter")  # Welcome -> Discover
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        await pilot.press("enter")  # Discover -> Auth (auto-auth)
+        await pilot.pause(1.0)
+        await pilot.press("enter")  # Product -> Components
+        await pilot.pause()
+        await pilot.press("enter")  # Components -> ConfigureWorkflow
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.configure_workflow import (
+            ConfigureWorkflowScreen,
+        )
+
+        assert isinstance(app.screen, ConfigureWorkflowScreen)
+        app.screen.query_one("#next", Button).focus()
+        await pilot.pause()
+        await pilot.press("enter")  # ConfigureWorkflow -> ConfigureSbom
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.configure_sbom import ConfigureSbomScreen
+        from sbomify_action.cli.wizard.screens.create_profile import CreateProfileScreen
+
+        assert isinstance(app.screen, ConfigureSbomScreen)
+
+        # Toggle augmentation radio to "Use a contact profile" so the
+        # picker becomes visible; highlight the + Create new sentinel
+        # (index 0) and press Enter.
+        aug = app.screen.query_one("#augmentation", RadioSet)
+        aug.focus()
+        await pilot.pause()
+        await pilot.press("down")  # move to aug-profile
+        await pilot.pause()
+        await pilot.press("enter")  # commit the radio
+        await pilot.pause()
+
+        picker = app.screen.query_one("#profile-picker", OptionList)
+        picker.highlighted = 0  # + Create new sentinel
+        await pilot.pause()
+        # Move focus to the Next button so route_enter advances via _advance
+        # rather than letting OptionList's own Enter handler fire.
+        app.screen.query_one("#next", Button).focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, CreateProfileScreen), (
+            "Enter with the + Create new sentinel highlighted must push CreateProfileScreen, not advance to Review"
+        )
+
+
 async def test_enter_on_focused_back_button_goes_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: pressing Enter while the Back button is focused must
     pop the screen, not trigger the screen's forward ``action_submit``.

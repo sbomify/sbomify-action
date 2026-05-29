@@ -276,21 +276,30 @@ class ConfigureSbomScreen(WizardScreen):
         if is_json:
             self._refresh_json_status()
 
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        """Hand off to CreateProfileScreen when the user picks the
-        '+ Create new' sentinel row."""
-        if event.option_list.id != "profile-picker":
-            return
-        if event.option.id == self._CREATE_PROFILE_SENTINEL:
-            from sbomify_action.cli.wizard.screens.create_profile import CreateProfileScreen
-
-            self.wizard.push_screen(CreateProfileScreen())
-
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "next":
             self._advance()
         elif event.button.id == "back":
             self.app.pop_screen()
+
+    def _picker_sentinel_highlighted(self) -> bool:
+        """True when the profile picker is highlighting the ``+ Create new``
+        sentinel — used so ``_advance`` can route to CreateProfileScreen
+        instead of falling back to Skip.
+
+        Listening for ``OptionList.OptionSelected`` would be cleaner, but
+        the screen's ``priority=True`` Enter binding consumes the
+        keystroke before Textual can fire the OptionSelected event, so
+        the selection signal never reaches us through the normal channel.
+        """
+        try:
+            picker = self.query_one("#profile-picker", OptionList)
+        except Exception:  # noqa: BLE001
+            return False
+        if picker.highlighted is None:
+            return False
+        option = picker.get_option_at_index(picker.highlighted)
+        return option.id == self._CREATE_PROFILE_SENTINEL
 
     def _advance(self) -> None:
         plan = self.wizard.state.plan
@@ -304,14 +313,23 @@ class ConfigureSbomScreen(WizardScreen):
         # on every advance so toggling between Skip / Profile /
         # JsonConfig doesn't leak data from a previous selection.
         if plan.augmentation == "profile":
+            # User wants to create a new profile? Push the create
+            # screen instead of advancing — on success it pops back
+            # here with the new profile auto-selected (see
+            # on_screen_resume) and the user hits Next again to go
+            # to Review.
+            if self._picker_sentinel_highlighted():
+                from sbomify_action.cli.wizard.screens.create_profile import CreateProfileScreen
+
+                self.wizard.push_screen(CreateProfileScreen())
+                return
             plan.contact_profile_id = self._selected_profile_id()
             plan.sbomify_json_data = None
             if plan.contact_profile_id is None:
                 # The radio said 'profile' but the picker had no
-                # selection (or it sat on the + Create new sentinel).
-                # Fall back to skip rather than emit AUGMENT=true with
-                # no binding — silent no-op at workflow time would be
-                # worse.
+                # selection. Fall back to skip rather than emit
+                # AUGMENT=true with no binding — silent no-op at
+                # workflow time would be worse.
                 plan.augmentation = "skip"
         elif plan.augmentation == "json_config":
             plan.contact_profile_id = None
