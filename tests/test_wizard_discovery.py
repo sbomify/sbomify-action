@@ -144,7 +144,14 @@ def test_gather_repo_facts_non_git_dir(tmp_path: Path) -> None:
         ("git@github.com:acme/widget.git", "acme/widget"),
         ("https://github.com/acme/widget.git", "acme/widget"),
         ("https://x:y@github.com/acme/widget", "acme/widget"),
-        ("ssh://git@gitlab.example.com/acme/widget.git", "acme/widget"),
+        # Non-github remotes return None: the slug is only used to render
+        # OIDC binding instructions on the Done screen, and a wrong slug
+        # (eg from a nested GitLab group URL like
+        # ``https://git.example.com/team/group/subgroup/repo.git`` which
+        # would otherwise resolve to ``subgroup/repo``) is worse than
+        # no slug.
+        ("ssh://git@gitlab.example.com/acme/widget.git", None),
+        ("https://git.example.com/team/group/subgroup/repo.git", None),
         ("not-a-url", None),
     ],
 )

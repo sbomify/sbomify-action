@@ -89,9 +89,7 @@ class ConfigureSbomScreen(WizardScreen):
                 "[#5E5E5E]The same note is emitted as a comment in the generated workflow.[/]"
             )
         warning_tone = (
-            "[#F4B57F]⚠  Private repository[/]"
-            if visibility == "private"
-            else "[#5E5E5E]◌  Visibility unknown[/]"
+            "[#F4B57F]⚠  Private repository[/]" if visibility == "private" else "[#5E5E5E]◌  Visibility unknown[/]"
         )
         return (
             f"{warning_tone} — attestation has plan-tier requirements:\n"

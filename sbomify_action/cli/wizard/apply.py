@@ -51,19 +51,32 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
     # on the Components screen, `existing_id` is set and we use it
     # directly — no API call needed. Otherwise we get-or-create by name
     # (recovers from DUPLICATE_NAME on the backend).
+    # Shared get-or-create cache so two lockfiles that resolve to the same
+    # component name hit the API once and reuse the second call. Without it,
+    # the second iteration paid a wasted DUPLICATE_NAME round-trip.
     component_ids: dict[str, str] = {}
+    create_cache: dict[str, str] = {}
     for planned in plan.create_components:
         if planned.existing_id is not None:
             comp_id = planned.existing_id
             component_ids[str(planned.lockfile.rel_path)] = comp_id
             state.component_ids[planned.lockfile.rel_path] = comp_id
+            state.reused_component_ids.add(comp_id)
             state.applied.append(f"reused existing component {planned.name}")
             log("info", f"Reused existing component {planned.name} ({comp_id})")
             continue
 
-        comp_id, was_created = api.get_or_create_component(planned.name, cache={})
+        # Pass component_type='sbom' explicitly — the wizard onboards code-
+        # repo SBOMs, matching the legacy default that the consolidated
+        # client no longer carries.
+        comp_id, was_created = api.get_or_create_component(planned.name, create_cache, component_type="sbom")
         component_ids[str(planned.lockfile.rel_path)] = comp_id
         state.component_ids[planned.lockfile.rel_path] = comp_id
+        if not was_created:
+            # DUPLICATE_NAME-recovered: an existing component matched the
+            # name, so the user didn't actually create anything. Mark it
+            # reused so the Done summary classifies it correctly.
+            state.reused_component_ids.add(comp_id)
         verb = "Created" if was_created else "Reused"
         state.applied.append(f"{verb.lower()} component {planned.name}")
         log("success" if was_created else "info", f"{verb} component {planned.name} ({comp_id})")
@@ -75,7 +88,13 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
             state.applied.append("attached components to product")
             log("info", f"Attached {len(component_ids)} component(s) to product")
         except APIError as e:
-            log("warning", f"Could not attach components to product: {e}")
+            # Attach failure leaves components floating unlinked from the
+            # product. We DON'T raise — the workflow file still gets written
+            # so the user can retry attach manually — but we record on state
+            # so the Done screen surfaces the problem instead of claiming
+            # success.
+            state.attach_error = str(e)
+            log("error", f"Could not attach components to product: {e}")
 
     # 4. Emit the workflow file. Last step so an API failure above never
     # leaves a broken .yml on disk that points at non-existent components.

@@ -217,7 +217,7 @@ def test_get_component_id_by_name_returns_none_when_missing() -> None:
 
 def test_create_component_success() -> None:
     client, _ = _client_with([_FakeResponse(201, {"id": "new-id", "name": "foo"})])
-    comp_id, was_created = client.create_component("foo")
+    comp_id, was_created = client.create_component("foo", component_type="sbom")
     assert comp_id == "new-id"
     assert was_created is True
 
@@ -232,7 +232,7 @@ def test_create_component_recovers_from_duplicate_name() -> None:
             ),
         ]
     )
-    comp_id, was_created = client.create_component("foo")
+    comp_id, was_created = client.create_component("foo", component_type="sbom")
     assert comp_id == "existing-id"
     assert was_created is False
 
@@ -240,13 +240,13 @@ def test_create_component_recovers_from_duplicate_name() -> None:
 def test_create_component_plan_limit() -> None:
     client, _ = _client_with([_FakeResponse(403, {"detail": "maximum components reached"})])
     with pytest.raises(PlanLimitError):
-        client.create_component("foo")
+        client.create_component("foo", component_type="sbom")
 
 
 def test_get_or_create_component_uses_cache() -> None:
     client, session = _client_with([])
     cache = {"foo": "cached-id"}
-    comp_id, created = client.get_or_create_component("foo", cache)
+    comp_id, created = client.get_or_create_component("foo", cache, component_type="sbom")
     assert comp_id == "cached-id"
     assert created is False
     session.request.assert_not_called()

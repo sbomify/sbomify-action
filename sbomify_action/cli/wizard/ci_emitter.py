@@ -65,14 +65,31 @@ def _matrix_block(
     """
     rows: list[str] = []
     multi_format = len(formats) > 1
+    # Track which component-name slugs are reused across lockfiles. When two
+    # lockfiles map to the same name (eg the user accepts the same suggested
+    # name for two Python projects in a monorepo), every matrix row would
+    # otherwise write to the same output_file and clobber each other in the
+    # runner workspace. Disambiguate by suffixing the lockfile path slug.
+    slug_counts: dict[str, int] = {}
     for c in components:
-        slug = slugify(c.name) or "component"
+        slug_counts[slugify(c.name) or "component"] = slug_counts.get(slugify(c.name) or "component", 0) + 1
+    for c in components:
+        name_slug = slugify(c.name) or "component"
         rel = str(c.lockfile.rel_path)
         cid = component_ids.get(rel, c.existing_id or "REPLACE_WITH_COMPONENT_ID")
+        # Per-lockfile uniqueness slug: only added when the component slug
+        # alone isn't unique across the matrix. We use the relative-path
+        # slug rather than an index so the output filename stays stable
+        # across re-runs even if lockfile order changes.
+        if slug_counts[name_slug] > 1:
+            lockfile_slug = slugify(rel.replace("/", "-")) or "lockfile"
+            row_slug = f"{name_slug}-{lockfile_slug}"
+        else:
+            row_slug = name_slug
         for fmt in formats:
             ext = _format_extension(fmt)
-            row_name = f"{slug}-{fmt}" if multi_format else slug
-            output_file = f"{slug}.{ext}" if not multi_format else f"{slug}.{ext}"
+            row_name = f"{row_slug}-{fmt}" if multi_format else row_slug
+            output_file = f"{row_slug}.{ext}"
             rows.append(
                 "          - name: " + row_name + "\n"
                 "            component_name: " + c.name + "\n"

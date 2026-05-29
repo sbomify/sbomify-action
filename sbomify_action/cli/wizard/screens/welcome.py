@@ -139,13 +139,21 @@ class WelcomeScreen(WizardScreen):
         if self.wizard.state.discovered:
             self._advance()
         else:
-            self.wizard.action_quit_with_cancel()
+            # Nothing to onboard — exit straight away. ``action_quit_with_cancel``
+            # is for accidental Ctrl-C presses mid-flow and requires a double-tap
+            # confirmation; pressing Enter on an empty repo is an explicit signal
+            # that the user wants out.
+            self.wizard.exit(0)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "start":
             self._advance()
         elif event.button.id == "cancel":
-            self.wizard.action_quit_with_cancel()
+            # The Cancel button is an explicit, deliberate click — exit without
+            # the Ctrl-C double-tap confirmation, which would otherwise show
+            # the user a misleading "Press Ctrl-C again" notification despite
+            # no Ctrl-C being involved.
+            self.wizard.exit(130)
 
     def _advance(self) -> None:
         from sbomify_action.cli.wizard.screens.discover import DiscoverScreen
@@ -187,8 +195,5 @@ class WelcomeScreen(WizardScreen):
         if visibility == "public":
             return "[#86EFAC]✓ public[/]"
         if visibility == "private":
-            return (
-                "[#F4B57F]⚠ private[/]  [#5E5E5E]"
-                "(attestation needs GitHub Enterprise Cloud)[/]"
-            )
+            return "[#F4B57F]⚠ private[/]  [#5E5E5E](attestation needs GitHub Enterprise Cloud)[/]"
         return "[#5E5E5E]◌ unknown[/]  [#5E5E5E](non-github remote or no network)[/]"

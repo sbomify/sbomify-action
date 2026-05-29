@@ -42,6 +42,10 @@ class ApplyScreen(WizardScreen):
         # weird state.
         self._worker_done = False
         self._worker_error = False
+        # Captured from the DOM on the main thread in ``on_mount`` so the
+        # worker thread never queries widgets directly. Always assigned
+        # before the worker is started.
+        self._log_widget: RichLog | None = None
 
     def compose_body(self) -> ComposeResult:
         # Error banner sits ABOVE the log so it stays visible even when
@@ -66,6 +70,10 @@ class ApplyScreen(WizardScreen):
             yield Button("Continue ▸", id="continue", variant="primary", disabled=True)
 
     def on_mount(self) -> None:
+        # Resolve the log widget on the main thread BEFORE the worker
+        # starts; the worker only holds a reference and never queries the
+        # DOM itself (DOM traversal isn't thread-safe in Textual).
+        self._log_widget = self.query_one("#apply-log", RichLog)
         self.run_worker(self._apply_worker, name="apply", thread=True, exclusive=True)
 
     def action_back_if_done(self) -> None:
@@ -76,12 +84,21 @@ class ApplyScreen(WizardScreen):
             self.app.pop_screen()
 
     def _apply_worker(self) -> str | None:
-        """Run apply_plan; return None on success, error message on failure."""
-        log_widget = self.query_one("#apply-log", RichLog)
+        """Run apply_plan; return None on success, error message on failure.
+
+        Runs on a Textual worker thread (``thread=True``). Textual widgets
+        are not thread-safe, so every DOM mutation hops back to the main
+        thread via ``app.call_from_thread`` — without it, concurrent paints
+        racing with ``RichLog.write`` corrupt the log's internal buffer.
+        """
+        log_widget = self._log_widget
+        assert log_widget is not None  # set in on_mount before the worker starts
+        app = self.app
 
         def log(kind: str, message: str) -> None:
             colour = _COLOR_BY_KIND.get(kind, "white")
-            log_widget.write(f"[{colour}]{kind:>8}[/]  {message}")
+            line = f"[{colour}]{kind:>8}[/]  {message}"
+            app.call_from_thread(log_widget.write, line)
 
         try:
             apply_mod.apply_plan(self.wizard.state, self.wizard.opts, log=log)
@@ -122,9 +139,7 @@ class ApplyScreen(WizardScreen):
             back_btn = self.query_one("#back", Button)
             continue_btn = self.query_one("#continue", Button)
             self._show_error_banner(str(event.worker.error))
-            self.query_one("#apply-log", RichLog).write(
-                f"[#F87171]worker error: {event.worker.error}[/]"
-            )
+            self.query_one("#apply-log", RichLog).write(f"[#F87171]worker error: {event.worker.error}[/]")
             continue_btn.label = "(apply failed)"
             continue_btn.disabled = True
             back_btn.variant = "primary"

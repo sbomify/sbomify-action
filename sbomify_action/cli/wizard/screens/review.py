@@ -56,11 +56,7 @@ class ReviewScreen(WizardScreen):
         table = self.query_one("#components-table", DataTable)
         table.add_columns("Lockfile", "Ecosystem", "Component", "Action")
         for c in self.wizard.state.plan.create_components:
-            action = (
-                "[#CBCCCE]reuse[/]"
-                if c.existing_id is not None
-                else "[#86EFAC]create[/]"
-            )
+            action = "[#CBCCCE]reuse[/]" if c.existing_id is not None else "[#86EFAC]create[/]"
             table.add_row(str(c.lockfile.rel_path), c.lockfile.ecosystem, c.name, action)
         self._render_diff()
         self.query_one("#apply", Button).focus()
@@ -121,9 +117,7 @@ class ReviewScreen(WizardScreen):
         target = workflow_path(self.wizard.state.facts.repo_root)
         plan = self.wizard.state.plan
         component_ids = {
-            str(c.lockfile.rel_path): c.existing_id
-            for c in plan.create_components
-            if c.existing_id is not None
+            str(c.lockfile.rel_path): c.existing_id for c in plan.create_components if c.existing_id is not None
         }
         new_content = ci_emitter.emit_workflow(
             plan,

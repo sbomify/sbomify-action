@@ -78,16 +78,31 @@ def _git(args: list[str], *, cwd: Path) -> str | None:
     return result.stdout.strip()
 
 
-# Matches the trailing "owner/repo" segment of a git remote URL.
-# Handles both SSH (git@github.com:owner/repo.git) and HTTPS
-# (https://github.com/owner/repo.git, https://x:y@…) formats.
-_OWNER_REPO_RE = re.compile(r"[:/](?P<owner>[^/:]+)/(?P<repo>[^/:]+?)(?:\.git)?/?$")
+# Match SSH (``git@github.com:owner/repo.git``) and HTTPS
+# (``https://github.com/owner/repo.git``, ``https://x:y@github.com/...``)
+# git remotes anchored at ``github.com``. Non-github URLs — GitHub
+# Enterprise, GitLab, Gitea, Bitbucket, and especially nested-group
+# URLs like ``https://git.example.com/team/group/sub/repo.git`` —
+# intentionally miss: extracting ``sub/repo`` would feed the wrong
+# slug into the Done screen's OIDC binding instructions.
+_GITHUB_OWNER_REPO_RE = re.compile(
+    r"^(?:"
+    r"git@github\.com:"
+    r"|https?://(?:[^@/]+@)?github\.com/"
+    r")(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$"
+)
 
 
 def _parse_owner_repo_slug(remote_url: str) -> str | None:
-    """Extract ``owner/repo`` from a typical git remote URL."""
+    """Extract ``owner/repo`` from a github.com remote URL.
+
+    Returns None for any non-github remote — the slug is only used in
+    OIDC binding instructions on the Done screen, where a wrong value
+    is worse than no value (it tells the user to paste an incorrect
+    identifier into the sbomify UI).
+    """
     cleaned = remote_url.strip()
-    match = _OWNER_REPO_RE.search(cleaned)
+    match = _GITHUB_OWNER_REPO_RE.match(cleaned)
     if not match:
         return None
     return f"{match.group('owner')}/{match.group('repo')}"

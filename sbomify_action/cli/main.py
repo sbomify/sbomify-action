@@ -2795,8 +2795,7 @@ def _run_wizard_cli(
     if debug:
         debug_buffer = _install_debug_buffer()
         click.echo(
-            "[--debug] Capturing DEBUG logs; full transcript will print to "
-            "stdout after the wizard exits.",
+            "[--debug] Capturing DEBUG logs; full transcript will print to stdout after the wizard exits.",
             err=True,
         )
 

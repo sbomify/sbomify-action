@@ -168,6 +168,15 @@ class WizardState:
     created_product_id: str | None = None
     component_ids: dict[Path, str] = field(default_factory=dict)
     written_files: list[Path] = field(default_factory=list)
+    # IDs of components that were reused (either pre-picked on the Components
+    # screen, or recovered from a DUPLICATE_NAME error during apply). The done
+    # screen reads this to differentiate created-vs-reused in the summary so
+    # re-running the wizard doesn't falsely report every component as new.
+    reused_component_ids: set[str] = field(default_factory=set)
+    # Set when component-to-product attach fails — done screen surfaces this
+    # so success isn't claimed when components are floating unlinked. Empty
+    # string when no failure has happened.
+    attach_error: str | None = None
 
     # True if a sentinel-tagged sboms.yml already exists at apply time.
     # Set by the welcome / discover phase; used by review to surface

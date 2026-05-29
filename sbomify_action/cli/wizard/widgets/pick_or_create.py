@@ -109,9 +109,7 @@ class PickOrCreate(Vertical):
         except Exception:  # noqa: BLE001
             pass
 
-    def on_option_list_option_highlighted(
-        self, event: OptionList.OptionHighlighted
-    ) -> None:
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         """Toggle the Input visibility when our OptionList moves."""
         # Only act on our own list, not a sibling picker bubbling up.
         if event.option_list.id != self._list_id:

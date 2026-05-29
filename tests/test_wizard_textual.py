@@ -67,9 +67,7 @@ async def test_app_starts_and_renders_welcome(tmp_path: Path, monkeypatch: pytes
         await pilot.pause()
 
 
-async def test_escape_from_authenticate_returns_to_discover(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_escape_from_authenticate_returns_to_discover(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: the password Input on AuthenticateScreen must not eat
     Escape. Without priority=True on the screen's Escape binding the
     user gets stuck with no way back to Discover."""

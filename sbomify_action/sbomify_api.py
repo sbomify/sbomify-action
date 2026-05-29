@@ -148,34 +148,47 @@ class SbomifyApiClient:
 
             if isinstance(data, list):
                 # Some endpoints return a bare list rather than {items: [...]}.
-                if not data:
-                    return
+                # Bare-list endpoints don't carry pagination metadata, so we
+                # treat the response as authoritative: yield once and stop.
+                # Re-requesting would loop forever against any endpoint that
+                # ignores ?page= and returns the same list every time.
                 for item in data:
                     if isinstance(item, dict):
                         yield item
-                page += 1
-                continue
+                return
 
             if not isinstance(data, dict):
                 raise APIError(f"Failed to {error_context}: unexpected response type ({type(data).__name__})")
 
             raw_items = data.get("items")
             if not isinstance(raw_items, list):
-                # Endpoint returned a non-paginated dict — yield it once and stop.
-                yield data
+                # Envelope without `items` — treat as a single-page response
+                # with no items and stop. Yielding the envelope dict would
+                # poison callers like list_components_by_name that .get('id')
+                # on every yielded element.
                 return
 
             for item in raw_items:
                 if isinstance(item, dict):
                     yield item
 
-            # Stop on explicit "no next page", empty page, or missing `next` link.
+            # Stop logic. Trust explicit pagination signals where present;
+            # otherwise assume single-page so we don't loop against an
+            # endpoint that ignores ?page= and returns the same items
+            # every request.
             pagination = data.get("pagination")
+            # 1. Explicit "no next page" markers — stop.
             if isinstance(pagination, dict) and pagination.get("has_next") is False:
                 return
+            if "next" in data and not data.get("next"):
+                return
+            # 2. Empty page — nothing more to consume.
             if not raw_items:
                 return
-            if "next" in data and not data.get("next"):
+            # 3. No pagination metadata at all → single-page response. Stop.
+            #    A server that wanted us to paginate would have shipped either
+            #    a ``pagination`` block or a ``next`` link.
+            if not isinstance(pagination, dict) and "next" not in data:
                 return
             page += 1
 
@@ -231,7 +244,7 @@ class SbomifyApiClient:
         self,
         name: str,
         *,
-        component_type: str = "bom",
+        component_type: str,
     ) -> tuple[str, bool]:
         """Create a component with get-or-create semantics.
 
@@ -278,7 +291,7 @@ class SbomifyApiClient:
         name: str,
         cache: dict[str, str],
         *,
-        component_type: str = "bom",
+        component_type: str,
     ) -> tuple[str, bool]:
         """Look the name up in ``cache``; on miss, create it (updating cache)."""
         if name in cache:
@@ -303,13 +316,20 @@ class SbomifyApiClient:
         """Set a component's visibility, logging (not raising) on failure.
 
         Visibility is best-effort; the action should not abort if the API
-        rejects it (e.g. when the token can't modify the component).
+        rejects it (eg. when the token can't modify the component, or 401s
+        on a long-running Yocto pipeline whose token expired). AuthError /
+        APIError from ``_request`` are caught and logged so the caller's
+        upload-then-set-visibility flow always completes.
         """
-        response = self._request(
-            "PATCH",
-            f"/api/v1/components/{component_id}",
-            json_body={"visibility": visibility},
-        )
+        try:
+            response = self._request(
+                "PATCH",
+                f"/api/v1/components/{component_id}",
+                json_body={"visibility": visibility},
+            )
+        except APIError as e:
+            logger.warning(f"Failed to set visibility for component {component_id}: {e}")
+            return
         if not response.ok:
             logger.warning(f"Failed to set visibility for component {component_id}: [{response.status_code}]")
 
@@ -330,7 +350,7 @@ class SbomifyApiClient:
     # products
 
     def list_products(self) -> list[dict[str, Any]]:
-        return list(self._paginate("/api/v1/products", error_context="list products", page_size=15))
+        return list(self._paginate("/api/v1/products", error_context="list products"))
 
     def get_product(self, product_id: str) -> dict[str, Any]:
         response = self._request("GET", f"/api/v1/products/{product_id}")
@@ -382,20 +402,50 @@ class SbomifyApiClient:
     # contact profiles
 
     def list_contact_profiles(self) -> list[dict[str, Any]]:
-        """List contact profiles for the workspace. Returns ``[]`` on 404."""
-        response = self._request("GET", "/api/v1/contact-profiles", params={"page": 1, "page_size": 100})
-        if response.status_code == 404:
-            logger.debug("Contact profiles endpoint not available")
-            return []
-        if not response.ok:
-            raise APIError(self._build_error("Failed to list contact profiles.", response))
-        data = self._safe_json_dict(response)
-        if data is None:
-            return []
-        items = data.get("items")
-        if isinstance(items, list):
-            return [item for item in items if isinstance(item, dict)]
-        return []
+        """List contact profiles for the workspace.
+
+        Returns ``[]`` on 404 — the endpoint isn't available on every
+        deployment, and callers treat absence as "no profiles configured".
+        Paginates so workspaces with more than one page of profiles aren't
+        silently truncated.
+
+        Inlines the pagination loop (rather than delegating to ``_paginate``)
+        so the 404-tolerant first-page check doesn't cost a duplicate round
+        trip.
+        """
+        items: list[dict[str, Any]] = []
+        page = 1
+        while page <= MAX_PAGES:
+            response = self._request(
+                "GET",
+                "/api/v1/contact-profiles",
+                params={"page": str(page), "page_size": str(DEFAULT_PAGE_SIZE)},
+            )
+            if response.status_code == 404:
+                logger.debug("Contact profiles endpoint not available")
+                return []
+            if not response.ok:
+                raise APIError(self._build_error("Failed to list contact profiles.", response))
+            data = self._safe_json_dict(response)
+            if data is None:
+                return items
+            raw_items = data.get("items")
+            if not isinstance(raw_items, list):
+                return items
+            for item in raw_items:
+                if isinstance(item, dict):
+                    items.append(item)
+            pagination = data.get("pagination")
+            if isinstance(pagination, dict) and pagination.get("has_next") is False:
+                return items
+            if "next" in data and not data.get("next"):
+                return items
+            if not raw_items:
+                return items
+            if not isinstance(pagination, dict) and "next" not in data:
+                return items
+            page += 1
+        raise APIError(f"Failed to list contact profiles: pagination safety limit reached ({MAX_PAGES} pages)")
 
     # ------------------------------------------------------------------
     # releases
@@ -405,19 +455,56 @@ class SbomifyApiClient:
         params: dict[str, str],
         error_context: str,
     ) -> list[dict[str, Any]]:
-        """Query the releases endpoint with the given params (single page)."""
-        response = self._request("GET", "/api/v1/releases", params=params)
-        if response.status_code == 404:
-            return []
-        if not response.ok:
-            raise APIError(self._build_error(f"Failed to {error_context}.", response))
-        data = self._safe_json_dict(response)
-        if data is None:
-            return []
-        items = data.get("items")
-        if not isinstance(items, list):
-            return []
-        return [item for item in items if isinstance(item, dict)]
+        """Query the releases endpoint, paginating until every release matching
+        ``params`` has been collected.
+
+        Pagination matters for DUPLICATE_NAME recovery: when the backend
+        rejects a create_release call, the existing release we need to look
+        up may be on page 2+ of a busy product. A single-page fetch silently
+        missed those releases and turned a "you already have this release"
+        into a hard APIError.
+
+        Returns ``[]`` on 404 (endpoint not available on every deployment).
+        Inlines the pagination loop (rather than calling ``_paginate``) so
+        the 404-tolerant first-page probe doesn't cost a duplicate round
+        trip.
+        """
+        items: list[dict[str, Any]] = []
+        page = 1
+        while page <= MAX_PAGES:
+            page_params = {**params, "page": str(page), "page_size": str(DEFAULT_PAGE_SIZE)}
+            response = self._request("GET", "/api/v1/releases", params=page_params)
+            if response.status_code == 404:
+                # Endpoint not available on this deployment. Treat as
+                # "no releases" rather than raising — preserves the soft-
+                # fail contract callers rely on.
+                return []
+            if not response.ok:
+                raise APIError(self._build_error(f"Failed to {error_context}.", response))
+            data = self._safe_json_dict(response)
+            if data is None:
+                return items
+            raw_items = data.get("items")
+            if not isinstance(raw_items, list):
+                return items
+            for item in raw_items:
+                if isinstance(item, dict):
+                    items.append(item)
+            # Same stop conditions as _paginate's dict branch: trust
+            # explicit pagination metadata when present, otherwise stop
+            # after one page so we don't loop against an endpoint that
+            # ignores ?page=.
+            pagination = data.get("pagination")
+            if isinstance(pagination, dict) and pagination.get("has_next") is False:
+                return items
+            if "next" in data and not data.get("next"):
+                return items
+            if len(raw_items) < DEFAULT_PAGE_SIZE:
+                return items
+            if not isinstance(pagination, dict) and "next" not in data:
+                return items
+            page += 1
+        raise APIError(f"Failed to {error_context}: pagination safety limit reached ({MAX_PAGES} pages)")
 
     def check_release_exists(self, product_id: str, version: str) -> bool:
         params = {"product_id": product_id, "version": version}

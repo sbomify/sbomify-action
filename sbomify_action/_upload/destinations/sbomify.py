@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from sbomify_action.exceptions import APIError
+from sbomify_action.exceptions import APIError, AuthError
 from sbomify_action.logging_config import logger
 from sbomify_action.sbomify_api import SbomifyApiClient
 
@@ -134,6 +134,19 @@ class SbomifyDestination:
                 sbom_payload=upload_data,
                 sbom_format=input.sbom_format,
                 content_encoding=content_encoding,
+            )
+        except AuthError as e:
+            # 401 short-circuits inside SbomifyApiClient._request before the
+            # response can flow into the body-parsing branch below, so we
+            # tag it with a stable error_code here. Downstream consumers
+            # (CI summary, log scrapers) keyed off ``AUTH_FAILED`` to
+            # distinguish auth failures from other 4xx.
+            return UploadResult.failure_result(
+                destination_name=self.name,
+                error_message=str(e),
+                error_code="AUTH_FAILED",
+                validated=validated,
+                validation_error=validation_error,
             )
         except APIError as e:
             return UploadResult.failure_result(

@@ -119,9 +119,16 @@ class AuthenticateScreen(WizardScreen):
 
         try:
             with ThreadPoolExecutor(max_workers=3) as pool:
-                products = pool.submit(_list_products).result()
-                components = pool.submit(_list_components).result()
-                profiles = pool.submit(_list_profiles).result()
+                # Submit all three first so they run concurrently — chaining
+                # ``submit(...).result()`` would block on each future before
+                # the next is submitted, serialising the calls and defeating
+                # the entire reason for the pool.
+                products_future = pool.submit(_list_products)
+                components_future = pool.submit(_list_components)
+                profiles_future = pool.submit(_list_profiles)
+                products = products_future.result()
+                components = components_future.result()
+                profiles = profiles_future.result()
         except APIError as e:
             return None, None, f"Workspace fetch failed: {e}"
 

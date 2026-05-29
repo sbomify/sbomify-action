@@ -37,10 +37,7 @@ class ProductScreen(WizardScreen):
                 classes="wizard-muted",
             )
             yield PickOrCreate(
-                existing=[
-                    (str(p.get("name") or p.get("id") or "(unnamed)"), str(p.get("id")))
-                    for p in products
-                ],
+                existing=[(str(p.get("name") or p.get("id") or "(unnamed)"), str(p.get("id"))) for p in products],
                 create_label="[#86EFAC]➕  Create a new product[/]",
                 placeholder="New product name (used only when 'Create new' is highlighted)",
                 # Pre-select the first existing product when the

@@ -37,17 +37,13 @@ class ComponentsScreen(WizardScreen):
     def compose_body(self) -> ComposeResult:
         existing = self.wizard.state.workspace.components if self.wizard.state.workspace else []
         existing_pairs = [
-            (str(c.get("name") or c.get("id") or "(unnamed)"), str(c.get("id")))
-            for c in existing
-            if c.get("id")
+            (str(c.get("name") or c.get("id") or "(unnamed)"), str(c.get("id"))) for c in existing if c.get("id")
         ]
         existing_by_name = {label: item_id for label, item_id in existing_pairs}
 
         intro = Vertical(classes="wizard-panel")
         intro.border_title = "◆  Components"
-        intro.border_subtitle = (
-            f"{len(self.wizard.state.selected)} lockfile(s) · {len(existing_pairs)} existing"
-        )
+        intro.border_subtitle = f"{len(self.wizard.state.selected)} lockfile(s) · {len(existing_pairs)} existing"
         with intro:
             yield Static(
                 "One component per lockfile. Use [b]↑/↓[/] to highlight an "
@@ -69,9 +65,7 @@ class ComponentsScreen(WizardScreen):
                 yield PickOrCreate(
                     existing=existing_pairs,
                     create_label="[#86EFAC]➕  Create a new component[/]",
-                    placeholder=(
-                        "New component name (used only when 'Create new' is highlighted)"
-                    ),
+                    placeholder=("New component name (used only when 'Create new' is highlighted)"),
                     default_new_value=lockfile.suggested_name,
                     # Auto-match by name: if a component called exactly
                     # ``suggested_name`` already exists, default to that
@@ -114,9 +108,7 @@ class ComponentsScreen(WizardScreen):
             else:
                 comp = next(c for c in existing if str(c.get("id")) == picked_id)
                 name = str(comp.get("name") or comp.get("id") or "(unnamed)")
-                plan.create_components.append(
-                    PlannedComponent(lockfile=lockfile, name=name, existing_id=picked_id)
-                )
+                plan.create_components.append(PlannedComponent(lockfile=lockfile, name=name, existing_id=picked_id))
                 logger.debug(
                     "Components: will reuse %s (id=%s) for %s",
                     name,

@@ -87,24 +87,29 @@ class DoneScreen(WizardScreen):
             # Reused components don't deserve the same green-checkmark
             # weight as newly-created ones — re-running the wizard
             # against an already-onboarded workspace should feel quiet,
-            # not like every line is an "event". Cross-reference each
-            # entry against the plan to figure out which is which.
-            reused_ids = {
-                str(c.existing_id)
-                for c in state.plan.create_components
-                if c.existing_id is not None
-            }
+            # not like every line is an "event". apply.apply_plan
+            # populates state.reused_component_ids with both pre-picked
+            # IDs and DUPLICATE_NAME-recovered IDs, so we don't need to
+            # re-derive the set here.
             lines.append("[#86EFAC]✓[/]  [#CBCCCE]Components[/]")
             for rel, cid in state.component_ids.items():
-                if cid in reused_ids:
-                    glyph = "[#5E5E5E]·[/]"   # muted dot — reused, nothing changed
+                if cid in state.reused_component_ids:
+                    glyph = "[#5E5E5E]·[/]"  # muted dot — reused, nothing changed
                     label = "[#5E5E5E]reused[/]"
                     cid_style = f"[#5E5E5E]{cid}[/]"
                 else:
-                    glyph = "[#86EFAC]+[/]"   # green plus — newly created
+                    glyph = "[#86EFAC]+[/]"  # green plus — newly created
                     label = "[#86EFAC]created[/]"
                     cid_style = f"[b]{cid}[/]"
                 lines.append(f"     {glyph}  {rel}  [#5E5E5E]→[/]  {cid_style}  {label}")
+        if state.attach_error:
+            # Components were created but attach failed — surface this
+            # prominently so the user knows their workflow file points at
+            # components that aren't actually linked to the product.
+            lines.append(
+                "[#F87171]✗[/]  [#CBCCCE]Attach[/]     [#F87171]failed — components are not linked to the product[/]"
+            )
+            lines.append(f"     [#5E5E5E]reason: {state.attach_error}[/]")
         for path in state.written_files:
             lines.append(f"[#86EFAC]✓[/]  [#CBCCCE]Wrote[/]      {path}")
         if not lines:

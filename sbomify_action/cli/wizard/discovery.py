@@ -122,7 +122,6 @@ def discover(repo_root: Path, *, repo_name: str | None = None) -> list[Discovere
 
     # path → best lockfile in that directory
     best_per_dir: dict[Path, tuple[int, Path]] = {}
-    count = 0
 
     for path in _walk(repo_root):
         name = path.name
@@ -134,8 +133,12 @@ def discover(repo_root: Path, *, repo_name: str | None = None) -> list[Discovere
         if current is None or priority < current[0]:
             best_per_dir[path.parent] = (priority, path)
 
-        count += 1
-        if count >= DISCOVERY_CAP:
+        # Cap on unique directories, not on raw matches. Monorepos
+        # commonly have ``uv.lock + pyproject.toml + requirements.txt``
+        # in every project directory, so a raw-match cap of 200 would
+        # truncate at ~67 projects even though best_per_dir collapses
+        # them down to one entry per dir.
+        if len(best_per_dir) >= DISCOVERY_CAP:
             break
 
     found: list[DiscoveredLockfile] = []
