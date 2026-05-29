@@ -123,6 +123,31 @@ async def test_configure_sbomify_json_prefills_from_existing_file(
         assert pressed is not None and pressed.id == "phase-build"
 
 
+async def test_configure_sbomify_json_tolerates_unreadable_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1 robustness: a malformed / non-object sbomify.json must NOT crash the
+    Configure form — _load_from_disk returns None and the form opens blank."""
+    from textual.widgets import Input
+
+    from sbomify_action.cli.wizard.screens.configure_sbomify_json import ConfigureSbomifyJsonScreen
+
+    for bad_content in ("this is not json", "[1, 2, 3]"):  # malformed, then a JSON array (non-dict)
+        _stub_discovery(monkeypatch, [])
+        (tmp_path / "sbomify.json").write_text(bad_content, encoding="utf-8")
+
+        app = WizardApp(_opts(tmp_path))
+        async with app.run_test(size=(120, 60)) as pilot:
+            assert app.state.facts.has_sbomify_json is True  # the (bad) file exists
+            await app.push_screen(ConfigureSbomifyJsonScreen())
+            await pilot.pause()
+
+            screen = app.screen
+            assert isinstance(screen, ConfigureSbomifyJsonScreen)
+            # No crash, and nothing got pre-filled from the unreadable file.
+            assert screen.query_one("#sup-name", Input).value == ""
+
+
 async def test_escape_from_authenticate_returns_to_discover(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: the password Input on AuthenticateScreen must not eat
     Escape. Without priority=True on the screen's Escape binding the

@@ -19,12 +19,15 @@ alongside the code it describes.
 
 from __future__ import annotations
 
+import json
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.widgets import Button, Input, RadioButton, RadioSet, Static
 
+from sbomify_action.cli.wizard.io import WIZARD_JSON_SENTINEL_KEY
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 
 # CycloneDX-defined lifecycle phases. The action's existing
@@ -322,10 +325,6 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
         keys the form doesn't render (eg ``licenses``) are ignored here but
         preserved on disk because apply leaves a non-wizard file untouched.
         """
-        import json
-
-        from sbomify_action.cli.wizard.io import WIZARD_JSON_SENTINEL_KEY
-
         json_path = self.wizard.state.facts.repo_root / "sbomify.json"
         try:
             with json_path.open("r", encoding="utf-8") as f:

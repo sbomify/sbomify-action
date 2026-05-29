@@ -151,9 +151,10 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
                 log(
                     "warning",
                     f"{json_path} already exists and wasn't created by the wizard — "
-                    "keeping it as-is (the action reads it at run time). Skipping the "
-                    "write. Delete it or add the '__sbomify_wizard__' key to let the "
-                    "wizard manage it.",
+                    "keeping it as-is (the action reads it at run time). Any values you "
+                    "entered in the wizard were NOT written to it. To let the wizard "
+                    "manage this file, delete it (or add the '__sbomify_wizard__' key) "
+                    "and re-run.",
                 )
             except OSError as e:
                 log("error", f"Could not write {json_path}: {e}")
@@ -179,6 +180,12 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
     try:
         write_workflow(target, rendered)
     except WorkflowOwnershipError as e:
+        # Unlike the sbomify.json ownership conflict above (which we soften to
+        # a warning and skip), a hand-authored workflow IS fatal: sboms.yml is
+        # wizard-owned CI infrastructure with no value if half-written, and
+        # there's no run-time fallback that reads "whatever is there". Failing
+        # loud forces the user to resolve the conflict rather than silently
+        # shipping a workflow that doesn't match the plan.
         log("error", str(e))
         raise
     state.written_files.append(target)

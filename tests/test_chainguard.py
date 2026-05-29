@@ -8,6 +8,7 @@ import pytest
 
 from sbomify_action._generation.chainguard import (
     ChainguardBaseImage,
+    _detect_chainguard_from_provenance,
     _extract_repo,
     _parse_purl_docker_uri,
     _resolve_platform_digest,
@@ -441,6 +442,29 @@ class TestDetectFromProvenance:
 
         result = detect_chainguard_image("oldimage:latest")
         assert result is None
+
+    @patch("sbomify_action._generation.chainguard._run_crane")
+    def test_tolerates_attestation_entry_missing_digest(self, mock_crane):
+        """An image-index attestation entry that matches the annotation but lacks
+        a 'digest' key must NOT raise KeyError — _detect_chainguard_from_provenance
+        returns None. Mirrors the _resolve_platform_digest hardening for the
+        provenance code path (off-spec/malformed registry responses)."""
+        index_no_digest = json.dumps(
+            {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.index.v1+json",
+                "manifests": [
+                    {
+                        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                        "annotations": {"vnd.docker.reference.type": "attestation-manifest"},
+                        # no "digest" key — must not KeyError
+                    },
+                ],
+            }
+        )
+        mock_crane.return_value = index_no_digest
+
+        assert _detect_chainguard_from_provenance("nginx:latest") is None
 
 
 class TestFetchChainguardSbom:

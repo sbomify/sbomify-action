@@ -310,7 +310,8 @@ def run_command(
         capture_output: Whether to capture stdout/stderr
         cwd: Working directory for the command (optional)
         docker_image: Docker image being scanned (optional, for better error messages)
-        log_errors: When True (default), a non-zero exit logs at ERROR. Set
+        log_errors: When True (default), a failure (non-zero exit, timeout, or
+            missing binary) logs at ERROR. Set
             False for a generator that runs inside the priority chain and is
             expected to fail gracefully when a higher-priority or fallback
             generator can still succeed (e.g. cdxgen on a Python lockfile,
@@ -408,10 +409,15 @@ def run_command(
         )
     except subprocess.TimeoutExpired:
         elapsed = int(time.time() - start_time)
-        logger.error(f"{command_name} command timed out after {elapsed}s (limit: {timeout}s)")
+        # Honour log_errors here too: a cdxgen timeout on, say, a Python
+        # lockfile is the same benign priority-chain fallback as a non-zero
+        # exit — it shouldn't spam red ERROR when a later generator succeeds.
+        timeout_msg = f"{command_name} command timed out after {elapsed}s (limit: {timeout}s)"
+        logger.error(timeout_msg) if log_errors else logger.debug(timeout_msg)
         raise SBOMGenerationError(f"{command_name} command timed out")
     except FileNotFoundError:
-        logger.error(f"{command_name} command not found")
+        not_found_msg = f"{command_name} command not found"
+        logger.error(not_found_msg) if log_errors else logger.debug(not_found_msg)
         raise SBOMGenerationError(f"{command_name} command not found - is it installed?")
     finally:
         # Stop the progress thread

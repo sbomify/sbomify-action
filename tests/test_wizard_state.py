@@ -386,3 +386,42 @@ def test_apply_writes_sbomify_json_when_absent(tmp_path: Path) -> None:
     written = json.loads((tmp_path / "sbomify.json").read_text(encoding="utf-8"))
     assert written["supplier"] == {"name": "Acme"}
     assert WIZARD_JSON_SENTINEL_KEY in written  # wizard stamped it for future ownership
+
+
+def test_apply_creates_component_with_bom_type(tmp_path: Path) -> None:
+    """apply_plan must create components with component_type='bom' (the backend
+    enum is {bom, document}; the old 'sbom' 422'd). Pins the apply.py call-site
+    directly — the other component-type tests cover the client + yocto facade,
+    not this path."""
+    facts = RepoFacts(
+        repo_root=tmp_path,
+        is_git=True,
+        remote_url="git@github.com:acme/widget.git",
+        suggested_repo_name="widget",
+        default_branch="main",
+        current_branch="main",
+        has_release_tags=False,
+        owner_repo_slug="acme/widget",
+    )
+    state = WizardState(facts=facts)
+    api = MagicMock()
+    api.get_or_create_component.return_value = ("comp-id-1", True)
+    state.api = api
+    state.workspace = WorkspaceSnapshot()
+    lockfile = DiscoveredLockfile(
+        path=tmp_path / "uv.lock", rel_path=Path("uv.lock"), ecosystem="python", suggested_name="widget"
+    )
+    state.plan = Plan(create_components=[PlannedComponent(lockfile=lockfile, name="widget")], augmentation="skip")
+
+    opts = WizardOptions(
+        token=None,
+        api_base_url="https://api.test",
+        repo_root=tmp_path,
+        output_dir=tmp_path / ".github" / "workflows",
+        dry_run=False,
+    )
+
+    apply_plan(state, opts)
+
+    api.get_or_create_component.assert_called_once()
+    assert api.get_or_create_component.call_args.kwargs.get("component_type") == "bom"

@@ -58,7 +58,7 @@ def clean_validation_error(detail: Any) -> str | None:
                 msg = item.get("msg") or item.get("detail") or ""
                 loc = item.get("loc")
                 field = None
-                if isinstance(loc, (list, tuple)) and loc:
+                if isinstance(loc, list | tuple) and loc:
                     # ``loc`` is a path like ['body', 'payload', '<field>'];
                     # the trailing element is the field the user cares about.
                     field = str(loc[-1])
