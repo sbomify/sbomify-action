@@ -96,7 +96,26 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
             state.attach_error = str(e)
             log("error", f"Could not attach components to product: {e}")
 
-    # 4. Emit the workflow file. Last step so an API failure above never
+    # 4. Bind the chosen contact profile to every applied component.
+    # The emitted workflow sets AUGMENT=true at run time and the action
+    # reads ``component.contact_profile_id`` off the backend — without
+    # the binding here the augmentation silently no-ops in CI. Per-
+    # component patch failures are surfaced as warnings (one bad PATCH
+    # shouldn't sink the whole apply); skip the loop entirely when the
+    # plan didn't pick a profile.
+    if plan.augmentation == "profile" and plan.contact_profile_id and component_ids:
+        bound = 0
+        for rel, comp_id in component_ids.items():
+            try:
+                api.patch_component(comp_id, contact_profile_id=plan.contact_profile_id)
+                bound += 1
+            except APIError as e:
+                log("warning", f"Could not bind profile to {rel} ({comp_id}): {e}")
+        if bound:
+            state.applied.append(f"bound contact profile to {bound} component(s)")
+            log("success", f"Bound contact profile {plan.contact_profile_id} to {bound} component(s)")
+
+    # 5. Emit the workflow file. Last step so an API failure above never
     # leaves a broken .yml on disk that points at non-existent components.
     if opts.dry_run:
         log("info", "Dry-run: skipping workflow write")

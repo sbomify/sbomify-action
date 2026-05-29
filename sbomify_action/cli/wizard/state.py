@@ -132,6 +132,14 @@ class Plan:
     release_strategy: ReleaseStrategy = "trunk"
     credential_mode: CredentialMode = "oidc"
     augmentation: AugmentationStrategy = "skip"
+    contact_profile_id: str | None = None
+    """ID of the contact profile to bind to every applied component when
+    ``augmentation == 'profile'``. ``None`` when augmentation is ``'skip'``
+    or when no profile was selected. apply.py patches each component with
+    ``contact_profile_id=<this>`` so AUGMENT=true at workflow run time
+    actually has something to look up — without this, the action sets
+    AUGMENT=true but the component has no profile bound on the backend
+    and augmentation silently no-ops."""
     sbom_formats: list[SbomFormat] = field(default_factory=lambda: ["cyclonedx"])
     """Which formats to emit per lockfile. One matrix entry per (lockfile, format)."""
     enrich: bool = True

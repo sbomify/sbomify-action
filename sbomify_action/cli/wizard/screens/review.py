@@ -93,11 +93,23 @@ class ReviewScreen(WizardScreen):
         formats_label = " + ".join(plan.sbom_formats) or "cyclonedx"
         attest_label = "on" if plan.attestation else "off"
         enrich_label = "on" if plan.enrich else "off"
+        augmentation_label: str = plan.augmentation
+        if plan.augmentation == "profile" and plan.contact_profile_id and workspace:
+            # Surface which profile actually gets bound — "profile" alone
+            # leaves the user wondering which one was picked.
+            match = next(
+                (p for p in workspace.contact_profiles if str(p.get("id")) == plan.contact_profile_id),
+                None,
+            )
+            if match:
+                augmentation_label = f"profile · [b]{match.get('name')}[/]  ({plan.contact_profile_id})"
+            else:
+                augmentation_label = f"profile · {plan.contact_profile_id}"
         return (
             f"[#CBCCCE]Product           [/]  {product_label}\n"
             f"[#CBCCCE]Release strategy  [/]  {plan.release_strategy}\n"
             f"[#CBCCCE]Credentials       [/]  {plan.credential_mode}\n"
-            f"[#CBCCCE]Augmentation      [/]  {plan.augmentation}\n"
+            f"[#CBCCCE]Augmentation      [/]  {augmentation_label}\n"
             f"[#CBCCCE]Enrichment        [/]  {enrich_label}\n"
             f"[#CBCCCE]SBOM formats      [/]  {formats_label}\n"
             f"[#CBCCCE]Build provenance  [/]  {attest_label}"
