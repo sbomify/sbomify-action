@@ -126,3 +126,54 @@ async def test_welcome_to_discover_navigates(tmp_path: Path, monkeypatch: pytest
 
         assert isinstance(app.screen, DiscoverScreen)
         assert len(app.state.discovered) == 1
+
+
+async def test_enter_on_focused_back_button_goes_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: pressing Enter while the Back button is focused must
+    pop the screen, not trigger the screen's forward ``action_submit``.
+
+    The screen-level Enter binding is ``priority=True`` so Input fields
+    can't swallow it (eg the token Input on AuthenticateScreen).
+    Without explicit routing, that priority also wins when the user
+    has Tabbed over to a non-primary button — pressing Enter on the
+    focused Back button would jump forward instead of back. Every
+    screen's ``action_submit`` / ``action_apply`` defers to
+    ``WizardScreen.route_enter`` to fix this.
+    """
+    from textual.widgets import Button
+
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "uv.lock",
+            rel_path=Path("uv.lock"),
+            ecosystem="python",
+            suggested_name="widget-py",
+        )
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # Welcome -> Discover
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.discover import DiscoverScreen
+        from sbomify_action.cli.wizard.screens.welcome import WelcomeScreen
+
+        assert isinstance(app.screen, DiscoverScreen)
+
+        # Walk focus until the Back button is focused.
+        for _ in range(8):
+            focused = app.focused
+            if isinstance(focused, Button) and focused.id == "back":
+                break
+            await pilot.press("shift+tab")
+            await pilot.pause()
+        else:
+            raise AssertionError("never focused the Back button via shift+tab")
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, WelcomeScreen), (
+            "Enter on focused Back button must pop the screen, not advance forward"
+        )

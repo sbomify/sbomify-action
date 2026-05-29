@@ -65,7 +65,7 @@ class DiscoverScreen(WizardScreen):
         self._clear_status()
 
     def action_submit(self) -> None:
-        self._advance()
+        self.route_enter(self._advance)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "next":

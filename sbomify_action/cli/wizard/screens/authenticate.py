@@ -58,7 +58,7 @@ class AuthenticateScreen(WizardScreen):
             input_box.focus()
 
     def action_submit(self) -> None:
-        self._start_auth(self.query_one("#token", Input).value.strip())
+        self.route_enter(lambda: self._start_auth(self.query_one("#token", Input).value.strip()))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "token":

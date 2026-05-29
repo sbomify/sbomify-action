@@ -106,7 +106,7 @@ class ConfigureSbomScreen(WizardScreen):
         self.query_one("#enrich", RadioSet).focus()
 
     def action_submit(self) -> None:
-        self._advance()
+        self.route_enter(self._advance)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "next":

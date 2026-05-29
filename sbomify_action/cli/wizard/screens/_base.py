@@ -13,12 +13,12 @@ always see where they are without needing to re-orient.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Callable, ClassVar
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Static
+from textual.widgets import Button, Footer, Header, Static
 
 if TYPE_CHECKING:
     from sbomify_action.cli.wizard.app import WizardApp
@@ -49,6 +49,31 @@ class WizardScreen(Screen[None]):
     def compose_body(self) -> ComposeResult:
         """Override to yield body widgets (panels, inputs, tables, …)."""
         return iter(())
+
+    def route_enter(self, forward: Callable[[], None]) -> None:
+        """Route a screen-level Enter keystroke to the right action.
+
+        The Enter binding on most wizard screens is ``priority=True`` so an
+        ``Input`` field can't swallow it (the user types a token, hits Enter,
+        the screen submits). But ``priority=True`` ALSO means the screen's
+        action wins when the user has Tabbed over to a non-primary button
+        (Back, Cancel) — Enter would then fire ``_advance`` and the user
+        would jump forward instead of back. Route Enter to whatever Button
+        currently holds focus so the visible "I'm about to press this button"
+        affordance matches what actually happens; only fall through to
+        ``forward`` when no non-primary Button has focus.
+
+        Primary buttons (the screen's forward action — Next, Authenticate,
+        Apply, Continue) get the fall-through path so Enter on the focused
+        primary button still triggers the same forward action it would have
+        anyway, and the screen behaviour stays unchanged for users who
+        haven't Tabbed away from the default.
+        """
+        focused = self.focused
+        if isinstance(focused, Button) and focused.variant != "primary":
+            focused.press()
+            return
+        forward()
 
     def _crumb_markup(self) -> str:
         """Numbered position chip + connected segment track + step title.
