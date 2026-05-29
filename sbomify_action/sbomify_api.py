@@ -401,15 +401,16 @@ class SbomifyApiClient:
     # ------------------------------------------------------------------
     # contact profiles
 
-    def list_teams(self) -> list[dict[str, Any]]:
-        """List workspaces (a.k.a. "teams" in legacy API naming) the token can see.
+    def list_workspaces(self) -> list[dict[str, Any]]:
+        """List workspaces the token can see.
 
-        Each item carries a ``key`` field used to scope team-nested
-        endpoints like ``/api/v1/teams/{team_key}/contact-profiles``.
+        Each item carries a ``key`` field used to scope workspace-nested
+        endpoints like ``/api/v1/workspaces/{team_key}/contact-profiles``.
         Returns a bare JSON list (no pagination envelope) directly from
-        the API.
+        the API. The route is mounted at ``/workspaces`` (not
+        ``/teams``) despite the legacy ``team_key`` parameter naming.
         """
-        response = self._request("GET", "/api/v1/teams/")
+        response = self._request("GET", "/api/v1/workspaces/")
         if not response.ok:
             raise APIError(self._build_error("Failed to list workspaces.", response))
         try:
@@ -423,20 +424,21 @@ class SbomifyApiClient:
     def list_contact_profiles(self, team_key: str) -> list[dict[str, Any]]:
         """List contact profiles for a workspace.
 
-        Hits ``GET /api/v1/teams/{team_key}/contact-profiles``. Returns
-        a bare JSON list (no pagination envelope), filtered to workspace-
-        level profiles (the backend excludes ``is_component_private``
-        ones). Returns ``[]`` on 404 — the endpoint isn't available on
-        every deployment, and callers treat absence as "no profiles
-        configured".
+        Hits ``GET /api/v1/workspaces/{team_key}/contact-profiles``.
+        Returns a bare JSON list (no pagination envelope), filtered
+        server-side to workspace-level profiles (the backend excludes
+        ``is_component_private`` ones). Returns ``[]`` on 404 — some
+        deployments don't expose the endpoint, and callers treat
+        absence as "no profiles configured".
 
-        ``team_key`` must come from a prior ``list_teams()`` call (or
-        be otherwise known to the caller); the API has no "current
-        team" notion for token-scoped requests, so it can't be omitted.
+        ``team_key`` must come from a prior ``list_workspaces()`` call
+        (or be otherwise known to the caller); the API has no "current
+        workspace" notion for token-scoped requests, so it can't be
+        omitted.
         """
-        response = self._request("GET", f"/api/v1/teams/{team_key}/contact-profiles")
+        response = self._request("GET", f"/api/v1/workspaces/{team_key}/contact-profiles")
         if response.status_code == 404:
-            logger.debug("Contact profiles endpoint not available for team %s", team_key)
+            logger.debug("Contact profiles endpoint not available for workspace %s", team_key)
             return []
         if not response.ok:
             raise APIError(self._build_error("Failed to list contact profiles.", response))

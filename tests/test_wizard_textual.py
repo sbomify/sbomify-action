@@ -41,16 +41,16 @@ def _stub_client(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> MagicMock
     products = kwargs.get("products") or []
     components = kwargs.get("components") or []
     profiles = kwargs.get("profiles") or []
-    # Stub list_teams too — the auth worker calls it first to derive
-    # team_key, which then scopes list_contact_profiles. Without a
-    # real list here, the worker can't find a team key and the
+    # Stub list_workspaces too — the auth worker calls it first to
+    # derive team_key, which then scopes list_contact_profiles. Without
+    # a real list here, the worker can't find a team key and the
     # contact-profiles prefetch is skipped (returns []), which would
     # make the augmentation profile radio appear disabled in tests.
-    teams = kwargs.get("teams") or [{"key": "acme", "name": "Acme Inc"}]
+    workspaces = kwargs.get("workspaces") or [{"key": "acme", "name": "Acme Inc"}]
 
     instance = MagicMock()
     instance.whoami.return_value = None
-    instance.list_teams.return_value = teams
+    instance.list_workspaces.return_value = workspaces
     instance.list_products.return_value = products
     instance.list_components.return_value = components
     instance.list_contact_profiles.return_value = profiles

@@ -341,15 +341,15 @@ def test_list_contact_profiles_success() -> None:
     assert profiles[0]["id"] == "cp1"
 
 
-def test_list_teams_returns_workspace_keys() -> None:
+def test_list_workspaces_returns_workspace_keys() -> None:
     client, _ = _client_with([_FakeResponse(200, [{"key": "acme", "name": "Acme Inc"}])])
-    teams = client.list_teams()
-    assert teams[0]["key"] == "acme"
+    workspaces = client.list_workspaces()
+    assert workspaces[0]["key"] == "acme"
 
 
-def test_list_teams_handles_non_list_body() -> None:
+def test_list_workspaces_handles_non_list_body() -> None:
     client, _ = _client_with([_FakeResponse(200, {"detail": "wrong shape"})])
-    assert client.list_teams() == []
+    assert client.list_workspaces() == []
 
 
 # ----------------------------------------------------------------------

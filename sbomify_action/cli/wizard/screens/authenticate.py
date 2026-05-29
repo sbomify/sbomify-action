@@ -13,6 +13,7 @@ from textual.worker import Worker, WorkerState
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 from sbomify_action.cli.wizard.state import WorkspaceSnapshot
 from sbomify_action.exceptions import APIError, AuthError
+from sbomify_action.logging_config import logger
 from sbomify_action.sbomify_api import SbomifyApiClient
 
 
@@ -108,19 +109,22 @@ class AuthenticateScreen(WizardScreen):
         except APIError as e:
             return None, None, f"Could not reach sbomify: {e}"
 
-        # Fetch the team list up front (small, single round-trip). We
-        # need the team key to scope the contact-profiles endpoint —
-        # ``/api/v1/teams/{team_key}/contact-profiles`` is the only way
-        # to enumerate them. Tokens are typically scoped to one team
-        # but the API returns a list; we use the first non-empty entry
-        # and store the key on state so apply.py can reuse it.
+        # Resolve the workspace key up front. The contact-profiles
+        # endpoint is nested under ``/api/v1/workspaces/{team_key}/``
+        # and there's no "current workspace" alias — we have to know
+        # the key explicitly. ``list_workspaces`` returns one or more
+        # entries for the token (typically one for scoped tokens; the
+        # user's full membership list for personal-access tokens). We
+        # take the first one with a usable key and surface a non-fatal
+        # warning on failure so the rest of the prefetch still runs.
         try:
-            teams = SbomifyApiClient(base_url, token).list_teams()
+            workspaces = SbomifyApiClient(base_url, token).list_workspaces()
         except APIError as e:
-            return None, None, f"Could not list workspaces: {e}"
+            logger.warning("Could not list workspaces: %s", e)
+            workspaces = []
         team_key: str | None = None
-        for team in teams:
-            key = team.get("key")
+        for ws in workspaces:
+            key = ws.get("key")
             if isinstance(key, str) and key:
                 team_key = key
                 break
@@ -133,11 +137,13 @@ class AuthenticateScreen(WizardScreen):
 
         def _list_profiles() -> list[dict[str, object]]:
             if team_key is None:
-                # No team key → can't query profiles. Surface as empty
-                # rather than as an error so the rest of the workspace
-                # prefetch still completes.
                 return []
-            return SbomifyApiClient(base_url, token).list_contact_profiles(team_key)
+            try:
+                return SbomifyApiClient(base_url, token).list_contact_profiles(team_key)
+            except APIError as e:
+                # Non-fatal — Augmentation just appears empty in that case.
+                logger.warning("Could not list contact profiles: %s", e)
+                return []
 
         try:
             with ThreadPoolExecutor(max_workers=3) as pool:
