@@ -298,6 +298,26 @@ SelectionList, OptionList, ListView {
     max-height: 20;
 }
 
+/* ConfigureWorkflow profile picker — inline OptionList that appears
+ * beneath the augmentation radio when "Use a contact profile" is
+ * chosen. Without an explicit constraint it inherits the generic
+ * OptionList `height: 1fr` rule and balloons to 20+ rows for two
+ * profile entries, pushing the Next button off the visible terminal
+ * area. Size to content (typical workspaces have a handful of
+ * profiles) and cap so a workspace with dozens still scrolls inside
+ * the panel rather than dominating it. */
+#profile-picker {
+    height: auto;
+    max-height: 8;
+    margin: 1 0 0 0;
+}
+
+#profile-help {
+    height: auto;
+    margin: 0 0 0 0;
+    color: $sbom-text-muted;
+}
+
 /* Review screen — RichLog rendering the unified diff between the
  * existing workflow file (if any) and what apply will write. Cap
  * height so a large diff scrolls inside the panel instead of pushing

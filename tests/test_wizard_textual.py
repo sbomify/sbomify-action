@@ -205,6 +205,75 @@ async def test_enter_on_focused_radio_set_toggles_radio(tmp_path: Path, monkeypa
         assert picker.option_count == 2
 
 
+async def test_escape_from_components_goes_back_in_any_focus_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: Escape from ComponentsScreen pops back to Product no
+    matter which inner widget has focus.
+
+    The Components screen mounts one PickOrCreate per lockfile; depending
+    on auto-match the user may be focused on the OptionList (existing
+    picked) or the "Create new" Input (no auto-match). Both paths must
+    honour the screen's Escape binding so Back navigation isn't trapped
+    by whichever widget happened to take focus.
+    """
+    from textual.widgets import Input, OptionList
+
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "uv.lock",
+            rel_path=Path("uv.lock"),
+            ecosystem="python",
+            suggested_name="widget-py",
+        )
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+    # No matching component → Input visible, "Create new" sentinel
+    # highlighted; this exercises the trickier focus path where Input
+    # could in theory swallow Escape.
+    _stub_client(
+        monkeypatch,
+        products=[{"id": "p1", "name": "alpha"}],
+        components=[{"id": "c1", "name": "OtherProject"}],
+    )
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        # Walk to Components. Auto-auth (token preset on opts) pushes
+        # ProductScreen automatically after the workspace prefetch
+        # completes, so we DON'T press Enter at Authenticate.
+        await pilot.press("enter")  # Welcome -> Discover
+        await pilot.pause()
+        await pilot.press("space")  # select lockfile
+        await pilot.pause()
+        await pilot.press("enter")  # Discover -> Authenticate (auto-auth)
+        await pilot.pause(1.0)  # wait for auth + auto-push to Product
+        await pilot.press("enter")  # Product -> Components
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.components import ComponentsScreen
+        from sbomify_action.cli.wizard.screens.product import ProductScreen
+
+        assert isinstance(app.screen, ComponentsScreen)
+
+        # Case 1: focus on OptionList → escape pops back to Product.
+        app.screen.query_one("#component-0-list", OptionList).focus()
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, ProductScreen), "Escape on OptionList must pop to Product"
+
+        # Forward to Components again, focus the Input this time.
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, ComponentsScreen)
+        app.screen.query_one("#component-0-input", Input).focus()
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, ProductScreen), "Escape on Input must pop to Product"
+
+
 async def test_enter_on_focused_back_button_goes_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: pressing Enter while the Back button is focused must
     pop the screen, not trigger the screen's forward ``action_submit``.
