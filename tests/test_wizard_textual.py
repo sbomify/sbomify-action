@@ -41,9 +41,16 @@ def _stub_client(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> MagicMock
     products = kwargs.get("products") or []
     components = kwargs.get("components") or []
     profiles = kwargs.get("profiles") or []
+    # Stub list_teams too — the auth worker calls it first to derive
+    # team_key, which then scopes list_contact_profiles. Without a
+    # real list here, the worker can't find a team key and the
+    # contact-profiles prefetch is skipped (returns []), which would
+    # make the augmentation profile radio appear disabled in tests.
+    teams = kwargs.get("teams") or [{"key": "acme", "name": "Acme Inc"}]
 
     instance = MagicMock()
     instance.whoami.return_value = None
+    instance.list_teams.return_value = teams
     instance.list_products.return_value = products
     instance.list_components.return_value = components
     instance.list_contact_profiles.return_value = profiles
@@ -139,7 +146,7 @@ async def test_enter_on_focused_radio_set_toggles_radio(tmp_path: Path, monkeypa
     on ``WizardScreen`` now detects RadioSet focus and toggles the
     highlighted button instead of forwarding.
     """
-    from textual.widgets import OptionList, RadioSet
+    from textual.widgets import OptionList, RadioButton, RadioSet
 
     lockfiles = [
         DiscoveredLockfile(
@@ -160,32 +167,50 @@ async def test_enter_on_focused_radio_set_toggles_radio(tmp_path: Path, monkeypa
         ],
     )
 
+    from textual.widgets import Button
+
     app = WizardApp(_opts(tmp_path))
-    async with app.run_test() as pilot:
-        # Walk to ConfigureWorkflow.
+    # Larger viewport so the augmentation panel + profile picker + Next
+    # button all render — Textual focus/visibility behaviour can shift
+    # when widgets are clipped on tiny pilot terminals.
+    async with app.run_test(size=(120, 60)) as pilot:
+        # Walk to ConfigureSbom (where Augmentation now lives — moved
+        # off ConfigureWorkflow so Enrichment + Augmentation, both
+        # metadata-source controls, sit together).
         await pilot.press("enter")  # Welcome -> Discover
         await pilot.pause()
         await pilot.press("space")  # select lockfile
         await pilot.pause()
-        await pilot.press("enter")  # Discover -> Authenticate
-        await pilot.pause(1.0)  # auto-auth uses stubbed client
-        await pilot.press("enter")  # Authenticate -> Product
-        await pilot.pause()
+        await pilot.press("enter")  # Discover -> Authenticate (auto-auth)
+        await pilot.pause(1.0)
         await pilot.press("enter")  # Product -> Components
         await pilot.pause()
         await pilot.press("enter")  # Components -> ConfigureWorkflow
         await pilot.pause()
 
+        # ConfigureWorkflow auto-focuses the release RadioSet, so Enter
+        # would toggle the highlighted radio (the right UX for picking)
+        # instead of advancing. Focus the Next button to advance.
         from sbomify_action.cli.wizard.screens.configure_workflow import (
             ConfigureWorkflowScreen,
         )
 
         assert isinstance(app.screen, ConfigureWorkflowScreen)
+        app.screen.query_one("#next", Button).focus()
+        await pilot.pause()
+        await pilot.press("enter")  # ConfigureWorkflow -> ConfigureSbom
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.configure_sbom import ConfigureSbomScreen
+
+        assert isinstance(app.screen, ConfigureSbomScreen)
 
         # Focus the augmentation RadioSet; arrow down to highlight the
         # profile radio; press Enter to commit. Without route_enter's
-        # RadioSet branch this advances to ConfigureSbom and the
-        # profile picker never becomes visible.
+        # RadioSet branch this advances to Review and the profile
+        # picker never becomes visible. RadioSet's own bindings consume
+        # Down (move) and Enter (commit highlighted) while the screen's
+        # Enter binding falls through via route_enter.
         aug = app.screen.query_one("#augmentation", RadioSet)
         aug.focus()
         await pilot.pause()
@@ -193,12 +218,16 @@ async def test_enter_on_focused_radio_set_toggles_radio(tmp_path: Path, monkeypa
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
+        # Drop the unused RadioButton import warning by referencing it.
+        _ = RadioButton
 
-        assert isinstance(app.screen, ConfigureWorkflowScreen), (
+        assert isinstance(app.screen, ConfigureSbomScreen), (
             "Enter on focused RadioSet must NOT advance — should toggle radio"
         )
         pressed = aug.pressed_button
-        assert pressed is not None and pressed.id == "aug-profile"
+        assert pressed is not None and pressed.id == "aug-profile", (
+            f"Expected aug-profile after down+enter, got {pressed.id if pressed else None}"
+        )
 
         picker = app.screen.query_one("#profile-picker", OptionList)
         assert picker.display is True, "Profile picker must appear after selecting profile radio"

@@ -401,51 +401,52 @@ class SbomifyApiClient:
     # ------------------------------------------------------------------
     # contact profiles
 
-    def list_contact_profiles(self) -> list[dict[str, Any]]:
-        """List contact profiles for the workspace.
+    def list_teams(self) -> list[dict[str, Any]]:
+        """List workspaces (a.k.a. "teams" in legacy API naming) the token can see.
 
-        Returns ``[]`` on 404 — the endpoint isn't available on every
-        deployment, and callers treat absence as "no profiles configured".
-        Paginates so workspaces with more than one page of profiles aren't
-        silently truncated.
-
-        Inlines the pagination loop (rather than delegating to ``_paginate``)
-        so the 404-tolerant first-page check doesn't cost a duplicate round
-        trip.
+        Each item carries a ``key`` field used to scope team-nested
+        endpoints like ``/api/v1/teams/{team_key}/contact-profiles``.
+        Returns a bare JSON list (no pagination envelope) directly from
+        the API.
         """
-        items: list[dict[str, Any]] = []
-        page = 1
-        while page <= MAX_PAGES:
-            response = self._request(
-                "GET",
-                "/api/v1/contact-profiles",
-                params={"page": str(page), "page_size": str(DEFAULT_PAGE_SIZE)},
-            )
-            if response.status_code == 404:
-                logger.debug("Contact profiles endpoint not available")
-                return []
-            if not response.ok:
-                raise APIError(self._build_error("Failed to list contact profiles.", response))
-            data = self._safe_json_dict(response)
-            if data is None:
-                return items
-            raw_items = data.get("items")
-            if not isinstance(raw_items, list):
-                return items
-            for item in raw_items:
-                if isinstance(item, dict):
-                    items.append(item)
-            pagination = data.get("pagination")
-            if isinstance(pagination, dict) and pagination.get("has_next") is False:
-                return items
-            if "next" in data and not data.get("next"):
-                return items
-            if not raw_items:
-                return items
-            if not isinstance(pagination, dict) and "next" not in data:
-                return items
-            page += 1
-        raise APIError(f"Failed to list contact profiles: pagination safety limit reached ({MAX_PAGES} pages)")
+        response = self._request("GET", "/api/v1/teams/")
+        if not response.ok:
+            raise APIError(self._build_error("Failed to list workspaces.", response))
+        try:
+            data = response.json()
+        except ValueError:
+            raise APIError("Failed to list workspaces: invalid JSON response from API")
+        if not isinstance(data, list):
+            return []
+        return [item for item in data if isinstance(item, dict)]
+
+    def list_contact_profiles(self, team_key: str) -> list[dict[str, Any]]:
+        """List contact profiles for a workspace.
+
+        Hits ``GET /api/v1/teams/{team_key}/contact-profiles``. Returns
+        a bare JSON list (no pagination envelope), filtered to workspace-
+        level profiles (the backend excludes ``is_component_private``
+        ones). Returns ``[]`` on 404 — the endpoint isn't available on
+        every deployment, and callers treat absence as "no profiles
+        configured".
+
+        ``team_key`` must come from a prior ``list_teams()`` call (or
+        be otherwise known to the caller); the API has no "current
+        team" notion for token-scoped requests, so it can't be omitted.
+        """
+        response = self._request("GET", f"/api/v1/teams/{team_key}/contact-profiles")
+        if response.status_code == 404:
+            logger.debug("Contact profiles endpoint not available for team %s", team_key)
+            return []
+        if not response.ok:
+            raise APIError(self._build_error("Failed to list contact profiles.", response))
+        try:
+            data = response.json()
+        except ValueError:
+            raise APIError("Failed to list contact profiles: invalid JSON response from API")
+        if not isinstance(data, list):
+            return []
+        return [item for item in data if isinstance(item, dict)]
 
     # ------------------------------------------------------------------
     # releases

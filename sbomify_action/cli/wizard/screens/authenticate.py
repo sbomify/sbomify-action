@@ -108,6 +108,23 @@ class AuthenticateScreen(WizardScreen):
         except APIError as e:
             return None, None, f"Could not reach sbomify: {e}"
 
+        # Fetch the team list up front (small, single round-trip). We
+        # need the team key to scope the contact-profiles endpoint —
+        # ``/api/v1/teams/{team_key}/contact-profiles`` is the only way
+        # to enumerate them. Tokens are typically scoped to one team
+        # but the API returns a list; we use the first non-empty entry
+        # and store the key on state so apply.py can reuse it.
+        try:
+            teams = SbomifyApiClient(base_url, token).list_teams()
+        except APIError as e:
+            return None, None, f"Could not list workspaces: {e}"
+        team_key: str | None = None
+        for team in teams:
+            key = team.get("key")
+            if isinstance(key, str) and key:
+                team_key = key
+                break
+
         def _list_products() -> list[dict[str, object]]:
             return SbomifyApiClient(base_url, token).list_products()
 
@@ -115,7 +132,12 @@ class AuthenticateScreen(WizardScreen):
             return SbomifyApiClient(base_url, token).list_components()
 
         def _list_profiles() -> list[dict[str, object]]:
-            return SbomifyApiClient(base_url, token).list_contact_profiles()
+            if team_key is None:
+                # No team key → can't query profiles. Surface as empty
+                # rather than as an error so the rest of the workspace
+                # prefetch still completes.
+                return []
+            return SbomifyApiClient(base_url, token).list_contact_profiles(team_key)
 
         try:
             with ThreadPoolExecutor(max_workers=3) as pool:
@@ -132,7 +154,12 @@ class AuthenticateScreen(WizardScreen):
         except APIError as e:
             return None, None, f"Workspace fetch failed: {e}"
 
-        workspace = WorkspaceSnapshot(products=products, components=components, contact_profiles=profiles)
+        workspace = WorkspaceSnapshot(
+            products=products,
+            components=components,
+            contact_profiles=profiles,
+            team_key=team_key,
+        )
         return client, workspace, None
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
