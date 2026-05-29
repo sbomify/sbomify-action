@@ -8,6 +8,7 @@ visual fidelity checks.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -72,6 +73,54 @@ async def test_app_starts_and_renders_welcome(tmp_path: Path, monkeypatch: pytes
 
         assert isinstance(app.screen, WelcomeScreen)
         await pilot.pause()
+
+
+async def test_configure_sbomify_json_prefills_from_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: when the repo already ships a sbomify.json, the Configure
+    (sbomify.json) form seeds itself from that file instead of opening blank."""
+    from textual.widgets import Input, RadioSet
+
+    from sbomify_action.cli.wizard.screens.configure_sbomify_json import ConfigureSbomifyJsonScreen
+
+    _stub_discovery(monkeypatch, [])
+    (tmp_path / "sbomify.json").write_text(
+        json.dumps(
+            {
+                "supplier": {
+                    "name": "Lithium Project",
+                    "url": ["https://example.com"],
+                    "contacts": [{"name": "Lithium Project", "email": "sec@example.com"}],
+                },
+                "authors": [{"name": "Rana", "email": "rana@example.com"}],
+                "security_contact": "https://example.com/security",
+                "lifecycle_phase": "build",
+                "licenses": ["MIT"],  # a field the form doesn't render — must not crash prefill
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # WizardApp.__init__ runs gather_repo_facts → has_sbomify_json=True.
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(120, 60)) as pilot:
+        assert app.state.facts.has_sbomify_json is True
+        await app.push_screen(ConfigureSbomifyJsonScreen())
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, ConfigureSbomifyJsonScreen)
+        assert screen.query_one("#sup-name", Input).value == "Lithium Project"
+        assert screen.query_one("#sup-url", Input).value == "https://example.com"
+        assert screen.query_one("#sup-email", Input).value == "sec@example.com"
+        assert screen.query_one("#author-name", Input).value == "Rana"
+        assert screen.query_one("#author-email", Input).value == "rana@example.com"
+        assert screen.query_one("#security-contact", Input).value == "https://example.com/security"
+        # The lifecycle RadioSet branch of _populate_from is exercised too:
+        # the on-disk "build" phase must be the pressed radio.
+        pressed = screen.query_one("#lifecycle", RadioSet).pressed_button
+        assert pressed is not None and pressed.id == "phase-build"
 
 
 async def test_escape_from_authenticate_returns_to_discover(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

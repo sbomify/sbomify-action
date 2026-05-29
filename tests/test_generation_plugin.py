@@ -1,5 +1,6 @@
 """Tests for the SBOM generation plugin architecture."""
 
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -22,6 +23,40 @@ from sbomify_action._generation.generators import (
     TrivyImageGenerator,
 )
 from sbomify_action.exceptions import SBOMGenerationError, ToolNotAvailableError
+
+
+class TestRunCommandErrorLogging(unittest.TestCase):
+    """run_command's ``log_errors`` flag controls the severity of a failed
+    subprocess. A priority-chain fallback that fails gracefully (eg cdxgen on
+    a Python lockfile, where cyclonedx-py/syft take over) passes
+    ``log_errors=False`` so it logs at DEBUG instead of spamming red ERROR
+    lines on the happy path — while still raising ``SBOMGenerationError`` so
+    the orchestrator can try the next generator."""
+
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_log_errors_false_logs_debug_not_error(self, mock_run: MagicMock) -> None:
+        from sbomify_action._generation import utils
+
+        mock_run.side_effect = subprocess.CalledProcessError(
+            returncode=1, cmd=["cdxgen", "."], stderr="yargs-parser node version error", output=""
+        )
+        with patch.object(utils, "logger") as mock_logger:
+            with self.assertRaises(SBOMGenerationError):
+                utils.run_command(["cdxgen", "."], "cdxgen", log_errors=False)
+            # The failure must NOT reach ERROR (neither the summary line nor
+            # log_command_error's body, both of which route through utils.logger).
+            mock_logger.error.assert_not_called()
+            self.assertTrue(mock_logger.debug.called, "expected the failure to be logged at DEBUG")
+
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_log_errors_true_still_logs_error(self, mock_run: MagicMock) -> None:
+        from sbomify_action._generation import utils
+
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd=["syft", "."], stderr="boom", output="")
+        with patch.object(utils, "logger") as mock_logger:
+            with self.assertRaises(SBOMGenerationError):
+                utils.run_command(["syft", "."], "syft", log_errors=True)
+            mock_logger.error.assert_called()
 
 
 class TestFormatVersion(unittest.TestCase):

@@ -217,9 +217,19 @@ def test_get_component_id_by_name_returns_none_when_missing() -> None:
 
 def test_create_component_success() -> None:
     client, _ = _client_with([_FakeResponse(201, {"id": "new-id", "name": "foo"})])
-    comp_id, was_created = client.create_component("foo", component_type="sbom")
+    comp_id, was_created = client.create_component("foo", component_type="bom")
     assert comp_id == "new-id"
     assert was_created is True
+
+
+def test_create_component_rejects_invalid_type_without_request() -> None:
+    """A component_type the backend doesn't accept (e.g. the old "sbom"
+    literal) must fail fast client-side with a clear ValueError, never
+    reaching the network to come back as an opaque 422."""
+    client, session = _client_with([])
+    with pytest.raises(ValueError, match="Invalid component_type 'sbom'"):
+        client.create_component("foo", component_type="sbom")
+    session.request.assert_not_called()
 
 
 def test_create_component_recovers_from_duplicate_name() -> None:
@@ -232,7 +242,7 @@ def test_create_component_recovers_from_duplicate_name() -> None:
             ),
         ]
     )
-    comp_id, was_created = client.create_component("foo", component_type="sbom")
+    comp_id, was_created = client.create_component("foo", component_type="bom")
     assert comp_id == "existing-id"
     assert was_created is False
 
@@ -240,13 +250,89 @@ def test_create_component_recovers_from_duplicate_name() -> None:
 def test_create_component_plan_limit() -> None:
     client, _ = _client_with([_FakeResponse(403, {"detail": "maximum components reached"})])
     with pytest.raises(PlanLimitError):
-        client.create_component("foo", component_type="sbom")
+        client.create_component("foo", component_type="bom")
+
+
+def test_create_component_403_validation_list_is_not_plan_limit() -> None:
+    """A 403 whose detail is a pydantic *list* (not the plain plan-limit
+    string) must raise APIError — even when the collapsed message contains
+    the word 'maximum' (eg a max-length validation error). Plan-limit
+    detection keys off the raw string detail, not the cleaned text, so this
+    can't be misclassified as a PlanLimitError."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(
+                403,
+                {
+                    "detail": [
+                        {
+                            "type": "string_too_long",
+                            "loc": ["body", "payload", "name"],
+                            "msg": "String should have at most 255 characters (maximum length)",
+                        }
+                    ]
+                },
+            )
+        ]
+    )
+    with pytest.raises(APIError) as exc:
+        client.create_component("foo", component_type="bom")
+    assert not isinstance(exc.value, PlanLimitError)
+    # The readable message is still surfaced.
+    assert "name:" in str(exc.value)
+
+
+def test_clean_validation_error_collapses_pydantic_list() -> None:
+    """A pydantic/django-ninja 422 'detail' (list of per-field error dicts)
+    collapses to readable '<field>: <msg>' text instead of a raw repr dump."""
+    detail = [
+        {
+            "type": "enum",
+            "loc": ["body", "payload", "component_type"],
+            "msg": "Input should be 'document' or 'bom'",
+            "ctx": {"expected": "'document' or 'bom'"},
+        }
+    ]
+    cleaned = SbomifyApiClient._clean_validation_error(detail)
+    assert cleaned == "component_type: Input should be 'document' or 'bom'"
+
+
+def test_clean_validation_error_passthrough_and_none() -> None:
+    assert SbomifyApiClient._clean_validation_error("plain message") == "plain message"
+    assert SbomifyApiClient._clean_validation_error(None) is None
+    assert SbomifyApiClient._clean_validation_error([]) is None
+
+
+def test_create_component_422_renders_clean_detail() -> None:
+    """An unexpected 422 (non-DUPLICATE_NAME) surfaces readable text in the
+    raised APIError — not a raw Python dict repr."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(
+                422,
+                {
+                    "detail": [
+                        {
+                            "type": "enum",
+                            "loc": ["body", "payload", "component_type"],
+                            "msg": "Input should be 'document' or 'bom'",
+                        }
+                    ]
+                },
+            )
+        ]
+    )
+    with pytest.raises(APIError) as exc:
+        client.create_component("foo", component_type="bom")
+    message = str(exc.value)
+    assert "component_type: Input should be 'document' or 'bom'" in message
+    assert "{'type'" not in message  # no raw dict repr leaked to the user
 
 
 def test_get_or_create_component_uses_cache() -> None:
     client, session = _client_with([])
     cache = {"foo": "cached-id"}
-    comp_id, created = client.get_or_create_component("foo", cache, component_type="sbom")
+    comp_id, created = client.get_or_create_component("foo", cache, component_type="bom")
     assert comp_id == "cached-id"
     assert created is False
     session.request.assert_not_called()

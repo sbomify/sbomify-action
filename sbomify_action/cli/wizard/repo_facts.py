@@ -47,6 +47,11 @@ def gather_repo_facts(repo_root: Path) -> RepoFacts:
     if not suggested_repo_name:
         suggested_repo_name = repo_root.name
 
+    # Detect an existing repo-root sbomify.json so the wizard can pre-fill
+    # the json_config form from it and avoid dead-ending on the ownership
+    # check at apply time.
+    has_sbomify_json = (repo_root / "sbomify.json").is_file()
+
     return RepoFacts(
         repo_root=repo_root,
         is_git=is_git,
@@ -57,6 +62,7 @@ def gather_repo_facts(repo_root: Path) -> RepoFacts:
         has_release_tags=has_release_tags,
         owner_repo_slug=owner_repo_slug,
         visibility=visibility,
+        has_sbomify_json=has_sbomify_json,
     )
 
 

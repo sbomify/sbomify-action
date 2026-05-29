@@ -59,10 +59,10 @@ def test_create_component_delegates(stub_client: MagicMock) -> None:
 
     assert comp_id == "new-id"
     assert was_created is True
-    # Yocto must pass component_type='sbom' — the pre-consolidation Yocto
-    # code hard-coded this on every payload, and changing it would silently
-    # mis-categorise every Yocto component on the backend.
-    stub_client.create_component.assert_called_once_with("busybox", component_type="sbom")
+    # Yocto must pass component_type='bom' — the backend ComponentType enum
+    # is {bom, document}; there is no "sbom" value (it 422s), so the facade
+    # pins "bom" explicitly rather than relying on a client default.
+    stub_client.create_component.assert_called_once_with("busybox", component_type="bom")
 
 
 def test_patch_component_visibility_delegates(stub_client: MagicMock) -> None:
@@ -81,7 +81,7 @@ def test_iter_components_delegates(stub_client: MagicMock) -> None:
 
 def test_get_or_create_component_cache_hit(stub_client: MagicMock) -> None:
     # The client provides its own cache check; verify the facade still passes
-    # the cache through and pins component_type='sbom' (legacy Yocto type).
+    # the cache through and pins component_type='bom' (the backend BOM type).
     stub_client.get_or_create_component.return_value = ("cached", False)
 
     cache: dict[str, str] = {"busybox": "cached"}
@@ -89,7 +89,7 @@ def test_get_or_create_component_cache_hit(stub_client: MagicMock) -> None:
 
     assert comp_id == "cached"
     assert was_created is False
-    stub_client.get_or_create_component.assert_called_once_with("busybox", cache, component_type="sbom")
+    stub_client.get_or_create_component.assert_called_once_with("busybox", cache, component_type="bom")
 
 
 def test_get_or_create_component_cache_miss(stub_client: MagicMock) -> None:
@@ -100,7 +100,7 @@ def test_get_or_create_component_cache_miss(stub_client: MagicMock) -> None:
 
     assert comp_id == "new-id"
     assert was_created is True
-    stub_client.get_or_create_component.assert_called_once_with("busybox", cache, component_type="sbom")
+    stub_client.get_or_create_component.assert_called_once_with("busybox", cache, component_type="bom")
 
 
 def test_create_component_error_propagates(stub_client: MagicMock) -> None:

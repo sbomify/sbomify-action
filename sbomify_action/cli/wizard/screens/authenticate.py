@@ -20,13 +20,16 @@ from sbomify_action.sbomify_api import SbomifyApiClient
 def _pick_default_workspace_key(workspaces: list[dict[str, object]]) -> str | None:
     """Return the ``key`` of the workspace the wizard should bind to.
 
-    The backend scopes ``list_products`` / ``list_components`` to the
-    token's bound team (scoped tokens) or the authenticating user's
-    *default* workspace (PATs). Mirror that by reading the
+    ``GET /api/v1/workspaces/`` returns every workspace the underlying
+    *user* belongs to, regardless of the token's scope (the backend does
+    not filter that endpoint by token-bound team today). But
+    ``list_products`` / ``list_components`` ARE scoped — to the token's
+    bound team for scoped tokens, or the authenticating user's *default*
+    workspace for PATs. Mirror that scoping by reading the
     ``is_default_team`` flag on the current user's membership entry —
-    that's the same signal the backend uses. When no entry is marked
-    default (or the response omits the membership block), fall back
-    to the first usable key.
+    the same signal the backend uses for the component listing. When no
+    entry is marked default (or the response omits the membership block),
+    fall back to the first usable key.
     """
     fallback: str | None = None
     for ws in workspaces:
@@ -141,18 +144,18 @@ class AuthenticateScreen(WizardScreen):
         # Resolve the workspace key up front. The contact-profiles
         # endpoint is nested under ``/api/v1/workspaces/{team_key}/``
         # and there's no "current workspace" alias — we have to know
-        # the key explicitly. ``list_workspaces`` returns one or more
-        # entries: a scoped token returns the one workspace it's bound
-        # to; a personal-access token returns every workspace the
-        # user belongs to.
+        # the key explicitly. ``list_workspaces`` returns every workspace
+        # the underlying USER belongs to, regardless of token scope (the
+        # backend doesn't filter that endpoint by token-bound team), so a
+        # multi-workspace user gets multiple entries even with a token
+        # scoped to one team.
         #
-        # For multi-workspace tokens we MUST pick the workspace where
-        # list_products / list_components are actually scoped — those
-        # endpoints have no team_key parameter and resolve via the
-        # token's bound team (scoped) or the user's default workspace
-        # (PAT). Picking the wrong workspace silently binds profiles
-        # to components that live elsewhere — the exact failure mode
-        # apply.py's profile-binding step exists to avoid.
+        # We MUST pick the workspace where list_products / list_components
+        # are actually scoped — those endpoints have no team_key parameter
+        # and resolve via the token's bound team (scoped) or the user's
+        # default workspace (PAT). Picking the wrong workspace silently
+        # binds profiles to components that live elsewhere — the exact
+        # failure mode apply.py's profile-binding step exists to avoid.
         #
         # Strategy: prefer the workspace whose membership entry has
         # ``is_default_team=True`` for the current user (the same
@@ -175,8 +178,8 @@ class AuthenticateScreen(WizardScreen):
                 "(unknown)",
             )
             logger.warning(
-                "Token spans %d workspaces; the wizard will use %r (key=%s) — the "
-                "user's default workspace. If you intended to onboard a different "
+                "You belong to %d workspaces; the wizard will use %r (key=%s) — your "
+                "default workspace. If you intended to onboard a different "
                 "workspace, change the default in the sbomify UI and re-run.",
                 len(workspaces),
                 picked_name,

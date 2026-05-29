@@ -100,6 +100,12 @@ class RepoFacts:
     falls back to ``unknown``. Used to gate the attestation warning
     on the configure screen and surface the visibility line on the
     welcome screen."""
+    has_sbomify_json: bool = False
+    """True iff a ``sbomify.json`` already exists in the repo root at
+    wizard start. When set, the Configure (sbomify.json) screen pre-fills
+    its form from the existing file instead of opening blank, and the
+    apply phase treats a hand-authored (non-wizard) file as the source of
+    truth rather than dead-ending on the ownership check."""
 
 
 @dataclass

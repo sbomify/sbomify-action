@@ -71,10 +71,10 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
             log("info", f"Reused existing component {planned.name} ({comp_id})")
             continue
 
-        # Pass component_type='sbom' explicitly — the wizard onboards code-
-        # repo SBOMs, matching the legacy default that the consolidated
-        # client no longer carries.
-        comp_id, was_created = api.get_or_create_component(planned.name, create_cache, component_type="sbom")
+        # Pass component_type='bom' explicitly — the wizard onboards
+        # code-repo SBOMs, which are BOM-typed components on the backend
+        # (the ComponentType enum is {bom, document}; there is no "sbom").
+        comp_id, was_created = api.get_or_create_component(planned.name, create_cache, component_type="bom")
         component_ids[str(planned.lockfile.rel_path)] = comp_id
         state.component_ids[planned.lockfile.rel_path] = comp_id
         if not was_created:
@@ -139,15 +139,29 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
             json_path = opts.repo_root / "sbomify.json"
             try:
                 write_sbomify_json(json_path, plan.sbomify_json_data)
-            except SbomifyJsonOwnershipError as e:
-                log("error", str(e))
-                raise
+            except SbomifyJsonOwnershipError:
+                # A hand-authored sbomify.json already lives here (no wizard
+                # sentinel). Don't clobber it — but don't dead-end the whole
+                # apply over it either. The action's json_config provider reads
+                # whatever sbomify.json exists at run time, so the existing file
+                # is already doing its job; skip the write and keep going so the
+                # workflow + components still get created. The user can delete
+                # the file (or add the '__sbomify_wizard__' key) to hand it over
+                # to the wizard on a later run.
+                log(
+                    "warning",
+                    f"{json_path} already exists and wasn't created by the wizard — "
+                    "keeping it as-is (the action reads it at run time). Skipping the "
+                    "write. Delete it or add the '__sbomify_wizard__' key to let the "
+                    "wizard manage it.",
+                )
             except OSError as e:
                 log("error", f"Could not write {json_path}: {e}")
                 raise
-            state.written_files.append(json_path)
-            state.applied.append(f"wrote {json_path}")
-            log("success", f"Wrote {json_path}")
+            else:
+                state.written_files.append(json_path)
+                state.applied.append(f"wrote {json_path}")
+                log("success", f"Wrote {json_path}")
 
     # 6. Emit the workflow file. Last step so an API failure above never
     # leaves a broken .yml on disk that points at non-existent components.
