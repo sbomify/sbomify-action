@@ -40,11 +40,19 @@ class ConfigureSbomScreen(WizardScreen):
     def compose_body(self) -> ComposeResult:
         enrich = Vertical(classes="wizard-panel")
         enrich.border_title = "◆  Enrichment"
-        enrich.border_subtitle = "external package metadata (licenses, descriptions, …)"
+        enrich.border_subtitle = "external package metadata (licenses, identifiers, lifecycle)"
         with enrich:
+            yield Static(
+                "[#5E5E5E]Lockfiles list package names + versions but rarely carry licenses, "
+                "PURLs/CPEs, or EOL dates — leaving SBOMs that fail vulnerability matching, "
+                "license compliance, and [b]NTIA minimum elements[/]. Enrichment fills these "
+                "from package registries (PyPI, crates.io, deps.dev, Repology, LicenseDB) "
+                "so the SBOMs the workflow produces meet the bar regulators ask for.[/]",
+                classes="wizard-muted",
+            )
             with RadioSet(id="enrich"):
                 yield RadioButton(
-                    "Enrich packages from PyPI / deps.dev / Repology  [#86EFAC]✓ recommended[/]",
+                    "Enrich packages from external registries  [#86EFAC]✓ recommended[/]",
                     id="enrich-yes",
                     value=True,
                 )
@@ -85,9 +93,11 @@ class ConfigureSbomScreen(WizardScreen):
             picker.display = False
             yield picker
             help_text = Static(
-                "[#5E5E5E]The selected profile's supplier, contacts, and authors will be "
-                "attached to every SBOM this workflow generates. Same profile applies to every "
-                "component — re-run the wizard to change it.[/]",
+                "[#5E5E5E]The selected profile contributes supplier and author metadata to "
+                "every SBOM this workflow generates — both are minimum elements under "
+                "[b]NTIA[/], [b]CISA[/], and the [b]EU Cyber Resilience Act[/], so SBOMs without "
+                "them fail compliance checks. Same profile applies to every component; re-run "
+                "the wizard to change it.[/]",
                 id="profile-help",
                 markup=True,
             )
