@@ -20,3 +20,9 @@ repos:
           - types-PyYAML
           - types-toml
           - click
+          # The wizard subpackage subclasses Textual's App/Screen/widgets.
+          # Without Textual in the hook's isolated env, mypy treats those base
+          # classes as ``Any`` and emits spurious "Class cannot subclass value
+          # of type Any" / "Returning Any" errors. Pinned to the project floor
+          # so the hook's types match the runtime.
+          - textual>=0.85.0
