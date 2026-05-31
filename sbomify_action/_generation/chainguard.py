@@ -218,6 +218,11 @@ def _detect_chainguard_from_provenance(docker_image: str) -> ChainguardBaseImage
     for entry in index.get("manifests", []):
         annotations = entry.get("annotations", {})
         if annotations.get("vnd.docker.reference.type") == "attestation-manifest":
+            # ``.get`` (not ``[...]``) guards an off-spec entry that matches the
+            # annotation but omits ``digest``; ``if att_digest: break`` then keeps
+            # scanning for a later attestation entry that has one rather than
+            # aborting — same continue-on-missing semantics as
+            # ``_resolve_platform_digest`` above.
             att_digest = entry.get("digest")
             if att_digest:
                 break

@@ -12,6 +12,7 @@ workflow on disk.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Literal
 
 from sbomify_action.cli.wizard import ci_emitter
@@ -38,8 +39,10 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
     """Execute every staged mutation in ``state.plan``.
 
     Idempotent where possible (component create uses get-or-create
-    semantics; attach is a set-union; workflow write backs up to .bak)
-    and fail-fast otherwise. Populates ``state.applied``,
+    semantics; attach is a set-union; the workflow write is sentinel-guarded
+    — overwrites a wizard-owned file, refuses a hand-authored one, and writes
+    no ``.bak`` since git holds the prior version) and fail-fast otherwise.
+    Populates ``state.applied``,
     ``state.created_product_id``, ``state.component_ids``, and
     ``state.written_files`` as side effects so the done screen can show
     what happened.
@@ -155,6 +158,14 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
                     "entered in the wizard were NOT written to it. To let the wizard "
                     "manage this file, delete it (or add the '__sbomify_wizard__' key) "
                     "and re-run.",
+                )
+                # Surface the unwritten payload so the user can copy it into the
+                # file by hand instead of re-running the whole wizard to
+                # reproduce what they typed.
+                log(
+                    "info",
+                    "Values you entered (copy into sbomify.json manually if wanted):\n"
+                    + json.dumps(plan.sbomify_json_data, indent=2, sort_keys=True),
                 )
             except OSError as e:
                 log("error", f"Could not write {json_path}: {e}")
