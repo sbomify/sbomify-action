@@ -495,7 +495,7 @@ class ConfigureSbomScreen(WizardScreen):
                     "but wasn't created by the wizard.[/] [#5E5E5E]Apply will keep it as-is "
                     "and surface your form values for manual copy. The action will read the "
                     "existing file at workflow run time. To let the wizard manage it, delete "
-                    "the file or add a top-level [b]\"__sbomify_wizard__\": {}[/] key.[/]"
+                    'the file or add a top-level [b]"__sbomify_wizard__": {}[/] key.[/]'
                 )
 
         status.update("\n\n".join(lines))
