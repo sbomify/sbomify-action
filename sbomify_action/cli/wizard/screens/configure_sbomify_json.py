@@ -30,6 +30,10 @@ from textual.widgets import Button, Input, RadioButton, RadioSet, Static
 from sbomify_action.cli.wizard.io import WIZARD_JSON_SENTINEL_KEY
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 
+# Constructor calls use the wizard's state-aware glyph subclass; the
+# base RadioButton import stays for ``rs.query(RadioButton)`` below.
+from sbomify_action.cli.wizard.widgets import StatefulRadioButton
+
 # CycloneDX-defined lifecycle phases. The action's existing
 # ``_augmentation/metadata.py`` accepts these values verbatim.
 _LIFECYCLE_PHASES: list[tuple[str, str]] = [
@@ -129,7 +133,7 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
             )
             with RadioSet(id="lifecycle"):
                 for phase, label in _LIFECYCLE_PHASES:
-                    yield RadioButton(label, id=f"phase-{phase}", value=phase == "build")
+                    yield StatefulRadioButton(label, id=f"phase-{phase}", value=phase == "build")
 
         dates = Vertical(classes="wizard-panel")
         dates.border_title = "◇  Lifecycle dates"

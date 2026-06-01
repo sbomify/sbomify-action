@@ -17,13 +17,14 @@ from typing import cast
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, RadioButton, RadioSet
+from textual.widgets import Button, RadioSet
 
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 from sbomify_action.cli.wizard.state import (
     CredentialMode,
     ReleaseStrategy,
 )
+from sbomify_action.cli.wizard.widgets import StatefulRadioButton as RadioButton
 
 
 class ConfigureWorkflowScreen(WizardScreen):

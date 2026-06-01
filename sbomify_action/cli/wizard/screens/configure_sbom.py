@@ -25,6 +25,13 @@ from textual.widgets.option_list import Option
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 from sbomify_action.cli.wizard.state import AugmentationStrategy, SbomFormat
 
+# Visible (constructor) name shadowed so every new RadioButton in this
+# screen uses the wizard's state-aware glyph subclass. The base class
+# is still imported under its real name for ``rs.query(RadioButton)``
+# call sites that iterate every radio (StatefulRadioButton inherits
+# from RadioButton, so the query still matches).
+from sbomify_action.cli.wizard.widgets import StatefulRadioButton
+
 
 class ConfigureSbomScreen(WizardScreen):
     """Phase 7 — SBOM content: enrichment / augmentation / formats / provenance."""
@@ -61,12 +68,12 @@ class ConfigureSbomScreen(WizardScreen):
                 classes="wizard-muted",
             )
             with RadioSet(id="enrich"):
-                yield RadioButton(
+                yield StatefulRadioButton(
                     "Enrich packages from external registries  [#86EFAC]✓ recommended[/]",
                     id="enrich-yes",
                     value=True,
                 )
-                yield RadioButton("Skip enrichment — lockfile data only", id="enrich-no")
+                yield StatefulRadioButton("Skip enrichment — lockfile data only", id="enrich-no")
 
         # Augmentation: skip vs bind a contact profile to every component.
         # The picker always shows existing workspace profiles plus a
@@ -92,12 +99,12 @@ class ConfigureSbomScreen(WizardScreen):
                 classes="wizard-muted",
             )
             with RadioSet(id="augmentation"):
-                yield RadioButton("Skip — leave metadata blank for now", id="aug-skip", value=True)
-                yield RadioButton(
+                yield StatefulRadioButton("Skip — leave metadata blank for now", id="aug-skip", value=True)
+                yield StatefulRadioButton(
                     "Use a contact profile (saved to sbomify)  [#86EFAC]✓ recommended[/]",
                     id="aug-profile",
                 )
-                yield RadioButton(
+                yield StatefulRadioButton(
                     "Write a sbomify.json file (saved to the repo)",
                     id="aug-json_config",
                 )
@@ -131,13 +138,13 @@ class ConfigureSbomScreen(WizardScreen):
         fmt.border_subtitle = "one matrix row per format"
         with fmt:
             with RadioSet(id="formats"):
-                yield RadioButton(
+                yield StatefulRadioButton(
                     "CycloneDX  [#86EFAC]✓ recommended[/]",
                     id="fmt-cdx",
                     value=True,
                 )
-                yield RadioButton("SPDX", id="fmt-spdx")
-                yield RadioButton("Both CycloneDX and SPDX", id="fmt-both")
+                yield StatefulRadioButton("SPDX", id="fmt-spdx")
+                yield StatefulRadioButton("Both CycloneDX and SPDX", id="fmt-both")
 
         # Public/unknown repos default to "attest"; private repos
         # default to "skip" because attestation needs GHEC on private.
@@ -148,12 +155,12 @@ class ConfigureSbomScreen(WizardScreen):
         with attest:
             yield Static(self._attestation_note(), classes="wizard-muted")
             with RadioSet(id="attestation"):
-                yield RadioButton(
+                yield StatefulRadioButton(
                     "Sign SBOMs with attest-build-provenance  [#86EFAC]✓ recommended for releases[/]",
                     id="attest-yes",
                     value=attest_default_yes,
                 )
-                yield RadioButton(
+                yield StatefulRadioButton(
                     "Skip provenance attestation",
                     id="attest-no",
                     value=not attest_default_yes,
@@ -441,24 +448,57 @@ class ConfigureSbomScreen(WizardScreen):
     def _refresh_json_status(self) -> None:
         """Render the inline status under the json_config radio.
 
-        Tells the user whether the sbomify.json fields have been
-        captured yet, and how to get to the form.
+        Tells the user (a) whether the sbomify.json fields have been
+        captured yet, and (b) what apply will do with any existing
+        ``sbomify.json`` at the repo root: overwrite if the wizard
+        owns it (``__sbomify_wizard__`` sentinel present); keep
+        as-is otherwise.
         """
+        from rich.markup import escape as _esc
+
+        from sbomify_action.cli.wizard.io import sbomify_json_has_wizard_sentinel
+
         status = self.query_one("#json-config-status", Static)
         data = self.wizard.state.plan.sbomify_json_data
+
+        lines: list[str] = []
+
+        # Form-fill status — what the user has typed so far.
         if data:
             supplier = data.get("supplier") if isinstance(data, dict) else None
             sup_name = supplier.get("name") if isinstance(supplier, dict) and supplier.get("name") else "(unnamed)"
-            status.update(
-                f"[#86EFAC]✓  Configured.[/] Supplier: [b]{sup_name}[/]. "
+            lines.append(
+                f"[#86EFAC]✓  Configured.[/] Supplier: [b]{_esc(str(sup_name))}[/]. "
                 "[#5E5E5E]Press [b]Next[/] to review, or pick the radio again to edit.[/]"
             )
         else:
-            status.update(
+            lines.append(
                 "[#5E5E5E]◌  Not configured yet — press [b]Next[/] to open the "
                 "sbomify.json form. Fields will be written to "
                 "[b]<repo>/sbomify.json[/] when apply runs.[/]"
             )
+
+        # Existing-file status — what apply.py's ownership check will
+        # do at write time. Soft-fail on file-system / parse errors;
+        # better to silently omit the warning than to misrender it.
+        repo_root = self.wizard.state.facts.repo_root
+        json_path = repo_root / "sbomify.json"
+        if json_path.is_file():
+            if sbomify_json_has_wizard_sentinel(json_path):
+                lines.append(
+                    "[#5E5E5E]ℹ  An existing wizard-stamped [b]sbomify.json[/] was found at "
+                    "the repo root — apply will overwrite it with the values from this form.[/]"
+                )
+            else:
+                lines.append(
+                    "[#F4B57F]⚠  An existing [b]sbomify.json[/] was found at the repo root "
+                    "but wasn't created by the wizard.[/] [#5E5E5E]Apply will keep it as-is "
+                    "and surface your form values for manual copy. The action will read the "
+                    "existing file at workflow run time. To let the wizard manage it, delete "
+                    "the file or add a top-level [b]\"__sbomify_wizard__\": {}[/] key.[/]"
+                )
+
+        status.update("\n\n".join(lines))
 
     def _selected_profile_id(self) -> str | None:
         """Read the picker's highlighted profile id, or None when nothing
