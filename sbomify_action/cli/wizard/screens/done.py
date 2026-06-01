@@ -40,10 +40,20 @@ class DoneScreen(WizardScreen):
             yield Static(self._applied_summary(), classes="wizard-muted")
 
         if self.wizard.state.plan.credential_mode == "oidc":
-            oidc = Vertical(classes="wizard-panel")
-            oidc.border_title = "⚠  One more step — set up OIDC trusted publishing"
-            with oidc:
-                yield Static(self._oidc_instructions(), classes="wizard-muted")
+            state = self.wizard.state
+            if state.oidc_bindings_registered and state.oidc_binding_note is None:
+                # Fully auto-registered during apply — nothing left to do.
+                oidc = Vertical(classes="wizard-panel-emphasis")
+                oidc.border_title = "✓  OIDC trusted publishing is set up"
+                with oidc:
+                    yield Static(self._oidc_success(), classes="wizard-muted")
+            else:
+                # Auto-registration was skipped or failed — show the reason
+                # (oidc_binding_note) and the manual fallback instructions.
+                oidc = Vertical(classes="wizard-panel")
+                oidc.border_title = "⚠  One more step — set up OIDC trusted publishing"
+                with oidc:
+                    yield Static(self._oidc_instructions(), classes="wizard-muted")
         else:
             tok = Vertical(classes="wizard-panel")
             tok.border_title = "⚠  Add the SBOMIFY_TOKEN secret"
@@ -116,11 +126,29 @@ class DoneScreen(WizardScreen):
             lines.append("[#5E5E5E]◌  (nothing applied)[/]")
         return "\n".join(lines)
 
+    def _oidc_success(self) -> str:
+        state = self.wizard.state
+        slug = state.facts.owner_repo_slug or "your repository"
+        count = state.oidc_bindings_registered
+        return "\n".join(
+            [
+                f"Registered the trusted publisher for [b]{slug}[/] on {count} component(s).",
+                "",
+                "Nothing else to do — pushing to the default branch will mint a short-lived",
+                "token via OIDC and publish your first SBOM.",
+            ]
+        )
+
     def _oidc_instructions(self) -> str:
         state = self.wizard.state
         api_base = self.wizard.opts.api_base_url
         slug = state.facts.owner_repo_slug or "<owner>/<repo>"
-        lines = [
+        lines: list[str] = []
+        # Explain WHY auto-registration didn't happen (private repo, missing
+        # slug, not owner/admin, backend error) before the manual steps.
+        if state.oidc_binding_note:
+            lines.extend([state.oidc_binding_note, ""])
+        lines += [
             "Trusted publishing needs an OIDC binding per component in the sbomify UI.",
             "",
             f"  Repository: [b]{slug}[/]",

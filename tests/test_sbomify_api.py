@@ -501,3 +501,35 @@ def test_upload_sbom_does_not_raise_on_non_2xx() -> None:
     client, _ = _client_with([_FakeResponse(409, {"error_code": "DUPLICATE_ARTIFACT"})])
     response = client.upload_sbom("c1", b"{}")
     assert response.status_code == 409
+
+
+# ----------------------------------------------------------------------
+# OIDC trusted publishing
+
+
+def test_create_oidc_binding_201_returns_true_and_posts_body() -> None:
+    client, session = _client_with([_FakeResponse(201, {"id": "b1", "repository": "acme/widget"})])
+    created = client.create_oidc_binding("comp-1", "acme/widget")
+    assert created is True
+    call = session.request.call_args
+    assert call.args[0] == "POST"
+    assert call.args[1].endswith("/api/v1/auth/oidc/github/bindings")
+    assert call.kwargs["json"] == {"component_id": "comp-1", "repository": "acme/widget", "provider": "github"}
+
+
+def test_create_oidc_binding_409_already_bound_returns_false() -> None:
+    """A 409 (repository already bound) is idempotent success, not an error —
+    so re-running the wizard doesn't surface a scary failure."""
+    client, _ = _client_with([_FakeResponse(409, {"detail": "This repository is already bound to this component."})])
+    created = client.create_oidc_binding("comp-1", "acme/widget")
+    assert created is False
+
+
+@pytest.mark.parametrize("status", [400, 404, 500])
+def test_create_oidc_binding_other_errors_raise(status: int) -> None:
+    """400 (unresolvable/private repo), 404 (not owner/admin or no component),
+    5xx → APIError, so the wizard logs a warning and falls back to manual
+    instructions."""
+    client, _ = _client_with([_FakeResponse(status, {"detail": "nope"})])
+    with pytest.raises(APIError):
+        client.create_oidc_binding("comp-1", "acme/widget")

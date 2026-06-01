@@ -123,7 +123,16 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
             state.applied.append(f"bound contact profile to {bound} component(s)")
             log("success", f"Bound contact profile {plan.contact_profile_id} to {bound} component(s)")
 
-    # 5. Write sbomify.json when the user chose the json_config
+    # 5. Register OIDC trusted-publisher bindings (oidc credential mode only).
+    # The emitted workflow authenticates via OIDC; without a binding on the
+    # backend the first publish 403s. Auto-register one per component so the
+    # user doesn't have to create it by hand in the UI — the single most
+    # common reason a first OIDC run fails. Best-effort: every failure path is
+    # a warning + a done-screen fallback to manual instructions, never fatal.
+    if plan.credential_mode == "oidc" and component_ids:
+        _register_oidc_bindings(state, component_ids, log)
+
+    # 6. Write sbomify.json when the user chose the json_config
     # augmentation strategy. The action's json_config provider reads
     # this file at workflow run time (AUGMENT=true triggers it) and
     # injects the supplier / manufacturer / authors / lifecycle fields
@@ -175,7 +184,7 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
                 state.applied.append(f"wrote {json_path}")
                 log("success", f"Wrote {json_path}")
 
-    # 6. Emit the workflow file. Last step so an API failure above never
+    # 7. Emit the workflow file. Last step so an API failure above never
     # leaves a broken .yml on disk that points at non-existent components.
     if opts.dry_run:
         log("info", "Dry-run: skipping workflow write")
@@ -202,6 +211,55 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
     state.written_files.append(target)
     state.applied.append(f"wrote {target}")
     log("success", f"Wrote {target}")
+
+
+def _register_oidc_bindings(state: WizardState, component_ids: dict[str, str], log: LogFn) -> None:
+    """Auto-register a GitHub trusted-publisher binding per applied component.
+
+    Mirrors the UI's manual "Trusted Publishing → Add binding" step so OIDC
+    publishing works on the very first run. Records the outcome on
+    ``state.oidc_bindings_registered`` / ``state.oidc_binding_note`` for the
+    done screen. Never raises — every failure is a warning plus a note that
+    makes the done screen fall back to manual instructions.
+    """
+    api = state.require_api()
+    slug = state.facts.owner_repo_slug
+    if not slug:
+        state.oidc_binding_note = (
+            "Couldn't detect a GitHub 'owner/repo' from the git remote, so the "
+            "trusted publisher must be registered manually."
+        )
+        log("warning", state.oidc_binding_note)
+        return
+    if state.facts.visibility == "private":
+        # The backend resolves owner/repo → immutable GitHub IDs via the public
+        # REST API, which 404s for private repos (no PAT support yet). Skip the
+        # call rather than emit a confusing per-component 400 warning.
+        state.oidc_binding_note = (
+            f"'{slug}' looks private — sbomify can't resolve a private repo's GitHub IDs yet, "
+            "so the trusted publisher must be registered manually."
+        )
+        log("info", state.oidc_binding_note)
+        return
+
+    registered = 0
+    last_error: str | None = None
+    for rel, comp_id in component_ids.items():
+        try:
+            api.create_oidc_binding(comp_id, slug)
+            registered += 1
+        except APIError as exc:
+            last_error = str(exc)
+            log("warning", f"Could not register trusted publisher for {rel} ({comp_id}): {exc}")
+
+    state.oidc_bindings_registered = registered
+    if registered and last_error is None:
+        state.applied.append(f"registered trusted publisher ({slug}) for {registered} component(s)")
+        log("success", f"Registered trusted publisher {slug} for {registered} component(s)")
+    else:
+        # A failure (or zero successes) — leave a note so the done screen shows
+        # manual instructions. Any partial-success count is preserved above.
+        state.oidc_binding_note = last_error or "Trusted-publisher registration didn't complete; register it manually."
 
 
 def _resolve_product(state: WizardState, log: LogFn) -> dict[str, Any] | None:
