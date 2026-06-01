@@ -25,6 +25,52 @@ DEFAULT_TIMEOUT = 60
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGES = 500  # Safety limit against runaway pagination.
 
+# Component types the sbomify backend accepts (mirrors
+# ``core.schemas.ComponentType``: BOM="bom", DOCUMENT="document"). There is
+# NO "sbom" value — passing one trips a server-side 422. We validate
+# client-side so a wrong literal fails fast with a clear message at the
+# call site instead of an opaque enum-validation dump from the API.
+VALID_COMPONENT_TYPES = frozenset({"bom", "document"})
+
+
+def clean_validation_error(detail: Any) -> str | None:
+    """Render an API error ``detail`` into human-readable text.
+
+    django-ninja / pydantic 422 responses put a *list* of per-field error
+    dicts (``{type, loc, msg, ctx}``) in ``detail``. Stringifying that list
+    dumps raw Python reprs — eg ``[{'type': 'enum', 'loc': ['body', 'payload',
+    'component_type'], 'msg': "Input should be 'document' or 'bom'", ...}]`` —
+    at the user. Collapse it to ``<field>: <msg>`` lines instead. A plain-string
+    detail (the common case) passes through unchanged; ``None`` stays ``None``
+    so callers can treat "no detail" as falsy.
+
+    Module-level (not just a client method) so other code paths that handle raw
+    API responses — eg the upload destination, which never goes through
+    ``SbomifyApiClient`` — can reuse it without depending on the class (and
+    without breaking when tests mock the class wholesale).
+    """
+    if detail is None:
+        return None
+    if isinstance(detail, list):
+        parts: list[str] = []
+        for item in detail:
+            if isinstance(item, dict):
+                msg = item.get("msg") or item.get("detail") or ""
+                loc = item.get("loc")
+                field = None
+                if isinstance(loc, list | tuple) and loc:
+                    # ``loc`` is a path like ['body', 'payload', '<field>'];
+                    # the trailing element is the field the user cares about.
+                    field = str(loc[-1])
+                if field and msg:
+                    parts.append(f"{field}: {msg}")
+                elif msg:
+                    parts.append(str(msg))
+            elif item:
+                parts.append(str(item))
+        return "; ".join(parts) if parts else None
+    return str(detail)
+
 
 class SbomifyApiClient:
     """Thin wrapper around the sbomify REST API.
@@ -100,10 +146,18 @@ class SbomifyApiClient:
         message = f"{prefix} [{response.status_code}]"
         body = SbomifyApiClient._safe_json_dict(response)
         if body is not None:
-            detail = body.get("detail")
+            detail = SbomifyApiClient._clean_validation_error(body.get("detail"))
             if detail:
                 message += f" - {detail}"
         return message
+
+    @staticmethod
+    def _clean_validation_error(detail: Any) -> str | None:
+        """Backwards-compatible alias for the module-level
+        :func:`clean_validation_error`. Kept so existing call sites and tests
+        that reference ``SbomifyApiClient._clean_validation_error`` keep working.
+        """
+        return clean_validation_error(detail)
 
     @staticmethod
     def _safe_json_dict(response: requests.Response) -> dict[str, Any] | None:
@@ -252,7 +306,16 @@ class SbomifyApiClient:
         ``DUPLICATE_NAME`` (status 400 or 409) by looking the existing
         component up by name. Raises ``PlanLimitError`` when the team has
         hit their component-count limit.
+
+        Raises ``ValueError`` if ``component_type`` isn't a value the
+        backend accepts — a hardcoded-literal mistake (the only way a bad
+        type reaches here) should fail loud at the call site / in CI, not
+        ship and surface as an opaque 422 at runtime.
         """
+        if component_type not in VALID_COMPONENT_TYPES:
+            raise ValueError(
+                f"Invalid component_type {component_type!r}; expected one of {sorted(VALID_COMPONENT_TYPES)}."
+            )
         response = self._request(
             "POST",
             "/api/v1/components",
@@ -269,7 +332,15 @@ class SbomifyApiClient:
             return str(comp_id), True
 
         body = self._safe_json_dict(response) or {}
-        detail = body.get("detail") or ""
+        # ``raw_detail`` drives plan-limit detection; ``detail`` (cleaned) is for
+        # the human-facing message only. Keep them separate: the backend's
+        # plan-limit 403 sends a plain string ("maximum components reached"),
+        # whereas a pydantic 422 sends a list. Matching "maximum" against the
+        # *cleaned* string would misfire on a list-detail whose collapsed text
+        # happens to contain "maximum" (eg "name: ...maximum length 255"),
+        # raising PlanLimitError for a plain validation error.
+        raw_detail = body.get("detail")
+        detail = self._clean_validation_error(raw_detail) or ""
         error_code = body.get("error_code") or ""
         err_msg = f"Failed to create component '{name}'. [{response.status_code}]"
         if detail:
@@ -282,7 +353,7 @@ class SbomifyApiClient:
                 return existing_id, False
             raise APIError(f"Component '{name}' reported as duplicate by API but could not be found via lookup")
 
-        if response.status_code == 403 and isinstance(detail, str) and "maximum" in detail.lower():
+        if response.status_code == 403 and isinstance(raw_detail, str) and "maximum" in raw_detail.lower():
             raise PlanLimitError(err_msg)
         raise APIError(err_msg)
 

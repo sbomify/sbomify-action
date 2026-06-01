@@ -41,12 +41,12 @@ def get_component_id_by_name(api_base_url: str, token: str, name: str) -> str | 
 def create_component(api_base_url: str, token: str, name: str) -> tuple[str, bool]:
     """Create a new component (or recover an existing one on DUPLICATE_NAME).
 
-    Yocto components are SBOM-typed (``component_type='sbom'``) by historical
-    convention — the pre-consolidation Yocto code hard-coded this string on
-    every payload. Anything else mis-categorises the component in the sbomify
-    dashboard, so we pass it explicitly instead of letting the client default.
+    Yocto components are BOM-typed (``component_type='bom'``). The backend
+    ComponentType enum is ``{bom, document}`` — there is no "sbom" value
+    (passing it 422s), so we pass ``"bom"`` explicitly rather than relying
+    on a client default.
     """
-    return _client(api_base_url, token).create_component(name, component_type="sbom")
+    return _client(api_base_url, token).create_component(name, component_type="bom")
 
 
 def patch_component_visibility(api_base_url: str, token: str, component_id: str, visibility: str) -> None:
@@ -57,7 +57,7 @@ def patch_component_visibility(api_base_url: str, token: str, component_id: str,
 def get_or_create_component(api_base_url: str, token: str, name: str, cache: dict[str, str]) -> tuple[str, bool]:
     """Look the name up in ``cache``; on miss, create the component (and update cache).
 
-    Passes ``component_type='sbom'`` so newly-created Yocto components match
-    the historical type (see ``create_component`` above).
+    Passes ``component_type='bom'`` so newly-created Yocto components get
+    the correct backend type (see ``create_component`` above).
     """
-    return _client(api_base_url, token).get_or_create_component(name, cache, component_type="sbom")
+    return _client(api_base_url, token).get_or_create_component(name, cache, component_type="bom")

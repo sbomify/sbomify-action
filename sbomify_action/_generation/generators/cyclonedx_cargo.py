@@ -14,6 +14,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
     CARGO_CYCLONEDX_DEFAULT,
@@ -23,6 +24,13 @@ from ..protocol import (
 )
 from ..result import GenerationResult
 from ..utils import run_command
+
+# Check tool availability once at module load (mirrors cyclonedx_py / syft).
+# Without this guard, supports() would claim a Cargo.lock and then fail at
+# generate() time when cargo-cyclonedx isn't installed (eg pip installs that
+# don't bundle it) — a spurious ERROR + wasted attempt before the orchestrator
+# falls through to a generic generator.
+_CARGO_CYCLONEDX_AVAILABLE, _CARGO_CYCLONEDX_PATH = check_tool_available("cargo-cyclonedx")
 
 
 class CycloneDXCargoGenerator:
@@ -69,6 +77,10 @@ class CycloneDXCargoGenerator:
         Supports Cargo.lock files when requesting CycloneDX format.
         Does not support Docker images or SPDX format.
         """
+        # Check if cargo-cyclonedx is installed
+        if not _CARGO_CYCLONEDX_AVAILABLE:
+            return False
+
         # Only supports lock files, not Docker images
         if not input.is_lock_file:
             return False

@@ -19,12 +19,15 @@ alongside the code it describes.
 
 from __future__ import annotations
 
+import json
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.widgets import Button, Input, RadioButton, RadioSet, Static
 
+from sbomify_action.cli.wizard.io import WIZARD_JSON_SENTINEL_KEY
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 
 # CycloneDX-defined lifecycle phases. The action's existing
@@ -148,9 +151,13 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
             yield Button("Save  ▸", id="save", variant="primary")
 
     def on_mount(self) -> None:
-        # Pre-populate from any previously-saved data so the user can
-        # come back and edit.
-        prior = self.wizard.state.plan.sbomify_json_data or {}
+        # Pre-populate from previously-saved plan data so the user can come
+        # back and edit. If the plan has nothing yet but the repo already
+        # ships a sbomify.json, seed the form from that on-disk file so the
+        # user edits their existing metadata instead of re-typing it.
+        prior = self.wizard.state.plan.sbomify_json_data
+        if not prior and self.wizard.state.facts.has_sbomify_json:
+            prior = self._load_from_disk()
         if prior:
             self._populate_from(prior)
         self.query_one("#sup-name", Input).focus()
@@ -307,3 +314,23 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
             value = data.get(key)
             if isinstance(value, str):
                 self.query_one(f"#{input_id}", Input).value = value
+
+    def _load_from_disk(self) -> dict[str, object] | None:
+        """Read an existing repo-root ``sbomify.json`` to seed the form.
+
+        Returns the parsed JSON object with the wizard sentinel key removed
+        (it's bookkeeping the form shouldn't surface), or ``None`` if the
+        file is absent, unreadable, malformed, or not a JSON object. Purely
+        a convenience — any failure just leaves the form blank, and unknown
+        keys the form doesn't render (eg ``licenses``) are ignored here but
+        preserved on disk because apply leaves a non-wizard file untouched.
+        """
+        json_path = self.wizard.state.facts.repo_root / "sbomify.json"
+        try:
+            with json_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        return {k: v for k, v in data.items() if k != WIZARD_JSON_SENTINEL_KEY}

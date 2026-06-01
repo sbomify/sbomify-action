@@ -19,8 +19,16 @@ from sbomify_action._generation.protocol import (
 )
 
 
+@patch("sbomify_action._generation.generators.cyclonedx_cargo._CARGO_CYCLONEDX_AVAILABLE", True)
 class TestCycloneDXCargoGenerator(unittest.TestCase):
-    """Tests for CycloneDXCargoGenerator."""
+    """Tests for CycloneDXCargoGenerator.
+
+    The class-level patch forces ``_CARGO_CYCLONEDX_AVAILABLE=True`` so the
+    ``supports()`` tests exercise the lock-file/format/version logic regardless
+    of whether cargo-cyclonedx happens to be installed in the test env (it
+    usually isn't — it's a Rust tool). Mirrors the pattern used for the
+    syft/cyclonedx-py generators in test_generation_plugin.py.
+    """
 
     def setUp(self):
         """Set up test fixtures."""
@@ -147,8 +155,14 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
         self.assertIn("Unsupported CycloneDX version", result.error_message)
 
 
+@patch("sbomify_action._generation.generators.cyclonedx_cargo._CARGO_CYCLONEDX_AVAILABLE", True)
 class TestCycloneDXCargoGeneratorPriority(unittest.TestCase):
-    """Tests for CycloneDXCargoGenerator priority in registry."""
+    """Tests for CycloneDXCargoGenerator priority in registry.
+
+    Forces ``_CARGO_CYCLONEDX_AVAILABLE=True`` so ``get_generators_for`` (which
+    filters on ``supports()``) includes the cargo generator regardless of
+    whether the Rust tool is installed in the test env.
+    """
 
     def test_cargo_generator_is_registered(self):
         """Test that CycloneDXCargoGenerator is in default registry."""
@@ -202,6 +216,28 @@ class TestCycloneDXCargoGeneratorPriority(unittest.TestCase):
         self.assertEqual(generators[0].name, "cyclonedx-cargo")
         self.assertEqual(generators[1].name, "cdxgen-fs")
         self.assertEqual(generators[2].name, "trivy-fs")
+
+
+class TestCycloneDXCargoToolAvailability(unittest.TestCase):
+    """Availability-guard regression tests (kept out of the class-patched
+    classes so the False case isn't masked by a class-level True patch)."""
+
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo._CARGO_CYCLONEDX_AVAILABLE", False)
+    def test_does_not_support_when_tool_missing(self):
+        """When cargo-cyclonedx isn't installed, supports() must return False so
+        the orchestrator falls through to a generic generator instead of
+        picking cargo-cyclonedx and failing at generate() time with a spurious
+        ERROR. Mirrors the cyclonedx-py / syft availability guards."""
+        generator = CycloneDXCargoGenerator()
+        gen_input = GenerationInput(lock_file="/path/to/Cargo.lock", output_format="cyclonedx")
+        self.assertFalse(generator.supports(gen_input))
+
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo._CARGO_CYCLONEDX_AVAILABLE", True)
+    def test_supports_when_tool_available(self):
+        """Sanity: with the tool available, the Cargo.lock is supported."""
+        generator = CycloneDXCargoGenerator()
+        gen_input = GenerationInput(lock_file="/path/to/Cargo.lock", output_format="cyclonedx")
+        self.assertTrue(generator.supports(gen_input))
 
 
 class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):

@@ -8,7 +8,7 @@ from typing import Any
 
 from sbomify_action.exceptions import APIError, AuthError
 from sbomify_action.logging_config import logger
-from sbomify_action.sbomify_api import SbomifyApiClient
+from sbomify_action.sbomify_api import SbomifyApiClient, clean_validation_error
 
 from ..protocol import UploadInput
 from ..result import UploadResult
@@ -174,7 +174,14 @@ class SbomifyDestination:
                 response_json = response.json()
                 error_code = response_json.get("error_code")
                 if "detail" in response_json:
-                    err_msg += f" - {response_json['detail']}"
+                    # Collapse pydantic 422 list-detail into readable text so a
+                    # raw Python dict repr never reaches the user (mirrors the
+                    # SbomifyApiClient error path). Use the module-level helper,
+                    # not SbomifyApiClient's, so it survives tests that mock the
+                    # client class wholesale.
+                    cleaned = clean_validation_error(response_json["detail"])
+                    if cleaned:
+                        err_msg += f" - {cleaned}"
 
                 # Handle duplicate SBOM error with specific message
                 if response.status_code == 409 and error_code == "DUPLICATE_ARTIFACT":

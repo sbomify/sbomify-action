@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
+from sbomify_action.cli.wizard.apply import apply_plan
 from sbomify_action.cli.wizard.io import (
     WIZARD_HEADER_SENTINEL,
     WIZARD_JSON_SENTINEL_KEY,
@@ -17,6 +20,7 @@ from sbomify_action.cli.wizard.io import (
     write_workflow,
 )
 from sbomify_action.cli.wizard.options import WizardOptions
+from sbomify_action.cli.wizard.repo_facts import gather_repo_facts
 from sbomify_action.cli.wizard.state import (
     DiscoveredLockfile,
     Plan,
@@ -282,3 +286,142 @@ def test_sbomify_json_has_wizard_sentinel_helpers(tmp_path: Path) -> None:
     with_sentinel = tmp_path / "sent.json"
     with_sentinel.write_text('{"' + WIZARD_JSON_SENTINEL_KEY + '": {}}', encoding="utf-8")
     assert sbomify_json_has_wizard_sentinel(with_sentinel) is True
+
+
+# ----------------------------------------------------------------------
+# P1: existing sbomify.json detection + non-dead-ending apply
+
+
+def test_gather_repo_facts_detects_existing_sbomify_json(tmp_path: Path) -> None:
+    """has_sbomify_json reflects whether a repo-root sbomify.json exists."""
+    assert gather_repo_facts(tmp_path).has_sbomify_json is False
+
+    (tmp_path / "sbomify.json").write_text('{"supplier": {"name": "Acme"}}', encoding="utf-8")
+    assert gather_repo_facts(tmp_path).has_sbomify_json is True
+
+
+def test_repo_facts_has_sbomify_json_defaults_false(tmp_path: Path) -> None:
+    """The dataclass default keeps existing construct sites working."""
+    assert _facts(tmp_path).has_sbomify_json is False
+
+
+def test_apply_keeps_handauthored_sbomify_json_and_still_writes_workflow(tmp_path: Path) -> None:
+    """A pre-existing non-wizard sbomify.json must NOT dead-end apply.
+
+    Before the fix, apply raised on the ownership check and never wrote the
+    workflow. Now it keeps the user's file untouched (the action reads it at
+    run time), logs a warning, and proceeds to write the workflow + create
+    components.
+    """
+    # Hand-authored sbomify.json with a field the wizard form doesn't surface
+    # (``licenses``) — proving we never clobber/strip it.
+    handauthored = {"supplier": {"name": "Lithium Project"}, "licenses": ["MIT"]}
+    json_path = tmp_path / "sbomify.json"
+    json_path.write_text(json.dumps(handauthored), encoding="utf-8")
+
+    facts = RepoFacts(
+        repo_root=tmp_path,
+        is_git=True,
+        remote_url="git@github.com:acme/widget.git",
+        suggested_repo_name="widget",
+        default_branch="main",
+        current_branch="main",
+        has_release_tags=False,
+        owner_repo_slug="acme/widget",
+        has_sbomify_json=True,
+    )
+    state = WizardState(facts=facts)
+    state.api = MagicMock()  # not exercised: no product, no components
+    state.workspace = WorkspaceSnapshot()
+    state.plan = Plan(augmentation="json_config", sbomify_json_data={"supplier": {"name": "edited"}})
+
+    opts = WizardOptions(
+        token=None,
+        api_base_url="https://api.test",
+        repo_root=tmp_path,
+        output_dir=tmp_path / ".github" / "workflows",
+        dry_run=False,
+    )
+
+    logs: list[tuple[str, str]] = []
+    apply_plan(state, opts, log=lambda kind, msg: logs.append((kind, msg)))
+
+    # The hand-authored file is byte-for-byte preserved (no sentinel injected,
+    # licenses intact).
+    assert json.loads(json_path.read_text(encoding="utf-8")) == handauthored
+    # A warning was surfaced, not a fatal error.
+    assert any(kind == "warning" and "wizard" in msg.lower() for kind, msg in logs)
+    # The workflow still got written — apply did not dead-end.
+    assert (tmp_path / ".github" / "workflows" / "sboms.yml").is_file()
+
+
+def test_apply_writes_sbomify_json_when_absent(tmp_path: Path) -> None:
+    """With no pre-existing file, apply writes a wizard-stamped sbomify.json."""
+    facts = RepoFacts(
+        repo_root=tmp_path,
+        is_git=True,
+        remote_url="git@github.com:acme/widget.git",
+        suggested_repo_name="widget",
+        default_branch="main",
+        current_branch="main",
+        has_release_tags=False,
+        owner_repo_slug="acme/widget",
+        has_sbomify_json=False,
+    )
+    state = WizardState(facts=facts)
+    state.api = MagicMock()
+    state.workspace = WorkspaceSnapshot()
+    state.plan = Plan(augmentation="json_config", sbomify_json_data={"supplier": {"name": "Acme"}})
+
+    opts = WizardOptions(
+        token=None,
+        api_base_url="https://api.test",
+        repo_root=tmp_path,
+        output_dir=tmp_path / ".github" / "workflows",
+        dry_run=False,
+    )
+
+    apply_plan(state, opts)
+
+    written = json.loads((tmp_path / "sbomify.json").read_text(encoding="utf-8"))
+    assert written["supplier"] == {"name": "Acme"}
+    assert WIZARD_JSON_SENTINEL_KEY in written  # wizard stamped it for future ownership
+
+
+def test_apply_creates_component_with_bom_type(tmp_path: Path) -> None:
+    """apply_plan must create components with component_type='bom' (the backend
+    enum is {bom, document}; the old 'sbom' 422'd). Pins the apply.py call-site
+    directly — the other component-type tests cover the client + yocto facade,
+    not this path."""
+    facts = RepoFacts(
+        repo_root=tmp_path,
+        is_git=True,
+        remote_url="git@github.com:acme/widget.git",
+        suggested_repo_name="widget",
+        default_branch="main",
+        current_branch="main",
+        has_release_tags=False,
+        owner_repo_slug="acme/widget",
+    )
+    state = WizardState(facts=facts)
+    api = MagicMock()
+    api.get_or_create_component.return_value = ("comp-id-1", True)
+    state.api = api
+    state.workspace = WorkspaceSnapshot()
+    lockfile = DiscoveredLockfile(
+        path=tmp_path / "uv.lock", rel_path=Path("uv.lock"), ecosystem="python", suggested_name="widget"
+    )
+    state.plan = Plan(create_components=[PlannedComponent(lockfile=lockfile, name="widget")], augmentation="skip")
+
+    opts = WizardOptions(
+        token=None,
+        api_base_url="https://api.test",
+        repo_root=tmp_path,
+        output_dir=tmp_path / ".github" / "workflows",
+        dry_run=False,
+    )
+
+    apply_plan(state, opts)
+
+    api.get_or_create_component.assert_called_once()
+    assert api.get_or_create_component.call_args.kwargs.get("component_type") == "bom"

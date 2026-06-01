@@ -163,16 +163,17 @@ def log_command_error(command_name: str, stderr: str, stdout: str, level: str = 
         command_name: The name of the command that failed
         stderr: The stderr output from the command
         stdout: The stdout output from the command (some tools output errors here)
-        level: Log level to use ("error" or "warning"). Default is "error".
+        level: Log level to use ("error", "warning", or "debug"). Default is
+            "error". "debug" is used for failures inside a generator priority
+            chain where a later generator is expected to succeed, so the
+            failure is benign noise on the happy path.
     """
     # Prefer stderr, fall back to stdout (some tools like cdxgen output errors to stdout)
     output = stderr or stdout
     if output:
         message = f"[{command_name}] error: {output.strip()}"
-        if level == "warning":
-            logger.warning(message)
-        else:
-            logger.error(message)
+        log_fn = {"debug": logger.debug, "warning": logger.warning}.get(level, logger.error)
+        log_fn(message)
 
 
 # Patterns that indicate a Docker image was not found in the registry
@@ -295,6 +296,7 @@ def run_command(
     capture_output: bool = True,
     cwd: str | None = None,
     docker_image: str | None = None,
+    log_errors: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     """
     Run a command and handle common error cases.
@@ -308,6 +310,16 @@ def run_command(
         capture_output: Whether to capture stdout/stderr
         cwd: Working directory for the command (optional)
         docker_image: Docker image being scanned (optional, for better error messages)
+        log_errors: When True (default), a failure (non-zero exit, timeout, or
+            missing binary) logs at ERROR. Set
+            False for a generator that runs inside the priority chain and is
+            expected to fail gracefully when a higher-priority or fallback
+            generator can still succeed (e.g. cdxgen on a Python lockfile,
+            where cyclonedx-py/syft take over) — its failure is then logged
+            at DEBUG so it doesn't spam ERROR on the happy path. The
+            ``SBOMGenerationError`` is still raised either way; the
+            orchestrator surfaces the real ERROR only if *every* generator
+            in the chain fails.
 
     Returns:
         CompletedProcess result
@@ -370,9 +382,18 @@ def run_command(
                 returncode=e.returncode,
             )
 
-        # Other errors are logged at ERROR level (potential bugs or system issues)
-        logger.error(f"{command_name} command failed with error: {e}")
-        log_command_error(command_name, stderr, stdout)
+        # Other errors normally log at ERROR (potential bugs or system issues).
+        # When the caller is a priority-chain generator that fails gracefully
+        # (log_errors=False), drop to DEBUG so an expected fallback doesn't
+        # spam red ERROR lines on the happy path — the SBOMGenerationError is
+        # still raised, and the orchestrator logs ERROR only if all generators
+        # fail.
+        if log_errors:
+            logger.error(f"{command_name} command failed with error: {e}")
+            log_command_error(command_name, stderr, stdout)
+        else:
+            logger.debug(f"{command_name} command failed (trying next generator): {e}")
+            log_command_error(command_name, stderr, stdout, level="debug")
 
         # Include error summary in the exception message for better diagnostics
         error_summary = extract_error_summary(stderr or stdout)
@@ -388,10 +409,15 @@ def run_command(
         )
     except subprocess.TimeoutExpired:
         elapsed = int(time.time() - start_time)
-        logger.error(f"{command_name} command timed out after {elapsed}s (limit: {timeout}s)")
+        # Honour log_errors here too: a cdxgen timeout on, say, a Python
+        # lockfile is the same benign priority-chain fallback as a non-zero
+        # exit — it shouldn't spam red ERROR when a later generator succeeds.
+        timeout_msg = f"{command_name} command timed out after {elapsed}s (limit: {timeout}s)"
+        logger.error(timeout_msg) if log_errors else logger.debug(timeout_msg)
         raise SBOMGenerationError(f"{command_name} command timed out")
     except FileNotFoundError:
-        logger.error(f"{command_name} command not found")
+        not_found_msg = f"{command_name} command not found"
+        logger.error(not_found_msg) if log_errors else logger.debug(not_found_msg)
         raise SBOMGenerationError(f"{command_name} command not found - is it installed?")
     finally:
         # Stop the progress thread

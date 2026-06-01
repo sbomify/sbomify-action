@@ -190,8 +190,13 @@ class CdxgenFsGenerator:
         logger.info(f"Running cdxgen for {input.lock_file_name} (CycloneDX {version}, type={cdxgen_type or 'auto'})")
 
         try:
-            # run_command raises SBOMGenerationError on failure (uses check=True)
-            run_command(cmd, "cdxgen", timeout=DEFAULT_TIMEOUT, cwd=str(lock_file_directory))
+            # run_command raises SBOMGenerationError on failure (uses check=True).
+            # log_errors=False: cdxgen is a priority-20 fallback that routinely
+            # fails for ecosystems it doesn't handle (eg a Python uv.lock, where
+            # cyclonedx-py/syft take over). Its failure is benign on the happy
+            # path, so log it at DEBUG rather than spamming ERROR; the
+            # orchestrator surfaces a real ERROR only if every generator fails.
+            run_command(cmd, "cdxgen", timeout=DEFAULT_TIMEOUT, cwd=str(lock_file_directory), log_errors=False)
 
             # Verify output file was created
             if not Path(output_file_abs).exists():
@@ -300,8 +305,12 @@ class CdxgenImageGenerator:
         logger.info(f"Running cdxgen for {input.docker_image} (CycloneDX {version})")
 
         try:
-            # run_command raises SBOMGenerationError on failure (uses check=True)
-            run_command(cmd, "cdxgen", timeout=DEFAULT_TIMEOUT, docker_image=input.docker_image)
+            # run_command raises SBOMGenerationError on failure (uses check=True).
+            # log_errors=False: cdxgen image scanning is a priority-20 fallback
+            # ahead of syft; a benign failure here shouldn't spam ERROR when syft
+            # can still succeed. (Docker-image-not-found is handled separately and
+            # still logs at WARNING.)
+            run_command(cmd, "cdxgen", timeout=DEFAULT_TIMEOUT, docker_image=input.docker_image, log_errors=False)
 
             # Verify output file was created
             if not Path(input.output_file).exists():

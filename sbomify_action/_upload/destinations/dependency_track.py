@@ -214,6 +214,15 @@ class DependencyTrackDestination:
                 destination_name=self.name,
                 error_message="SBOM upload to Dependency Track timed out",
             )
+        except requests.exceptions.RequestException as e:
+            # Any other transport-layer failure (SSLError, ProxyError,
+            # TooManyRedirects, …). Return a clean failure result rather than
+            # letting it propagate and crash the upload step — the upload
+            # destination contract is to report failures, not raise.
+            return UploadResult.failure_result(
+                destination_name=self.name,
+                error_message=f"SBOM upload to Dependency Track failed: {e}",
+            )
 
         # Handle response
         if not response.ok:
