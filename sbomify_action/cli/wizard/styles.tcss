@@ -329,6 +329,19 @@ SelectionList, OptionList, ListView {
     max-height: 20;
 }
 
+/* Apply screen — live log of apply_plan's progress. Same problem as
+ * #workflow-diff: the generic ``RichLog { height: 1fr }`` rule fills
+ * every remaining row, pushing the Continue / Back buttons under the
+ * apply panel below the visible terminal area. Symptom: user finishes
+ * apply, sees "success Wrote …" but no Continue button — wizard
+ * appears stuck. Size to content (typical apply emits <20 lines)
+ * and cap so a very chatty run still scrolls inside the panel
+ * rather than dominating the viewport. */
+#apply-log {
+    height: auto;
+    max-height: 20;
+}
+
 SelectionList:focus, OptionList:focus, ListView:focus {
     border: tall $sbom-purple;
 }

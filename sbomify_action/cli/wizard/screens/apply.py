@@ -54,7 +54,7 @@ class ApplyScreen(WizardScreen):
         error_banner = Static("", id="apply-error-banner", markup=True)
         error_banner.display = False
 
-        panel = Vertical(classes="wizard-panel")
+        panel = Vertical(classes="wizard-panel", id="apply-panel")
         panel.border_title = "⏳  Applying"
         panel.border_subtitle = "live log"
         with panel:
@@ -117,7 +117,16 @@ class ApplyScreen(WizardScreen):
             continue_btn = self.query_one("#continue", Button)
             back_btn.disabled = False
             if result is None:
-                # apply_plan returned cleanly.
+                # apply_plan returned cleanly. Swap the panel title to
+                # a positive marker so the user has a clear "done"
+                # signal — the hourglass would otherwise hover over a
+                # finished operation.
+                try:
+                    panel = self.query_one("#apply-panel", Vertical)
+                    panel.border_title = "✓  Applied"
+                    panel.border_subtitle = "ready to finish"
+                except Exception:  # noqa: BLE001
+                    pass
                 continue_btn.label = "Continue ▸"
                 continue_btn.disabled = False
                 continue_btn.focus()
