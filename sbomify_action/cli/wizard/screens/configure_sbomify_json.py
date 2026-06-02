@@ -27,7 +27,7 @@ from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.widgets import Button, Input, RadioButton, RadioSet, Static
 
-from sbomify_action.cli.wizard.io import WIZARD_JSON_SENTINEL_KEY
+from sbomify_action.cli.wizard.io import WIZARD_JSON_SENTINEL_KEY, sbomify_json_has_wizard_sentinel
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 
 # Constructor calls use the wizard's state-aware glyph subclass; the
@@ -70,6 +70,24 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
                 "added later by editing [b]sbomify.json[/] directly.[/]",
                 classes="wizard-muted",
             )
+            # If a hand-authored sbomify.json is already on disk (no wizard
+            # sentinel), apply will refuse to overwrite it — any edits the
+            # user makes on this screen would silently land in the info log
+            # only. Warn loudly at the top of the form so the user can decide
+            # whether to delete the file or skip the edit. Wizard-stamped
+            # files don't surface a warning (apply rewrites them as part of
+            # the normal flow, with a .bak fallback).
+            if self._existing_file_is_hand_authored():
+                yield Static(
+                    "[#F4B57F]⚠ Heads up:[/] [b]sbomify.json[/] already exists in this "
+                    "repository and was not created by the wizard. Apply will "
+                    "[b]keep the existing file as-is[/] — any values you enter below "
+                    "won't be written. To let the wizard manage it, exit, delete "
+                    "[b]sbomify.json[/] (or add a top-level "
+                    f"[b]{WIZARD_JSON_SENTINEL_KEY}[/] key), and re-run.",
+                    classes="wizard-muted",
+                    id="ownership-warning",
+                )
 
         sup = Vertical(classes="wizard-panel")
         sup.border_title = "◇  Supplier"
@@ -318,6 +336,19 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
             value = data.get(key)
             if isinstance(value, str):
                 self.query_one(f"#{input_id}", Input).value = value
+
+    def _existing_file_is_hand_authored(self) -> bool:
+        """True when a sbomify.json exists on disk without the wizard sentinel.
+
+        apply.py refuses to overwrite such a file (it may carry hand-authored
+        fields the form doesn't surface), so we surface a one-line warning at
+        the top of the form so the user doesn't waste typing on edits that
+        won't be persisted.
+        """
+        json_path = self.wizard.state.facts.repo_root / "sbomify.json"
+        if not json_path.exists():
+            return False
+        return not sbomify_json_has_wizard_sentinel(json_path)
 
     def _load_from_disk(self) -> dict[str, object] | None:
         """Read an existing repo-root ``sbomify.json`` to seed the form.

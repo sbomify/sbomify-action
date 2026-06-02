@@ -191,6 +191,38 @@ def test_write_sbomify_json_overwrites_existing_sentinel_file(tmp_path: Path) ->
     assert data["supplier"] == {"name": "v2"}
 
 
+def test_write_sbomify_json_writes_bak_on_content_change(tmp_path: Path) -> None:
+    """Overwriting a wizard-stamped sbomify.json with new content stores the
+    previous version as ``sbomify.json.bak`` so a user can recover hand-edits
+    they made between wizard runs (the wizard's form doesn't surface every
+    field — eg. licenses — and re-running would otherwise drop the lot
+    silently)."""
+    import json as _json
+
+    path = tmp_path / "sbomify.json"
+    write_sbomify_json(path, {"supplier": {"name": "v1"}})
+    first_text = path.read_text(encoding="utf-8")
+
+    write_sbomify_json(path, {"supplier": {"name": "v2"}})
+    bak = tmp_path / "sbomify.json.bak"
+    assert bak.exists()
+    assert bak.read_text(encoding="utf-8") == first_text
+    # And the live file got the new content.
+    assert _json.loads(path.read_text(encoding="utf-8"))["supplier"] == {"name": "v2"}
+
+
+def test_write_sbomify_json_no_bak_on_identical_rewrite(tmp_path: Path) -> None:
+    """Re-running the wizard with no changes (dry-run-then-real, or a no-op
+    re-apply) must NOT churn a fresh .bak — that would erase a prior real
+    .bak the user might still need."""
+    path = tmp_path / "sbomify.json"
+    write_sbomify_json(path, {"supplier": {"name": "v1"}})
+    write_sbomify_json(path, {"supplier": {"name": "v1"}})  # identical
+
+    bak = tmp_path / "sbomify.json.bak"
+    assert not bak.exists()
+
+
 def test_write_sbomify_json_refuses_to_overwrite_handauthored(tmp_path: Path) -> None:
     """A hand-crafted sbomify.json (no wizard sentinel) must NOT be clobbered.
 
@@ -595,3 +627,165 @@ def test_apply_skips_oidc_binding_without_repo_slug(tmp_path: Path) -> None:
 
     api.create_oidc_binding.assert_not_called()
     assert state.oidc_binding_note is not None
+
+
+def test_apply_oidc_partial_success_tracks_failed_components(tmp_path: Path) -> None:
+    """When some bindings succeed and some fail, only the failed components
+    end up in state.oidc_failed_components — the Done screen's manual-fallback
+    panel lists only those, not the already-bound ones."""
+    state, api = _oidc_apply_state(tmp_path, names=("a", "b", "c"))
+
+    # Per-component: comp-0 newly registered (True), comp-1 already bound
+    # (False), comp-2 raises. Keyed by component id rather than call order
+    # because the per-component loop runs in parallel and call ordering is
+    # not deterministic.
+    def _side_effect(comp_id: str, _slug: str) -> bool:
+        if comp_id == "comp-0":
+            return True
+        if comp_id == "comp-1":
+            return False
+        raise APIError("Failed to register trusted publisher [404] - not owner/admin")
+
+    api.create_oidc_binding.side_effect = _side_effect
+
+    apply_plan(state, _real_opts(tmp_path))
+
+    # Two components ended up bound (newly + already), one failed.
+    assert state.oidc_bindings_registered == 2
+    assert state.oidc_newly_registered == 1
+    assert len(state.oidc_failed_components) == 1
+    failed_rel = next(iter(state.oidc_failed_components))
+    # comp-2 corresponds to the third component, whose lockfile is c.lock.
+    assert failed_rel == Path("c.lock")
+    # Partial success surfaces both an Applied summary line AND a note so Done
+    # routes to manual-fallback for the failed components.
+    assert any("2/3" in line for line in state.applied)
+    assert state.oidc_binding_note is not None
+    assert "404" in state.oidc_binding_note
+
+
+def test_apply_oidc_distinguishes_newly_registered_from_already_bound(tmp_path: Path) -> None:
+    """The 201/409 split is exposed on state so Done's success message can say
+    'registered X new; Y already bound' instead of falsely claiming N new."""
+    state, api = _oidc_apply_state(tmp_path, names=("a", "b", "c"))
+
+    # comp-0 newly registered (201); comp-1, comp-2 already bound (409).
+    # Keyed by id rather than call order: per-component loop runs in parallel.
+    def _side_effect(comp_id: str, _slug: str) -> bool:
+        return comp_id == "comp-0"
+
+    api.create_oidc_binding.side_effect = _side_effect
+
+    apply_plan(state, _real_opts(tmp_path))
+
+    assert state.oidc_bindings_registered == 3
+    assert state.oidc_newly_registered == 1
+    # The Applied summary mentions BOTH counts so the user knows what was done.
+    assert any("1 new" in line and "2 already" in line for line in state.applied)
+
+
+def test_apply_all_oidc_bindings_already_existed_does_not_claim_registration(tmp_path: Path) -> None:
+    """A re-run where every binding already exists (all 409s) must not claim
+    'Registered N component(s)' — that misleads the user about what changed."""
+    state, api = _oidc_apply_state(tmp_path, names=("a", "b"))
+    api.create_oidc_binding.return_value = False  # every call → already bound
+
+    apply_plan(state, _real_opts(tmp_path))
+
+    assert state.oidc_bindings_registered == 2
+    assert state.oidc_newly_registered == 0
+    # Summary should say "already set", not "registered N".
+    matching = [line for line in state.applied if "trusted publisher" in line.lower()]
+    assert matching
+    assert any("already" in line for line in matching)
+    assert not any("registered trusted publisher (acme/widget) for 2 component(s)" in line for line in matching)
+
+
+def test_apply_resets_state_between_runs(tmp_path: Path) -> None:
+    """A user pressing Back after a partial-fail and re-running apply must
+    start from a clean slate — without the reset, oidc_binding_note from
+    the first run survives the successful retry and Done shows the manual
+    fallback for a successful binding."""
+    state, api = _oidc_apply_state(tmp_path)
+    # First run: binding fails — leaves a note.
+    api.create_oidc_binding.side_effect = APIError("Failed to register trusted publisher [500]")
+    apply_plan(state, _real_opts(tmp_path))
+    assert state.oidc_binding_note is not None
+    first_applied = list(state.applied)
+
+    # Second run: binding succeeds — note must be cleared, applied must not duplicate.
+    api.create_oidc_binding.side_effect = None
+    api.create_oidc_binding.return_value = True
+    api.get_or_create_component.side_effect = [("comp-0", True)]
+    apply_plan(state, _real_opts(tmp_path))
+
+    assert state.oidc_binding_note is None
+    assert state.oidc_bindings_registered == 1
+    assert state.oidc_failed_components == {}
+    # Applied entries from the first run shouldn't accumulate.
+    assert len(state.applied) < 2 * len(first_applied)
+
+
+def test_apply_dry_run_sets_is_dry_run_flag_and_no_real_binding(tmp_path: Path) -> None:
+    """Dry-run must mark state so Done can render preview UI; it must NOT
+    increment oidc_bindings_registered (which would route Done to the success
+    panel falsely claiming a binding was made)."""
+    state, api = _oidc_apply_state(tmp_path)
+    opts = WizardOptions(
+        token=None,
+        api_base_url="https://api.test",
+        repo_root=tmp_path,
+        output_dir=tmp_path / ".github" / "workflows",
+        dry_run=True,
+    )
+
+    apply_plan(state, opts)
+
+    assert state.is_dry_run is True
+    api.create_oidc_binding.assert_not_called()
+    # Bindings counter must stay zero — Done branches on this to pick the
+    # success card vs the dry-run preview panel.
+    assert state.oidc_bindings_registered == 0
+    # But Done needs to know SOMETHING about the would-be binding, so a note
+    # carries the preview text.
+    assert state.oidc_binding_note is not None
+    assert "[dry-run]" in state.oidc_binding_note
+
+
+def test_apply_dry_run_records_would_be_writes_in_state(tmp_path: Path) -> None:
+    """Dry-run's "[dry-run] Would write X" log lines must also appear on
+    state.written_files so Done's Wrote/would-write summary lists them. Without
+    this the Applied panel goes silent about the workflow file even though
+    the apply log just said it would be written."""
+    state, _api = _oidc_apply_state(tmp_path)
+    opts = WizardOptions(
+        token=None,
+        api_base_url="https://api.test",
+        repo_root=tmp_path,
+        output_dir=tmp_path / ".github" / "workflows",
+        dry_run=True,
+    )
+
+    apply_plan(state, opts)
+
+    # Workflow path is always written in dry-run preview.
+    assert any(p.name == "sboms.yml" for p in state.written_files)
+
+
+def test_apply_workflow_emission_uses_created_product_id(tmp_path: Path) -> None:
+    """When the user picked 'create new product', apply must pass the
+    newly-created product's id (state.created_product_id) to the workflow
+    emitter — otherwise tag-strategy workflows silently drop PRODUCT_RELEASE
+    because plan.use_product_id stays None on the create-new path."""
+    state, api = _oidc_apply_state(tmp_path, credential_mode="token")
+    state.plan.create_product = "Acme Widget"
+    state.plan.release_strategy = "tag"
+    api.create_product.return_value = {"id": "prod-NEW", "name": "Acme Widget"}
+
+    apply_plan(state, _real_opts(tmp_path))
+
+    workflow_file = tmp_path / ".github" / "workflows" / "sboms.yml"
+    assert workflow_file.exists()
+    content = workflow_file.read_text()
+    # PRODUCT_RELEASE must reference the newly-created product id, not be absent.
+    assert "PRODUCT_RELEASE: '[\"prod-NEW:" in content

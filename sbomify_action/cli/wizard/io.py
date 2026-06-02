@@ -119,6 +119,18 @@ def write_sbomify_json(path: Path, payload: dict[str, Any]) -> None:
     is never silently clobbered. The sentinel key is injected before
     serialisation; the action's json_config provider ignores unknown
     top-level keys so its presence doesn't change runtime behaviour.
+
+    When the existing wizard-stamped file's content differs from what we're
+    about to write, the previous version is saved next to it as
+    ``sbomify.json.bak``. Unlike workflow files (which the wizard treats
+    as fully wizard-owned because they live under ``.github/workflows``
+    and are git-tracked), sbomify.json carries metadata the user
+    sometimes hand-edits between runs (extra licenses, custom contacts)
+    — keeping a one-shot ``.bak`` lets the user recover that work
+    without rummaging through git for an unstaged file. We never write a
+    ``.bak`` for byte-identical writes (re-running the wizard with no
+    edits) so the bak doesn't get spuriously refreshed with the same
+    content on every dry-run-then-real cycle.
     """
     if path.exists() and not sbomify_json_has_wizard_sentinel(path):
         raise SbomifyJsonOwnershipError(
@@ -134,5 +146,13 @@ def write_sbomify_json(path: Path, payload: dict[str, Any]) -> None:
     # ordering, a stale or maliciously-crafted payload could strip the
     # ownership marker and silently take over future re-runs.
     stamped: dict[str, Any] = {**payload, WIZARD_JSON_SENTINEL_KEY: WIZARD_JSON_SENTINEL_VALUE}
+    serialized = json.dumps(stamped, indent=2, sort_keys=True) + "\n"
+    if path.exists():
+        try:
+            previous = path.read_text(encoding="utf-8")
+        except OSError:
+            previous = None
+        if previous is not None and previous != serialized:
+            path.with_suffix(path.suffix + ".bak").write_text(previous, encoding="utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(stamped, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(serialized, encoding="utf-8")

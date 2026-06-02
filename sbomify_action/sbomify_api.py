@@ -740,13 +740,7 @@ class SbomifyApiClient:
     # ------------------------------------------------------------------
     # OIDC trusted publishing
 
-    def create_oidc_binding(
-        self,
-        component_id: str,
-        repository: str,
-        *,
-        provider: str = "github",
-    ) -> bool:
+    def create_oidc_binding(self, component_id: str, repository: str) -> bool:
         """Register a GitHub OIDC trusted-publisher binding for a component.
 
         Ties a GitHub repository (``owner/repo``) to a component so that
@@ -766,11 +760,17 @@ class SbomifyApiClient:
         workspace, OR the component doesn't exist — the API conflates the two).
         Callers in the wizard treat these as non-fatal warnings and fall back
         to manual binding instructions.
+
+        GitHub is the only provider the wizard supports today. When a second
+        provider (eg. GitLab) is wired up, give it its own method routed at
+        ``/api/v1/auth/oidc/{provider}/bindings`` rather than a kwarg here —
+        the backend URL is provider-specific and adding a ``provider`` kwarg
+        would send a body field that the github route silently ignores.
         """
         response = self._request(
             "POST",
             "/api/v1/auth/oidc/github/bindings",
-            json_body={"component_id": component_id, "repository": repository, "provider": provider},
+            json_body={"component_id": component_id, "repository": repository},
         )
         if response.status_code == 201:
             return True

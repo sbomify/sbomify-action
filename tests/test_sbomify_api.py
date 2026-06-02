@@ -515,7 +515,9 @@ def test_create_oidc_binding_201_returns_true_and_posts_name_only() -> None:
     assert call.args[0] == "POST"
     assert call.args[1].endswith("/api/v1/auth/oidc/github/bindings")
     # Name only — no GitHub IDs (the backend resolves public / defers private).
-    assert call.kwargs["json"] == {"component_id": "comp-1", "repository": "acme/widget", "provider": "github"}
+    # No `provider` field: GitHub is the only provider the wizard supports today and
+    # the URL itself is provider-specific (a second provider gets its own method).
+    assert call.kwargs["json"] == {"component_id": "comp-1", "repository": "acme/widget"}
 
 
 def test_create_oidc_binding_409_already_bound_returns_false() -> None:

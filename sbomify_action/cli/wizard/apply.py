@@ -13,6 +13,8 @@ workflow on disk.
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, Callable, Literal
 
 from sbomify_action.cli.wizard import ci_emitter
@@ -26,9 +28,17 @@ from sbomify_action.cli.wizard.io import (
 from sbomify_action.cli.wizard.options import WizardOptions
 from sbomify_action.cli.wizard.state import WizardState
 from sbomify_action.exceptions import APIError
+from sbomify_action.sbomify_api import SbomifyApiClient
 
 LogKind = Literal["info", "success", "warning", "error"]
 LogFn = Callable[[LogKind, str], None]
+
+# Bound on per-component HTTP fan-out (profile binding + OIDC binding).
+# A small pool keeps the backend from being stampeded by a monorepo
+# with dozens of lockfiles while still cutting latency by ~Nx for
+# typical 2-10 component runs. requests.Session is not thread-safe, so
+# each worker constructs its own SbomifyApiClient.
+_MAX_PER_COMPONENT_WORKERS = 8
 
 
 def _noop(_kind: LogKind, _message: str) -> None:
@@ -57,6 +67,13 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
     if state.workspace is None:
         raise RuntimeError("apply_plan called before workspace prefetch")
     plan = state.plan
+
+    # Clear any prior apply attempt's artifacts. The Apply screen lets a user
+    # press Back after a failure and retry — without this reset, a previous
+    # run's oidc_binding_note survives a successful retry and routes Done to
+    # the manual-fallback panel, and state.applied accumulates duplicate
+    # "wrote X" lines.
+    state.reset_apply_artifacts()
 
     if opts.dry_run:
         _apply_plan_dry_run(state, opts, log)
@@ -124,16 +141,26 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
     # shouldn't sink the whole apply); skip the loop entirely when the
     # plan didn't pick a profile.
     if plan.augmentation == "profile" and plan.contact_profile_id and component_ids:
-        bound = 0
-        for rel, comp_id in component_ids.items():
-            try:
-                api.patch_component(comp_id, contact_profile_id=plan.contact_profile_id)
-                bound += 1
-            except APIError as e:
-                log("warning", f"Could not bind profile to {rel} ({comp_id}): {e}")
+        profile_id = plan.contact_profile_id
+
+        def _bind_profile(client: SbomifyApiClient, _rel: Path, comp_id: str) -> bool:
+            client.patch_component(comp_id, contact_profile_id=profile_id)
+            return True
+
+        bound, profile_failures = _per_component_best_effort(
+            api,
+            component_ids,
+            _bind_profile,
+            "bind profile",
+            log,
+        )
         if bound:
             state.applied.append(f"bound contact profile to {bound} component(s)")
-            log("success", f"Bound contact profile {plan.contact_profile_id} to {bound} component(s)")
+            log("success", f"Bound contact profile {profile_id} to {bound} component(s)")
+        # Profile-binding failures are logged but not surfaced on Done — there's
+        # no per-step retry UI for it today (unlike OIDC which routes to a
+        # manual-fallback panel). Re-running the wizard rebinds.
+        del profile_failures
 
     # 5. Register OIDC trusted-publisher bindings (oidc credential mode only).
     # The emitted workflow authenticates via OIDC; without a binding on the
@@ -204,6 +231,12 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
         facts=state.facts,
         api_base_url=opts.api_base_url,
         component_ids=component_ids,
+        # Pass state.created_product_id (set by _resolve_product for both
+        # create-new and use-existing paths). Without this, tag-strategy
+        # workflows for users who picked "create new product" silently
+        # drop PRODUCT_RELEASE because plan.use_product_id stays None on
+        # the create path.
+        product_id=state.created_product_id,
     )
     target = workflow_path(opts.repo_root)
     try:
@@ -231,7 +264,8 @@ def _apply_plan_dry_run(state: WizardState, opts: WizardOptions, log: LogFn) -> 
     Synthetic IDs (``<dry-run:component:foo>``) replace the IDs the
     real flow would have learned from API responses — they're
     obviously placeholder so the user can't accidentally treat them
-    as real handles.
+    as real handles, and Done reads ``state.is_dry_run`` to skip the
+    "open this URL" affordances that would otherwise resolve to a 404.
 
     Read-only auth + workspace prefetch already happened on the
     Authenticate screen before the user reached Apply; this function
@@ -239,6 +273,7 @@ def _apply_plan_dry_run(state: WizardState, opts: WizardOptions, log: LogFn) -> 
     """
     plan = state.plan
     assert state.workspace is not None  # narrowed by caller
+    state.is_dry_run = True
 
     log("info", "Dry-run mode — no API mutations, no file writes.")
     log("info", "")
@@ -290,13 +325,20 @@ def _apply_plan_dry_run(state: WizardState, opts: WizardOptions, log: LogFn) -> 
             f"[dry-run] Would bind contact profile {plan.contact_profile_id} to {len(component_ids)} component(s)",
         )
 
-    # 5. OIDC bindings — same gating logic as the real path so the Done
-    # screen's auto-vs-manual branching is preview-accurate.
+    # 5. OIDC bindings — preview without claiming success. Leave
+    # oidc_bindings_registered=0 so the Done screen renders a preview
+    # panel rather than the "✓ Registered" success card; the dry-run
+    # note carries the preview text. The slug-missing branch sets the
+    # same note the real path would so the manual-fallback panel
+    # preview is accurate too.
     if plan.credential_mode == "oidc" and component_ids:
         slug = state.facts.owner_repo_slug
         if slug:
-            state.oidc_bindings_registered = len(component_ids)
             state.applied.append(f"would register trusted publisher ({slug}) for {len(component_ids)} component(s)")
+            state.oidc_binding_note = (
+                f"[dry-run] Would register trusted publisher {slug} for "
+                f"{len(component_ids)} component(s) — re-run without --dry-run to apply."
+            )
             log(
                 "info",
                 f"[dry-run] Would register trusted publisher {slug} for {len(component_ids)} component(s)",
@@ -323,27 +365,93 @@ def _apply_plan_dry_run(state: WizardState, opts: WizardOptions, log: LogFn) -> 
             )
         else:
             state.applied.append(f"would write {json_path}")
+            # Track the path so Done's Wrote/would-write summary mentions the
+            # file (it iterates state.written_files). is_dry_run drives the
+            # label glyph.
+            state.written_files.append(json_path)
             log("info", f"[dry-run] Would write {json_path}")
 
     # 7. Workflow file
     target = workflow_path(opts.repo_root)
     state.applied.append(f"would write {target}")
+    state.written_files.append(target)
     log("info", f"[dry-run] Would write {target}")
 
     log("info", "")
     log("info", "Re-run without --dry-run to actually apply these changes.")
 
 
-def _register_oidc_bindings(state: WizardState, component_ids: dict[str, str], log: LogFn) -> None:
+def _per_component_best_effort(
+    api: SbomifyApiClient,
+    component_ids: dict[str, str],
+    action: Callable[[SbomifyApiClient, Path, str], Any],
+    label: str,
+    log: LogFn,
+) -> tuple[int, dict[Path, str]]:
+    """Run ``action`` against every applied component in parallel.
+
+    The shared ``api`` client is safe to use across workers because the
+    requests.Session under it carries only bearer-auth headers (no
+    cookie state mutated per request), and the action's POST/PATCH
+    calls are idempotent enough that concurrent dispatch from a bounded
+    pool doesn't race. Tests stub ``state.api`` with a MagicMock and
+    assert call counts; sharing one client across threads keeps that
+    pattern intact.
+
+    Returns ``(success_count, failures)`` where ``failures`` maps
+    relative-path to error message. Catches only ``APIError`` (which is
+    the parent of ``AuthError`` per exceptions.py and includes the
+    ConnectionError/Timeout shims in sbomify_api._request); anything
+    else escapes and aborts the apply, which is the right behaviour for
+    programming errors. ``label`` is interpolated into per-failure
+    warning messages ("Could not {label} for foo (cid): …").
+    """
+    rels = list(component_ids.items())
+
+    def _one(item: tuple[str, str]) -> tuple[Path, str | None]:
+        rel_str, comp_id = item
+        rel_path = Path(rel_str)
+        try:
+            action(api, rel_path, comp_id)
+            return rel_path, None
+        except APIError as exc:
+            return rel_path, str(exc) or exc.__class__.__name__
+
+    max_workers = min(_MAX_PER_COMPONENT_WORKERS, max(len(rels), 1))
+    if max_workers == 1:
+        # Single component — skip pool overhead and keep the stack trace
+        # straightforward for the common solo-lockfile case.
+        results = [_one(rels[0])] if rels else []
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            results = list(pool.map(_one, rels))
+
+    successes = 0
+    failures: dict[Path, str] = {}
+    for rel_path, error in results:
+        comp_id = component_ids[str(rel_path)]
+        if error is None:
+            successes += 1
+        else:
+            failures[rel_path] = error
+            log("warning", f"Could not {label} for {rel_path} ({comp_id}): {error}")
+    return successes, failures
+
+
+def _register_oidc_bindings(
+    state: WizardState,
+    component_ids: dict[str, str],
+    log: LogFn,
+) -> None:
     """Auto-register a GitHub trusted-publisher binding per applied component.
 
     Mirrors the UI's manual "Trusted Publishing → Add binding" step so OIDC
     publishing works on the very first run. Records the outcome on
-    ``state.oidc_bindings_registered`` / ``state.oidc_binding_note`` for the
-    done screen. Never raises — every failure is a warning plus a note that
-    makes the done screen fall back to manual instructions.
+    ``state.oidc_bindings_registered`` / ``state.oidc_newly_registered`` /
+    ``state.oidc_failed_components`` / ``state.oidc_binding_note`` for the
+    done screen. Never raises — every failure path lands on the Done manual
+    fallback instead of aborting the apply.
     """
-    api = state.require_api()
     slug = state.facts.owner_repo_slug
     if not slug:
         state.oidc_binding_note = (
@@ -357,24 +465,73 @@ def _register_oidc_bindings(state: WizardState, component_ids: dict[str, str], l
     # GitHub token needed). The backend resolves the immutable IDs for public
     # repos at create time and defers to the first OIDC publish for private
     # ones (pin-on-first-use); see the deferred-pinning change in the main app.
-    registered = 0
-    last_error: str | None = None
-    for rel, comp_id in component_ids.items():
-        try:
-            api.create_oidc_binding(comp_id, slug)
-            registered += 1
-        except APIError as exc:
-            last_error = str(exc)
-            log("warning", f"Could not register trusted publisher for {rel} ({comp_id}): {exc}")
+    #
+    # create_oidc_binding returns True for fresh 201s, False for idempotent
+    # 409s ("already bound"). Track both separately so the Done success
+    # message can say "registered N (M already present)" instead of falsely
+    # claiming N fresh bindings on a re-run.
+    newly_registered = 0
 
-    state.oidc_bindings_registered = registered
-    if registered and last_error is None:
-        state.applied.append(f"registered trusted publisher ({slug}) for {registered} component(s)")
-        log("success", f"Registered trusted publisher {slug} for {registered} component(s)")
+    def _bind_oidc(client: SbomifyApiClient, _rel: Path, comp_id: str) -> bool:
+        nonlocal newly_registered
+        created = client.create_oidc_binding(comp_id, slug)
+        if created:
+            newly_registered += 1
+        return created
+
+    api = state.require_api()
+    successes, failures = _per_component_best_effort(
+        api,
+        component_ids,
+        _bind_oidc,
+        "register trusted publisher",
+        log,
+    )
+
+    # nonlocal mutation from worker threads needs a barrier — _per_component_best_effort
+    # already joined every future before returning, so newly_registered is settled.
+    state.oidc_bindings_registered = successes
+    state.oidc_newly_registered = newly_registered
+    state.oidc_failed_components = failures
+    already_bound = successes - newly_registered
+
+    if successes and not failures:
+        if newly_registered and already_bound:
+            summary = (
+                f"registered trusted publisher ({slug}) for {newly_registered} new "
+                f"component(s); {already_bound} already had a binding"
+            )
+            log_msg = (
+                f"Trusted publisher for {slug}: registered {newly_registered} new, {already_bound} already present"
+            )
+        elif newly_registered:
+            summary = f"registered trusted publisher ({slug}) for {newly_registered} component(s)"
+            log_msg = f"Registered trusted publisher {slug} for {newly_registered} component(s)"
+        else:
+            # All 409s — every binding already existed. Don't claim "registered"
+            # in either the Applied panel line or the success log; it would
+            # falsely suggest fresh registrations on a no-op re-run.
+            summary = f"trusted publisher ({slug}) already set for {already_bound} component(s)"
+            log_msg = f"Trusted publisher {slug} was already set for {already_bound} component(s)"
+        state.applied.append(summary)
+        log("success", log_msg)
+    elif successes:
+        # Partial success — surface BOTH the count of bound components on the
+        # Applied panel (so user knows what auto-succeeded) AND a failure note
+        # so Done routes to the manual-fallback panel for the failed ones.
+        state.applied.append(f"registered trusted publisher ({slug}) for {successes}/{len(component_ids)} component(s)")
+        first_failure = next(iter(failures.values()), None)
+        state.oidc_binding_note = (
+            first_failure
+            or "Some trusted-publisher registrations didn't complete; register the failed components manually."
+        )
     else:
-        # A failure (or zero successes) — leave a note so the done screen shows
-        # manual instructions. Any partial-success count is preserved above.
-        state.oidc_binding_note = last_error or "Trusted-publisher registration didn't complete; register it manually."
+        # Zero successes — leave a note so Done shows manual instructions for
+        # every component (failures dict carries the per-component errors).
+        first_failure = next(iter(failures.values()), None)
+        state.oidc_binding_note = (
+            first_failure or "Trusted-publisher registration didn't complete; register it manually."
+        )
 
 
 def _resolve_product(state: WizardState, log: LogFn) -> dict[str, Any] | None:

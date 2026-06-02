@@ -2561,7 +2561,8 @@ def cli(
     default=False,
     help=(
         "Show what would happen without making API mutations or file writes. "
-        "Read-only API calls (auth, listing components/products) still run."
+        "Yocto's dry-run short-circuits before any API client is constructed, "
+        "so no auth call or listing is attempted."
     ),
 )
 @click.option(
@@ -2849,12 +2850,7 @@ def wizard_cmd(
     Scans for lockfiles, authenticates against sbomify, registers
     matching components, and writes ``.github/workflows/sboms.yml``.
     """
-    # Inherit --token from the root group when the subcommand's own
-    # --token is unset, matching the precedence the yocto subcommand
-    # already uses (and matching user expectation that
-    # ``sbomify-action --token X wizard`` works).
-    if not token and ctx.parent is not None:
-        token = ctx.parent.params.get("token")
+    token = _inherit_root_token(ctx, token)
     _run_wizard_cli(token, api_base_url, repo_root, output_dir, dry_run, debug)
 
 
@@ -2877,11 +2873,38 @@ def init_cmd(
     the full onboarding wizard.
     """
     click.echo("Note: `init` is an alias for `wizard`. Prefer `sbomify-action wizard`.", err=True)
-    # Same parent-token inheritance as the wizard subcommand — keeps
-    # behaviour identical to its alias target.
-    if not token and ctx.parent is not None:
-        token = ctx.parent.params.get("token")
+    token = _inherit_root_token(ctx, token)
     _run_wizard_cli(token, api_base_url, repo_root, output_dir, dry_run, debug)
+
+
+def _inherit_root_token(ctx: click.Context, token: Optional[str]) -> Optional[str]:
+    """Resolve the token for the wizard / init subcommand.
+
+    The wizard's own --token wins when the user typed it. Otherwise,
+    inherit the root group's --token ONLY when the root saw the value
+    on the command line (``sbomify-action --token X wizard``) — not when
+    Click pulled it from the root's ``envvar="TOKEN"``. The root group
+    binds $TOKEN as the GitHub-Action-style env var, but the wizard
+    subcommand documents (and ``_resolve_token`` implements)
+    ``$SBOMIFY_TOKEN`` as the higher-precedence env source. Without
+    this distinction, $TOKEN would silently outrank $SBOMIFY_TOKEN any
+    time the wizard ran with both env vars set, contradicting the help
+    text on ``--token``.
+    """
+    if token:
+        return token
+    if ctx.parent is None:
+        return None
+    parent_token = ctx.parent.params.get("token")
+    if not isinstance(parent_token, str) or not parent_token:
+        return None
+    source = ctx.parent.get_parameter_source("token")
+    if source is click.core.ParameterSource.COMMANDLINE:
+        return parent_token
+    # Root populated --token from $TOKEN — let _resolve_token apply the
+    # documented env precedence ($SBOMIFY_TOKEN before $TOKEN) instead of
+    # treating the env-derived value as an explicit override.
+    return None
 
 
 def main() -> None:

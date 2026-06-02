@@ -279,6 +279,7 @@ def emit_workflow(
     facts: RepoFacts,
     api_base_url: str,
     component_ids: dict[str, str] | None = None,
+    product_id: str | None = None,
 ) -> str:
     """Render the wizard's ``sboms.yml`` for ``plan``.
 
@@ -288,6 +289,14 @@ def emit_workflow(
     omitted; the emitter falls back to the planned component's
     ``existing_id`` or a literal ``REPLACE_WITH_COMPONENT_ID``
     placeholder.
+
+    ``product_id`` is the product the workflow should publish releases
+    under for tag-strategy emissions. Apply passes
+    ``state.created_product_id`` (covers both create-new and
+    use-existing paths); pre-apply callers can omit it and fall back to
+    ``plan.use_product_id``. Without one of those, tag-strategy
+    workflows silently drop ``PRODUCT_RELEASE`` and never publish a
+    release lifecycle event.
     """
     component_ids = component_ids or {}
     lockfile_paths = [str(c.lockfile.rel_path) for c in plan.create_components]
@@ -302,7 +311,7 @@ def emit_workflow(
         augmentation=plan.augmentation,
         enrich=plan.enrich,
         release_strategy=plan.release_strategy,
-        product_id=plan.use_product_id,
+        product_id=product_id or plan.use_product_id,
     )
     matrix = _matrix_block(plan.create_components, formats, component_ids)
     attest_step = _attest_step() if plan.attestation else ""

@@ -123,6 +123,12 @@ class WorkspaceSnapshot:
     field name is preserved for backward compatibility — the route
     moved from ``/teams/`` to ``/workspaces/`` in the backend rename
     but the URL parameter still uses the old name.)"""
+    display_name: str | None = None
+    """Human-readable name of the picked workspace. Surfaced on the
+    auth-success status line so the user can spot a misdirection — the
+    workspace picker uses ``is_default_team`` which is wrong for scoped
+    tokens bound to a non-default workspace, and there's no
+    programmatic way to disambiguate today."""
 
 
 @dataclass
@@ -217,25 +223,67 @@ class WizardState:
     # these to show either a "✓ done" confirmation or fall back to manual
     # instructions.
     oidc_bindings_registered: int = 0
-    """Count of components a trusted-publisher binding was registered for
-    (created or already-present). 0 when auto-registration didn't run or
-    didn't bind anything."""
+    """Count of components a trusted-publisher binding exists for after apply
+    — the sum of fresh 201s and idempotent 409s ("already bound"). 0 when
+    auto-registration didn't run or every call failed. Done renders the
+    success panel only when this > 0 AND there are no failed components."""
+    oidc_newly_registered: int = 0
+    """Count of components where apply created a fresh binding (HTTP 201).
+    Reported in the Done success message so a re-run that hit only 409s
+    isn't misreported as "registered N new bindings"."""
+    oidc_failed_components: dict[Path, str] = field(default_factory=dict)
+    """``{rel_path: error_message}`` for components where create_oidc_binding
+    raised. Used by the Done screen's manual-fallback panel to list ONLY the
+    failed components instead of every applied one — re-binding successful
+    components would just produce 409 noise. Empty when every binding
+    succeeded (or no auto-registration was attempted)."""
     oidc_binding_note: str | None = None
-    """Set when auto-registration was skipped or failed (no GitHub slug,
-    private repo, not owner/admin, backend error). When non-None the done
-    screen shows the manual binding instructions plus this reason; when None
-    and ``oidc_bindings_registered`` > 0, it shows the success confirmation."""
+    """Set when auto-registration was skipped wholesale (no GitHub slug,
+    network failure before the loop) OR is a per-component failure message
+    that bubbles to the panel header. When non-None AND
+    ``oidc_failed_components`` is empty, the slug-missing case applies and
+    Done falls back to listing every component for manual setup."""
 
     # True if a sentinel-tagged sboms.yml already exists at apply time.
     # Set by the welcome / discover phase; used by review to surface
     # "will overwrite (.bak created)" rather than "will create".
     workflow_exists: bool = False
 
+    is_dry_run: bool = False
+    """True when the active apply pass is the dry-run simulation
+    (``_apply_plan_dry_run``). The Done screen reads this to label
+    "would write" rows correctly, render a preview-mode OIDC panel
+    instead of claiming a real binding, and disable the
+    "copy first URL to clipboard" action whose synthetic
+    ``<dry-run:component:...>`` IDs would produce a 404 URL."""
+
     def require_api(self) -> "SbomifyApiClient":
         """Return the API client, raising if authenticate hasn't run yet."""
         if self.api is None:
             raise RuntimeError("WizardState.api accessed before authenticate screen ran")
         return self.api
+
+    def reset_apply_artifacts(self) -> None:
+        """Clear every field apply_plan writes, so a Back→Apply retry starts clean.
+
+        Without this, a prior partial-fail's ``oidc_binding_note`` survives a
+        successful retry and routes Done to the manual-fallback panel; or
+        repeated runs accumulate duplicate ``"wrote X"`` lines in
+        ``applied``. We deliberately leave ``facts``, ``api``, ``workspace``,
+        ``discovered``, ``selected``, ``plan``, and ``workflow_exists`` alone
+        — those are inputs to apply, not outputs of it.
+        """
+        self.applied = []
+        self.created_product_id = None
+        self.component_ids = {}
+        self.written_files = []
+        self.reused_component_ids = set()
+        self.attach_error = None
+        self.oidc_bindings_registered = 0
+        self.oidc_newly_registered = 0
+        self.oidc_failed_components = {}
+        self.oidc_binding_note = None
+        self.is_dry_run = False
 
     def __repr__(self) -> str:
         return (

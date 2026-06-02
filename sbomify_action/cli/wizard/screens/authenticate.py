@@ -27,10 +27,23 @@ def _pick_default_workspace_key(workspaces: list[dict[str, object]]) -> str | No
     bound team for scoped tokens, or the authenticating user's *default*
     workspace for PATs. Mirror that scoping by reading the
     ``is_default_team`` flag on the current user's membership entry —
-    the same signal the backend uses for the component listing. When no
-    entry is marked default (or the response omits the membership block),
-    fall back to the first usable key.
+    the same signal the backend uses for the component listing.
+
+    Caveat: for a *scoped* token bound to a non-default workspace, the
+    membership block on the token's bound workspace still reads
+    ``is_default_team=False`` (the flag tracks the user's default, not
+    the token's scope), so this picker can return the wrong key. There's
+    no programmatic disambiguation today — the picked workspace is
+    surfaced in the auth-success status line so the user can spot a
+    mismatch (eg. by seeing a workspace name they didn't expect) and
+    re-run with the right token. When the token spans exactly one
+    workspace (the common case for both unscoped PAT-with-one-team and
+    scoped tokens correctly filtered backend-side), there's no
+    ambiguity — return that key without consulting the flag.
     """
+    usable_keys = [str(ws.get("key")) for ws in workspaces if isinstance(ws.get("key"), str) and ws.get("key")]
+    if len(usable_keys) == 1:
+        return usable_keys[0]
     fallback: str | None = None
     for ws in workspaces:
         key = ws.get("key")
@@ -47,6 +60,24 @@ def _pick_default_workspace_key(workspaces: list[dict[str, object]]) -> str | No
             if member.get("is_me") and member.get("is_default_team"):
                 return key
     return fallback
+
+
+def _workspace_display_name(workspaces: list[dict[str, object]], key: str | None) -> str | None:
+    """Return the human name (or key) of the workspace with ``key``.
+
+    Used in the auth-success status line so the user sees which workspace
+    the wizard picked — a scoped token bound to a non-default workspace can
+    surface a misdirection here (cf. ``_pick_default_workspace_key`` caveat).
+    """
+    if not key:
+        return None
+    for ws in workspaces:
+        if isinstance(ws.get("key"), str) and ws.get("key") == key:
+            name = ws.get("name")
+            if isinstance(name, str) and name:
+                return name
+            return key
+    return key
 
 
 class AuthenticateScreen(WizardScreen):
@@ -225,6 +256,11 @@ class AuthenticateScreen(WizardScreen):
             contact_profiles=profiles,
             team_key=team_key,
         )
+        # Stash the picked workspace's display name on the snapshot — the
+        # main thread reads it for the auth-success status line so the user
+        # can spot a misdirection (the picker is is_default_team-based,
+        # which is wrong for scoped tokens bound to a non-default workspace).
+        workspace.display_name = _workspace_display_name(workspaces, team_key)
         return client, workspace, None
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
@@ -251,8 +287,16 @@ class AuthenticateScreen(WizardScreen):
         # what's coming on the next two screens — otherwise Product /
         # Components arrive with no context for "how many existing
         # things will I see?".
+        # Lead with the workspace name when known — the picker is
+        # is_default_team-based and can choose the wrong workspace for
+        # scoped tokens; surfacing the name lets the user catch a
+        # misdirection here before any components are created.
+        if workspace.display_name:
+            ws_clause = f"  Workspace: [b]{workspace.display_name}[/]."
+        else:
+            ws_clause = ""
         self._set_status(
-            f"[#86EFAC]✓  Authenticated.[/]  Loaded "
+            f"[#86EFAC]✓  Authenticated.[/]{ws_clause}  Loaded "
             f"[b]{len(workspace.products)}[/] product(s), "
             f"[b]{len(workspace.components)}[/] component(s), "
             f"[b]{len(workspace.contact_profiles)}[/] contact profile(s)."
