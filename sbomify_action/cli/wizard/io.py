@@ -128,6 +128,11 @@ def write_sbomify_json(path: Path, payload: dict[str, Any]) -> None:
             '(e.g. \'"__sbomify_wizard__": {"managed": true}\') to '
             "allow the wizard to manage it."
         )
-    stamped: dict[str, Any] = {WIZARD_JSON_SENTINEL_KEY: WIZARD_JSON_SENTINEL_VALUE, **payload}
+    # Sentinel goes AFTER the payload spread so a payload that happens
+    # to contain ``__sbomify_wizard__`` (eg. round-tripped from an
+    # earlier wizard write) cannot override or erase it. Without this
+    # ordering, a stale or maliciously-crafted payload could strip the
+    # ownership marker and silently take over future re-runs.
+    stamped: dict[str, Any] = {**payload, WIZARD_JSON_SENTINEL_KEY: WIZARD_JSON_SENTINEL_VALUE}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(stamped, indent=2, sort_keys=True) + "\n", encoding="utf-8")

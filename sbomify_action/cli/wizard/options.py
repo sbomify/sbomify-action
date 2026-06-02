@@ -19,6 +19,16 @@ class WizardOptions:
     api_base_url: str
     repo_root: Path
     output_dir: Path
+    """Where the emitted workflow lives, validated to be
+    ``<repo_root>/.github/workflows/`` by the CLI layer. The wizard
+    itself doesn't route writes through this — ``workflow_path()``
+    hardcodes ``<repo_root>/.github/workflows/sboms.yml`` per the
+    "one canonical filename" design decision. The field exists so
+    the CLI flag (``--output-dir``) keeps a stable parsing surface
+    and can reject misconfigured invocations before launching the
+    TUI; if a future PR ever wants to allow alternative paths,
+    plumb this value through ``workflow_path`` then. Removing the
+    flag would be a CLI break, so we keep it as a no-op constraint."""
     dry_run: bool
     debug: bool = False
     """True when ``--debug`` was passed. The CLI layer captures DEBUG

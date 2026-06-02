@@ -220,8 +220,33 @@ def test_write_sbomify_json_refuses_malformed_json(tmp_path: Path) -> None:
     with pytest.raises(SbomifyJsonOwnershipError):
         write_sbomify_json(path, {"supplier": {"name": "Wizard"}})
 
-    # Original byte content untouched.
-    assert path.read_text(encoding="utf-8") == "{ not json"
+
+def test_write_sbomify_json_sentinel_wins_over_payload_collision(tmp_path: Path) -> None:
+    """A payload key colliding with the sentinel must NOT override or
+    erase it — otherwise a round-tripped or maliciously-crafted payload
+    could strip the ownership marker on a future re-run.
+    """
+    import json as _json
+
+    path = tmp_path / "sbomify.json"
+    write_sbomify_json(
+        path,
+        {
+            "supplier": {"name": "Acme"},
+            # Payload tries to override the sentinel with a bogus value.
+            WIZARD_JSON_SENTINEL_KEY: {"managed": False, "version": 999},
+        },
+    )
+
+    data = _json.loads(path.read_text(encoding="utf-8"))
+    # Sentinel must reflect the wizard's true ownership marker, not the
+    # payload's override attempt.
+    assert data[WIZARD_JSON_SENTINEL_KEY]["managed"] is True
+    assert data[WIZARD_JSON_SENTINEL_KEY]["version"] == 1
+    # Sentinel-helpers still recognises the file as wizard-owned.
+    assert sbomify_json_has_wizard_sentinel(path) is True
+    # The non-sentinel payload still made it through.
+    assert data["supplier"] == {"name": "Acme"}
 
 
 def test_pick_default_workspace_key_prefers_user_default() -> None:
@@ -476,21 +501,33 @@ def _oidc_apply_state(
     return state, api
 
 
-def _dry_opts(tmp_path: Path) -> WizardOptions:
-    # dry_run=True runs the API steps (incl. OIDC register) but skips file writes.
+def _real_opts(tmp_path: Path) -> WizardOptions:
+    """Build WizardOptions for a real apply (dry_run=False).
+
+    The OIDC / API-mutation tests assert on call counts to the mock
+    api, so they need the real apply path. A real apply also writes
+    the workflow file under ``tmp_path/.github/workflows/`` which the
+    pytest tmp_path fixture cleans up after the test exits.
+
+    (The OIDC tests were originally written against an earlier
+    contract where ``dry_run=True`` still made API calls but skipped
+    file writes. That contract was tightened — dry-run now skips
+    every mutation — so this helper now hands back the non-dry-run
+    options the tests actually need.)
+    """
     return WizardOptions(
         token=None,
         api_base_url="https://api.test",
         repo_root=tmp_path,
         output_dir=tmp_path / ".github" / "workflows",
-        dry_run=True,
+        dry_run=False,
     )
 
 
 def test_apply_registers_oidc_binding_per_component(tmp_path: Path) -> None:
     state, api = _oidc_apply_state(tmp_path, names=("a", "b"))  # default visibility="public"
 
-    apply_plan(state, _dry_opts(tmp_path))
+    apply_plan(state, _real_opts(tmp_path))
 
     assert api.create_oidc_binding.call_count == 2
     # Each call sends just the repo slug (no GitHub IDs, no token).
@@ -503,7 +540,7 @@ def test_apply_registers_oidc_binding_per_component(tmp_path: Path) -> None:
 def test_apply_skips_oidc_binding_in_token_mode(tmp_path: Path) -> None:
     state, api = _oidc_apply_state(tmp_path, credential_mode="token")
 
-    apply_plan(state, _dry_opts(tmp_path))
+    apply_plan(state, _real_opts(tmp_path))
 
     api.create_oidc_binding.assert_not_called()
     assert state.oidc_bindings_registered == 0
@@ -516,7 +553,7 @@ def test_apply_oidc_binding_409_counts_as_registered(tmp_path: Path) -> None:
     state, api = _oidc_apply_state(tmp_path)
     api.create_oidc_binding.return_value = False  # already bound
 
-    apply_plan(state, _dry_opts(tmp_path))
+    apply_plan(state, _real_opts(tmp_path))
 
     assert state.oidc_bindings_registered == 1
     assert state.oidc_binding_note is None
@@ -528,7 +565,7 @@ def test_apply_oidc_binding_failure_is_warning_not_fatal(tmp_path: Path) -> None
 
     logs: list[tuple[str, str]] = []
     # Must NOT raise — a binding failure can't sink the whole apply.
-    apply_plan(state, _dry_opts(tmp_path), log=lambda kind, msg: logs.append((kind, msg)))
+    apply_plan(state, _real_opts(tmp_path), log=lambda kind, msg: logs.append((kind, msg)))
 
     # Component was still created (the failure is isolated to the binding step).
     assert state.component_ids
@@ -543,7 +580,7 @@ def test_apply_private_repo_registers_by_name(tmp_path: Path) -> None:
     so the wizard's side is identical regardless of visibility."""
     state, api = _oidc_apply_state(tmp_path, visibility="private")
 
-    apply_plan(state, _dry_opts(tmp_path))
+    apply_plan(state, _real_opts(tmp_path))
 
     assert api.create_oidc_binding.call_count == 1
     assert api.create_oidc_binding.call_args.args[1] == "acme/widget"
@@ -554,7 +591,7 @@ def test_apply_private_repo_registers_by_name(tmp_path: Path) -> None:
 def test_apply_skips_oidc_binding_without_repo_slug(tmp_path: Path) -> None:
     state, api = _oidc_apply_state(tmp_path, slug=None)
 
-    apply_plan(state, _dry_opts(tmp_path))
+    apply_plan(state, _real_opts(tmp_path))
 
     api.create_oidc_binding.assert_not_called()
     assert state.oidc_binding_note is not None

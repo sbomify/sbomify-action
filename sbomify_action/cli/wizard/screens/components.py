@@ -35,11 +35,23 @@ class ComponentsScreen(WizardScreen):
     ]
 
     def compose_body(self) -> ComposeResult:
+        from rich.markup import escape as _esc
+
         existing = self.wizard.state.workspace.components if self.wizard.state.workspace else []
+        # Escape API-supplied names before passing them as picker
+        # labels — PickOrCreate's OptionList renders labels as Rich
+        # markup, so a component literally named "widget [pre-release]"
+        # would otherwise have ``[pre-release]`` parsed as a markup tag
+        # and either crash the render or emit garbled output. The
+        # auto-match map keys by RAW name so a lockfile's
+        # suggested_name (eg "widget-py") still matches the picker
+        # entry — escaping is purely a rendering concern.
         existing_pairs = [
-            (str(c.get("name") or c.get("id") or "(unnamed)"), str(c.get("id"))) for c in existing if c.get("id")
+            (_esc(str(c.get("name") or c.get("id") or "(unnamed)")), str(c.get("id"))) for c in existing if c.get("id")
         ]
-        existing_by_name = {label: item_id for label, item_id in existing_pairs}
+        existing_by_name = {
+            str(c.get("name") or c.get("id") or "(unnamed)"): str(c.get("id")) for c in existing if c.get("id")
+        }
 
         intro = Vertical(classes="wizard-panel")
         intro.border_title = "◆  Components"

@@ -25,6 +25,8 @@ class ProductScreen(WizardScreen):
     ]
 
     def compose_body(self) -> ComposeResult:
+        from rich.markup import escape as _esc
+
         products = self.wizard.state.workspace.products if self.wizard.state.workspace else []
         panel = Vertical(classes="wizard-panel")
         panel.border_title = "◆  Pick a product"
@@ -36,8 +38,17 @@ class ProductScreen(WizardScreen):
                 "name. [b]Enter[/] when done.",
                 classes="wizard-muted",
             )
+            # Escape API-supplied names before passing them as picker
+            # labels — PickOrCreate's OptionList renders labels as Rich
+            # markup, so a product literally named "Acme [Internal]"
+            # would otherwise have ``[Internal]`` parsed as a markup
+            # tag and either crash the render or emit garbled output.
+            # IDs are token-encoded and don't need escaping.
+            existing_pairs = [
+                (_esc(str(p.get("name") or p.get("id") or "(unnamed)")), str(p.get("id"))) for p in products
+            ]
             yield PickOrCreate(
-                existing=[(str(p.get("name") or p.get("id") or "(unnamed)"), str(p.get("id"))) for p in products],
+                existing=existing_pairs,
                 create_label="[#86EFAC]➕  Create a new product[/]",
                 placeholder="New product name (used only when 'Create new' is highlighted)",
                 # Pre-select the first existing product when the

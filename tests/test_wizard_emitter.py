@@ -90,8 +90,17 @@ def test_emit_tag_strategy_uses_tag_versioning(tmp_path: Path) -> None:
     )
     yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
     assert "tags: ['v*']" in yaml
+    # The tag-strategy version step now wraps the strip in a bash if/else so
+    # workflow_dispatch from a branch falls back to the short SHA instead of
+    # emitting refs/heads/<branch> (which contains slashes and breaks
+    # downstream component-version parsing).
+    assert "refs/tags/*" in yaml
     assert "GITHUB_REF#refs/tags/" in yaml
-    assert "PRODUCT_RELEASE: 'prod-1:${{ steps.ver.outputs.v }}'" in yaml
+    assert "git rev-parse --short HEAD" in yaml
+    # PRODUCT_RELEASE must be a JSON array string — cli/main.py runs
+    # json.loads on it and rejects scalar shapes. The wizard previously
+    # emitted "PRODUCT_RELEASE: 'pid:ver'" which failed at runtime.
+    assert "PRODUCT_RELEASE: '[\"prod-1:${{ steps.ver.outputs.v }}\"]'" in yaml
 
 
 def test_emit_manual_only_workflow_dispatch(tmp_path: Path) -> None:
@@ -416,11 +425,18 @@ def test_apply_plan_create_new_product(tmp_path: Path) -> None:
     assert state.created_product_id == "prod-new"
 
 
-def test_apply_plan_dry_run_skips_write(tmp_path: Path) -> None:
+def test_apply_plan_dry_run_skips_api_mutations_and_writes(tmp_path: Path) -> None:
+    """Dry-run must NOT call any mutating API method and must NOT write files.
+
+    The previous contract still made API calls and only suppressed
+    writes; the Copilot review (correctly) flagged that as misleading
+    given the help text claims "no API calls". The new contract: dry-
+    run is a pure preview — auth + workspace prefetch (read-only) ran
+    on the Authenticate screen, but apply itself stays silent.
+    """
     state = _state(tmp_path)
     api = state.api
     assert api is not None
-    api.get_or_create_component.return_value = ("comp-1", True)
 
     state.plan = Plan(
         use_product_id="prod-existing",
@@ -436,9 +452,19 @@ def test_apply_plan_dry_run_skips_write(tmp_path: Path) -> None:
     )
     apply_mod.apply_plan(state, opts)
 
+    # No workflow file written.
     assert not (tmp_path / ".github" / "workflows" / "sboms.yml").exists()
-    # Components still created — only the disk write is suppressed.
-    api.get_or_create_component.assert_called_once()
+    # No API mutations: no component create, no product create, no
+    # attach, no patch, no OIDC binding.
+    api.get_or_create_component.assert_not_called()
+    api.create_product.assert_not_called()
+    api.attach_components_to_product.assert_not_called()
+    api.patch_component.assert_not_called()
+    api.create_oidc_binding.assert_not_called()
+    # But the state is still populated with synthetic markers so the
+    # Done screen can render a meaningful summary.
+    assert state.component_ids  # one synthetic id per planned component
+    assert any("would" in line.lower() for line in state.applied)
 
 
 def test_apply_plan_overwrites_existing_sentinel_file_without_bak(tmp_path: Path) -> None:

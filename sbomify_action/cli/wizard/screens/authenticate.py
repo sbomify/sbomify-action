@@ -91,11 +91,13 @@ class AuthenticateScreen(WizardScreen):
             input_box.focus()
 
     def action_submit(self) -> None:
+        # Enter is routed through here only — the priority=True binding on
+        # this screen consumes Enter before any focused Input can fire
+        # Input.Submitted, so an on_input_submitted handler would be
+        # unreachable dead code. action_submit reads the token value
+        # directly and kicks off _start_auth, covering both "Enter on
+        # the Input" and "Enter on the Authenticate button" paths.
         self.route_enter(lambda: self._start_auth(self.query_one("#token", Input).value.strip()))
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "token":
-            self._start_auth(event.value.strip())
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back":

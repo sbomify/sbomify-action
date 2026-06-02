@@ -2555,7 +2555,15 @@ def cli(
 @click.option("--component-id", default=None, help="Component ID for SPDX 3 single-file upload.")
 @click.option("--augment/--no-augment", default=False, help="Run augmentation per SBOM.")
 @click.option("--enrich/--no-enrich", default=False, help="Run enrichment per SBOM.")
-@click.option("--dry-run", is_flag=True, default=False, help="Show what would happen without API calls.")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help=(
+        "Show what would happen without making API mutations or file writes. "
+        "Read-only API calls (auth, listing components/products) still run."
+    ),
+)
 @click.option(
     "--visibility",
     type=click.Choice(["public", "private", "gated"], case_sensitive=False),
@@ -2694,16 +2702,22 @@ def _wizard_options(func: _FC) -> _FC:
             "--dry-run",
             is_flag=True,
             default=False,
-            help="Walk the wizard and render the plan, but make no API calls and write no files.",
+            help=(
+                "Walk the wizard and render the plan, but make no API mutations "
+                "and write no files. Read-only API calls during authentication / "
+                "workspace prefetch still happen; apply emits [dry-run] lines for "
+                "every mutation it would have made."
+            ),
         ),
         click.option(
             "--debug",
             is_flag=True,
             default=False,
             help=(
-                "Stream DEBUG-level logs to a file (Textual eats stdout while "
-                "running, so console logging won't help). The path is printed "
-                "before the TUI launches."
+                "Buffer DEBUG-level logs in memory and dump them to stdout "
+                "AFTER the TUI exits. Textual takes over stdout while it's "
+                "running, so streaming logs in real time isn't possible — "
+                "the dump is the next-best thing."
             ),
         ),
     ]
@@ -2820,7 +2834,9 @@ def _run_wizard_cli(
 
 @cli.command("wizard")
 @_wizard_options
+@click.pass_context
 def wizard_cmd(
+    ctx: click.Context,
     token: Optional[str],
     api_base_url: str,
     repo_root: Path,
@@ -2833,12 +2849,20 @@ def wizard_cmd(
     Scans for lockfiles, authenticates against sbomify, registers
     matching components, and writes ``.github/workflows/sboms.yml``.
     """
+    # Inherit --token from the root group when the subcommand's own
+    # --token is unset, matching the precedence the yocto subcommand
+    # already uses (and matching user expectation that
+    # ``sbomify-action --token X wizard`` works).
+    if not token and ctx.parent is not None:
+        token = ctx.parent.params.get("token")
     _run_wizard_cli(token, api_base_url, repo_root, output_dir, dry_run, debug)
 
 
 @cli.command("init")
 @_wizard_options
+@click.pass_context
 def init_cmd(
+    ctx: click.Context,
     token: Optional[str],
     api_base_url: str,
     repo_root: Path,
@@ -2853,6 +2877,10 @@ def init_cmd(
     the full onboarding wizard.
     """
     click.echo("Note: `init` is an alias for `wizard`. Prefer `sbomify-action wizard`.", err=True)
+    # Same parent-token inheritance as the wizard subcommand — keeps
+    # behaviour identical to its alias target.
+    if not token and ctx.parent is not None:
+        token = ctx.parent.params.get("token")
     _run_wizard_cli(token, api_base_url, repo_root, output_dir, dry_run, debug)
 
 

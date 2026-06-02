@@ -46,11 +46,23 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
     ``state.created_product_id``, ``state.component_ids``, and
     ``state.written_files`` as side effects so the done screen can show
     what happened.
+
+    When ``opts.dry_run`` is set, short-circuits to ``_apply_plan_dry_run``
+    which simulates every step (populating the same state fields with
+    synthetic markers) without touching the API or the filesystem. That
+    keeps the ``--dry-run`` contract honest — read-only auth + workspace
+    prefetch already happened on the Authenticate screen, but apply
+    makes zero further calls.
     """
     if state.workspace is None:
         raise RuntimeError("apply_plan called before workspace prefetch")
-    api = state.require_api()
     plan = state.plan
+
+    if opts.dry_run:
+        _apply_plan_dry_run(state, opts, log)
+        return
+
+    api = state.require_api()
 
     # 1. Resolve or create the product.
     product = _resolve_product(state, log)
@@ -145,51 +157,48 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
     # surface — eg licenses, multi-entity suppliers, vcs_* overrides)
     # is never silently clobbered.
     if plan.augmentation == "json_config" and plan.sbomify_json_data is not None:
-        if opts.dry_run:
-            log("info", "Dry-run: skipping sbomify.json write")
+        # Dry-run paths short-circuit at the top of apply_plan, so by
+        # the time we get here we're definitely doing a real write.
+        json_path = opts.repo_root / "sbomify.json"
+        try:
+            write_sbomify_json(json_path, plan.sbomify_json_data)
+        except SbomifyJsonOwnershipError:
+            # A hand-authored sbomify.json already lives here (no wizard
+            # sentinel). Don't clobber it — but don't dead-end the whole
+            # apply over it either. The action's json_config provider reads
+            # whatever sbomify.json exists at run time, so the existing file
+            # is already doing its job; skip the write and keep going so the
+            # workflow + components still get created. The user can delete
+            # the file (or add the '__sbomify_wizard__' key) to hand it over
+            # to the wizard on a later run.
+            log(
+                "warning",
+                f"{json_path} already exists and wasn't created by the wizard — "
+                "keeping it as-is (the action reads it at run time). Any values you "
+                "entered in the wizard were NOT written to it. To let the wizard "
+                "manage this file, delete it (or add the '__sbomify_wizard__' key) "
+                "and re-run.",
+            )
+            # Surface the unwritten payload so the user can copy it into the
+            # file by hand instead of re-running the whole wizard to
+            # reproduce what they typed.
+            log(
+                "info",
+                "Values you entered (copy into sbomify.json manually if wanted):\n"
+                + json.dumps(plan.sbomify_json_data, indent=2, sort_keys=True),
+            )
+        except OSError as e:
+            log("error", f"Could not write {json_path}: {e}")
+            raise
         else:
-            json_path = opts.repo_root / "sbomify.json"
-            try:
-                write_sbomify_json(json_path, plan.sbomify_json_data)
-            except SbomifyJsonOwnershipError:
-                # A hand-authored sbomify.json already lives here (no wizard
-                # sentinel). Don't clobber it — but don't dead-end the whole
-                # apply over it either. The action's json_config provider reads
-                # whatever sbomify.json exists at run time, so the existing file
-                # is already doing its job; skip the write and keep going so the
-                # workflow + components still get created. The user can delete
-                # the file (or add the '__sbomify_wizard__' key) to hand it over
-                # to the wizard on a later run.
-                log(
-                    "warning",
-                    f"{json_path} already exists and wasn't created by the wizard — "
-                    "keeping it as-is (the action reads it at run time). Any values you "
-                    "entered in the wizard were NOT written to it. To let the wizard "
-                    "manage this file, delete it (or add the '__sbomify_wizard__' key) "
-                    "and re-run.",
-                )
-                # Surface the unwritten payload so the user can copy it into the
-                # file by hand instead of re-running the whole wizard to
-                # reproduce what they typed.
-                log(
-                    "info",
-                    "Values you entered (copy into sbomify.json manually if wanted):\n"
-                    + json.dumps(plan.sbomify_json_data, indent=2, sort_keys=True),
-                )
-            except OSError as e:
-                log("error", f"Could not write {json_path}: {e}")
-                raise
-            else:
-                state.written_files.append(json_path)
-                state.applied.append(f"wrote {json_path}")
-                log("success", f"Wrote {json_path}")
+            state.written_files.append(json_path)
+            state.applied.append(f"wrote {json_path}")
+            log("success", f"Wrote {json_path}")
 
     # 7. Emit the workflow file. Last step so an API failure above never
     # leaves a broken .yml on disk that points at non-existent components.
-    if opts.dry_run:
-        log("info", "Dry-run: skipping workflow write")
-        return
-
+    # Dry-run paths short-circuit at the top of apply_plan, so this is
+    # always a real write.
     rendered = ci_emitter.emit_workflow(
         plan,
         facts=state.facts,
@@ -211,6 +220,118 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
     state.written_files.append(target)
     state.applied.append(f"wrote {target}")
     log("success", f"Wrote {target}")
+
+
+def _apply_plan_dry_run(state: WizardState, opts: WizardOptions, log: LogFn) -> None:
+    """Simulate apply_plan without touching the API or the filesystem.
+
+    Populates the same state fields a real apply would (so the Done
+    screen can still render meaningfully) but every mutation is logged
+    as ``[dry-run] Would …`` and no network or disk writes happen.
+    Synthetic IDs (``<dry-run:component:foo>``) replace the IDs the
+    real flow would have learned from API responses — they're
+    obviously placeholder so the user can't accidentally treat them
+    as real handles.
+
+    Read-only auth + workspace prefetch already happened on the
+    Authenticate screen before the user reached Apply; this function
+    is responsible for the no-mutation contract from apply onward.
+    """
+    plan = state.plan
+    assert state.workspace is not None  # narrowed by caller
+
+    log("info", "Dry-run mode — no API mutations, no file writes.")
+    log("info", "")
+
+    # 1. Product
+    if plan.create_product:
+        synth_pid = f"<dry-run:product:{plan.create_product}>"
+        state.created_product_id = synth_pid
+        state.applied.append(f"would create product {plan.create_product}")
+        log("info", f"[dry-run] Would create product {plan.create_product}")
+    elif plan.use_product_id:
+        match = next(
+            (p for p in state.workspace.products if str(p.get("id")) == plan.use_product_id),
+            None,
+        )
+        product_name = match.get("name") if isinstance(match, dict) else plan.use_product_id
+        state.created_product_id = plan.use_product_id
+        log("info", f"[dry-run] Would use existing product {product_name}")
+    else:
+        log("warning", "[dry-run] No product selected — components would not be attached")
+
+    # 2. Components
+    component_ids: dict[str, str] = {}
+    for planned in plan.create_components:
+        if planned.existing_id is not None:
+            comp_id = planned.existing_id
+            component_ids[str(planned.lockfile.rel_path)] = comp_id
+            state.component_ids[planned.lockfile.rel_path] = comp_id
+            state.reused_component_ids.add(comp_id)
+            state.applied.append(f"would reuse existing component {planned.name}")
+            log("info", f"[dry-run] Would reuse existing component {planned.name} ({comp_id})")
+        else:
+            synth_cid = f"<dry-run:component:{planned.name}>"
+            component_ids[str(planned.lockfile.rel_path)] = synth_cid
+            state.component_ids[planned.lockfile.rel_path] = synth_cid
+            state.applied.append(f"would create component {planned.name}")
+            log("info", f"[dry-run] Would create component {planned.name}")
+
+    # 3. Attach
+    if state.created_product_id and component_ids:
+        state.applied.append("would attach components to product")
+        log("info", f"[dry-run] Would attach {len(component_ids)} component(s) to product")
+
+    # 4. Profile binding
+    if plan.augmentation == "profile" and plan.contact_profile_id and component_ids:
+        state.applied.append(f"would bind contact profile to {len(component_ids)} component(s)")
+        log(
+            "info",
+            f"[dry-run] Would bind contact profile {plan.contact_profile_id} to {len(component_ids)} component(s)",
+        )
+
+    # 5. OIDC bindings — same gating logic as the real path so the Done
+    # screen's auto-vs-manual branching is preview-accurate.
+    if plan.credential_mode == "oidc" and component_ids:
+        slug = state.facts.owner_repo_slug
+        if slug:
+            state.oidc_bindings_registered = len(component_ids)
+            state.applied.append(f"would register trusted publisher ({slug}) for {len(component_ids)} component(s)")
+            log(
+                "info",
+                f"[dry-run] Would register trusted publisher {slug} for {len(component_ids)} component(s)",
+            )
+        else:
+            state.oidc_binding_note = (
+                "Couldn't detect a GitHub 'owner/repo' from the git remote, so the "
+                "trusted publisher would need to be registered manually."
+            )
+            log("warning", f"[dry-run] {state.oidc_binding_note}")
+
+    # 6. sbomify.json — flag a hand-authored file the real apply would
+    # refuse so the user sees the warning before the real run.
+    if plan.augmentation == "json_config" and plan.sbomify_json_data is not None:
+        from sbomify_action.cli.wizard.io import sbomify_json_has_wizard_sentinel
+
+        json_path = opts.repo_root / "sbomify.json"
+        if json_path.exists() and not sbomify_json_has_wizard_sentinel(json_path):
+            log(
+                "warning",
+                f"[dry-run] {json_path} already exists and isn't wizard-stamped — "
+                "the real apply would keep it as-is and your form values wouldn't "
+                "be written.",
+            )
+        else:
+            state.applied.append(f"would write {json_path}")
+            log("info", f"[dry-run] Would write {json_path}")
+
+    # 7. Workflow file
+    target = workflow_path(opts.repo_root)
+    state.applied.append(f"would write {target}")
+    log("info", f"[dry-run] Would write {target}")
+
+    log("info", "")
+    log("info", "Re-run without --dry-run to actually apply these changes.")
 
 
 def _register_oidc_bindings(state: WizardState, component_ids: dict[str, str], log: LogFn) -> None:

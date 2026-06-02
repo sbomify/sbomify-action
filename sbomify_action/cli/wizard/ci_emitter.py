@@ -116,12 +116,30 @@ def _trigger_block(strategy: ReleaseStrategy, branch: str, lockfile_paths: list[
 def _version_step(strategy: ReleaseStrategy) -> str:
     """Compute the ``COMPONENT_VERSION`` for the matrix job's step output.
 
-    - tag → strip ``refs/tags/`` from ``GITHUB_REF`` (clean semver).
+    - tag-strategy push (``GITHUB_REF`` starts with ``refs/tags/``) →
+      strip the prefix and use the clean tag (semver).
+    - tag-strategy ``workflow_dispatch`` (no tag — ``GITHUB_REF`` looks
+      like ``refs/heads/main``) → fall back to the short SHA so the
+      version doesn't end up as ``refs/heads/<branch>`` (slashes are
+      invalid in a component version and would fail downstream
+      parsing in cli/main.py).
     - trunk/manual → short SHA so each push gets a unique version
       without clashing.
     """
     if strategy == "tag":
-        return '      - id: ver\n        run: echo "v=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"\n'
+        # Bash test: only strip the prefix when GITHUB_REF actually
+        # starts with refs/tags/. Otherwise emit the short SHA so a
+        # workflow_dispatch from a branch produces a valid version
+        # string.
+        return (
+            "      - id: ver\n"
+            "        run: |\n"
+            '          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then\n'
+            '            echo "v=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"\n'
+            "          else\n"
+            '            echo "v=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"\n'
+            "          fi\n"
+        )
     return '      - id: ver\n        run: echo "v=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"\n'
 
 
@@ -183,7 +201,16 @@ def _env_block(
         ]
     )
     if release_strategy == "tag" and product_id:
-        lines.append(f"          PRODUCT_RELEASE: '{product_id}:${{{{ steps.ver.outputs.v }}}}'")
+        # PRODUCT_RELEASE is parsed by cli/main.py as a JSON list — see
+        # cli/main.py's "PRODUCT_RELEASE must be a JSON list like
+        # [\"product_id:v1.2.3\"]" validation. The previous scalar
+        # emission ("PRODUCT_RELEASE: 'pid:ver'") failed json.loads at
+        # runtime and aborted the workflow before upload. Emit the
+        # JSON-array form so the parser accepts it. The literal
+        # ``\"`` inside YAML single quotes survives without further
+        # escaping because YAML treats single-quoted scalars as raw
+        # text (double-quote is the only escapable character there).
+        lines.append(f"          PRODUCT_RELEASE: '[\"{product_id}:${{{{ steps.ver.outputs.v }}}}\"]'")
     return "\n".join(lines) + "\n"
 
 
