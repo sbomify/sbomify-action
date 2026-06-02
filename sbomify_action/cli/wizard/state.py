@@ -211,6 +211,21 @@ class WizardState:
     # string when no failure has happened.
     attach_error: str | None = None
 
+    # OIDC trusted-publisher auto-registration outcome (oidc credential mode).
+    # apply.apply_plan tries to register a binding per applied component so the
+    # user doesn't have to create one by hand in the UI. The done screen reads
+    # these to show either a "✓ done" confirmation or fall back to manual
+    # instructions.
+    oidc_bindings_registered: int = 0
+    """Count of components a trusted-publisher binding was registered for
+    (created or already-present). 0 when auto-registration didn't run or
+    didn't bind anything."""
+    oidc_binding_note: str | None = None
+    """Set when auto-registration was skipped or failed (no GitHub slug,
+    private repo, not owner/admin, backend error). When non-None the done
+    screen shows the manual binding instructions plus this reason; when None
+    and ``oidc_bindings_registered`` > 0, it shows the success confirmation."""
+
     # True if a sentinel-tagged sboms.yml already exists at apply time.
     # Set by the welcome / discover phase; used by review to surface
     # "will overwrite (.bak created)" rather than "will create".

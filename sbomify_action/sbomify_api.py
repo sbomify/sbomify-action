@@ -738,6 +738,50 @@ class SbomifyApiClient:
         raise APIError(err_msg)
 
     # ------------------------------------------------------------------
+    # OIDC trusted publishing
+
+    def create_oidc_binding(
+        self,
+        component_id: str,
+        repository: str,
+        *,
+        provider: str = "github",
+    ) -> bool:
+        """Register a GitHub OIDC trusted-publisher binding for a component.
+
+        Ties a GitHub repository (``owner/repo``) to a component so that
+        repository's workflow can mint short-lived upload tokens via OIDC —
+        the same binding a user would otherwise create by hand in the UI.
+
+        Sends only the repo name (no GitHub token, public or private). The
+        backend resolves the immutable IDs for public repos at create time and
+        defers to the first OIDC publish for private ones (pin-on-first-use).
+
+        Idempotent: a 409 (the repository is already bound to this component)
+        is treated as success and returns ``False`` (nothing created). A fresh
+        201 returns ``True``.
+
+        Raises ``APIError`` on any other non-2xx — notably 400 (malformed slug)
+        and 404 (the token's user isn't an owner/admin of the component's
+        workspace, OR the component doesn't exist — the API conflates the two).
+        Callers in the wizard treat these as non-fatal warnings and fall back
+        to manual binding instructions.
+        """
+        response = self._request(
+            "POST",
+            "/api/v1/auth/oidc/github/bindings",
+            json_body={"component_id": component_id, "repository": repository, "provider": provider},
+        )
+        if response.status_code == 201:
+            return True
+        if response.status_code == 409:
+            logger.info(f"Trusted publisher already registered for component {component_id} ({repository})")
+            return False
+        raise APIError(
+            self._build_error(f"Failed to register trusted publisher for component {component_id}.", response)
+        )
+
+    # ------------------------------------------------------------------
     # upload
 
     def upload_sbom(

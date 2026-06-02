@@ -29,6 +29,7 @@ from sbomify_action.cli.wizard.state import (
     WizardState,
     WorkspaceSnapshot,
 )
+from sbomify_action.exceptions import APIError
 
 
 def _facts(tmp_path: Path) -> RepoFacts:
@@ -425,3 +426,135 @@ def test_apply_creates_component_with_bom_type(tmp_path: Path) -> None:
 
     api.get_or_create_component.assert_called_once()
     assert api.get_or_create_component.call_args.kwargs.get("component_type") == "bom"
+
+
+# ----------------------------------------------------------------------
+# apply: OIDC trusted-publisher auto-registration
+
+
+def _oidc_apply_state(
+    tmp_path: Path,
+    *,
+    credential_mode: str = "oidc",
+    visibility: str = "public",
+    slug: str | None = "acme/widget",
+    names: tuple[str, ...] = ("widget",),
+) -> tuple[WizardState, MagicMock]:
+    """Build a WizardState + mock api ready for apply_plan, with ``names``
+    components and OIDC defaults. The mock's create_oidc_binding returns True
+    (created) by default — tests override it for 409/error paths."""
+    facts = RepoFacts(
+        repo_root=tmp_path,
+        is_git=True,
+        remote_url="git@github.com:acme/widget.git",
+        suggested_repo_name="widget",
+        default_branch="main",
+        current_branch="main",
+        has_release_tags=False,
+        owner_repo_slug=slug,
+        visibility=visibility,  # type: ignore[arg-type]
+    )
+    state = WizardState(facts=facts)
+    api = MagicMock()
+    api.get_or_create_component.side_effect = [(f"comp-{i}", True) for i in range(len(names))]
+    api.create_oidc_binding.return_value = True
+    state.api = api
+    state.workspace = WorkspaceSnapshot()
+    state.plan = Plan(
+        create_components=[
+            PlannedComponent(
+                lockfile=DiscoveredLockfile(
+                    path=tmp_path / f"{n}.lock", rel_path=Path(f"{n}.lock"), ecosystem="python", suggested_name=n
+                ),
+                name=n,
+            )
+            for n in names
+        ],
+        credential_mode=credential_mode,  # type: ignore[arg-type]
+        augmentation="skip",
+    )
+    return state, api
+
+
+def _dry_opts(tmp_path: Path) -> WizardOptions:
+    # dry_run=True runs the API steps (incl. OIDC register) but skips file writes.
+    return WizardOptions(
+        token=None,
+        api_base_url="https://api.test",
+        repo_root=tmp_path,
+        output_dir=tmp_path / ".github" / "workflows",
+        dry_run=True,
+    )
+
+
+def test_apply_registers_oidc_binding_per_component(tmp_path: Path) -> None:
+    state, api = _oidc_apply_state(tmp_path, names=("a", "b"))  # default visibility="public"
+
+    apply_plan(state, _dry_opts(tmp_path))
+
+    assert api.create_oidc_binding.call_count == 2
+    # Each call sends just the repo slug (no GitHub IDs, no token).
+    bound_slugs = {call.args[1] for call in api.create_oidc_binding.call_args_list}
+    assert bound_slugs == {"acme/widget"}
+    assert state.oidc_bindings_registered == 2
+    assert state.oidc_binding_note is None
+
+
+def test_apply_skips_oidc_binding_in_token_mode(tmp_path: Path) -> None:
+    state, api = _oidc_apply_state(tmp_path, credential_mode="token")
+
+    apply_plan(state, _dry_opts(tmp_path))
+
+    api.create_oidc_binding.assert_not_called()
+    assert state.oidc_bindings_registered == 0
+    assert state.oidc_binding_note is None
+
+
+def test_apply_oidc_binding_409_counts_as_registered(tmp_path: Path) -> None:
+    """An already-bound repo (client returns False) still counts as registered
+    and leaves no note — re-running the wizard shows success, not a warning."""
+    state, api = _oidc_apply_state(tmp_path)
+    api.create_oidc_binding.return_value = False  # already bound
+
+    apply_plan(state, _dry_opts(tmp_path))
+
+    assert state.oidc_bindings_registered == 1
+    assert state.oidc_binding_note is None
+
+
+def test_apply_oidc_binding_failure_is_warning_not_fatal(tmp_path: Path) -> None:
+    state, api = _oidc_apply_state(tmp_path)
+    api.create_oidc_binding.side_effect = APIError("Failed to register trusted publisher [404] - nope")
+
+    logs: list[tuple[str, str]] = []
+    # Must NOT raise — a binding failure can't sink the whole apply.
+    apply_plan(state, _dry_opts(tmp_path), log=lambda kind, msg: logs.append((kind, msg)))
+
+    # Component was still created (the failure is isolated to the binding step).
+    assert state.component_ids
+    assert state.oidc_binding_note is not None
+    assert "404" in state.oidc_binding_note
+    assert any(kind == "warning" and "trusted publisher" in msg.lower() for kind, msg in logs)
+
+
+def test_apply_private_repo_registers_by_name(tmp_path: Path) -> None:
+    """A private repo registers by name exactly like a public one — no GitHub
+    token, no ID resolution. The backend defers ID pinning to the first publish,
+    so the wizard's side is identical regardless of visibility."""
+    state, api = _oidc_apply_state(tmp_path, visibility="private")
+
+    apply_plan(state, _dry_opts(tmp_path))
+
+    assert api.create_oidc_binding.call_count == 1
+    assert api.create_oidc_binding.call_args.args[1] == "acme/widget"
+    assert state.oidc_bindings_registered == 1
+    assert state.oidc_binding_note is None
+
+
+def test_apply_skips_oidc_binding_without_repo_slug(tmp_path: Path) -> None:
+    state, api = _oidc_apply_state(tmp_path, slug=None)
+
+    apply_plan(state, _dry_opts(tmp_path))
+
+    api.create_oidc_binding.assert_not_called()
+    assert state.oidc_binding_note is not None
