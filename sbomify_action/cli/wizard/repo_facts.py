@@ -7,7 +7,9 @@ vs-trunk release default — without touching git later.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Literal
@@ -175,3 +177,75 @@ def detect_visibility(remote_url: str, owner_repo_slug: str) -> Literal["public"
     if isinstance(body, dict) and body.get("private") is True:
         return "private"
     return "unknown"
+
+
+# How long we'll wait for the authenticated repo-id lookup. Runs at apply time
+# (only for private repos), not on the startup hot path, so it can be a touch
+# more generous than the visibility probe.
+_REPO_ID_TIMEOUT = 5.0
+
+
+def github_token() -> str | None:
+    """Best-effort local GitHub token for authenticated repo-metadata reads.
+
+    Used only to resolve a PRIVATE repo's immutable IDs (which sbomify can't
+    read anonymously). Looked up in order: ``GH_TOKEN``, ``GITHUB_TOKEN``, then
+    ``gh auth token`` (the GitHub CLI). Returns ``None`` when none is available
+    — callers fall back to manual binding instructions. The token is used to
+    call GitHub directly from the operator's machine; it is NEVER sent to
+    sbomify (only the resolved integer IDs are).
+    """
+    for var in ("GH_TOKEN", "GITHUB_TOKEN"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return value
+    if shutil.which("gh"):
+        try:
+            result = subprocess.run(
+                ["gh", "auth", "token"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode == 0:
+            token = result.stdout.strip()
+            if token:
+                return token
+    return None
+
+
+def resolve_repo_ids(owner_repo_slug: str, token: str) -> tuple[int, int] | None:
+    """Resolve ``owner/repo`` → ``(repository_id, repository_owner_id)`` via an
+    AUTHENTICATED GitHub API call (so it works for private repos).
+
+    Returns the immutable numeric IDs, or ``None`` on any failure (network,
+    non-200, missing/malformed fields) — the caller treats ``None`` as "couldn't
+    resolve" and falls back to manual instructions. Pure helper: no logging, no
+    side effects.
+    """
+    url = f"https://api.github.com/repos/{owner_repo_slug}"
+    try:
+        response = requests.get(
+            url,
+            timeout=_REPO_ID_TIMEOUT,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+    except requests.RequestException:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    try:
+        return int(body["id"]), int(body["owner"]["id"])
+    except (KeyError, TypeError, ValueError):
+        return None

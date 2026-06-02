@@ -16,6 +16,8 @@ from sbomify_action.cli.wizard.repo_facts import (
     _parse_owner_repo_slug,
     detect_visibility,
     gather_repo_facts,
+    github_token,
+    resolve_repo_ids,
 )
 
 # ----------------------------------------------------------------------
@@ -256,3 +258,92 @@ def test_detect_visibility_rate_limit_returns_unknown(monkeypatch: pytest.Monkey
         lambda *args, **kwargs: _FakeResponse(403, {"message": "rate limit"}),
     )
     assert detect_visibility("git@github.com:acme/widget.git", "acme/widget") == "unknown"
+
+
+# ----------------------------------------------------------------------
+# github_token (used only to resolve private-repo IDs)
+
+
+def _no_github_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+
+def test_github_token_prefers_gh_token_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "from-gh-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "from-github-token")
+    assert github_token() == "from-gh-token"
+
+
+def test_github_token_falls_back_to_github_token_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "from-github-token")
+    assert github_token() == "from-github-token"
+
+
+def test_github_token_uses_gh_cli_when_no_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    _no_github_env(monkeypatch)
+    monkeypatch.setattr("sbomify_action.cli.wizard.repo_facts.shutil.which", lambda _name: "/usr/bin/gh")
+
+    class _Result:
+        returncode = 0
+        stdout = "cli-token\n"
+
+    monkeypatch.setattr("sbomify_action.cli.wizard.repo_facts.subprocess.run", lambda *a, **k: _Result())
+    assert github_token() == "cli-token"
+
+
+def test_github_token_none_when_no_env_and_no_gh(monkeypatch: pytest.MonkeyPatch) -> None:
+    _no_github_env(monkeypatch)
+    monkeypatch.setattr("sbomify_action.cli.wizard.repo_facts.shutil.which", lambda _name: None)
+    assert github_token() is None
+
+
+def test_github_token_none_when_gh_cli_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    _no_github_env(monkeypatch)
+    monkeypatch.setattr("sbomify_action.cli.wizard.repo_facts.shutil.which", lambda _name: "/usr/bin/gh")
+
+    class _Result:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr("sbomify_action.cli.wizard.repo_facts.subprocess.run", lambda *a, **k: _Result())
+    assert github_token() is None
+
+
+# ----------------------------------------------------------------------
+# resolve_repo_ids (authenticated — works for private repos)
+
+
+def test_resolve_repo_ids_returns_ids_on_200(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.repo_facts.requests.get",
+        lambda *a, **k: _FakeResponse(200, {"id": 1296269, "owner": {"id": 583231}}),
+    )
+    assert resolve_repo_ids("aurangzaib048/rwaj-assessment", "tok") == (1296269, 583231)
+
+
+def test_resolve_repo_ids_none_on_non_200(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.repo_facts.requests.get",
+        lambda *a, **k: _FakeResponse(404, {}),
+    )
+    assert resolve_repo_ids("acme/widget", "tok") is None
+
+
+def test_resolve_repo_ids_none_on_malformed_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.repo_facts.requests.get",
+        lambda *a, **k: _FakeResponse(200, {"id": 1296269}),  # missing owner.id
+    )
+    assert resolve_repo_ids("acme/widget", "tok") is None
+
+
+def test_resolve_repo_ids_none_on_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import requests
+
+    def boom(*_a: object, **_k: object) -> object:
+        raise requests.ConnectionError("offline")
+
+    monkeypatch.setattr("sbomify_action.cli.wizard.repo_facts.requests.get", boom)
+    assert resolve_repo_ids("acme/widget", "tok") is None

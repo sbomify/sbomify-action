@@ -533,3 +533,22 @@ def test_create_oidc_binding_other_errors_raise(status: int) -> None:
     client, _ = _client_with([_FakeResponse(status, {"detail": "nope"})])
     with pytest.raises(APIError):
         client.create_oidc_binding("comp-1", "acme/widget")
+
+
+def test_create_oidc_binding_sends_ids_when_provided() -> None:
+    """Explicit IDs (the private-repo path) are included in the body so the
+    backend skips its own GitHub lookup."""
+    client, session = _client_with([_FakeResponse(201, {"id": "b1"})])
+    client.create_oidc_binding("comp-1", "acme/private", repository_id=111, repository_owner_id=222)
+    body = session.request.call_args.kwargs["json"]
+    assert body["repository_id"] == 111
+    assert body["repository_owner_id"] == 222
+
+
+def test_create_oidc_binding_omits_ids_when_not_provided() -> None:
+    """Public-repo path sends no IDs — the backend resolves the slug itself."""
+    client, session = _client_with([_FakeResponse(201, {"id": "b1"})])
+    client.create_oidc_binding("comp-1", "acme/widget")
+    body = session.request.call_args.kwargs["json"]
+    assert "repository_id" not in body
+    assert "repository_owner_id" not in body

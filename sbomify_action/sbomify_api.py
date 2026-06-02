@@ -746,6 +746,8 @@ class SbomifyApiClient:
         repository: str,
         *,
         provider: str = "github",
+        repository_id: int | None = None,
+        repository_owner_id: int | None = None,
     ) -> bool:
         """Register a GitHub OIDC trusted-publisher binding for a component.
 
@@ -753,21 +755,31 @@ class SbomifyApiClient:
         repository's workflow can mint short-lived upload tokens via OIDC —
         the same binding a user would otherwise create by hand in the UI.
 
+        When ``repository_id`` and ``repository_owner_id`` are BOTH supplied
+        they're sent so the backend skips its (unauthenticated) GitHub lookup —
+        this is how a PRIVATE repo gets a binding, since sbomify can't read a
+        private repo's metadata anonymously. The wizard resolves these IDs with
+        the operator's own GitHub auth; the token itself is never sent here.
+
         Idempotent: a 409 (the repository is already bound to this component)
         is treated as success and returns ``False`` (nothing created). A fresh
         201 returns ``True``.
 
         Raises ``APIError`` on any other non-2xx — notably 400 (the backend
-        couldn't resolve the repo to immutable GitHub IDs, eg a private repo)
-        and 404 (the token's user isn't an owner/admin of the component's
-        workspace, OR the component doesn't exist — the API conflates the two).
-        Callers in the wizard treat these as non-fatal warnings and fall back
-        to manual binding instructions.
+        couldn't resolve the repo to immutable GitHub IDs, eg a private repo
+        with no IDs supplied) and 404 (the token's user isn't an owner/admin of
+        the component's workspace, OR the component doesn't exist — the API
+        conflates the two). Callers in the wizard treat these as non-fatal
+        warnings and fall back to manual binding instructions.
         """
+        body: dict[str, Any] = {"component_id": component_id, "repository": repository, "provider": provider}
+        if repository_id is not None and repository_owner_id is not None:
+            body["repository_id"] = repository_id
+            body["repository_owner_id"] = repository_owner_id
         response = self._request(
             "POST",
             "/api/v1/auth/oidc/github/bindings",
-            json_body={"component_id": component_id, "repository": repository, "provider": provider},
+            json_body=body,
         )
         if response.status_code == 201:
             return True
