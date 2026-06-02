@@ -246,7 +246,9 @@ class WizardState:
 
     # True if a sentinel-tagged sboms.yml already exists at apply time.
     # Set by the welcome / discover phase; used by review to surface
-    # "will overwrite (.bak created)" rather than "will create".
+    # "will overwrite" rather than "will create". No .bak is written —
+    # the workflow file lives under .github/workflows/ where git holds
+    # the prior version (see write_workflow in cli/wizard/io.py).
     workflow_exists: bool = False
 
     is_dry_run: bool = False

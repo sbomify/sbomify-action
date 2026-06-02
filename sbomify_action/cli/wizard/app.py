@@ -5,17 +5,21 @@ reads from / writes to a single shared ``WizardState`` instance on the
 app so state survives screen transitions. Background I/O runs on
 ``@work(thread=True)`` workers, so the UI never blocks.
 
-Phases:
+Phases (``step_index`` on each ``WizardScreen``):
 
-  1. welcome        — banner + repo summary + start button
-  2. discover       — multi-select lockfiles
-  3. authenticate   — token entry + parallel workspace prefetch
-  4. product        — pick existing or create new
-  5. configure      — release strategy + credential + augmentation
-                      + per-component name
-  6. review         — table of planned writes + confirm
-  6b. apply         — RichLog + progress bar
-  6c. done          — summary + OIDC binding instructions
+  1. welcome              — hero, repo summary, start button
+  2. discover             — multi-select lockfiles
+  3. authenticate         — token entry + parallel workspace prefetch
+  4. product              — pick existing or create new
+  5. components           — pick existing or create per lockfile
+  6. configure (workflow) — release strategy + credential + augmentation
+  7. configure (SBOM)     — enrichment / formats / attestation /
+                            (when augmentation=profile) profile picker /
+                            (when augmentation=json_config) push to
+                            configure (sbomify.json) for the in-repo
+                            metadata form
+  8. review + apply + done — table of planned writes → RichLog progress
+                             → summary panel + OIDC instructions
 """
 
 from __future__ import annotations

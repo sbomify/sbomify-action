@@ -61,7 +61,10 @@ class WelcomeScreen(WizardScreen):
     step_subtitle = ""
 
     BINDINGS = [
-        Binding("enter", "start", "Continue", show=True),
+        # priority=True so the binding wins over default Button activations —
+        # we route Enter through ``route_enter`` (in WizardScreen) so a
+        # focused Cancel button gets pressed instead of advancing the wizard.
+        Binding("enter", "start", "Continue", show=True, priority=True),
         Binding("escape", "app.quit_with_cancel", "Cancel", show=True),
     ]
 
@@ -136,6 +139,13 @@ class WelcomeScreen(WizardScreen):
             self.query_one("#cancel", Button).focus()
 
     def action_start(self) -> None:
+        # Route Enter through ``route_enter`` so a focused Cancel button gets
+        # pressed instead of advancing — without this, a user who tabs to
+        # Cancel and presses Enter still moves forward, which is the opposite
+        # of what every other wizard screen does.
+        self.route_enter(self._advance_or_exit)
+
+    def _advance_or_exit(self) -> None:
         if self.wizard.state.discovered:
             self._advance()
         else:
