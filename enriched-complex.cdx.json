@@ -1,0 +1,192 @@
+{
+  "components": [
+    {
+      "bom-ref": "BomRef.5204365785575016.8656284925261701",
+      "description": "Python package for providing Mozilla's CA Bundle.",
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://pypi.org/project/certifi/"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/certifi/python-certifi"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/certifi/python-certifi"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "GPL-2.0-only OR GPL-2.0-or-later OR MPL-2.0"
+        }
+      ],
+      "name": "certifi",
+      "properties": [
+        {
+          "name": "bsi:component:filename",
+          "value": "certifi-2026.2.25-py3-none-any.whl"
+        },
+        {
+          "name": "sbomify:enrichment:source",
+          "value": "pypi.org"
+        }
+      ],
+      "publisher": "Kenneth Reitz",
+      "purl": "pkg:pypi/certifi@2025.10.5",
+      "supplier": {
+        "name": "Python Package Index (PyPI)"
+      },
+      "type": "library",
+      "version": "2025.10.5"
+    },
+    {
+      "bom-ref": "BomRef.7547686272020188.9052591526000398",
+      "licenses": [
+        {
+          "license": {
+            "name": "My Custom License v2"
+          }
+        }
+      ],
+      "name": "custom-license-pkg",
+      "type": "library",
+      "version": "5.0"
+    },
+    {
+      "bom-ref": "BomRef.11659877832924714.16765797656719028",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "dual-field-pkg",
+      "type": "library",
+      "version": "4.0"
+    },
+    {
+      "bom-ref": "BomRef.6760585791414927.12371902487304953",
+      "licenses": [
+        {
+          "expression": "MIT AND Apache-2.0"
+        }
+      ],
+      "name": "dual-license-pkg",
+      "type": "library",
+      "version": "1.0"
+    },
+    {
+      "bom-ref": "BomRef.48496490932619407.27093000938719214",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 WITH LLVM-exception"
+        }
+      ],
+      "name": "exception-pkg",
+      "type": "library",
+      "version": "2.0"
+    },
+    {
+      "bom-ref": "BomRef.16740979837536551.3907937833250337",
+      "licenses": [
+        {
+          "expression": "MIT OR GPL-2.0-only OR LGPL-2.1-only OR LicenseRef-Proprietary-Nonsense"
+        }
+      ],
+      "name": "mixed-pkg",
+      "type": "library",
+      "version": "7.0"
+    },
+    {
+      "bom-ref": "BomRef.0381758573922274.12190702651058238",
+      "licenses": [
+        {
+          "expression": "(MIT OR Apache-2.0) AND GPL-2.0-only"
+        }
+      ],
+      "name": "nested-compound",
+      "type": "library",
+      "version": "3.0"
+    },
+    {
+      "bom-ref": "BomRef.6401461712990884.3730398743285014",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "valid-pkg",
+      "type": "library",
+      "version": "6.0"
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "BomRef.0381758573922274.12190702651058238"
+    },
+    {
+      "ref": "BomRef.11659877832924714.16765797656719028"
+    },
+    {
+      "ref": "BomRef.16740979837536551.3907937833250337"
+    },
+    {
+      "ref": "BomRef.48496490932619407.27093000938719214"
+    },
+    {
+      "ref": "BomRef.5204365785575016.8656284925261701"
+    },
+    {
+      "dependsOn": [
+        "BomRef.0381758573922274.12190702651058238",
+        "BomRef.11659877832924714.16765797656719028",
+        "BomRef.16740979837536551.3907937833250337",
+        "BomRef.48496490932619407.27093000938719214",
+        "BomRef.5204365785575016.8656284925261701",
+        "BomRef.6401461712990884.3730398743285014",
+        "BomRef.6760585791414927.12371902487304953",
+        "BomRef.7547686272020188.9052591526000398"
+      ],
+      "ref": "BomRef.5612143740465892.12698179744435112"
+    },
+    {
+      "ref": "BomRef.6401461712990884.3730398743285014"
+    },
+    {
+      "ref": "BomRef.6760585791414927.12371902487304953"
+    },
+    {
+      "ref": "BomRef.7547686272020188.9052591526000398"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "bom-ref": "BomRef.5612143740465892.12698179744435112",
+      "name": "test-app",
+      "type": "application",
+      "version": "1.0.0"
+    },
+    "licenses": [
+      {
+        "expression": "MIT AND BSD-3-Clause"
+      }
+    ],
+    "timestamp": "2026-04-15T19:04:48.285886+00:00"
+  },
+  "serialNumber": "urn:uuid:0a876ed3-0ac7-479b-9810-01c4558a1827",
+  "version": 1,
+  "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "compositions": [
+    {
+      "aggregate": "incomplete",
+      "assemblies": [
+        "BomRef.5612143740465892.12698179744435112"
+      ]
+    }
+  ]
+}

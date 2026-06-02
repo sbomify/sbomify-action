@@ -1,0 +1,96 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "name": "complex-app",
+      "version": "3.0",
+      "type": "application"
+    },
+    "licenses": [
+      {
+        "license": {
+          "id": "GPL-2.0-only AND MIT"
+        }
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "with-pkg",
+      "version": "1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 WITH LLVM-exception"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "nested-pkg",
+      "version": "2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "(MIT OR BSD-2-Clause) AND Apache-2.0"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "mixed-licenses",
+      "version": "3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        },
+        {
+          "license": {
+            "id": "GPL-3.0-only OR LGPL-3.0-only"
+          }
+        },
+        {
+          "license": {
+            "id": "Custom License XYZ"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "valid-only",
+      "version": "4.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "multiple-valid",
+      "version": "5.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        },
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ]
+    }
+  ]
+}

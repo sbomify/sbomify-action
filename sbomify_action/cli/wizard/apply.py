@@ -24,7 +24,6 @@ from sbomify_action.cli.wizard.io import (
     write_workflow,
 )
 from sbomify_action.cli.wizard.options import WizardOptions
-from sbomify_action.cli.wizard.repo_facts import github_token, resolve_repo_ids
 from sbomify_action.cli.wizard.state import WizardState
 from sbomify_action.exceptions import APIError
 
@@ -233,36 +232,15 @@ def _register_oidc_bindings(state: WizardState, component_ids: dict[str, str], l
         log("warning", state.oidc_binding_note)
         return
 
-    # Private repos: sbomify can't read their metadata anonymously, so resolve
-    # the immutable IDs here with the operator's own local GitHub auth and pass
-    # them to the API (the token never leaves this machine — only the IDs are
-    # sent). Public repos send no IDs and the backend resolves the slug itself.
-    repository_id: int | None = None
-    repository_owner_id: int | None = None
-    if state.facts.visibility == "private":
-        token = github_token()
-        if not token:
-            state.oidc_binding_note = (
-                f"'{slug}' is private and no local GitHub token was found (set GH_TOKEN or run "
-                "`gh auth login`) to resolve its repository IDs — register the trusted publisher manually."
-            )
-            log("warning", state.oidc_binding_note)
-            return
-        resolved = resolve_repo_ids(slug, token)
-        if resolved is None:
-            state.oidc_binding_note = (
-                f"Couldn't read '{slug}' metadata from GitHub with the available token (does it grant "
-                "access to this repo?) — register the trusted publisher manually."
-            )
-            log("warning", state.oidc_binding_note)
-            return
-        repository_id, repository_owner_id = resolved
-
+    # Send only the repo name — identical for public and private repos (no
+    # GitHub token needed). The backend resolves the immutable IDs for public
+    # repos at create time and defers to the first OIDC publish for private
+    # ones (pin-on-first-use); see the deferred-pinning change in the main app.
     registered = 0
     last_error: str | None = None
     for rel, comp_id in component_ids.items():
         try:
-            api.create_oidc_binding(comp_id, slug, repository_id=repository_id, repository_owner_id=repository_owner_id)
+            api.create_oidc_binding(comp_id, slug)
             registered += 1
         except APIError as exc:
             last_error = str(exc)

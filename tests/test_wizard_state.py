@@ -493,13 +493,9 @@ def test_apply_registers_oidc_binding_per_component(tmp_path: Path) -> None:
     apply_plan(state, _dry_opts(tmp_path))
 
     assert api.create_oidc_binding.call_count == 2
-    # Each call binds the same repo slug to one of the created components.
+    # Each call sends just the repo slug (no GitHub IDs, no token).
     bound_slugs = {call.args[1] for call in api.create_oidc_binding.call_args_list}
     assert bound_slugs == {"acme/widget"}
-    # Public repo: no IDs sent — the backend resolves the slug itself.
-    for call in api.create_oidc_binding.call_args_list:
-        assert call.kwargs.get("repository_id") is None
-        assert call.kwargs.get("repository_owner_id") is None
     assert state.oidc_bindings_registered == 2
     assert state.oidc_binding_note is None
 
@@ -541,50 +537,18 @@ def test_apply_oidc_binding_failure_is_warning_not_fatal(tmp_path: Path) -> None
     assert any(kind == "warning" and "trusted publisher" in msg.lower() for kind, msg in logs)
 
 
-def test_apply_private_repo_resolves_ids_and_registers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Private repo + a local GitHub token: the wizard resolves the immutable
-    IDs itself and passes them to the API (the backend can't resolve a private
-    repo). The token never reaches the API call — only the IDs do."""
+def test_apply_private_repo_registers_by_name(tmp_path: Path) -> None:
+    """A private repo registers by name exactly like a public one — no GitHub
+    token, no ID resolution. The backend defers ID pinning to the first publish,
+    so the wizard's side is identical regardless of visibility."""
     state, api = _oidc_apply_state(tmp_path, visibility="private")
-    monkeypatch.setattr("sbomify_action.cli.wizard.apply.github_token", lambda: "ghp_fake")
-    monkeypatch.setattr("sbomify_action.cli.wizard.apply.resolve_repo_ids", lambda slug, token: (111, 222))
 
     apply_plan(state, _dry_opts(tmp_path))
 
     assert api.create_oidc_binding.call_count == 1
-    call = api.create_oidc_binding.call_args
-    assert call.kwargs["repository_id"] == 111
-    assert call.kwargs["repository_owner_id"] == 222
+    assert api.create_oidc_binding.call_args.args[1] == "acme/widget"
     assert state.oidc_bindings_registered == 1
     assert state.oidc_binding_note is None
-
-
-def test_apply_private_repo_without_github_token_skips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Private repo + no local GitHub token: can't resolve IDs, so skip with a
-    note pointing the user at GH_TOKEN / `gh auth login`."""
-    state, api = _oidc_apply_state(tmp_path, visibility="private")
-    monkeypatch.setattr("sbomify_action.cli.wizard.apply.github_token", lambda: None)
-
-    apply_plan(state, _dry_opts(tmp_path))
-
-    api.create_oidc_binding.assert_not_called()
-    assert state.oidc_bindings_registered == 0
-    assert state.oidc_binding_note is not None
-    assert "private" in state.oidc_binding_note.lower()
-
-
-def test_apply_private_repo_id_resolve_failure_skips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Private repo + token present but the GitHub lookup fails (returns None):
-    skip with a note rather than sending a slug the backend can't resolve."""
-    state, api = _oidc_apply_state(tmp_path, visibility="private")
-    monkeypatch.setattr("sbomify_action.cli.wizard.apply.github_token", lambda: "ghp_fake")
-    monkeypatch.setattr("sbomify_action.cli.wizard.apply.resolve_repo_ids", lambda slug, token: None)
-
-    apply_plan(state, _dry_opts(tmp_path))
-
-    api.create_oidc_binding.assert_not_called()
-    assert state.oidc_bindings_registered == 0
-    assert state.oidc_binding_note is not None
 
 
 def test_apply_skips_oidc_binding_without_repo_slug(tmp_path: Path) -> None:
