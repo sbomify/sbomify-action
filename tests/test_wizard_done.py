@@ -59,10 +59,12 @@ def test_oidc_instructions_prepend_note_when_auto_register_skipped(monkeypatch: 
 
     text = _done_screen(monkeypatch, state)._oidc_instructions()
 
-    # The reason comes first, then the manual steps + per-component settings link.
+    # The reason comes first, then the manual steps + per-component link to the
+    # real component page (/component/{id}/ — singular; /components/{id}/settings 404s).
     assert text.startswith("'acme/widget' looks private")
     assert "Trusted publishing needs an OIDC binding" in text
-    assert "components/c1/settings" in text
+    assert "/component/c1/" in text
+    assert "/components/c1/settings" not in text
 
 
 def test_oidc_instructions_without_note_is_plain_manual_steps(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -70,7 +70,7 @@ class DoneScreen(WizardScreen):
         self.wizard.exit(0)
 
     def action_copy_first_url(self) -> None:
-        """Copy the OIDC settings URL for the first applied component."""
+        """Copy the component page URL for the first applied component."""
         state = self.wizard.state
         if not state.component_ids:
             self.notify(
@@ -80,7 +80,7 @@ class DoneScreen(WizardScreen):
             return
         api_base = self.wizard.opts.api_base_url
         first_cid = next(iter(state.component_ids.values()))
-        url = f"{api_base}/components/{first_cid}/settings"
+        url = f"{api_base}/component/{first_cid}/"
         self.app.copy_to_clipboard(url)
         self.notify(f"Copied {url} to clipboard.", severity="information")
 
@@ -156,7 +156,7 @@ class DoneScreen(WizardScreen):
             "For each component:",
         ]
         for rel, cid in state.component_ids.items():
-            lines.append(f"  · {rel}  →  {api_base}/components/{cid}/settings")
+            lines.append(f"  · {rel}  →  {api_base}/component/{cid}/")
         lines.extend(
             [
                 "",
