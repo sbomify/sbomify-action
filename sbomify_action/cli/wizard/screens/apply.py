@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rich.markup import escape as rich_escape
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -96,8 +97,12 @@ class ApplyScreen(WizardScreen):
         app = self.app
 
         def log(kind: str, message: str) -> None:
+            # ``RichLog`` is mounted with ``markup=True`` so the per-kind colour
+            # tags work. ``message`` is untrusted (API errors, URLs containing
+            # `[`, exception text) — escape it so a stray `[` doesn't get
+            # parsed as markup and either misrender the line or raise mid-log.
             colour = _COLOR_BY_KIND.get(kind, "white")
-            line = f"[{colour}]{kind:>8}[/]  {message}"
+            line = f"[{colour}]{kind:>8}[/]  {rich_escape(message)}"
             app.call_from_thread(log_widget.write, line)
 
         try:
@@ -147,8 +152,12 @@ class ApplyScreen(WizardScreen):
             self._worker_error = True
             back_btn = self.query_one("#back", Button)
             continue_btn = self.query_one("#continue", Button)
-            self._show_error_banner(str(event.worker.error))
-            self.query_one("#apply-log", RichLog).write(f"[#F87171]worker error: {event.worker.error}[/]")
+            error_text = str(event.worker.error)
+            self._show_error_banner(error_text)
+            # ``RichLog`` is markup=True; escape the worker-error message so a
+            # `[` in the exception text (eg "APIError [404] - ...") doesn't
+            # collide with the colour wrapping tags.
+            self.query_one("#apply-log", RichLog).write(f"[#F87171]worker error: {rich_escape(error_text)}[/]")
             continue_btn.label = "(apply failed)"
             continue_btn.disabled = True
             back_btn.variant = "primary"
@@ -162,8 +171,11 @@ class ApplyScreen(WizardScreen):
             banner = self.query_one("#apply-error-banner", Static)
         except Exception:  # noqa: BLE001
             return
+        # ``banner`` is a Static with markup=True. The message is API/exception
+        # text which can contain `[` — escape so a stray bracket can't either
+        # mis-style the rest of the banner or raise from markup parsing.
         banner.update(
-            f"[#F87171]✗  Apply failed.[/]  [#CBCCCE]{message}[/]\n"
+            f"[#F87171]✗  Apply failed.[/]  [#CBCCCE]{rich_escape(message)}[/]\n"
             "[#5E5E5E]Press [b]◂ Back[/] (or [b]Esc[/]) to return to Review and retry.[/]"
         )
         banner.display = True
