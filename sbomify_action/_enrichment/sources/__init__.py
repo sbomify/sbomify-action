@@ -12,6 +12,7 @@ from .pubdev import PubDevSource
 from .purl import PURLSource
 from .pypi import PyPISource
 from .repology import RepologySource
+from .tea import TeaSource
 
 __all__ = [
     "ClearlyDefinedSource",
@@ -26,4 +27,5 @@ __all__ = [
     "PURLSource",
     "PyPISource",
     "RepologySource",
+    "TeaSource",
 ]
