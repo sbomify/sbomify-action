@@ -37,7 +37,7 @@ docker run --rm -it \
   sbomify-action wizard
 ```
 
-The wizard scans your repo for lockfiles, signs you in to [sbomify](https://app.sbomify.com), registers the matching components, and writes a release-ready `.github/workflows/sboms.yml` for you—no hand-editing YAML. Pass `--dry-run` to preview every change without touching the API or writing files.
+The wizard scans your repo for lockfiles, signs you in to [sbomify](https://app.sbomify.com), registers the matching components, and writes a release-ready `.github/workflows/sboms.yml` for you—no hand-editing YAML. Pass `--dry-run` to preview the full plan without making any API changes or writing files (it still signs in to read your workspace).
 
 > **Note:** The wizard is interactive, so the `-it` flags are required, and it must run on your machine—not in CI. The volume mount (`-v "$(pwd):/github/workspace"`) is what lets it write the generated workflow back into your repo.
 
@@ -99,7 +99,8 @@ The Docker image bundles every tool the wizard needs. If you'd rather not use Do
 | `--token`        | sbomify API token (falls back to `$SBOMIFY_TOKEN`, then `$TOKEN`)           |
 | `--api-base-url` | sbomify API base URL (default: `https://app.sbomify.com`; for self-hosted)  |
 | `--repo-root`    | Repository root to scan for lockfiles (default: current directory)          |
-| `--dry-run`      | Walk through the wizard and preview the plan without API calls or writing files |
+| `--output-dir`   | Where the workflow is written (default: `.github/workflows`; must resolve there, since that's the only path GitHub Actions loads workflows from) |
+| `--dry-run`      | Walk through the wizard and preview the plan; makes no API changes and writes no files (read-only sign-in/workspace prefetch still happens) |
 | `--debug`        | Dump debug logs after the wizard exits                                      |
 
 > **Note:** The wizard is interactive and must run on your machine—it refuses to launch in CI (`$CI`/`$GITHUB_ACTIONS`). It won't overwrite a hand-authored `sboms.yml`; it only manages workflows it generated. `sbomify-action init` is a backwards-compatible alias.
