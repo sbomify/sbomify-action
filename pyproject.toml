@@ -70,6 +70,7 @@ dev = [
 include = [
     "sbomify_action/**/*.py",
     "sbomify_action/**/*.json",
+    "sbomify_action/**/*.tcss",
     "sbomify-action.cdx.json",
 ]
 core-metadata-version = "2.3"
@@ -83,6 +84,7 @@ sbom-files = ["sbomify-action.cdx.json"]
 include = [
     "sbomify_action/**/*.py",
     "sbomify_action/**/*.json",
+    "sbomify_action/**/*.tcss",
 ]
 
 [build-system]
