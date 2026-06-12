@@ -1,0 +1,73 @@
+---
+name: OpenGrep
+
+# Static analysis (SAST) with OpenGrep — an open-source, registry-free fork of
+# Semgrep. Findings are uploaded as SARIF to the GitHub Security tab
+# (Code Scanning), so this scan is non-blocking and surfaces alerts on PRs.
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  schedule:
+    # Weekly re-scan (Mondays 06:00 UTC) to catch new rules against existing code.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+env:
+  # OpenGrep release to install (https://github.com/opengrep/opengrep/releases).
+  OPENGREP_VERSION: v1.22.0
+
+jobs:
+  opengrep:
+    name: OpenGrep Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write  # required to upload SARIF to the Security tab
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Checkout OpenGrep rules
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: opengrep/opengrep-rules
+          ref: f1d2b562b414783763fd02a6ed2736eaed622efa  # archived repo, pinned for reproducibility
+          path: .opengrep-rules
+          persist-credentials: false
+
+      - name: Install OpenGrep
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -fsSL -o "$HOME/bin/opengrep" \
+            "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          chmod +x "$HOME/bin/opengrep"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          "$HOME/bin/opengrep" --version
+
+      - name: Run OpenGrep scan
+        run: |
+          opengrep scan \
+            --config .opengrep-rules/python/lang/security \
+            --config .opengrep-rules/generic/secrets \
+            --config .opengrep-rules/dockerfile/security \
+            --config .opengrep-rules/bash \
+            --sarif-output=opengrep.sarif \
+            --exclude .opengrep-rules \
+            --exclude tests/test-data \
+            .
+
+      - name: Upload SARIF to GitHub Security
+        if: always()  # publish findings even if the scan step reports them
+        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        with:
+          sarif_file: opengrep.sarif
+          category: opengrep
