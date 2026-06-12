@@ -99,9 +99,15 @@ def _resolve_tag_sha(version: str) -> str | None:
     if response.status_code != 200:
         return None
     try:
-        sha = response.json().get("sha", "")
+        payload = response.json()
     except ValueError:
         return None
+    # GitHub returns an object here, but a proxy/error page could hand back a
+    # well-formed non-dict JSON value (list, string, null). Guard the type so
+    # ``.get`` can't raise AttributeError — this stays best-effort/never-raise.
+    if not isinstance(payload, dict):
+        return None
+    sha = payload.get("sha", "")
     return sha if isinstance(sha, str) and _SHA_RE.fullmatch(sha) else None
 
 

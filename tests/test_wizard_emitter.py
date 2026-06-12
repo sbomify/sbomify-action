@@ -350,6 +350,16 @@ def test_resolve_tag_sha_invalid_json_returns_none(mocker) -> None:
     assert _resolve_tag_sha("v26.2.0") is None
 
 
+def test_resolve_tag_sha_non_dict_json_returns_none(mocker) -> None:
+    # A proxy/error page can hand back well-formed JSON that isn't an object
+    # (list/string). ``.get`` would then raise AttributeError — assert we
+    # degrade to None instead, keeping the never-raise contract.
+    response = MagicMock(status_code=200)
+    response.json.return_value = ["not", "a", "dict"]
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_tag_sha("v26.2.0") is None
+
+
 def test_resolve_tag_sha_rejects_malformed_sha(mocker) -> None:
     response = MagicMock(status_code=200)
     response.json.return_value = {"sha": "not-a-real-sha"}
