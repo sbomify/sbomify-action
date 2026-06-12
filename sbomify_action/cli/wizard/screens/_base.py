@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, ClassVar
 
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import Screen
@@ -25,6 +26,28 @@ if TYPE_CHECKING:
 
 
 TOTAL_STEPS = 8
+
+# Responsive breakpoints (terminal cells). The wizard is a fit-to-viewport
+# TUI — nothing scrolls — so every screen has to render inside whatever the
+# terminal gives us. Three tiers, each guaranteed to fit at its lower bound:
+#
+#   * Below MIN_* even the fully-compacted layout can't fit, so we replace
+#     the body with a "resize your terminal" prompt (k9s / lazygit do the
+#     same). 80x24 is the classic default terminal size.
+#   * Below ROOMY_* we shed the roomy "comfortable" layout: the welcome
+#     "what we'll do" preview (redundant with the progress crumb) is
+#     dropped and paddings tighten, via the ``-compact`` class.
+#   * The welcome mascot is governed separately by ART_* — it's the single
+#     tallest element, but it still fits in far more terminals than the
+#     full comfortable layout does, so we keep showing the art whenever
+#     there's room for it (its own ``-no-art`` opt-out below the bound).
+MIN_WIDTH = 80
+MIN_HEIGHT = 24
+ART_WIDTH = 100
+ART_HEIGHT = 42
+PREVIEW_HEIGHT = 48
+ROOMY_WIDTH = 100
+ROOMY_HEIGHT = 63
 
 
 class WizardScreen(Screen[None]):
@@ -44,7 +67,56 @@ class WizardScreen(Screen[None]):
             if self.step_subtitle:
                 yield Static(self.step_subtitle, classes="wizard-subtitle")
             yield from self.compose_body()
+        # Shown (and the body hidden) only when the terminal is below the
+        # minimum supported size — see ``_apply_responsive``. The text is
+        # filled in on resize so it can quote the live dimensions.
+        yield Static("", id="too-small")
         yield Footer()
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._apply_responsive(event.size.width, event.size.height)
+
+    def _apply_responsive(self, width: int, height: int) -> None:
+        """Toggle responsive classes from the current terminal size.
+
+        Three independent toggles (CSS in ``styles.tcss`` keys off them):
+
+        * ``-tiny`` — below the supported minimum: swap the whole body for
+          a resize prompt.
+        * ``-compact`` — below the roomy bound: drop the "what we'll do"
+          preview and tighten padding so the content still fits.
+        * ``-no-art`` — below the art bound: hide the welcome mascot. Kept
+          separate from ``-compact`` because the art fits in many terminals
+          that are still too short for the full comfortable layout, so a
+          "compact but show the art" middle tier is the common case.
+        * ``-no-preview`` — below the preview bound: hide the welcome "what
+          we'll do" list. Also its own bound (the list is short text that
+          fits well below the roomy layout) so we keep showing it rather
+          than leaving the screen half-empty on a medium-tall terminal.
+        """
+        too_small = width < MIN_WIDTH or height < MIN_HEIGHT
+        roomy = width >= ROOMY_WIDTH and height >= ROOMY_HEIGHT
+        show_art = width >= ART_WIDTH and height >= ART_HEIGHT
+        show_preview = height >= PREVIEW_HEIGHT
+        self.set_class(too_small, "-tiny")
+        self.set_class(not too_small and not roomy, "-compact")
+        self.set_class(not too_small and not show_art, "-no-art")
+        self.set_class(not too_small and not show_preview, "-no-preview")
+        if too_small:
+            try:
+                self.query_one("#too-small", Static).update(self._too_small_markup(width, height))
+            except Exception:  # noqa: BLE001 — node not mounted yet; next resize repaints
+                pass
+
+    @staticmethod
+    def _too_small_markup(width: int, height: int) -> str:
+        """Centered 'please resize' notice quoting the live terminal size."""
+        return (
+            "[b #F4B57F]⚠  Terminal too small[/]\n\n"
+            f"[#CBCCCE]Current size[/]  [b]{width}×{height}[/]\n"
+            f"[#CBCCCE]Minimum size[/]  [b]{MIN_WIDTH}×{MIN_HEIGHT}[/]\n\n"
+            "[#8A7DFF]Resize this window to continue.[/]"
+        )
 
     def compose_body(self) -> ComposeResult:
         """Override to yield body widgets (panels, inputs, tables, …)."""

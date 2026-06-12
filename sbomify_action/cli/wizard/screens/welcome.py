@@ -118,7 +118,7 @@ class WelcomeScreen(WizardScreen):
         # step indicator at the top of every screen so the mental model
         # is consistent throughout the wizard.
         if self.wizard.state.discovered:
-            steps = Vertical(classes="wizard-panel")
+            steps = Vertical(classes="wizard-panel", id="what-well-do")
             steps.border_title = "What we'll do"
             steps.border_subtitle = "8 steps · ~3 minutes"
             with steps:

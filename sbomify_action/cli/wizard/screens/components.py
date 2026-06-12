@@ -62,7 +62,7 @@ class ComponentsScreen(WizardScreen):
                 "existing component (or leave on [b]Create new[/]), then "
                 "[b]Tab[/] to edit the new-component name. [b]Enter[/] / "
                 "[b]Next[/] when done.",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
 
         # Each lockfile gets its own card so the relationship between
