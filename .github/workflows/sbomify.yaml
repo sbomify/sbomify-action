@@ -1087,13 +1087,14 @@ jobs:
 
           GHCR_REPO="ghcr.io/$(echo "${GH_REPO_OWNER}/${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
           DOCKERHUB_REPO="sbomifyhub/${IMAGE_NAME}"
+          BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 
           {
             echo "version=${VERSION}"
             echo "image_tag=${IMAGE_TAG}"
             echo "ghcr_repo=${GHCR_REPO}"
             echo "dockerhub_repo=${DOCKERHUB_REPO}"
-            echo "build_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            echo "build_date=${BUILD_DATE}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
