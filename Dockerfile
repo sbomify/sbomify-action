@@ -200,6 +200,15 @@ RUN conan profile detect --force
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# Advertise 24-bit colour so the Textual wizard renders the sbomify brand
+# palette correctly. `docker run -it` allocates a TTY with TERM=xterm and
+# never sets COLORTERM, so Rich/Textual would otherwise detect only the
+# 16-colour "standard" system and downsample the brand hex colours
+# (#141035, #8A7DFF, …) to muddy ANSI greys. COLORTERM is the deciding
+# lever: Docker never sets it implicitly, so this image value is the
+# effective default (a runtime `-e COLORTERM=…` still overrides it).
+ENV COLORTERM=truecolor
+
 # Runtime version information (from build args)
 ENV SBOMIFY_GITHUB_ACTION_VERSION=${VERSION}
 ENV SBOMIFY_GITHUB_ACTION_COMMIT_SHA=${COMMIT_SHA}
