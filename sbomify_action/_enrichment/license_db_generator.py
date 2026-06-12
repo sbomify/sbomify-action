@@ -34,7 +34,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -42,6 +41,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Tuple
 from urllib.parse import urljoin
 
+import defusedxml.ElementTree as ET  # hardened against XXE; parses untrusted remote XML
 import requests
 from packageurl import PackageURL
 

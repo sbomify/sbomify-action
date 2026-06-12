@@ -77,6 +77,7 @@ def _run_crane(args: list[str]) -> str:
     """Run a crane command and return stdout."""
     cmd = ["crane"] + args
     logger.debug(f"Running: {' '.join(cmd)}")
+    # nosemgrep: dangerous-subprocess-use-audit  # list-form, shell=False, fixed executable
     result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
     return result.stdout
 
@@ -85,6 +86,7 @@ def _run_cosign(args: list[str]) -> str:
     """Run a cosign command and return stdout."""
     cmd = ["cosign"] + args
     logger.debug(f"Running: {' '.join(cmd)}")
+    # nosemgrep: dangerous-subprocess-use-audit  # list-form, shell=False, fixed executable
     result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
     return result.stdout
 

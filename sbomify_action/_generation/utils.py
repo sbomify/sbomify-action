@@ -352,6 +352,11 @@ def run_command(
     progress_thread.start()
 
     try:
+        # Safe by invariant: the executable (cmd[0]) is always an internal generator
+        # constant ("syft", "cdxgen", "trivy", ...), never user-controlled. Untrusted
+        # values (lockfile paths, image refs) reach only argv, and shell=False means
+        # no shell parsing — so neither command nor shell injection is reachable.
+        # nosemgrep: dangerous-subprocess-use-audit
         result = subprocess.run(
             cmd,
             capture_output=capture_output,
