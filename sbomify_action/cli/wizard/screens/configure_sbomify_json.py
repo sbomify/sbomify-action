@@ -22,13 +22,12 @@ from __future__ import annotations
 import json
 
 from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical
 from textual.css.query import NoMatches
-from textual.widgets import Button, Input, RadioButton, RadioSet, Static
+from textual.widgets import Input, RadioButton, RadioSet, Static
 
 from sbomify_action.cli.wizard.io import WIZARD_JSON_SENTINEL_KEY, sbomify_json_has_wizard_sentinel
-from sbomify_action.cli.wizard.screens._base import WizardScreen
+from sbomify_action.cli.wizard.screens._paged import PagedFormScreen
 
 # Constructor calls use the wizard's state-aware glyph subclass; the
 # base RadioButton import stays for ``rs.query(RadioButton)`` below.
@@ -47,19 +46,29 @@ _LIFECYCLE_PHASES: list[tuple[str, str]] = [
 ]
 
 
-class ConfigureSbomifyJsonScreen(WizardScreen):
-    """Collect the fields written to ``sbomify.json``."""
+class ConfigureSbomifyJsonScreen(PagedFormScreen):
+    """Collect the fields written to ``sbomify.json``.
+
+    The field set is larger than an 80×24 terminal can hold, so it's
+    split into three fit-to-viewport pages (see ``PagedFormScreen``):
+    Supplier → Manufacturer / author / security → Lifecycle.
+    """
 
     step_index = 7
     step_title = "Configure (sbomify.json)"
     step_subtitle = "Organisational metadata written to the repo, version-controlled alongside the code."
 
-    BINDINGS = [
-        Binding("enter", "submit", "Save ▸", show=True, priority=True),
-        Binding("escape", "app.pop_screen", "Back", show=True, priority=True),
-    ]
+    PAGE_TITLES = ["Supplier", "Manufacturer · author · security", "Lifecycle"]
 
-    def compose_body(self) -> ComposeResult:
+    def compose_page(self, index: int) -> ComposeResult:
+        if index == 0:
+            yield from self._compose_supplier_page()
+        elif index == 1:
+            yield from self._compose_parties_page()
+        else:
+            yield from self._compose_lifecycle_page()
+
+    def _compose_supplier_page(self) -> ComposeResult:
         intro = Vertical(classes="wizard-panel")
         intro.border_title = "◆  sbomify.json fields"
         intro.border_subtitle = "saved to the repository root"
@@ -68,7 +77,7 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
                 "[#5E5E5E]Fields marked [#F4B57F]required[/] satisfy NTIA / CISA / EU CRA "
                 "minimum elements. The rest are optional — most are CRA-recommended and can be "
                 "added later by editing [b]sbomify.json[/] directly.[/]",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             # If a hand-authored sbomify.json is already on disk (no wizard
             # sentinel), apply will refuse to overwrite it — any edits the
@@ -76,7 +85,8 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
             # only. Warn loudly at the top of the form so the user can decide
             # whether to delete the file or skip the edit. Wizard-stamped
             # files don't surface a warning (apply rewrites them as part of
-            # the normal flow, with a .bak fallback).
+            # the normal flow, with a .bak fallback). This is a warning, not
+            # help text, so it keeps the ``wizard-muted`` class (never hidden).
             if self._existing_file_is_hand_authored():
                 yield Static(
                     "[#F4B57F]⚠ Heads up:[/] [b]sbomify.json[/] already exists in this "
@@ -95,19 +105,20 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
         with sup:
             yield Static(
                 "[#F4B57F]Name required[/] — email + website strongly recommended.",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             yield Input(placeholder="Supplier name (e.g. Acme Inc.)", id="sup-name")
             yield Input(placeholder="Supplier email (e.g. hello@acme.com)", id="sup-email")
             yield Input(placeholder="Supplier website (e.g. https://acme.com)", id="sup-url")
 
+    def _compose_parties_page(self) -> ComposeResult:
         man = Vertical(classes="wizard-panel")
         man.border_title = "◇  Manufacturer"
         man.border_subtitle = "the entity that created the software (optional, may differ from supplier)"
         with man:
             yield Static(
                 "[#5E5E5E]Optional — leave blank when supplier and manufacturer are the same.[/]",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             yield Input(placeholder="Manufacturer name (optional)", id="man-name")
             yield Input(placeholder="Manufacturer email (optional)", id="man-email")
@@ -120,7 +131,7 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
             yield Static(
                 "[#5E5E5E]Optional but [b]recommended[/] — satisfies NTIA's "
                 "[b]Author of SBOM Data[/] minimum element.[/]",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             yield Input(placeholder="Author name (optional)", id="author-name")
             yield Input(placeholder="Author email (optional)", id="author-email")
@@ -132,13 +143,14 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
             yield Static(
                 "[#5E5E5E]URL, [b]mailto:[/], or [b]tel:[/] — eg "
                 "[#8A7DFF u]https://example.com/.well-known/security.txt[/]. CRA-recommended.[/]",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             yield Input(
                 placeholder="Security contact URI (optional)",
                 id="security-contact",
             )
 
+    def _compose_lifecycle_page(self) -> ComposeResult:
         lifecycle = Vertical(classes="wizard-panel")
         lifecycle.border_title = "◇  Lifecycle phase"
         lifecycle.border_subtitle = "CycloneDX 1.5+ field, CISA framing"
@@ -147,7 +159,7 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
                 "[#5E5E5E]Where this software sits in its lifecycle today. Most repos that "
                 "produce shipped artifacts pick [b]Build[/]; libraries in active development "
                 "pick [b]Development[/].[/]",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             with RadioSet(id="lifecycle"):
                 for phase, label in _LIFECYCLE_PHASES:
@@ -160,17 +172,11 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
             yield Static(
                 "[#5E5E5E]Required for some EU CRA submissions and helpful for any consumer "
                 "needing EOL / EOS planning.[/]",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             yield Input(placeholder="Release date (YYYY-MM-DD)", id="release-date")
             yield Input(placeholder="Support period end (YYYY-MM-DD)", id="support-end")
             yield Input(placeholder="End of life (YYYY-MM-DD)", id="end-of-life")
-
-        yield Static("", id="sbomify-json-status", markup=True)
-
-        with Horizontal(classes="button-row"):
-            yield Button("◂ Back", id="back")
-            yield Button("Save  ▸", id="save", variant="primary")
 
     def on_mount(self) -> None:
         # Pre-populate from previously-saved plan data so the user can come
@@ -184,22 +190,13 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
             self._populate_from(prior)
         self.query_one("#sup-name", Input).focus()
 
-    def action_submit(self) -> None:
-        # Enter is handled here only — the priority=True binding on
-        # this screen consumes Enter before any focused Input can fire
-        # Input.Submitted, so an on_input_submitted handler would be
-        # unreachable dead code.
-        self.route_enter(self._save)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
-        elif event.button.id == "save":
-            self._save()
-
-    def _save(self) -> None:
+    def save(self) -> None:
         sup_name = self.query_one("#sup-name", Input).value.strip()
         if not sup_name:
+            # Supplier name is the only required field and it lives on the
+            # first page (index 0) — jump back to it so the error points at
+            # the empty input even if the user pressed Save from a later page.
+            self._goto_page(0)
             self._set_status("[#F87171]Supplier name is required (it's an NTIA minimum element).[/]")
             return
 
@@ -263,9 +260,6 @@ class ConfigureSbomifyJsonScreen(WizardScreen):
         if pressed is None or not pressed.id:
             return None
         return pressed.id.split("-", 1)[1]
-
-    def _set_status(self, markup: str) -> None:
-        self.query_one("#sbomify-json-status", Static).update(markup)
 
     def _populate_from(self, data: dict[str, object]) -> None:
         """Re-fill inputs from a previously-saved sbomify_json_data dict.

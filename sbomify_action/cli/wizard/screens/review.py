@@ -40,7 +40,7 @@ class ReviewScreen(WizardScreen):
         with components:
             yield DataTable(id="components-table", cursor_type="none", zebra_stripes=True)
 
-        diff_panel = Vertical(classes="wizard-panel")
+        diff_panel = Vertical(classes="wizard-panel", id="diff-panel")
         target = workflow_path(self.wizard.state.facts.repo_root)
         verb = "overwrite" if self.wizard.state.workflow_exists else "create"
         diff_panel.border_title = f"◆  Diff — {verb} {target}"

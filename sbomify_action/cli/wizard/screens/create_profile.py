@@ -21,22 +21,25 @@ ConfigureSbom, which auto-selects the freshly-created profile.
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Input, Static
+from textual.containers import Vertical
+from textual.widgets import Input, Static
 from textual.worker import Worker, WorkerState
 
-from sbomify_action.cli.wizard.screens._base import WizardScreen
+from sbomify_action.cli.wizard.screens._paged import PagedFormScreen
 from sbomify_action.exceptions import APIError
 from sbomify_action.logging_config import logger
 
 
-class CreateProfileScreen(WizardScreen):
+class CreateProfileScreen(PagedFormScreen):
     """Modal-style screen for creating a new contact profile via the API.
 
     Doesn't claim its own step in the crumb track — it's a sub-flow off
     Configure (SBOM). The user lands back on ConfigureSbom afterwards
     with the new profile selected.
+
+    The field set doesn't fit an 80×24 terminal, so it's split into two
+    fit-to-viewport pages (see ``PagedFormScreen``): identity +
+    organisation, then security contact + author.
     """
 
     step_index = 7
@@ -46,12 +49,15 @@ class CreateProfileScreen(WizardScreen):
         "and the EU CRA list as minimum SBOM elements."
     )
 
-    BINDINGS = [
-        Binding("enter", "submit", "Create profile ▸", show=True, priority=True),
-        Binding("escape", "app.pop_screen", "Back", show=True, priority=True),
-    ]
+    PAGE_TITLES = ["Identity & organisation", "Security & author"]
 
-    def compose_body(self) -> ComposeResult:
+    def compose_page(self, index: int) -> ComposeResult:
+        if index == 0:
+            yield from self._compose_org_page()
+        else:
+            yield from self._compose_contacts_page()
+
+    def _compose_org_page(self) -> ComposeResult:
         intro = Vertical(classes="wizard-panel")
         intro.border_title = "◆  New contact profile"
         intro.border_subtitle = "saved to your sbomify workspace"
@@ -60,7 +66,7 @@ class CreateProfileScreen(WizardScreen):
                 "[#5E5E5E]Fields marked [#F4B57F]required[/] are needed for the API call AND "
                 "for NTIA / CISA / EU CRA compliance. Everything else is optional and can be "
                 "edited later in the sbomify UI.[/]",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
 
         # Profile identity — internal label used to pick this profile
@@ -69,7 +75,7 @@ class CreateProfileScreen(WizardScreen):
         ident.border_title = "◇  Profile name"
         ident.border_subtitle = "internal label, free-text"
         with ident:
-            yield Static("[#F4B57F]required[/]", classes="wizard-muted")
+            yield Static("[#F4B57F]required[/]", classes="wizard-help")
             yield Input(
                 placeholder="e.g. 'Acme default' or 'Production releases'",
                 id="profile-name",
@@ -82,7 +88,7 @@ class CreateProfileScreen(WizardScreen):
         with org:
             yield Static(
                 "[#F4B57F]Name and email required[/] — feed the SBOM's [b]supplier[/] and [b]manufacturer[/] fields.",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             yield Input(placeholder="Organisation name (e.g. Acme Inc.)", id="org-name")
             yield Input(placeholder="Organisation email (e.g. hello@acme.com)", id="org-email")
@@ -93,6 +99,7 @@ class CreateProfileScreen(WizardScreen):
                 id="org-website",
             )
 
+    def _compose_contacts_page(self) -> ComposeResult:
         # Security contact — the backend rejects entities without at
         # least one contact, and the EU CRA requires a security contact.
         sec = Vertical(classes="wizard-panel")
@@ -102,7 +109,7 @@ class CreateProfileScreen(WizardScreen):
             yield Static(
                 "[#F4B57F]Name and email required[/] — listed as the "
                 "[b]security contact[/] on every SBOM this workflow generates.",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             yield Input(placeholder="Security contact name", id="sec-name")
             yield Input(placeholder="Security contact email", id="sec-email")
@@ -118,35 +125,15 @@ class CreateProfileScreen(WizardScreen):
                 "CycloneDX [b]authors[/] field and satisfies NTIA's [b]Author of SBOM Data[/] "
                 "minimum element. Skip if a tool (eg sbomify-action itself) will be credited "
                 "as the author instead.[/]",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             yield Input(placeholder="Author name (optional)", id="author-name")
             yield Input(placeholder="Author email (optional)", id="author-email")
 
-        # Status line for inline error/progress feedback.
-        yield Static("", id="profile-status", markup=True)
-
-        with Horizontal(classes="button-row"):
-            yield Button("◂ Back", id="back")
-            yield Button("Create profile  ▸", id="submit", variant="primary")
-
     def on_mount(self) -> None:
         self.query_one("#profile-name", Input).focus()
 
-    def action_submit(self) -> None:
-        # Enter is handled here only — the priority=True binding on
-        # this screen consumes Enter before any focused Input can fire
-        # Input.Submitted, so an on_input_submitted handler would be
-        # unreachable dead code.
-        self.route_enter(self._submit)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
-        elif event.button.id == "submit":
-            self._submit()
-
-    def _submit(self) -> None:
+    def save(self) -> None:
         """Validate, build the payload, and POST it on a worker thread."""
         if self.wizard.state.workspace is None or not self.wizard.state.workspace.team_key:
             self._set_status("[#F87171]No workspace key available — can't create a profile.[/]")
@@ -158,6 +145,9 @@ class CreateProfileScreen(WizardScreen):
         sec_name = self.query_one("#sec-name", Input).value.strip()
         sec_email = self.query_one("#sec-email", Input).value.strip()
 
+        # Profile name + organisation live on page 1, the security contact
+        # on page 2. Jump to whichever page owns the first missing field so
+        # the error lands next to the empty input.
         missing: list[str] = []
         if not name:
             missing.append("profile name")
@@ -170,6 +160,8 @@ class CreateProfileScreen(WizardScreen):
         if not sec_email:
             missing.append("security contact email")
         if missing:
+            page_for_missing = 0 if (not name or not org_name or not org_email) else 1
+            self._goto_page(page_for_missing)
             self._set_status(f"[#F87171]Missing required field(s): {', '.join(missing)}.[/]")
             return
 
@@ -207,7 +199,7 @@ class CreateProfileScreen(WizardScreen):
             payload["authors"] = [{"name": author_name, "email": author_email}]
 
         self._set_status("[#CBCCCE]Creating profile…[/]")
-        self.query_one("#submit", Button).disabled = True
+        self.next_button.disabled = True
         self.run_worker(
             lambda: self._create_worker(payload),
             name="create-profile",
@@ -243,7 +235,7 @@ class CreateProfileScreen(WizardScreen):
             # the user to submit a duplicate.
             if isinstance(result, str):
                 self._set_status(f"[#F87171]✗  {result}[/]")
-                self.query_one("#submit", Button).disabled = False
+                self.next_button.disabled = False
                 return
             if isinstance(result, dict) and result.get("id"):
                 # Append to the workspace snapshot so ConfigureSbom's
@@ -264,10 +256,7 @@ class CreateProfileScreen(WizardScreen):
                 "unexpected. Check the sbomify UI under Settings → Contacts before "
                 "re-submitting to avoid creating a duplicate.[/]"
             )
-            self.query_one("#submit", Button).disabled = False
+            self.next_button.disabled = False
         elif event.state == WorkerState.ERROR:
             self._set_status(f"[#F87171]✗  Unexpected error: {event.worker.error}[/]")
-            self.query_one("#submit", Button).disabled = False
-
-    def _set_status(self, markup: str) -> None:
-        self.query_one("#profile-status", Static).update(markup)
+            self.next_button.disabled = False

@@ -65,7 +65,7 @@ class ConfigureSbomScreen(WizardScreen):
                 "license compliance, and [b]NTIA minimum elements[/]. Enrichment fills these "
                 "from package registries (PyPI, crates.io, deps.dev, Repology, LicenseDB) "
                 "so the SBOMs the workflow produces meet the bar regulators ask for.[/]",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             with RadioSet(id="enrich"):
                 yield StatefulRadioButton(
@@ -96,7 +96,7 @@ class ConfigureSbomScreen(WizardScreen):
                 "and the [b]EU Cyber Resilience Act[/], so SBOMs without them fail compliance "
                 "checks. A sbomify contact profile fills these in for every SBOM the workflow "
                 "produces.[/]",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             with RadioSet(id="augmentation"):
                 yield StatefulRadioButton("Skip — leave metadata blank for now", id="aug-skip", value=True)
@@ -153,7 +153,13 @@ class ConfigureSbomScreen(WizardScreen):
         attest.border_title = "◆  Build provenance"
         attest.border_subtitle = "signed attestations via sigstore"
         with attest:
-            yield Static(self._attestation_note(), classes="wizard-muted")
+            headline, detail = self._attestation_note()
+            yield Static(headline, classes="wizard-muted")
+            # The plan-tier breakdown is several rows of detail — keep it
+            # on roomy terminals but let it drop on tight ones (the
+            # headline already carries the public/private verdict). Both
+            # branches of _attestation_note always return a detail string.
+            yield Static(detail, classes="wizard-help")
             with RadioSet(id="attestation"):
                 yield StatefulRadioButton(
                     "Sign SBOMs with attest-build-provenance  [#86EFAC]✓ recommended for releases[/]",
@@ -170,27 +176,33 @@ class ConfigureSbomScreen(WizardScreen):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")
 
-    def _attestation_note(self) -> str:
-        """Visibility-gated note above the attestation radio set."""
+    def _attestation_note(self) -> tuple[str, str]:
+        """Visibility-gated note above the attestation radio set.
+
+        Returns ``(headline, detail)`` — the headline carries the
+        public/private verdict and always renders; the detail is the
+        plan-tier breakdown, shown on roomy terminals and dropped on
+        tight ones (it's tagged ``wizard-help`` by the caller).
+        """
         visibility = self.wizard.state.facts.visibility
         if visibility == "public":
             return (
                 "[#86EFAC]✓  Public repository[/] — attestation is supported on any GitHub plan, "
-                "signed via the public-good Sigstore instance.\n"
-                "[#5E5E5E]The same note is emitted as a comment in the generated workflow.[/]"
+                "signed via the public-good Sigstore instance.",
+                "[#5E5E5E]The same note is emitted as a comment in the generated workflow.[/]",
             )
         warning_tone = (
             "[#F4B57F]⚠  Private repository[/]" if visibility == "private" else "[#5E5E5E]◌  Visibility unknown[/]"
         )
         return (
-            f"{warning_tone} — attestation has plan-tier requirements:\n"
+            f"{warning_tone} — attestation has plan-tier requirements.",
             "[#86EFAC]✓  Supported[/]\n"
             "    • Public repos on any GitHub plan  (public-good Sigstore)\n"
             "    • Private/internal repos on [b]GitHub Enterprise Cloud[/]  (private Sigstore)\n"
             "[#F87171]✗  Not supported[/]\n"
             "    • Private/internal repos on Free, Pro, or Team — the workflow will fail\n"
             "    • Any repo on GitHub Enterprise Server\n"
-            "[#5E5E5E]The same note is emitted as a comment in the generated workflow.[/]"
+            "[#5E5E5E]The same note is emitted as a comment in the generated workflow.[/]",
         )
 
     # Sentinel id used by the "+ Create a new profile" row at the top

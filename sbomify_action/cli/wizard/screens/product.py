@@ -36,7 +36,7 @@ class ProductScreen(WizardScreen):
                 "Use [b]↑/↓[/] to highlight a product (or leave on "
                 "[b]Create new[/]), then [b]Tab[/] to edit the new-product "
                 "name. [b]Enter[/] when done.",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             # Escape API-supplied names before passing them as picker
             # labels — PickOrCreate's OptionList renders labels as Rich
