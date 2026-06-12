@@ -69,6 +69,23 @@ Footer > .footer--key {
     margin-bottom: 1;
 }
 
+/* Paged forms (see screens/_paged.py) — the "Step n of N · Title" header
+ * that replaces the static subtitle on multi-page forms. Unlike the
+ * subtitle it stays visible in compact mode (it's the only cue to which
+ * page you're on). */
+.wizard-page-indicator {
+    color: $sbom-purple;
+    margin-bottom: 1;
+}
+
+.form-page {
+    height: auto;
+}
+
+#form-status {
+    height: auto;
+}
+
 /* Card panels — modern devsecops-CLI shape: rounded border with a
  * named title bar (set via widget.border_title). Padding gives the
  * content room to breathe; bottom margin keeps stacked cards from
@@ -104,6 +121,16 @@ Footer > .footer--key {
 }
 
 .wizard-muted {
+    color: $sbom-text-muted;
+    margin-bottom: 1;
+}
+
+/* Explanatory / rationale prose (the "why" copy and keyboard hints above
+ * a control) — styled like muted text, but tagged separately so the
+ * responsive layer can drop it on tight terminals while keeping warnings
+ * and status lines (which stay ``wizard-muted``). See the ``-compact``
+ * rule near the foot of this file. */
+.wizard-help {
     color: $sbom-text-muted;
     margin-bottom: 1;
 }
@@ -289,9 +316,17 @@ SelectionList, OptionList, ListView {
     max-height: 20;
 }
 
-/* Product / Components: per-widget sizing now lives on the
- * PickOrCreate widget's DEFAULT_CSS — both screens render identical
- * pickers via the shared component. */
+/* Product / Components: the picker's OptionList must size to its
+ * content (a "create new" row + however many existing items), NOT grab
+ * 1fr. PickOrCreate's DEFAULT_CSS says as much, but the generic
+ * ``OptionList { height: 1fr }`` rule above is app-origin and outranks
+ * widget DEFAULT_CSS, so without this app-level override the picker
+ * balloons to fill the screen and shoves the Next button off the
+ * bottom. Re-assert auto + a cap here where it can win. */
+PickOrCreate > OptionList {
+    height: auto;
+    max-height: 10;
+}
 
 /* Review screen — DataTable of planned components defaults to 1fr
  * from the generic `DataTable` rule above. Override for #components-
@@ -324,13 +359,17 @@ SelectionList, OptionList, ListView {
     color: $sbom-text-muted;
 }
 
-/* Review screen — RichLog rendering the unified diff between the
- * existing workflow file (if any) and what apply will write. Cap
- * height so a large diff scrolls inside the panel instead of pushing
- * the Apply / Back buttons off-screen. */
+/* Review screen — the diff panel is the screen's flexible region: it
+ * takes 1fr so it soaks up whatever vertical space is left after the
+ * (fixed-height) plan summary, components table, and button row, and
+ * the RichLog inside scrolls. This pins Apply / Back on screen at any
+ * terminal height without the page itself ever scrolling. */
+#diff-panel {
+    height: 1fr;
+}
+
 #workflow-diff {
-    height: auto;
-    max-height: 20;
+    height: 1fr;
 }
 
 /* Apply screen — live log of apply_plan's progress. Same problem as
@@ -413,4 +452,178 @@ RichLog {
     border: round $sbom-primary-600;
     height: 1fr;
     color: $sbom-text-muted;
+}
+
+/* ---------------------------------------------------------------------
+ * Responsive layout
+ *
+ * The wizard fits the viewport — nothing scrolls. ``WizardScreen``
+ * (_base.py) toggles ``-compact`` / ``-tiny`` on the screen from the
+ * live terminal size; the rules below react to those classes.
+ * --------------------------------------------------------------------- */
+
+/* Too-small guard — below the supported minimum (80x24) we hide the
+ * normal body and show a centered resize prompt in its place. Hidden by
+ * default; the screen only carries ``-tiny`` when it's genuinely too
+ * small to render. */
+#too-small {
+    display: none;
+    height: 1fr;
+    width: 1fr;
+    content-align: center middle;
+    text-align: center;
+}
+
+.-tiny .wizard-body {
+    display: none;
+}
+
+.-tiny #too-small {
+    display: block;
+}
+
+/* Art opt-out — the welcome mascot is the single tallest element, so it
+ * has its own breakpoint (see ART_* in _base.py): we keep showing it
+ * wherever it fits, and only hide it on terminals too short/narrow for
+ * the two-column hero. The text column carries the message on its own. */
+.-no-art .wizard-hero-mascot {
+    display: none;
+}
+
+/* The welcome "What we'll do" preview has its own bound (PREVIEW_HEIGHT)
+ * rather than riding on ``-compact``: it's a short text list that fits in
+ * far more terminals than the full comfortable layout, so we keep showing
+ * it down to medium-tall terminals and only drop it when genuinely short.
+ * (The progress crumb already communicates the eight steps regardless.) */
+.-no-preview #what-well-do {
+    display: none;
+}
+
+/* Compact mode — terminal is usable but below the roomy bound. Flatten
+ * the vertical padding / margins that exist purely to let the comfortable
+ * layout breathe. Everything here is additive over the comfortable
+ * defaults above, so a roomy terminal is completely unaffected. */
+
+.-compact .wizard-body {
+    padding: 0 2;
+}
+
+.-compact .wizard-hero {
+    padding: 0 2;
+    margin-bottom: 1;
+}
+
+.-compact .wizard-panel,
+.-compact .wizard-panel-emphasis {
+    padding: 0 2;
+    margin-bottom: 0;
+}
+
+.-compact .wizard-step-crumb,
+.-compact .wizard-hero-title,
+.-compact .wizard-hero-tagline,
+.-compact .wizard-title,
+.-compact .wizard-muted,
+.-compact .wizard-page-indicator {
+    margin-bottom: 0;
+}
+
+/* The per-screen subtitle is a secondary one-liner — the progress crumb
+ * already names the current step — so drop it on tight terminals to
+ * reclaim a row (two when it wraps). */
+.-compact .wizard-subtitle {
+    display: none;
+}
+
+/* Form controls: in the comfortable layout each Label has a top margin
+ * and each Input a bottom margin so fields breathe. On tight terminals
+ * those single-row gaps add up fast across a multi-field form — collapse
+ * them so the form body reclaims a row per control. */
+.-compact Label {
+    margin-top: 0;
+}
+
+/* A full Textual Input box is 3 rows (top border + text + bottom border).
+ * Across a multi-field form that's the dominant cost, so on tight
+ * terminals slim each Input to 2 rows — a single underline border that
+ * still separates adjacent fields and still carries the focus / invalid
+ * cue (purple when focused, red when invalid). */
+.-compact Input {
+    margin: 0;
+    height: 2;
+    min-height: 2;
+    border: none;
+    border-bottom: tall $sbom-primary-600;
+}
+
+.-compact Input:focus {
+    border: none;
+    border-bottom: tall $sbom-purple;
+}
+
+.-compact Input.-invalid {
+    border: none;
+    border-bottom: tall #F87171;
+}
+
+/* Progressive disclosure — drop the explanatory rationale prose so the
+ * controls fit. Warnings and status lines stay (they're ``wizard-muted``,
+ * not ``wizard-help``). The full copy returns on roomy terminals. */
+.-compact .wizard-help {
+    display: none;
+}
+
+/* Capped scrollable regions — lists / tables / logs already scroll
+ * inside their own box, so on tight terminals we just lower the cap.
+ * The content is still fully reachable via the widget's own scrollbar;
+ * only the page itself never scrolls. */
+.-compact PickOrCreate > OptionList {
+    max-height: 6;
+}
+
+.-compact #lockfile-list {
+    max-height: 8;
+}
+
+.-compact #apply-log {
+    max-height: 8;
+}
+
+/* Review's components table scrolls internally; cap it hard on tight
+ * terminals so a long component list can't crowd out the plan summary
+ * or the diff (which is the 1fr flex region — see #diff-panel above). */
+.-compact #components-table {
+    max-height: 4;
+}
+
+.-compact #profile-picker {
+    max-height: 5;
+}
+
+.-compact .button-row {
+    padding-top: 0;
+    height: 1;
+}
+
+/* Flatten the action buttons on tight terminals: a bordered Textual
+ * Button is 3 rows tall (top border + label + bottom border); dropping
+ * the border makes each row-of-buttons 1 row instead of 3, reclaimed on
+ * every screen. The border normally doubles as the focus ring, so swap
+ * in a background/bold focus cue that reads without it. */
+.-compact .button-row Button {
+    border: none;
+    height: 1;
+    min-height: 1;
+}
+
+.-compact .button-row Button:focus {
+    background: $sbom-purple;
+    color: $sbom-primary;
+    text-style: bold;
+}
+
+.-compact .button-row Button.-primary:focus {
+    background: $sbom-grad-peach;
+    color: $sbom-primary;
+    text-style: bold;
 }

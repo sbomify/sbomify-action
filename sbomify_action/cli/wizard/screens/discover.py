@@ -36,7 +36,7 @@ class DiscoverScreen(WizardScreen):
             yield Static(
                 "Use [b]Space[/] to toggle each lockfile, [b]a[/] to select all, "
                 "[b]n[/] to select none, [b]Enter[/] when you're done.",
-                classes="wizard-muted",
+                classes="wizard-help",
             )
             yield SelectionList[int](id="lockfile-list")
             yield Static("", id="discover-status", markup=True)

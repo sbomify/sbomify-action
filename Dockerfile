@@ -173,6 +173,14 @@ LABEL com.sbomify.maintainer="sbomify <hello@sbomify.com>" \
       com.sbomify.vcs.branch="${VCS_REF}" \
       com.sbomify.vcs.commit="${COMMIT_SHA}"
 
+# git is needed at runtime: the wizard reads repo facts (remote name,
+# branch, visibility) from the bind-mounted workspace, and slim images
+# don't ship it. Without it those facts silently degrade to folder-name
+# and "unknown" visibility.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git && \
+    rm -rf /var/lib/apt/lists/*
+
 # Note: Java/Maven is installed on-demand at runtime when processing Java/Scala projects
 # This reduces the base image size by ~330MB for non-Java workloads
 
@@ -199,6 +207,15 @@ RUN conan profile detect --force
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+
+# Advertise 24-bit colour so the Textual wizard renders the sbomify brand
+# palette correctly. `docker run -it` allocates a TTY with TERM=xterm and
+# never sets COLORTERM, so Rich/Textual would otherwise detect only the
+# 16-colour "standard" system and downsample the brand hex colours
+# (#141035, #8A7DFF, …) to muddy ANSI greys. COLORTERM is the deciding
+# lever: Docker never sets it implicitly, so this image value is the
+# effective default (a runtime `-e COLORTERM=…` still overrides it).
+ENV COLORTERM=truecolor
 
 # Runtime version information (from build args)
 ENV SBOMIFY_GITHUB_ACTION_VERSION=${VERSION}

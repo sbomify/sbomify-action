@@ -33,8 +33,13 @@ def gather_repo_facts(repo_root: Path) -> RepoFacts:
     if is_git:
         remote_url = _git(["config", "--get", "remote.origin.url"], cwd=repo_root) or None
         if remote_url:
+            # owner_repo_slug stays github-only (it feeds OIDC binding
+            # instructions where a wrong value is harmful), but the bare
+            # repo *name* can be read from any remote — GitLab, Bitbucket,
+            # self-hosted, nested groups — so we don't fall back to the
+            # checkout's directory name just because the host isn't github.
             owner_repo_slug = _parse_owner_repo_slug(remote_url)
-            suggested_repo_name = owner_repo_slug.split("/", 1)[1] if owner_repo_slug else None
+            suggested_repo_name = _repo_name_from_remote(remote_url)
         head_ref = _git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=repo_root)
         if head_ref and "/" in head_ref:
             default_branch = head_ref.split("/", 1)[1]
@@ -67,10 +72,18 @@ def gather_repo_facts(repo_root: Path) -> RepoFacts:
 
 
 def _git(args: list[str], *, cwd: Path) -> str | None:
-    """Run ``git <args>``; return stripped stdout, or None on any failure."""
+    """Run ``git <args>``; return stripped stdout, or None on any failure.
+
+    ``-c safe.directory=*`` is prepended so the wizard still reads facts
+    when the repo is bind-mounted into a container owned by a different
+    UID than the process — git's "detected dubious ownership" guard would
+    otherwise make every command fail and silently degrade the suggested
+    repo name and visibility to their no-git fallbacks. All commands here
+    are read-only, so disabling the guard for them is safe.
+    """
     try:
         result = subprocess.run(
-            ["git", *args],
+            ["git", "-c", "safe.directory=*", *args],
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -112,6 +125,27 @@ def _parse_owner_repo_slug(remote_url: str) -> str | None:
     if not match:
         return None
     return f"{match.group('owner')}/{match.group('repo')}"
+
+
+def _repo_name_from_remote(remote_url: str) -> str | None:
+    """Extract the bare repository name from any git remote URL.
+
+    Host-agnostic, unlike :func:`_parse_owner_repo_slug`: it takes the
+    final path segment and strips a trailing ``.git``, so it works for
+    SSH and HTTPS remotes on GitHub, GitLab, Bitbucket, self-hosted
+    forges, and nested-group URLs alike. Only the leaf name is used (for
+    the suggested component name), so nested groups are not a problem
+    here the way they are for the OIDC slug.
+
+    Returns None when nothing usable remains.
+    """
+    cleaned = remote_url.strip().rstrip("/")
+    if cleaned.endswith(".git"):
+        cleaned = cleaned[: -len(".git")]
+    # The repo name follows the final path separator ("/") or the
+    # scp-style host separator (":") in "git@host:owner/repo".
+    name = re.split(r"[/:]", cleaned)[-1].strip()
+    return name or None
 
 
 # Matches both SSH (git@github.com:...) and HTTPS
