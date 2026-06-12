@@ -173,6 +173,14 @@ LABEL com.sbomify.maintainer="sbomify <hello@sbomify.com>" \
       com.sbomify.vcs.branch="${VCS_REF}" \
       com.sbomify.vcs.commit="${COMMIT_SHA}"
 
+# git is needed at runtime: the wizard reads repo facts (remote name,
+# branch, visibility) from the bind-mounted workspace, and slim images
+# don't ship it. Without it those facts silently degrade to folder-name
+# and "unknown" visibility.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git && \
+    rm -rf /var/lib/apt/lists/*
+
 # Note: Java/Maven is installed on-demand at runtime when processing Java/Scala projects
 # This reduces the base image size by ~330MB for non-Java workloads
 

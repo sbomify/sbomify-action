@@ -14,6 +14,7 @@ from sbomify_action.cli.wizard.io import WIZARD_HEADER_SENTINEL
 from sbomify_action.cli.wizard.repo_facts import (
     _is_github_remote,
     _parse_owner_repo_slug,
+    _repo_name_from_remote,
     detect_visibility,
     gather_repo_facts,
 )
@@ -157,6 +158,35 @@ def test_gather_repo_facts_non_git_dir(tmp_path: Path) -> None:
 )
 def test_parse_owner_repo_slug(url: str, expected: str | None) -> None:
     assert _parse_owner_repo_slug(url) == expected
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("git@github.com:acme/widget.git", "widget"),
+        ("https://github.com/acme/widget.git", "widget"),
+        ("https://x:y@github.com/acme/widget", "widget"),
+        # Unlike the OIDC slug, the bare name is read from *any* remote.
+        ("ssh://git@gitlab.example.com/acme/widget.git", "widget"),
+        ("https://git.example.com/team/group/subgroup/repo.git", "repo"),
+        ("git@bitbucket.org:acme/widget.git", "widget"),
+        ("https://github.com/acme/widget/", "widget"),
+        ("", None),
+    ],
+)
+def test_repo_name_from_remote(url: str, expected: str | None) -> None:
+    assert _repo_name_from_remote(url) == expected
+
+
+def test_gather_repo_facts_non_github_remote_uses_git_name(tmp_path: Path) -> None:
+    """A non-github remote still yields a git-derived name, not the folder."""
+    _init_git_repo(tmp_path, remote="git@gitlab.com:acme/cool-widget.git")
+    facts = gather_repo_facts(tmp_path)
+    assert facts.is_git is True
+    # owner_repo_slug stays github-only…
+    assert facts.owner_repo_slug is None
+    # …but the suggested name comes from the remote, not tmp_path.name.
+    assert facts.suggested_repo_name == "cool-widget"
 
 
 # ----------------------------------------------------------------------
