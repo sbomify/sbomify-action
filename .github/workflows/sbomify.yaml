@@ -1062,47 +1062,53 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - name: Determine version
-        id: version
+      - name: Prepare build metadata
+        id: meta
         env:
           GH_REF_TYPE: ${{ github.ref_type }}
           GH_REF_NAME: ${{ github.ref_name }}
           GH_SHA: ${{ github.sha }}
+          GH_REPO_OWNER: ${{ github.repository_owner }}
         run: |
-          # Extract base version from pyproject.toml
+          # Full version string is used for image labels / runtime env (VERSION build-arg).
+          # The image *tag* is kept separate because it must not contain '+' (invalid in tags).
           BASE_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
 
           if [[ "${GH_REF_TYPE}" == "tag" ]]; then
-            # For tags, use the tag name (strip 'v' prefix if present)
-            VERSION="${GH_REF_NAME}"
-            VERSION="${VERSION#v}"
+            # For tags, strip a leading 'v' (v1.2.3 -> 1.2.3)
+            VERSION="${GH_REF_NAME#v}"
+            IMAGE_TAG="${VERSION}"
           else
-            # For branches, use base version + short SHA as semver build metadata
+            # For master, version carries the short SHA as semver build metadata; tag is 'latest'
             SHORT_SHA=$(echo "${GH_SHA}" | cut -c1-7)
             VERSION="${BASE_VERSION}+${SHORT_SHA}"
+            IMAGE_TAG="latest"
           fi
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Build image
-        env:
-          BUILD_VERSION: ${{ steps.version.outputs.version }}
-          COMMIT_SHA: ${{ github.sha }}
-          VCS_REF: ${{ github.ref_name }}
-        run: |
-          docker build . \
-            --file Dockerfile \
-            --tag $IMAGE_NAME \
-            --label "runnumber=${GITHUB_RUN_ID}" \
-            --build-arg VERSION="${BUILD_VERSION}" \
-            --build-arg COMMIT_SHA="${COMMIT_SHA}" \
-            --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-            --build-arg VCS_REF="${VCS_REF}"
+          GHCR_REPO="ghcr.io/$(echo "${GH_REPO_OWNER}/${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
+          DOCKERHUB_REPO="sbomifyhub/${IMAGE_NAME}"
+          BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 
-      - name: Log in to registry
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_ACTOR: ${{ github.actor }}
-        run: echo "${GH_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
+          {
+            echo "version=${VERSION}"
+            echo "image_tag=${IMAGE_TAG}"
+            echo "ghcr_repo=${GHCR_REPO}"
+            echo "dockerhub_repo=${DOCKERHUB_REPO}"
+            echo "build_date=${BUILD_DATE}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
@@ -1110,30 +1116,36 @@ jobs:
           username: sbomifyhub
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Push image
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.meta.outputs.ghcr_repo }}:${{ steps.meta.outputs.image_tag }}
+            ${{ steps.meta.outputs.dockerhub_repo }}:${{ steps.meta.outputs.image_tag }}
+          labels: |
+            runnumber=${{ github.run_id }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
+            VCS_REF=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image summary
         env:
-          GH_REPO_OWNER: ${{ github.repository_owner }}
-          GH_REF: ${{ github.ref }}
+          GHCR_REF: ${{ steps.meta.outputs.ghcr_repo }}:${{ steps.meta.outputs.image_tag }}
+          DOCKERHUB_REF: ${{ steps.meta.outputs.dockerhub_repo }}:${{ steps.meta.outputs.image_tag }}
         run: |
-          set -x
-          GITHUB_IMAGE_ID=ghcr.io/${GH_REPO_OWNER}/$IMAGE_NAME
-          GITHUB_IMAGE_ID=$(echo $GITHUB_IMAGE_ID | tr '[A-Z]' '[a-z]')
-          DOCKER_HUB_IMAGE_ID=sbomifyhub/$IMAGE_NAME
-
-          VERSION=$(echo "${GH_REF}" | sed -e 's,.*/\(.*\),\1,')
-
-          [[ "${GH_REF}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
-
-          [ "$VERSION" == "master" ] && VERSION=latest
-
-          echo VERSION=$VERSION
-          docker tag $IMAGE_NAME $GITHUB_IMAGE_ID:$VERSION
-          docker tag $IMAGE_NAME $DOCKER_HUB_IMAGE_ID:$VERSION
-
-          docker push $GITHUB_IMAGE_ID:$VERSION
-          docker push $DOCKER_HUB_IMAGE_ID:$VERSION
-
-          echo \`\`\` >> ${GITHUB_STEP_SUMMARY}
-          echo "Primary: $GITHUB_IMAGE_ID:$VERSION" >> ${GITHUB_STEP_SUMMARY}
-          echo "Mirror:  $DOCKER_HUB_IMAGE_ID:$VERSION" >> ${GITHUB_STEP_SUMMARY}
-          echo \`\`\` >> ${GITHUB_STEP_SUMMARY}
+          {
+            echo '```'
+            echo "Primary:   ${GHCR_REF}"
+            echo "Mirror:    ${DOCKERHUB_REF}"
+            echo "Platforms: linux/amd64, linux/arm64"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
