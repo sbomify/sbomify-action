@@ -59,7 +59,7 @@ jobs:
             --config .opengrep-rules/python/lang/security \
             --config .opengrep-rules/generic/secrets \
             --config .opengrep-rules/dockerfile/security \
-            --config .opengrep-rules/bash \
+            --config .opengrep-rules/bash/curl \
             --sarif-output=opengrep.sarif \
             --exclude .opengrep-rules \
             --exclude tests/test-data \

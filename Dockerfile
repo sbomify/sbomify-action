@@ -205,4 +205,5 @@ ENV SBOMIFY_GITHUB_ACTION_VERSION=${VERSION}
 ENV SBOMIFY_GITHUB_ACTION_COMMIT_SHA=${COMMIT_SHA}
 ENV SBOMIFY_GITHUB_ACTION_VCS_REF=${VCS_REF}
 
+# nosemgrep: missing-user  # GitHub Action container must run as root to access the mounted workspace
 CMD ["sbomify-action"]

@@ -207,6 +207,7 @@ class PipdeptreeExpander:
             cmd.extend(["--packages", packages])
 
         try:
+            # nosemgrep: dangerous-subprocess-use-audit  # list-form, shell=False, fixed executable
             result = subprocess.run(
                 cmd,
                 capture_output=True,

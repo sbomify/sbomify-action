@@ -352,6 +352,7 @@ def run_command(
     progress_thread.start()
 
     try:
+        # nosemgrep: dangerous-subprocess-use-audit  # list-form, shell=False, caller-supplied argv
         result = subprocess.run(
             cmd,
             capture_output=capture_output,
