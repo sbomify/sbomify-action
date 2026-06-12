@@ -185,6 +185,7 @@ class WelcomeScreen(WizardScreen):
             "[#8A7DFF]06[/]  Configure SBOM content (enrichment / formats / provenance)",
             "[#8A7DFF]07[/]  Review the plan",
             "[#8A7DFF]08[/]  Apply — write the workflow file & finalise components",
+            "[#5E5E5E]  ·[/]  [#5E5E5E]Optionally generate & upload your first SBOM(s) right here[/]",
         ]
 
     def _repo_lines(self) -> list[str]:

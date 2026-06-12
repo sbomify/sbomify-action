@@ -191,6 +191,25 @@ class ApplyScreen(WizardScreen):
                 # but defend in depth.
                 self.app.pop_screen()
                 return
+            self._advance_after_apply()
+
+    def _advance_after_apply(self) -> None:
+        """Offer the optional 'generate & upload now' step when it's viable,
+        otherwise go straight to Done.
+
+        The offer only makes sense when the SBOM generators are installed
+        and we have real component ids to upload against (so never on a
+        dry-run) — ``generation_available`` encodes both. When it isn't
+        viable the workflow file the wizard just wrote still generates SBOMs
+        in CI, so Done is the right terminus.
+        """
+        from sbomify_action.cli.wizard import generate as generate_mod
+
+        if generate_mod.generation_available(self.wizard.state):
+            from sbomify_action.cli.wizard.screens.generate import GenerateScreen
+
+            self.wizard.push_screen(GenerateScreen())
+        else:
             from sbomify_action.cli.wizard.screens.done import DoneScreen
 
             self.wizard.push_screen(DoneScreen())

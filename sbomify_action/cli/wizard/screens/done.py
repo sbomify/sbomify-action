@@ -154,6 +154,19 @@ class DoneScreen(WizardScreen):
         else:
             for path in state.written_files:
                 lines.append(f"[#86EFAC]✓[/]  [#CBCCCE]Wrote[/]      {path}")
+        # Outcome of the optional 'generate & upload now' step. None means it
+        # was skipped or never offered, so say nothing in that case.
+        if state.generated_ok is not None:
+            total = state.generated_total
+            ok = state.generated_ok
+            if total and ok == total:
+                lines.append(f"[#86EFAC]✓[/]  [#CBCCCE]SBOMs[/]      generated + uploaded {ok}")
+            elif ok:
+                lines.append(f"[#F4B57F]⚠[/]  [#CBCCCE]SBOMs[/]      uploaded {ok}/{total} — see the generate log")
+            else:
+                lines.append(
+                    "[#F87171]✗[/]  [#CBCCCE]SBOMs[/]      generation didn't upload anything — see the generate log"
+                )
         if not lines:
             lines.append("[#5E5E5E]◌  (nothing applied)[/]")
         return "\n".join(lines)

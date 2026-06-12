@@ -251,6 +251,17 @@ class WizardState:
     # the prior version (see write_workflow in cli/wizard/io.py).
     workflow_exists: bool = False
 
+    # Outcome of the optional final "generate & upload now" step. The
+    # GenerateScreen runs the real generate→upload pipeline once per
+    # (component, format) right inside the wizard's environment (only
+    # offered when the SBOM generators are installed — eg the sbomify
+    # Docker image). The Done screen reads these to add a line to its
+    # summary. ``generated_ok`` stays None when the step was skipped or
+    # never offered, so Done can tell "didn't run" apart from "ran, zero
+    # uploaded".
+    generated_ok: int | None = None
+    generated_total: int = 0
+
     is_dry_run: bool = False
     """True when the active apply pass is the dry-run simulation
     (``_apply_plan_dry_run``). The Done screen reads this to label
