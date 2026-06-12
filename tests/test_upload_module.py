@@ -241,8 +241,8 @@ class TestSbomifyDestination(unittest.TestCase):
         dest = SbomifyDestination(token="test-token")
         self.assertFalse(dest.is_configured())
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_upload_success(self, mock_post):
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_upload_success(self, mock_client_cls):
         """Test successful upload."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6", "components": []}, f)
@@ -251,8 +251,12 @@ class TestSbomifyDestination(unittest.TestCase):
         try:
             mock_response = Mock()
             mock_response.ok = True
+            mock_response.status_code = 200
             mock_response.json.return_value = {"sbom_id": "sbom-123"}
-            mock_post.return_value = mock_response
+            mock_response.headers = {}
+            mock_client = Mock()
+            mock_client.upload_sbom.return_value = mock_response
+            mock_client_cls.return_value = mock_client
 
             dest = SbomifyDestination(token="test-token", component_id="my-component")
             input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
@@ -263,15 +267,16 @@ class TestSbomifyDestination(unittest.TestCase):
             self.assertEqual(result.sbom_id, "sbom-123")
             self.assertEqual(result.destination_name, "sbomify")
 
-            # Verify API call
-            mock_post.assert_called_once()
-            call_args = mock_post.call_args
-            self.assertIn("/api/v1/sboms/artifact/cyclonedx/my-component", call_args[0][0])
+            # Verify client was called with the correct component+format.
+            mock_client.upload_sbom.assert_called_once()
+            call_kwargs = mock_client.upload_sbom.call_args.kwargs
+            self.assertEqual(call_kwargs["component_id"], "my-component")
+            self.assertEqual(call_kwargs["sbom_format"], "cyclonedx")
         finally:
             Path(sbom_file).unlink()
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_upload_with_custom_api_url(self, mock_post):
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_upload_with_custom_api_url(self, mock_client_cls):
         """Test upload with custom API base URL."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
@@ -280,8 +285,12 @@ class TestSbomifyDestination(unittest.TestCase):
         try:
             mock_response = Mock()
             mock_response.ok = True
+            mock_response.status_code = 200
             mock_response.json.return_value = {"id": "sbom-456"}
-            mock_post.return_value = mock_response
+            mock_response.headers = {}
+            mock_client = Mock()
+            mock_client.upload_sbom.return_value = mock_response
+            mock_client_cls.return_value = mock_client
 
             dest = SbomifyDestination(
                 token="test-token",
@@ -293,13 +302,14 @@ class TestSbomifyDestination(unittest.TestCase):
             result = dest.upload(input)
 
             self.assertTrue(result.success)
-            call_args = mock_post.call_args
-            self.assertTrue(call_args[0][0].startswith("https://custom.sbomify.com"))
+            # Client must have been built with the custom base URL.
+            call_args = mock_client_cls.call_args
+            self.assertEqual(call_args.args[0], "https://custom.sbomify.com")
         finally:
             Path(sbom_file).unlink()
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_upload_api_error(self, mock_post):
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_upload_api_error(self, mock_client_cls):
         """Test upload with API error response."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
@@ -310,7 +320,10 @@ class TestSbomifyDestination(unittest.TestCase):
             mock_response.ok = False
             mock_response.status_code = 401
             mock_response.json.return_value = {"detail": "Invalid token"}
-            mock_post.return_value = mock_response
+            mock_response.headers = {}
+            mock_client = Mock()
+            mock_client.upload_sbom.return_value = mock_response
+            mock_client_cls.return_value = mock_client
 
             dest = SbomifyDestination(token="bad-token", component_id="my-component")
             input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
@@ -323,17 +336,19 @@ class TestSbomifyDestination(unittest.TestCase):
         finally:
             Path(sbom_file).unlink()
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_upload_connection_error(self, mock_post):
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_upload_connection_error(self, mock_client_cls):
         """Test upload with connection error."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
             sbom_file = f.name
 
         try:
-            import requests
+            from sbomify_action.exceptions import APIError
 
-            mock_post.side_effect = requests.exceptions.ConnectionError("Connection failed")
+            mock_client = Mock()
+            mock_client.upload_sbom.side_effect = APIError("Failed to connect to sbomify API")
+            mock_client_cls.return_value = mock_client
 
             dest = SbomifyDestination(token="test-token", component_id="my-component")
             input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
@@ -369,8 +384,8 @@ class TestSbomifyDestination(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("not found", result.error_message.lower())
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_upload_duplicate_sbom_error(self, mock_post):
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_upload_duplicate_sbom_error(self, mock_client_cls):
         """Test upload with 409 DUPLICATE_ARTIFACT error returns specific error code and message."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
@@ -384,7 +399,10 @@ class TestSbomifyDestination(unittest.TestCase):
                 "detail": "Artifact already exists",
                 "error_code": "DUPLICATE_ARTIFACT",
             }
-            mock_post.return_value = mock_response
+            mock_response.headers = {}
+            mock_client = Mock()
+            mock_client.upload_sbom.return_value = mock_response
+            mock_client_cls.return_value = mock_client
 
             dest = SbomifyDestination(token="test-token", component_id="my-component")
             input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
@@ -398,8 +416,8 @@ class TestSbomifyDestination(unittest.TestCase):
         finally:
             Path(sbom_file).unlink()
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_upload_other_409_error(self, mock_post):
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_upload_other_409_error(self, mock_client_cls):
         """Test upload with 409 error without DUPLICATE_ARTIFACT still returns generic error."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
@@ -413,7 +431,10 @@ class TestSbomifyDestination(unittest.TestCase):
                 "detail": "Some other conflict",
                 "error_code": "OTHER_CONFLICT",
             }
-            mock_post.return_value = mock_response
+            mock_response.headers = {}
+            mock_client = Mock()
+            mock_client.upload_sbom.return_value = mock_response
+            mock_client_cls.return_value = mock_client
 
             dest = SbomifyDestination(token="test-token", component_id="my-component")
             input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
@@ -427,8 +448,8 @@ class TestSbomifyDestination(unittest.TestCase):
         finally:
             Path(sbom_file).unlink()
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_upload_component_not_found_error(self, mock_post):
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_upload_component_not_found_error(self, mock_client_cls):
         """Test upload with 404 error returns COMPONENT_NOT_FOUND error code and actionable message."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
@@ -441,7 +462,10 @@ class TestSbomifyDestination(unittest.TestCase):
             mock_response.json.return_value = {
                 "detail": "Component not found",
             }
-            mock_post.return_value = mock_response
+            mock_response.headers = {}
+            mock_client = Mock()
+            mock_client.upload_sbom.return_value = mock_response
+            mock_client_cls.return_value = mock_client
 
             dest = SbomifyDestination(token="test-token", component_id="nonexistent-component")
             input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
@@ -455,8 +479,8 @@ class TestSbomifyDestination(unittest.TestCase):
         finally:
             Path(sbom_file).unlink()
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_upload_component_not_found_no_json_body(self, mock_post):
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_upload_component_not_found_no_json_body(self, mock_client_cls):
         """Test upload with 404 error and no JSON body still returns COMPONENT_NOT_FOUND."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
@@ -467,7 +491,10 @@ class TestSbomifyDestination(unittest.TestCase):
             mock_response.ok = False
             mock_response.status_code = 404
             mock_response.json.side_effect = ValueError("No JSON")
-            mock_post.return_value = mock_response
+            mock_response.headers = {}
+            mock_client = Mock()
+            mock_client.upload_sbom.return_value = mock_response
+            mock_client_cls.return_value = mock_client
 
             dest = SbomifyDestination(token="test-token", component_id="nonexistent-component")
             input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
@@ -762,7 +789,7 @@ class TestUploadOrchestrator(unittest.TestCase):
             configured = orchestrator.get_configured_destinations()
             self.assertIn("sbomify", configured)
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
     def test_upload_to_specific_destination(self, mock_post):
         """Test uploading to a specific destination."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -808,7 +835,7 @@ class TestCreateRegistryWithSbomify(unittest.TestCase):
 class TestPublicUploadAPI(unittest.TestCase):
     """Tests for the public upload_sbom and upload_to_all functions."""
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
     def test_upload_sbom_success(self, mock_post):
         """Test upload_sbom function success case."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -818,8 +845,12 @@ class TestPublicUploadAPI(unittest.TestCase):
         try:
             mock_response = Mock()
             mock_response.ok = True
+            mock_response.status_code = 200
             mock_response.json.return_value = {"sbom_id": "public-api-123"}
-            mock_post.return_value = mock_response
+            mock_response.headers = {}
+            mock_client = Mock()
+            mock_client.upload_sbom.return_value = mock_response
+            mock_post.return_value = mock_client
 
             result = upload_sbom(
                 sbom_file=sbom_file,
@@ -833,7 +864,7 @@ class TestPublicUploadAPI(unittest.TestCase):
         finally:
             Path(sbom_file).unlink()
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
     def test_upload_sbom_to_specific_destination(self, mock_post):
         """Test upload_sbom to specific destination."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -843,8 +874,12 @@ class TestPublicUploadAPI(unittest.TestCase):
         try:
             mock_response = Mock()
             mock_response.ok = True
+            mock_response.status_code = 200
             mock_response.json.return_value = {"sbom_id": "sbom-456"}
-            mock_post.return_value = mock_response
+            mock_response.headers = {}
+            mock_client = Mock()
+            mock_client.upload_sbom.return_value = mock_response
+            mock_post.return_value = mock_client
 
             result = upload_sbom(
                 sbom_file=sbom_file,
@@ -877,7 +912,7 @@ class TestPublicUploadAPI(unittest.TestCase):
         finally:
             Path(sbom_file).unlink()
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
     def test_upload_to_all(self, mock_post):
         """Test upload_to_all function."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -887,8 +922,12 @@ class TestPublicUploadAPI(unittest.TestCase):
         try:
             mock_response = Mock()
             mock_response.ok = True
+            mock_response.status_code = 200
             mock_response.json.return_value = {"sbom_id": "sbom-789"}
-            mock_post.return_value = mock_response
+            mock_response.headers = {}
+            mock_client = Mock()
+            mock_client.upload_sbom.return_value = mock_response
+            mock_post.return_value = mock_client
 
             # Only sbomify configured (no DTRACK env vars)
             with patch.dict(os.environ, {}, clear=True):
@@ -970,6 +1009,35 @@ class TestDependencyTrackErrors(unittest.TestCase):
             Path(sbom_file).unlink()
 
     @patch("sbomify_action._upload.destinations.dependency_track.requests.put")
+    def test_upload_other_request_exception_returns_failure(self, mock_put):
+        """A non-ConnectionError/Timeout transport failure (eg SSLError) must
+        return a clean UploadResult.failure_result, not propagate and crash
+        the upload step."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
+            sbom_file = f.name
+
+        try:
+            import requests
+
+            mock_put.side_effect = requests.exceptions.SSLError("certificate verify failed")
+
+            config = DependencyTrackConfig(
+                api_key="test-key",
+                api_url="https://dtrack.example.com/api",
+                project_id="project-uuid",
+            )
+            dest = DependencyTrackDestination(config=config)
+            input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
+
+            result = dest.upload(input)  # must not raise
+
+            self.assertFalse(result.success)
+            self.assertIn("failed", result.error_message.lower())
+        finally:
+            Path(sbom_file).unlink()
+
+    @patch("sbomify_action._upload.destinations.dependency_track.requests.put")
     def test_upload_timeout_error(self, mock_put):
         """Test upload with timeout error."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -1045,11 +1113,30 @@ class TestDependencyTrackErrors(unittest.TestCase):
         self.assertIn("not found", result.error_message.lower())
 
 
+def _ok_upload_response() -> Mock:
+    """Build a 200-OK response for a successful upload_sbom call."""
+    response = Mock()
+    response.ok = True
+    response.status_code = 200
+    response.json.return_value = {"sbom_id": "sbom-ok"}
+    response.headers = {}
+    return response
+
+
+def _stub_client(mock_client_cls: Mock, response: Mock | None = None) -> Mock:
+    """Wire mock_client_cls so SbomifyApiClient(...) returns a Mock client."""
+    response = response or _ok_upload_response()
+    client = Mock()
+    client.upload_sbom.return_value = response
+    mock_client_cls.return_value = client
+    return client
+
+
 class TestSbomifyGzipCompression(unittest.TestCase):
     """Tests for gzip compression of large SBOM uploads."""
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_small_file_not_compressed(self, mock_post):
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_small_file_not_compressed(self, mock_client_cls):
         """Files under GZIP_THRESHOLD are sent uncompressed."""
         small_data = json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.6"})
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -1057,10 +1144,7 @@ class TestSbomifyGzipCompression(unittest.TestCase):
             sbom_file = f.name
 
         try:
-            mock_response = Mock()
-            mock_response.ok = True
-            mock_response.json.return_value = {"sbom_id": "sbom-small"}
-            mock_post.return_value = mock_response
+            client = _stub_client(mock_client_cls)
 
             dest = SbomifyDestination(token="test-token", component_id="my-component")
             input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
@@ -1068,18 +1152,18 @@ class TestSbomifyGzipCompression(unittest.TestCase):
             result = dest.upload(input)
 
             self.assertTrue(result.success)
-            call_kwargs = mock_post.call_args[1]
-            # No Content-Encoding header for small files
-            self.assertNotIn("Content-Encoding", call_kwargs["headers"])
-            # Data sent is the raw bytes, not gzip
-            self.assertEqual(call_kwargs["data"], small_data.encode())
+            call_kwargs = client.upload_sbom.call_args.kwargs
+            # No content_encoding for small files.
+            self.assertIsNone(call_kwargs.get("content_encoding"))
+            # Payload is the raw bytes, not gzip.
+            self.assertEqual(call_kwargs["sbom_payload"], small_data.encode())
         finally:
             Path(sbom_file).unlink()
 
     @patch("sbomify_action._upload.destinations.sbomify.GZIP_THRESHOLD", 100)
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_large_file_compressed(self, mock_post):
-        """Files over GZIP_THRESHOLD are gzip-compressed with Content-Encoding header."""
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_large_file_compressed(self, mock_client_cls):
+        """Files over GZIP_THRESHOLD are gzip-compressed with content_encoding."""
         import gzip
 
         large_data = json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.6", "padding": "x" * 200})
@@ -1088,10 +1172,7 @@ class TestSbomifyGzipCompression(unittest.TestCase):
             sbom_file = f.name
 
         try:
-            mock_response = Mock()
-            mock_response.ok = True
-            mock_response.json.return_value = {"sbom_id": "sbom-large"}
-            mock_post.return_value = mock_response
+            client = _stub_client(mock_client_cls)
 
             dest = SbomifyDestination(token="test-token", component_id="my-component")
             input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
@@ -1099,76 +1180,59 @@ class TestSbomifyGzipCompression(unittest.TestCase):
             result = dest.upload(input)
 
             self.assertTrue(result.success)
-            call_kwargs = mock_post.call_args[1]
-            # Content-Encoding header must be set
-            self.assertEqual(call_kwargs["headers"]["Content-Encoding"], "gzip")
-            # Data is valid gzip that decompresses to original
-            decompressed = gzip.decompress(call_kwargs["data"])
+            call_kwargs = client.upload_sbom.call_args.kwargs
+            self.assertEqual(call_kwargs["content_encoding"], "gzip")
+            decompressed = gzip.decompress(call_kwargs["sbom_payload"])
             self.assertEqual(decompressed, large_data.encode())
         finally:
             Path(sbom_file).unlink()
 
     @patch("sbomify_action._upload.destinations.sbomify.GZIP_THRESHOLD", 100)
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_compressed_data_smaller_than_original(self, mock_post):
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_compressed_data_smaller_than_original(self, mock_client_cls):
         """Compressed upload data should be smaller than the original."""
-        # Highly repetitive data compresses well
         large_data = json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.6", "padding": "a" * 500})
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             f.write(large_data)
             sbom_file = f.name
 
         try:
-            mock_response = Mock()
-            mock_response.ok = True
-            mock_response.json.return_value = {"sbom_id": "sbom-compressed"}
-            mock_post.return_value = mock_response
+            client = _stub_client(mock_client_cls)
 
             dest = SbomifyDestination(token="test-token", component_id="my-component")
             input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")
 
             dest.upload(input)
 
-            call_kwargs = mock_post.call_args[1]
-            self.assertLess(len(call_kwargs["data"]), len(large_data.encode()))
+            call_kwargs = client.upload_sbom.call_args.kwargs
+            self.assertLess(len(call_kwargs["sbom_payload"]), len(large_data.encode()))
         finally:
             Path(sbom_file).unlink()
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_large_incompressible_data_sent_uncompressed(self, mock_post):
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_large_incompressible_data_sent_uncompressed(self, mock_client_cls):
         """When gzip produces larger output, send uncompressed."""
         import os
 
         dest = SbomifyDestination(token="test-token", component_id="test-component")
 
-        # Patch GZIP_THRESHOLD to 0 so the gzip compression path is exercised
         with patch("sbomify_action._upload.destinations.sbomify.GZIP_THRESHOLD", 0):
-            # A tiny payload where gzip overhead makes output larger than input
             fd, path = tempfile.mkstemp(suffix=".json")
             try:
                 payload = b"a"
                 with os.fdopen(fd, "wb") as f:
                     f.write(payload)
 
-                mock_response = Mock()
-                mock_response.ok = True
-                mock_response.json.return_value = {"sbom_id": "test-id"}
-                mock_post.return_value = mock_response
+                client = _stub_client(mock_client_cls)
 
                 input_data = UploadInput(sbom_file=path, sbom_format="cyclonedx", validate_before_upload=False)
                 dest.upload(input_data)
 
-                # Verify the request was made
-                mock_post.assert_called_once()
-                call_kwargs = mock_post.call_args
-
-                # Should NOT have Content-Encoding: gzip since compressed would be larger
-                headers = call_kwargs.kwargs.get("headers", call_kwargs[1].get("headers", {}))
-                self.assertNotIn("Content-Encoding", headers)
-
-                # Data should be the original uncompressed bytes
-                sent_data = call_kwargs.kwargs.get("data", call_kwargs[1].get("data", b""))
-                self.assertEqual(sent_data, payload)
+                client.upload_sbom.assert_called_once()
+                call_kwargs = client.upload_sbom.call_args.kwargs
+                # Compressed output would be larger here, so destination must send uncompressed.
+                self.assertIsNone(call_kwargs.get("content_encoding"))
+                self.assertEqual(call_kwargs["sbom_payload"], payload)
             finally:
                 os.unlink(path)
 
@@ -1176,17 +1240,19 @@ class TestSbomifyGzipCompression(unittest.TestCase):
 class TestSbomifyTimeout(unittest.TestCase):
     """Tests for Sbomify timeout handling."""
 
-    @patch("sbomify_action._upload.destinations.sbomify.requests.post")
-    def test_upload_timeout_error(self, mock_post):
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_upload_timeout_error(self, mock_client_cls):
         """Test upload with timeout error."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
             sbom_file = f.name
 
         try:
-            import requests
+            from sbomify_action.exceptions import APIError
 
-            mock_post.side_effect = requests.exceptions.Timeout("Request timed out")
+            client = Mock()
+            client.upload_sbom.side_effect = APIError("API request timed out")
+            mock_client_cls.return_value = client
 
             dest = SbomifyDestination(token="test-token", component_id="my-component")
             input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx")

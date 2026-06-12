@@ -146,8 +146,8 @@ def test_cyclonedx_full_flow_compliance(version, tmp_path):
             return_value=None,
         ),
         patch(
-            "sbomify_action._augmentation.providers.sbomify_api.requests.get",
-            return_value=mock_api_response,
+            "sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata",
+            return_value=mock_api_response.json.return_value,
         ),
     ):
         augment_sbom_from_file(
@@ -281,8 +281,8 @@ def test_spdx_full_flow_compliance(version, tmp_path):
             return_value=None,
         ),
         patch(
-            "sbomify_action._augmentation.providers.sbomify_api.requests.get",
-            return_value=mock_api_response,
+            "sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata",
+            return_value=mock_api_response.json.return_value,
         ),
     ):
         augment_sbom_from_file(

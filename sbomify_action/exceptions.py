@@ -83,6 +83,10 @@ class APIError(SbomifyError):
     """Raised when API operations fail."""
 
 
+class AuthError(APIError):
+    """Raised when the sbomify API rejects credentials (401)."""
+
+
 class PlanLimitError(APIError):
     """Raised when an API operation fails due to plan limits (e.g., max components)."""
 

@@ -110,6 +110,13 @@ class TestNormalizedMetadata:
         metadata = NormalizedMetadata(supplier="Test Org")
         assert metadata.has_data() is True
 
+    def test_has_data_with_cle_release_date(self):
+        """has_data must count cle_release_date — a source returning only a
+        release date (and nothing else) carries meaningful data and must not
+        be discarded as empty."""
+        metadata = NormalizedMetadata(cle_release_date="2024-01-15")
+        assert metadata.has_data() is True
+
     def test_has_data_empty(self):
         """Test has_data returns False when no data is present."""
         metadata = NormalizedMetadata()

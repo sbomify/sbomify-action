@@ -1,12 +1,17 @@
-"""
-Tests for product release functionality.
+"""Tests for the release-related API facade.
 
-These tests verify the shared releases API module which is used by
-the SbomifyReleasesProcessor.
+Most of the functions in ``_processors/releases_api.py`` now delegate
+straight to ``SbomifyApiClient``; their semantics are pinned in
+``test_sbomify_api.py``. Here we keep the delegation contract checked
+and exercise the one helper that doesn't talk to the API:
+``get_release_friendly_name``.
 """
 
-import unittest
-from unittest.mock import Mock, patch
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+import pytest
 
 from sbomify_action._processors.releases_api import (
     check_release_exists,
@@ -19,552 +24,94 @@ from sbomify_action._processors.releases_api import (
 )
 from sbomify_action.exceptions import APIError
 
+API_BASE = "https://api.test.com/v1"
+TOKEN = "test-token"
 
-class TestReleasesApi(unittest.TestCase):
-    """Test releases API functionality."""
 
-    def setUp(self):
-        """Set up test fixtures."""
-        self.api_base_url = "https://api.test.com/v1"
-        self.token = "test-token"
+@pytest.fixture
+def stub_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    stub = MagicMock()
+    monkeypatch.setattr("sbomify_action._processors.releases_api._client", lambda _base, _token: stub)
+    return stub
 
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_check_release_exists_true(self, mock_get):
-        """Test checking for existing release returns True."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
-            "items": [{"id": "rel1", "version": "v1.0.0"}, {"id": "rel2", "version": "v2.0.0"}]
-        }
-        mock_get.return_value = mock_response
 
-        result = check_release_exists(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
+# ----------------------------------------------------------------------
+# delegation pins
 
-        self.assertTrue(result)
-        mock_get.assert_called_once()
-        call_args = mock_get.call_args
-        self.assertIn("product_id", call_args[1]["params"])
-        self.assertEqual(call_args[1]["params"]["product_id"], "Gu9wem8mkX")
-        self.assertEqual(call_args[1]["params"]["version"], "v1.0.0")
 
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_check_release_exists_false(self, mock_get):
-        """Test checking for non-existing release returns False."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"items": [{"id": "rel1", "version": "v2.0.0"}]}
-        mock_get.return_value = mock_response
+def test_check_release_exists_delegates(stub_client: MagicMock) -> None:
+    stub_client.check_release_exists.return_value = True
+    assert check_release_exists(API_BASE, TOKEN, "prod-1", "v1.0.0") is True
+    stub_client.check_release_exists.assert_called_once_with("prod-1", "v1.0.0")
 
-        result = check_release_exists(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
 
-        self.assertFalse(result)
+def test_get_release_id_delegates(stub_client: MagicMock) -> None:
+    stub_client.get_release_id.return_value = "rel-1"
+    assert get_release_id(API_BASE, TOKEN, "prod-1", "v1.0.0") == "rel-1"
+    stub_client.get_release_id.assert_called_once_with("prod-1", "v1.0.0")
 
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_check_release_exists_404(self, mock_get):
-        """Test that 404 response returns False."""
-        mock_response = Mock()
-        mock_response.status_code = 404
-        mock_response.ok = False
-        mock_get.return_value = mock_response
 
-        result = check_release_exists(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
+def test_get_release_id_by_name_delegates(stub_client: MagicMock) -> None:
+    stub_client.get_release_id_by_name.return_value = "rel-1"
+    assert get_release_id_by_name(API_BASE, TOKEN, "prod-1", "v1.0.0") == "rel-1"
+    stub_client.get_release_id_by_name.assert_called_once_with("prod-1", "v1.0.0")
 
-        self.assertFalse(result)
 
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_check_release_exists_api_error(self, mock_get):
-        """Test that API errors are properly raised."""
-        mock_response = Mock()
-        mock_response.status_code = 500
-        mock_response.ok = False
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {"detail": "Server error"}
-        mock_get.return_value = mock_response
+def test_get_release_details_delegates(stub_client: MagicMock) -> None:
+    stub_client.get_release_details.return_value = {"id": "rel-1", "version": "v1.0.0"}
+    assert get_release_details(API_BASE, TOKEN, "prod-1", "v1.0.0") == {"id": "rel-1", "version": "v1.0.0"}
+    stub_client.get_release_details.assert_called_once_with("prod-1", "v1.0.0")
 
-        with self.assertRaises(APIError) as cm:
-            check_release_exists(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
 
-        self.assertIn("500", str(cm.exception))
-        self.assertIn("Server error", str(cm.exception))
+def test_create_release_delegates(stub_client: MagicMock) -> None:
+    stub_client.create_release.return_value = "rel-new"
+    assert create_release(API_BASE, TOKEN, "prod-1", "v1.0.0") == "rel-new"
+    stub_client.create_release.assert_called_once_with("prod-1", "v1.0.0")
 
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_create_release_success(self, mock_post):
-        """Test successful release creation."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"id": "new-release-id"}
-        mock_post.return_value = mock_response
 
-        result = create_release(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
+def test_create_release_error_propagates(stub_client: MagicMock) -> None:
+    stub_client.create_release.side_effect = APIError("boom")
+    with pytest.raises(APIError):
+        create_release(API_BASE, TOKEN, "prod-1", "v1.0.0")
 
-        self.assertEqual(result, "new-release-id")
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
-        self.assertEqual(call_args[1]["json"]["product_id"], "Gu9wem8mkX")
-        self.assertEqual(call_args[1]["json"]["version"], "v1.0.0")
-        self.assertEqual(call_args[1]["json"]["name"], "v1.0.0")
 
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_create_release_api_error(self, mock_post):
-        """Test create release API error handling."""
-        mock_response = Mock()
-        mock_response.ok = False
-        mock_response.status_code = 400
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {"detail": "Bad request"}
-        mock_post.return_value = mock_response
+def test_tag_sbom_with_release_delegates(stub_client: MagicMock) -> None:
+    tag_sbom_with_release(API_BASE, TOKEN, "sbom-1", "rel-1")
+    stub_client.tag_sbom_with_release.assert_called_once_with("sbom-1", "rel-1")
 
-        with self.assertRaises(APIError) as cm:
-            create_release(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
 
-        self.assertIn("400", str(cm.exception))
-        self.assertIn("Bad request", str(cm.exception))
+# ----------------------------------------------------------------------
+# pure helper — no I/O
 
-    @patch("sbomify_action._processors.releases_api.get_release_id_by_name")
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_create_release_duplicate_name_returns_existing_id(self, mock_post, mock_get_release_id_by_name):
-        """Test create release handles DUPLICATE_NAME by returning existing release ID."""
-        # First call returns DUPLICATE_NAME error
-        mock_response = Mock()
-        mock_response.ok = False
-        mock_response.status_code = 400
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {
-            "detail": "A release with this name already exists for this product",
-            "error_code": "DUPLICATE_NAME",
-        }
-        mock_post.return_value = mock_response
 
-        # get_release_id_by_name returns the existing release ID
-        mock_get_release_id_by_name.return_value = "existing-release-id"
+class TestFriendlyName:
+    def test_custom_name(self) -> None:
+        details = {"id": "rel1", "version": "v1.0.0", "name": "Major Feature Release"}
+        assert get_release_friendly_name(details, "v1.0.0") == "'Major Feature Release' (v1.0.0)"
 
-        result = create_release(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
+    def test_default_name_equals_version(self) -> None:
+        details = {"id": "rel1", "version": "v1.0.0", "name": "v1.0.0"}
+        assert get_release_friendly_name(details, "v1.0.0") == "v1.0.0"
 
-        self.assertEqual(result, "existing-release-id")
-        # Should search by name "v1.0.0" since API enforces uniqueness on name
-        mock_get_release_id_by_name.assert_called_once_with(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
+    def test_legacy_default_name(self) -> None:
+        details = {"id": "rel1", "version": "v1.0.0", "name": "Release v1.0.0"}
+        assert get_release_friendly_name(details, "v1.0.0") == "v1.0.0"
 
-    @patch("sbomify_action._processors.releases_api.get_release_id_by_name")
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_create_release_duplicate_name_legacy_fallback(self, mock_post, mock_get_release_id_by_name):
-        """Test create release handles DUPLICATE_NAME by falling back to legacy 'Release {version}' name."""
-        mock_response = Mock()
-        mock_response.ok = False
-        mock_response.status_code = 400
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {
-            "detail": "A release with this name already exists for this product",
-            "error_code": "DUPLICATE_NAME",
-        }
-        mock_post.return_value = mock_response
+    def test_no_details(self) -> None:
+        assert get_release_friendly_name(None, "v1.0.0") == "v1.0.0"
 
-        # First call (new name) returns None, second call (legacy name) returns the ID
-        mock_get_release_id_by_name.side_effect = [None, "legacy-release-id"]
+    def test_empty_name(self) -> None:
+        details = {"id": "rel1", "version": "v1.0.0", "name": ""}
+        assert get_release_friendly_name(details, "v1.0.0") == "v1.0.0"
 
-        result = create_release(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
+    def test_none_name(self) -> None:
+        details = {"id": "rel1", "version": "v1.0.0", "name": None}
+        assert get_release_friendly_name(details, "v1.0.0") == "v1.0.0"
 
-        self.assertEqual(result, "legacy-release-id")
-        self.assertEqual(mock_get_release_id_by_name.call_count, 2)
-        mock_get_release_id_by_name.assert_any_call(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
-        mock_get_release_id_by_name.assert_any_call(self.api_base_url, self.token, "Gu9wem8mkX", "Release v1.0.0")
+    def test_whitespace_only_name(self) -> None:
+        details = {"id": "rel1", "version": "v1.0.0", "name": "   "}
+        assert get_release_friendly_name(details, "v1.0.0") == "v1.0.0"
 
-    @patch("sbomify_action._processors.releases_api.get_release_id_by_name")
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_create_release_duplicate_name_fallback_to_error(self, mock_post, mock_get_release_id_by_name):
-        """Test create release raises error if DUPLICATE_NAME but can't find existing release."""
-        mock_response = Mock()
-        mock_response.ok = False
-        mock_response.status_code = 400
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {
-            "detail": "A release with this name already exists for this product",
-            "error_code": "DUPLICATE_NAME",
-        }
-        mock_post.return_value = mock_response
-
-        # get_release_id_by_name returns None (can't find the release)
-        mock_get_release_id_by_name.return_value = None
-
-        with self.assertRaises(APIError) as cm:
-            create_release(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
-
-        self.assertIn("400", str(cm.exception))
-        # Error message includes the detail field, not the error_code
-        self.assertIn("already exists", str(cm.exception))
-
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_get_release_id_success(self, mock_get):
-        """Test successful release ID retrieval."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
-            "items": [{"id": "rel1", "version": "v1.0.0"}, {"id": "rel2", "version": "v2.0.0"}]
-        }
-        mock_get.return_value = mock_response
-
-        result = get_release_id(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
-
-        self.assertEqual(result, "rel1")
-
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_get_release_id_not_found(self, mock_get):
-        """Test release ID retrieval when release not found."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"items": []}
-        mock_get.return_value = mock_response
-
-        result = get_release_id(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
-
-        self.assertIsNone(result)
-
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_get_release_id_by_name_success(self, mock_get):
-        """Test successful release ID retrieval by name."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
-            "items": [
-                {"id": "rel1", "version": "v1.0.0", "name": "v1.0.0"},
-                {"id": "rel2", "version": "v2.0.0", "name": "v2.0.0"},
-            ]
-        }
-        mock_get.return_value = mock_response
-
-        result = get_release_id_by_name(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
-
-        self.assertEqual(result, "rel1")
-        # Verify query params don't include version filter
-        call_args = mock_get.call_args
-        self.assertEqual(call_args[1]["params"], {"product_id": "Gu9wem8mkX"})
-
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_get_release_id_by_name_not_found(self, mock_get):
-        """Test release ID retrieval by name when release not found."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
-            "items": [
-                {"id": "rel1", "version": "v1.0.0", "name": "v1.0.0"},
-            ]
-        }
-        mock_get.return_value = mock_response
-
-        result = get_release_id_by_name(self.api_base_url, self.token, "Gu9wem8mkX", "v2.0.0")
-
-        self.assertIsNone(result)
-
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_get_release_id_by_name_with_mismatched_version(self, mock_get):
-        """Test get_release_id_by_name finds release even when version field differs.
-
-        This is the key scenario that get_release_id_by_name fixes: a release exists
-        with name="v1.0.0" but version field is different or empty.
-        """
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
-            "items": [
-                # Release with name "v1.0.0" but version is different
-                {"id": "rel1", "version": "different-version", "name": "v1.0.0"},
-            ]
-        }
-        mock_get.return_value = mock_response
-
-        # get_release_id would fail here (version mismatch), but get_release_id_by_name succeeds
-        result = get_release_id_by_name(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
-
-        self.assertEqual(result, "rel1")
-
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_get_release_id_by_name_api_error(self, mock_get):
-        """Test get_release_id_by_name API error handling."""
-        mock_response = Mock()
-        mock_response.status_code = 500
-        mock_response.ok = False
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {"detail": "Server error"}
-        mock_get.return_value = mock_response
-
-        with self.assertRaises(APIError) as cm:
-            get_release_id_by_name(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
-
-        self.assertIn("500", str(cm.exception))
-        self.assertIn("Server error", str(cm.exception))
-
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_tag_sbom_with_release_success(self, mock_post):
-        """Test successful SBOM tagging."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_post.return_value = mock_response
-
-        tag_sbom_with_release(self.api_base_url, self.token, "sbom123", "rel456")
-
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
-        self.assertEqual(call_args[1]["json"]["sbom_id"], "sbom123")
-
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_tag_sbom_with_release_api_error(self, mock_post):
-        """Test SBOM tagging API error handling."""
-        mock_response = Mock()
-        mock_response.ok = False
-        mock_response.status_code = 403
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {"detail": "Forbidden"}
-        mock_post.return_value = mock_response
-
-        with self.assertRaises(APIError) as cm:
-            tag_sbom_with_release(self.api_base_url, self.token, "sbom123", "rel456")
-
-        self.assertIn("403", str(cm.exception))
-        self.assertIn("Forbidden", str(cm.exception))
-
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_tag_sbom_with_release_duplicate_artifact_succeeds(self, mock_post):
-        """Test SBOM tagging handles 409 DUPLICATE_ARTIFACT as success (idempotent).
-
-        When the SBOM is already tagged with the release (e.g., by server auto-tag,
-        another CI job, or UI), the API returns 409 Conflict with DUPLICATE_ARTIFACT.
-        This should be treated as success since the desired state is achieved.
-        """
-        mock_response = Mock()
-        mock_response.ok = False
-        mock_response.status_code = 409
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {
-            "detail": "Artifact already exists",
-            "error_code": "DUPLICATE_ARTIFACT",
-        }
-        mock_post.return_value = mock_response
-
-        # Should NOT raise an error - 409 DUPLICATE_ARTIFACT is treated as success
-        tag_sbom_with_release(self.api_base_url, self.token, "sbom123", "rel456")
-
-        mock_post.assert_called_once()
-
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_tag_sbom_with_release_409_without_duplicate_artifact_raises_error(self, mock_post):
-        """Test that 409 without DUPLICATE_ARTIFACT error code still raises error."""
-        mock_response = Mock()
-        mock_response.ok = False
-        mock_response.status_code = 409
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {
-            "detail": "Some other conflict",
-            "error_code": "OTHER_ERROR",
-        }
-        mock_post.return_value = mock_response
-
-        with self.assertRaises(APIError) as cm:
-            tag_sbom_with_release(self.api_base_url, self.token, "sbom123", "rel456")
-
-        self.assertIn("409", str(cm.exception))
-
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_get_release_details_success(self, mock_get):
-        """Test successful release details retrieval."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
-            "items": [
-                {
-                    "id": "rel1",
-                    "version": "v1.0.0",
-                    "name": "First Major Release",
-                    "description": "Our first major release with all core features",
-                },
-                {"id": "rel2", "version": "v2.0.0"},
-            ]
-        }
-        mock_get.return_value = mock_response
-
-        result = get_release_details(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
-
-        self.assertIsNotNone(result)
-        self.assertEqual(result["id"], "rel1")
-        self.assertEqual(result["name"], "First Major Release")
-        self.assertEqual(result["description"], "Our first major release with all core features")
-
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_get_release_details_not_found(self, mock_get):
-        """Test release details retrieval when release not found."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"items": []}
-        mock_get.return_value = mock_response
-
-        result = get_release_details(self.api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
-
-        self.assertIsNone(result)
-
-    def test_get_release_friendly_name_with_custom_name(self):
-        """Test friendly name generation with custom release name."""
-        release_details = {
-            "id": "rel1",
-            "version": "v1.0.0",
-            "name": "Major Feature Release",
-            "description": "Custom release description",
-        }
-
-        result = get_release_friendly_name(release_details, "v1.0.0")
-
-        self.assertEqual(result, "'Major Feature Release' (v1.0.0)")
-
-    def test_get_release_friendly_name_with_default_name(self):
-        """Test friendly name generation with default release name."""
-        release_details = {
-            "id": "rel1",
-            "version": "v1.0.0",
-            "name": "v1.0.0",  # Default format
-            "description": "Auto-generated release",
-        }
-
-        result = get_release_friendly_name(release_details, "v1.0.0")
-
-        self.assertEqual(result, "v1.0.0")
-
-    def test_get_release_friendly_name_with_legacy_default_name(self):
-        """Test friendly name generation treats legacy 'Release {version}' as default."""
-        release_details = {
-            "id": "rel1",
-            "version": "v1.0.0",
-            "name": "Release v1.0.0",  # Legacy default format
-        }
-
-        result = get_release_friendly_name(release_details, "v1.0.0")
-
-        self.assertEqual(result, "v1.0.0")
-
-    def test_get_release_friendly_name_no_details(self):
-        """Test friendly name generation when no release details available."""
-        result = get_release_friendly_name(None, "v1.0.0")
-
-        self.assertEqual(result, "v1.0.0")
-
-    def test_get_release_friendly_name_with_empty_string_name(self):
-        """Test friendly name generation when name is empty string."""
-        release_details = {
-            "id": "rel1",
-            "version": "v1.0.0",
-            "name": "",  # Empty string
-        }
-
-        result = get_release_friendly_name(release_details, "v1.0.0")
-
-        self.assertEqual(result, "v1.0.0")
-
-    def test_get_release_friendly_name_with_none_name(self):
-        """Test friendly name generation when name is None."""
-        release_details = {
-            "id": "rel1",
-            "version": "v1.0.0",
-            "name": None,  # Explicitly None
-        }
-
-        result = get_release_friendly_name(release_details, "v1.0.0")
-
-        self.assertEqual(result, "v1.0.0")
-
-    def test_get_release_friendly_name_with_whitespace_only_name(self):
-        """Test friendly name generation when name is whitespace only."""
-        release_details = {
-            "id": "rel1",
-            "version": "v1.0.0",
-            "name": "   ",  # Whitespace only
-        }
-
-        result = get_release_friendly_name(release_details, "v1.0.0")
-
-        self.assertEqual(result, "v1.0.0")
-
-    def test_get_release_friendly_name_trims_whitespace(self):
-        """Test friendly name generation trims leading/trailing whitespace."""
-        release_details = {
-            "id": "rel1",
-            "version": "v1.0.0",
-            "name": "  Custom Release Name  ",  # Has leading/trailing whitespace
-        }
-
-        result = get_release_friendly_name(release_details, "v1.0.0")
-
-        self.assertEqual(result, "'Custom Release Name' (v1.0.0)")
-
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_create_release_url_construction_no_double_api_prefix(self, mock_post):
-        """Test that create_release doesn't create URLs with double /api/v1 prefix."""
-        # Use production API URL which contains /api/v1
-        prod_api_base_url = "https://app.sbomify.com"
-
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"id": "new-release-id"}
-        mock_post.return_value = mock_response
-
-        create_release(prod_api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
-
-        # Verify the URL was constructed correctly
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
-        actual_url = call_args[0][0]
-
-        # Should be exactly this URL (no double /api/v1)
-        expected_url = "https://app.sbomify.com/api/v1/releases"
-        self.assertEqual(actual_url, expected_url, f"URL construction error: got {actual_url}, expected {expected_url}")
-
-        # Should not contain double /api/v1
-        self.assertNotIn("/api/v1/api/v1", actual_url, f"URL contains double /api/v1 prefix: {actual_url}")
-
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_check_release_exists_url_construction_no_double_api_prefix(self, mock_get):
-        """Test that check_release_exists doesn't create URLs with double /api/v1 prefix."""
-        # Use production API URL which contains /api/v1
-        prod_api_base_url = "https://app.sbomify.com"
-
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"items": []}
-        mock_get.return_value = mock_response
-
-        check_release_exists(prod_api_base_url, self.token, "Gu9wem8mkX", "v1.0.0")
-
-        # Verify the URL was constructed correctly
-        mock_get.assert_called_once()
-        call_args = mock_get.call_args
-        actual_url = call_args[0][0]
-
-        # Should be exactly this URL (no double /api/v1)
-        expected_url = "https://app.sbomify.com/api/v1/releases"
-        self.assertEqual(actual_url, expected_url, f"URL construction error: got {actual_url}, expected {expected_url}")
-
-        # Should not contain double /api/v1
-        self.assertNotIn("/api/v1/api/v1", actual_url, f"URL contains double /api/v1 prefix: {actual_url}")
-
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_tag_sbom_with_release_url_construction_no_double_api_prefix(self, mock_post):
-        """Test that tag_sbom_with_release doesn't create URLs with double /api/v1 prefix."""
-        # Use production API URL which contains /api/v1
-        prod_api_base_url = "https://app.sbomify.com"
-
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_post.return_value = mock_response
-
-        tag_sbom_with_release(prod_api_base_url, self.token, "sbom123", "rel456")
-
-        # Verify the URL was constructed correctly
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
-        actual_url = call_args[0][0]
-
-        # Should be exactly this URL (no double /api/v1)
-        expected_url = "https://app.sbomify.com/api/v1/releases/rel456/artifacts"
-        self.assertEqual(actual_url, expected_url, f"URL construction error: got {actual_url}, expected {expected_url}")
-
-        # Should not contain double /api/v1
-        self.assertNotIn("/api/v1/api/v1", actual_url, f"URL contains double /api/v1 prefix: {actual_url}")
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_trims_whitespace(self) -> None:
+        details = {"id": "rel1", "version": "v1.0.0", "name": "  Custom Release Name  "}
+        assert get_release_friendly_name(details, "v1.0.0") == "'Custom Release Name' (v1.0.0)"

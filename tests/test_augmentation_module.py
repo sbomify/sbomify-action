@@ -153,17 +153,14 @@ class TestLicenseHandling:
         assert enriched_bom.metadata.component.version == "2.0.0"
 
     @patch("sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file")
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_augmentation_metadata(self, mock_get, mock_find_config, sample_backend_metadata_with_mixed_licenses):
         """Test fetching metadata from providers (sbomify API)."""
         # Disable json-config provider to isolate sbomify API test
         mock_find_config.return_value = None
 
         # Setup mock
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = sample_backend_metadata_with_mixed_licenses
-        mock_get.return_value = mock_response
+        mock_get.return_value = sample_backend_metadata_with_mixed_licenses
 
         # Fetch metadata
         result = fetch_augmentation_metadata(
@@ -178,7 +175,7 @@ class TestLicenseHandling:
         assert result["authors"] == sample_backend_metadata_with_mixed_licenses["authors"]
 
     @patch("sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file")
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_augment_sbom_from_file_cyclonedx(
         self, mock_get, mock_find_config, sample_cyclonedx_bom, sample_backend_metadata_with_mixed_licenses
     ):
@@ -187,10 +184,7 @@ class TestLicenseHandling:
         mock_find_config.return_value = None
 
         # Setup mock
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = sample_backend_metadata_with_mixed_licenses
-        mock_get.return_value = mock_response
+        mock_get.return_value = sample_backend_metadata_with_mixed_licenses
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create input file
@@ -401,7 +395,7 @@ class TestSPDXAugmentation:
         assert enriched_doc.packages[0].version == "2.0.0-spdx"
 
     @patch("sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file")
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_augment_sbom_from_file_spdx(self, mock_get, mock_find_config, spdx_document):
         """Test augmenting SPDX SBOM from file."""
         # Disable json-config provider to isolate sbomify API test
@@ -413,10 +407,7 @@ class TestSPDXAugmentation:
             "licenses": ["MIT"],
         }
 
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = backend_data
-        mock_get.return_value = mock_response
+        mock_get.return_value = backend_data
 
         with tempfile.TemporaryDirectory() as tmpdir:
             from spdx_tools.spdx.writer.write_anything import write_file as spdx_write_file
@@ -1225,13 +1216,10 @@ class TestLockfilePackageDetection:
 class TestErrorHandling:
     """Test error handling in augmentation."""
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_file_not_found_error(self, mock_get):
         """Test handling of missing input file."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"supplier": {}}
-        mock_get.return_value = mock_response
+        mock_get.return_value = {"supplier": {}}
 
         with pytest.raises(FileNotFoundError) as exc_info:
             augment_sbom_from_file(
@@ -1245,13 +1233,10 @@ class TestErrorHandling:
         assert "Input SBOM file not found" in str(exc_info.value)
         assert "/nonexistent/file.json" in str(exc_info.value)
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_invalid_json_error(self, mock_get):
         """Test handling of invalid JSON in input file."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"supplier": {}}
-        mock_get.return_value = mock_response
+        mock_get.return_value = {"supplier": {}}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             input_file = Path(tmpdir) / "invalid.json"
@@ -1274,14 +1259,14 @@ class TestErrorHandling:
 
     @patch("sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file")
     @patch.dict(os.environ, {}, clear=True)
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_api_connection_error(self, mock_get, mock_find_config):
         """Test handling of API connection errors (provider returns None, not exception)."""
-        import requests
+        from sbomify_action.exceptions import APIError
 
         # Disable json-config provider to isolate API error test
         mock_find_config.return_value = None
-        mock_get.side_effect = requests.exceptions.ConnectionError("Connection failed")
+        mock_get.side_effect = APIError("Failed to connect to sbomify API")
 
         # With the provider architecture, API errors are caught and logged,
         # the provider returns None, and fetch_augmentation_metadata returns {}
@@ -1296,14 +1281,14 @@ class TestErrorHandling:
 
     @patch("sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file")
     @patch.dict(os.environ, {}, clear=True)
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_api_timeout_error(self, mock_get, mock_find_config):
         """Test handling of API timeout errors (provider returns None, not exception)."""
-        import requests
+        from sbomify_action.exceptions import APIError
 
         # Disable json-config provider to isolate API error test
         mock_find_config.return_value = None
-        mock_get.side_effect = requests.exceptions.Timeout("Timeout")
+        mock_get.side_effect = APIError("API request timed out")
 
         # With the provider architecture, API errors are caught and logged
         result = fetch_augmentation_metadata(
@@ -1317,18 +1302,15 @@ class TestErrorHandling:
 
     @patch("sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file")
     @patch.dict(os.environ, {}, clear=True)
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_api_404_error(self, mock_get, mock_find_config):
         """Test handling of API 404 errors (provider returns None, not exception)."""
+        from sbomify_action.exceptions import APIError
+
         # Disable json-config provider to isolate API error test
         mock_find_config.return_value = None
 
-        mock_response = Mock()
-        mock_response.ok = False
-        mock_response.status_code = 404
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {"detail": "Component not found"}
-        mock_get.return_value = mock_response
+        mock_get.side_effect = APIError("Failed to retrieve component metadata from sbomify. [404]")
 
         # With the provider architecture, API errors are caught and logged
         result = fetch_augmentation_metadata(
@@ -1340,15 +1322,12 @@ class TestErrorHandling:
         # Provider catches the error and returns None, which results in empty dict
         assert result == {}
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_missing_spec_version_error(self, mock_get):
         """Test handling of missing specVersion in CycloneDX SBOM."""
         from sbomify_action.exceptions import SBOMValidationError
 
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"supplier": {}}
-        mock_get.return_value = mock_response
+        mock_get.return_value = {"supplier": {}}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             input_file = Path(tmpdir) / "sbom.json"
@@ -1814,13 +1793,10 @@ class TestAugmentationValidation:
 
         return Document(creation_info=creation_info, packages=[package])
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_augment_cyclonedx_validates_output_by_default(self, mock_get, sample_cyclonedx_bom):
         """Test that CycloneDX augmentation validates output by default."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"supplier": {"name": "Test Supplier"}}
-        mock_get.return_value = mock_response
+        mock_get.return_value = {"supplier": {"name": "Test Supplier"}}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             from cyclonedx.output.json import JsonV1Dot6
@@ -1844,15 +1820,12 @@ class TestAugmentationValidation:
             assert format_result == "cyclonedx"
             assert output_file.exists()
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_augment_cyclonedx_validation_failure_raises_error(self, mock_get, sample_cyclonedx_bom):
         """Test that CycloneDX validation failure raises SBOMValidationError."""
         from sbomify_action.exceptions import SBOMValidationError
 
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"supplier": {"name": "Test Supplier"}}
-        mock_get.return_value = mock_response
+        mock_get.return_value = {"supplier": {"name": "Test Supplier"}}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             from cyclonedx.output.json import JsonV1Dot6
@@ -1883,13 +1856,10 @@ class TestAugmentationValidation:
 
                 assert "Augmented SBOM failed validation" in str(exc_info.value)
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_augment_cyclonedx_skips_validation_when_disabled(self, mock_get, sample_cyclonedx_bom):
         """Test that CycloneDX validation is skipped when validate=False."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"supplier": {"name": "Test Supplier"}}
-        mock_get.return_value = mock_response
+        mock_get.return_value = {"supplier": {"name": "Test Supplier"}}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             from cyclonedx.output.json import JsonV1Dot6
@@ -1916,13 +1886,10 @@ class TestAugmentationValidation:
 
             assert output_file.exists()
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_augment_spdx_validates_output_by_default(self, mock_get, sample_spdx_document):
         """Test that SPDX augmentation validates output by default."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"supplier": {"name": "SPDX Supplier"}}
-        mock_get.return_value = mock_response
+        mock_get.return_value = {"supplier": {"name": "SPDX Supplier"}}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             from spdx_tools.spdx.writer.write_anything import write_file as spdx_write_file
@@ -1944,15 +1911,12 @@ class TestAugmentationValidation:
             assert format_result == "spdx"
             assert output_file.exists()
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_augment_spdx_validation_failure_raises_error(self, mock_get, sample_spdx_document):
         """Test that SPDX validation failure raises SBOMValidationError."""
         from sbomify_action.exceptions import SBOMValidationError
 
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"supplier": {"name": "SPDX Supplier"}}
-        mock_get.return_value = mock_response
+        mock_get.return_value = {"supplier": {"name": "SPDX Supplier"}}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             from spdx_tools.spdx.writer.write_anything import write_file as spdx_write_file
@@ -1981,13 +1945,10 @@ class TestAugmentationValidation:
 
                 assert "Augmented SBOM failed validation" in str(exc_info.value)
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_augment_spdx_skips_validation_when_disabled(self, mock_get, sample_spdx_document):
         """Test that SPDX validation is skipped when validate=False."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"supplier": {"name": "SPDX Supplier"}}
-        mock_get.return_value = mock_response
+        mock_get.return_value = {"supplier": {"name": "SPDX Supplier"}}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             from spdx_tools.spdx.writer.write_anything import write_file as spdx_write_file

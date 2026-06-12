@@ -111,7 +111,9 @@ def _resolve_platform_digest(image_ref: str) -> str | None:
         for entry in manifest.get("manifests", []):
             p = entry.get("platform", {})
             if p.get("os") == os_name and p.get("architecture") == arch:
-                return str(entry["digest"])
+                digest = entry.get("digest")
+                if digest:
+                    return str(digest)
         logger.debug(f"No matching platform {current_platform} in manifest list for {image_ref}")
         return None
 
@@ -216,8 +218,14 @@ def _detect_chainguard_from_provenance(docker_image: str) -> ChainguardBaseImage
     for entry in index.get("manifests", []):
         annotations = entry.get("annotations", {})
         if annotations.get("vnd.docker.reference.type") == "attestation-manifest":
-            att_digest = entry["digest"]
-            break
+            # ``.get`` (not ``[...]``) guards an off-spec entry that matches the
+            # annotation but omits ``digest``; ``if att_digest: break`` then keeps
+            # scanning for a later attestation entry that has one rather than
+            # aborting — same continue-on-missing semantics as
+            # ``_resolve_platform_digest`` above.
+            att_digest = entry.get("digest")
+            if att_digest:
+                break
 
     if not att_digest:
         logger.debug(f"No attestation manifest found for {docker_image}")
@@ -237,8 +245,9 @@ def _detect_chainguard_from_provenance(docker_image: str) -> ChainguardBaseImage
     for layer in att_manifest.get("layers", []):
         annotations = layer.get("annotations", {})
         if annotations.get("in-toto.io/predicate-type") == "https://slsa.dev/provenance/v1":
-            provenance_digest = layer["digest"]
-            break
+            provenance_digest = layer.get("digest")
+            if provenance_digest:
+                break
 
     if not provenance_digest:
         logger.debug(f"No SLSA provenance layer found in attestation for {docker_image}")

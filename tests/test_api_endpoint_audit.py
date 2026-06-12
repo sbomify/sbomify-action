@@ -1,12 +1,17 @@
-"""
-Comprehensive audit of all API endpoints to ensure correct URL construction.
+"""URL-construction audit for every sbomify-facing endpoint.
 
-This test verifies that all API endpoints construct URLs correctly with the
-updated SBOMIFY_PRODUCTION_API base URL.
+These tests pin the exact URL each call site produces, so we don't
+regress to ``/api/v1/api/v1/...`` shapes if the base URL convention
+ever drifts. All callers now route through ``SbomifyApiClient``, so
+the patch target is the shared client's ``session.request``.
 """
 
-import unittest
-from unittest.mock import Mock, patch
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from sbomify_action._augmentation.providers.sbomify_api import SbomifyApiProvider
 from sbomify_action._processors.releases_api import (
@@ -16,189 +21,132 @@ from sbomify_action._processors.releases_api import (
     get_release_id,
     tag_sbom_with_release,
 )
-from sbomify_action.cli.main import (
-    SBOMIFY_PRODUCTION_API,
-)
+from sbomify_action.cli.main import SBOMIFY_PRODUCTION_API
+
+API_BASE = SBOMIFY_PRODUCTION_API
+TOKEN = "test-token"
+COMPONENT_ID = "test-component"
 
 
-class TestAPIEndpointAudit(unittest.TestCase):
-    """Comprehensive audit of all API endpoints."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        self.api_base_url = SBOMIFY_PRODUCTION_API
-        self.token = "test-token"
-        self.component_id = "test-component"
-
-    def test_production_api_base_url_format(self):
-        """Test that production API base URL is in the correct format."""
-        # Should be just the base domain without /api/v1
-        self.assertEqual(SBOMIFY_PRODUCTION_API, "https://app.sbomify.com")
-        self.assertFalse(SBOMIFY_PRODUCTION_API.endswith("/api/v1"))
-        self.assertFalse(SBOMIFY_PRODUCTION_API.endswith("/"))
-
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_check_release_exists_endpoint(self, mock_get):
-        """Test check_release_exists API endpoint URL construction."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"items": []}
-        mock_get.return_value = mock_response
-
-        check_release_exists(self.api_base_url, self.token, "product123", "v1.0.0")
-
-        mock_get.assert_called_once()
-        call_args = mock_get.call_args
-        actual_url = call_args[0][0]
-
-        expected_url = "https://app.sbomify.com/api/v1/releases"
-        self.assertEqual(actual_url, expected_url)
-        self.assertNotIn("/api/v1/api/v1", actual_url)
-
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_create_release_endpoint(self, mock_post):
-        """Test create_release API endpoint URL construction."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"id": "new-release-id"}
-        mock_post.return_value = mock_response
-
-        create_release(self.api_base_url, self.token, "product123", "v1.0.0")
-
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
-        actual_url = call_args[0][0]
-
-        expected_url = "https://app.sbomify.com/api/v1/releases"
-        self.assertEqual(actual_url, expected_url)
-        self.assertNotIn("/api/v1/api/v1", actual_url)
-
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_tag_sbom_with_release_endpoint(self, mock_post):
-        """Test tag_sbom_with_release API endpoint URL construction."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_post.return_value = mock_response
-
-        tag_sbom_with_release(self.api_base_url, self.token, "sbom123", "release456")
-
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
-        actual_url = call_args[0][0]
-
-        expected_url = "https://app.sbomify.com/api/v1/releases/release456/artifacts"
-        self.assertEqual(actual_url, expected_url)
-        self.assertNotIn("/api/v1/api/v1", actual_url)
-
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_get_release_id_endpoint(self, mock_get):
-        """Test get_release_id API endpoint URL construction."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"items": []}
-        mock_get.return_value = mock_response
-
-        get_release_id(self.api_base_url, self.token, "product123", "v1.0.0")
-
-        mock_get.assert_called_once()
-        call_args = mock_get.call_args
-        actual_url = call_args[0][0]
-
-        expected_url = "https://app.sbomify.com/api/v1/releases"
-        self.assertEqual(actual_url, expected_url)
-        self.assertNotIn("/api/v1/api/v1", actual_url)
-
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_get_release_details_endpoint(self, mock_get):
-        """Test get_release_details API endpoint URL construction."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"items": []}
-        mock_get.return_value = mock_response
-
-        get_release_details(self.api_base_url, self.token, "product123", "v1.0.0")
-
-        mock_get.assert_called_once()
-        call_args = mock_get.call_args
-        actual_url = call_args[0][0]
-
-        expected_url = "https://app.sbomify.com/api/v1/releases"
-        self.assertEqual(actual_url, expected_url)
-        self.assertNotIn("/api/v1/api/v1", actual_url)
-
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
-    def test_sbomify_api_provider_endpoint(self, mock_get):
-        """Test SbomifyApiProvider API endpoint URL construction."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {"supplier": {}, "authors": [], "licenses": []}
-        mock_get.return_value = mock_response
-
-        provider = SbomifyApiProvider()
-        provider.fetch(
-            api_base_url=self.api_base_url,
-            token=self.token,
-            component_id=self.component_id,
-        )
-
-        mock_get.assert_called_once()
-        call_args = mock_get.call_args
-        actual_url = call_args[0][0]
-
-        expected_url = "https://app.sbomify.com/api/v1/sboms/component/test-component/meta"
-        self.assertEqual(actual_url, expected_url)
-        self.assertNotIn("/api/v1/api/v1", actual_url)
-
-    def test_sbom_upload_url_construction(self):
-        """Test SBOM upload URL construction pattern."""
-        # This tests the URL pattern used in the upload function
-        FORMAT = "cyclonedx"
-        expected_url = f"{self.api_base_url}/api/v1/sboms/artifact/{FORMAT}/{self.component_id}"
-
-        self.assertEqual(expected_url, "https://app.sbomify.com/api/v1/sboms/artifact/cyclonedx/test-component")
-        self.assertNotIn("/api/v1/api/v1", expected_url)
-        self.assertEqual(expected_url.count("/api/v1"), 1)
-
-    def test_custom_api_base_url_override(self):
-        """Test that custom API base URLs work correctly."""
-        custom_api_base_url = "https://api.dev.sbomify.com"
-
-        # Test release URL construction with custom base
-        release_url = custom_api_base_url + "/api/v1/releases"
-        self.assertEqual(release_url, "https://api.dev.sbomify.com/api/v1/releases")
-        self.assertNotIn("/api/v1/api/v1", release_url)
-
-        # Test SBOM metadata URL construction with custom base
-        metadata_url = custom_api_base_url + f"/api/v1/sboms/component/{self.component_id}/meta"
-        self.assertEqual(metadata_url, "https://api.dev.sbomify.com/api/v1/sboms/component/test-component/meta")
-        self.assertNotIn("/api/v1/api/v1", metadata_url)
-
-    def test_all_endpoints_have_single_api_v1_prefix(self):
-        """Test that all API endpoints have exactly one /api/v1 prefix."""
-        base_url = "https://app.sbomify.com"
-        component_id = "test-component"
-        release_id = "test-release"
-        format_type = "cyclonedx"
-
-        # All API endpoints that should exist
-        endpoints = [
-            f"{base_url}/api/v1/releases",
-            f"{base_url}/api/v1/releases/{release_id}/artifacts",
-            f"{base_url}/api/v1/sboms/component/{component_id}/meta",
-            f"{base_url}/api/v1/sboms/artifact/{format_type}/{component_id}",
-        ]
-
-        for endpoint in endpoints:
-            with self.subTest(endpoint=endpoint):
-                # Should have exactly one occurrence of /api/v1
-                self.assertEqual(endpoint.count("/api/v1"), 1, f"Endpoint {endpoint} should have exactly one /api/v1")
-                # Should not have double slashes (except after protocol)
-                self.assertNotIn(
-                    "//", endpoint.replace("https://", ""), f"Endpoint {endpoint} should not have double slashes"
-                )
-                # Should not have double /api/v1
-                self.assertNotIn("/api/v1/api/v1", endpoint, f"Endpoint {endpoint} should not have double /api/v1")
+def _ok_response(json_body: Any) -> MagicMock:
+    response = MagicMock()
+    response.ok = True
+    response.status_code = 200
+    response.json.return_value = json_body
+    response.headers = {"content-type": "application/json"}
+    return response
 
 
-if __name__ == "__main__":
-    unittest.main()
+def _captured_urls(mock_request: MagicMock) -> list[str]:
+    """Extract the ``url`` argument from each session.request call."""
+    urls: list[str] = []
+    for call in mock_request.call_args_list:
+        args, kwargs = call
+        if "url" in kwargs:
+            urls.append(kwargs["url"])
+        elif len(args) >= 2:
+            urls.append(args[1])
+    return urls
+
+
+@pytest.fixture
+def mock_session_request() -> Any:
+    """Patch SbomifyApiClient's session.request for the duration of the test."""
+    with patch("sbomify_action.sbomify_api.requests.Session") as mock_session_cls:
+        instance = MagicMock()
+        mock_session_cls.return_value = instance
+        yield instance.request
+
+
+def test_production_api_base_url_format() -> None:
+    """Base URL must be the bare domain, no /api/v1 suffix, no trailing slash."""
+    assert SBOMIFY_PRODUCTION_API == "https://app.sbomify.com"
+    assert not SBOMIFY_PRODUCTION_API.endswith("/api/v1")
+    assert not SBOMIFY_PRODUCTION_API.endswith("/")
+
+
+def test_check_release_exists_endpoint(mock_session_request: MagicMock) -> None:
+    mock_session_request.return_value = _ok_response({"items": []})
+    check_release_exists(API_BASE, TOKEN, "product123", "v1.0.0")
+
+    urls = _captured_urls(mock_session_request)
+    assert urls == ["https://app.sbomify.com/api/v1/releases"]
+
+
+def test_create_release_endpoint(mock_session_request: MagicMock) -> None:
+    mock_session_request.return_value = _ok_response({"id": "new-release-id"})
+    create_release(API_BASE, TOKEN, "product123", "v1.0.0")
+
+    urls = _captured_urls(mock_session_request)
+    assert urls == ["https://app.sbomify.com/api/v1/releases"]
+
+
+def test_tag_sbom_with_release_endpoint(mock_session_request: MagicMock) -> None:
+    mock_session_request.return_value = _ok_response({})
+    tag_sbom_with_release(API_BASE, TOKEN, "sbom123", "release456")
+
+    urls = _captured_urls(mock_session_request)
+    assert urls == ["https://app.sbomify.com/api/v1/releases/release456/artifacts"]
+
+
+def test_get_release_id_endpoint(mock_session_request: MagicMock) -> None:
+    mock_session_request.return_value = _ok_response({"items": []})
+    get_release_id(API_BASE, TOKEN, "product123", "v1.0.0")
+
+    urls = _captured_urls(mock_session_request)
+    assert urls == ["https://app.sbomify.com/api/v1/releases"]
+
+
+def test_get_release_details_endpoint(mock_session_request: MagicMock) -> None:
+    mock_session_request.return_value = _ok_response({"items": []})
+    get_release_details(API_BASE, TOKEN, "product123", "v1.0.0")
+
+    urls = _captured_urls(mock_session_request)
+    assert urls == ["https://app.sbomify.com/api/v1/releases"]
+
+
+def test_sbomify_api_provider_endpoint(mock_session_request: MagicMock) -> None:
+    """Augmentation now routes through SbomifyApiClient; verify the URL it asks for."""
+    mock_session_request.return_value = _ok_response({"supplier": {}, "authors": [], "licenses": []})
+
+    provider = SbomifyApiProvider()
+    provider.fetch(api_base_url=API_BASE, token=TOKEN, component_id=COMPONENT_ID)
+
+    urls = _captured_urls(mock_session_request)
+    assert urls == ["https://app.sbomify.com/api/v1/sboms/component/test-component/meta"]
+
+
+def test_sbom_upload_url_construction() -> None:
+    """Static check on the upload URL template (no session call required)."""
+    sbom_format = "cyclonedx"
+    expected = f"{API_BASE}/api/v1/sboms/artifact/{sbom_format}/{COMPONENT_ID}"
+    assert expected == "https://app.sbomify.com/api/v1/sboms/artifact/cyclonedx/test-component"
+    assert "/api/v1/api/v1" not in expected
+    assert expected.count("/api/v1") == 1
+
+
+def test_custom_api_base_url_override() -> None:
+    """A custom base URL still composes cleanly with the endpoint paths."""
+    custom = "https://api.dev.sbomify.com"
+    assert custom + "/api/v1/releases" == "https://api.dev.sbomify.com/api/v1/releases"
+    assert (
+        custom + f"/api/v1/sboms/component/{COMPONENT_ID}/meta"
+        == "https://api.dev.sbomify.com/api/v1/sboms/component/test-component/meta"
+    )
+
+
+def test_all_endpoints_have_single_api_v1_prefix() -> None:
+    base = "https://app.sbomify.com"
+    component_id = "test-component"
+    release_id = "test-release"
+    sbom_format = "cyclonedx"
+    endpoints = [
+        f"{base}/api/v1/releases",
+        f"{base}/api/v1/releases/{release_id}/artifacts",
+        f"{base}/api/v1/sboms/component/{component_id}/meta",
+        f"{base}/api/v1/sboms/artifact/{sbom_format}/{component_id}",
+    ]
+    for endpoint in endpoints:
+        assert endpoint.count("/api/v1") == 1, endpoint
+        assert "//" not in endpoint.replace("https://", ""), endpoint
+        assert "/api/v1/api/v1" not in endpoint, endpoint

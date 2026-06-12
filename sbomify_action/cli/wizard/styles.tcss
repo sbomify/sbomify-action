@@ -1,0 +1,412 @@
+/* ---------------------------------------------------------------------
+ * sbomify brand palette — mirrors sbomify.com/tailwind.config.js +
+ * the @theme tokens in sbomify.com/_assets/css/tailwind.css.
+ * Keep these in sync if marketing rebrands.
+ * --------------------------------------------------------------------- */
+
+$sbom-primary: #141035;          /* primaryBG — deep purple-blue base */
+$sbom-primary-light: #201B4C;    /* primary.light — panel fill        */
+$sbom-primary-600: #37306B;      /* primary.600 — borders, dividers   */
+$sbom-primary-700: #4A4276;      /* primary.700 — button stroke       */
+$sbom-purple: #8A7DFF;           /* purple — accent / CTA             */
+$sbom-purple-hover: #7A6DE5;     /* purple.700 — CTA hover            */
+$sbom-secondary-bg: #1A1B2A;     /* secondaryBG — sunken surfaces     */
+$sbom-text-muted: #CBCCCE;       /* tertiaryText                      */
+$sbom-text-dim: #5E5E5E;         /* secondaryText                     */
+$sbom-fuschia: #FCDDEC;
+
+/* Signature blue → magenta → peach gradient. Used in markup, not CSS. */
+$sbom-grad-blue: #4059D0;
+$sbom-grad-magenta: #CC58BB;
+$sbom-grad-peach: #F4B57F;
+
+/* NOTE: we intentionally do NOT redefine Textual's built-in design
+ * tokens ($accent, $primary, $panel, …). Those are referenced by
+ * Textual's own internal stylesheet (e.g. ``hatch: right $panel;``)
+ * with shape expectations that don't accept arbitrary hex colours.
+ * Instead, every selector below uses our $sbom-* variables directly. */
+
+/* ---------------------------------------------------------------------
+ * App chrome
+ * --------------------------------------------------------------------- */
+
+Screen {
+    background: $sbom-primary;
+}
+
+Header {
+    background: $sbom-primary-light;
+    color: $sbom-purple;
+    text-style: bold;
+}
+
+Footer {
+    background: $sbom-primary-light;
+    color: $sbom-text-muted;
+}
+
+Footer > .footer--key {
+    color: $sbom-purple;
+    text-style: bold;
+}
+
+/* ---------------------------------------------------------------------
+ * Wizard layout — applied by WizardScreen.compose
+ * --------------------------------------------------------------------- */
+
+.wizard-body {
+    padding: 1 2;
+    height: 1fr;
+}
+
+.wizard-step-crumb {
+    color: $sbom-purple;
+    margin-bottom: 1;
+}
+
+.wizard-subtitle {
+    color: $sbom-text-muted;
+    margin-bottom: 1;
+}
+
+/* Card panels — modern devsecops-CLI shape: rounded border with a
+ * named title bar (set via widget.border_title). Padding gives the
+ * content room to breathe; bottom margin keeps stacked cards from
+ * butting up against each other. */
+.wizard-panel {
+    border: round $sbom-primary-600;
+    padding: 1 2;
+    margin-bottom: 1;
+    height: auto;
+    background: $sbom-primary-light;
+    border-title-color: $sbom-purple;
+    border-title-style: bold;
+    border-title-align: left;
+    border-subtitle-color: $sbom-text-muted;
+    border-subtitle-align: right;
+}
+
+.wizard-panel-emphasis {
+    border: thick $sbom-purple;
+    padding: 1 2;
+    margin-bottom: 1;
+    height: auto;
+    background: $sbom-primary-light;
+    border-title-color: $sbom-grad-peach;
+    border-title-style: bold;
+    border-title-align: left;
+}
+
+.wizard-title {
+    color: $sbom-purple;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.wizard-muted {
+    color: $sbom-text-muted;
+    margin-bottom: 1;
+}
+
+.banner {
+    color: $sbom-purple;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+/* Hero card — only used on the Welcome screen. Bigger padding,
+ * thick gradient border, title-bar uses the gradient peach so it
+ * pops against the deep purple background. */
+.wizard-hero {
+    border: thick $sbom-purple;
+    padding: 2 4;
+    margin-bottom: 1;
+    height: auto;
+    background: $sbom-primary-light;
+    border-title-color: $sbom-grad-peach;
+    border-title-style: bold;
+    border-title-align: left;
+}
+
+/* Two-column hero — text on the left, ASCII wizard on the right. */
+.wizard-hero-row {
+    height: auto;
+}
+
+.wizard-hero-text {
+    width: 1fr;
+    height: auto;
+    padding-right: 2;
+}
+
+.wizard-hero-mascot {
+    width: auto;
+    height: auto;
+    padding-left: 2;
+}
+
+.wizard-hero-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.wizard-hero-tagline {
+    text-style: italic;
+    margin-bottom: 1;
+}
+
+.wizard-hero-strap {
+    color: $sbom-text-muted;
+}
+
+/* ---------------------------------------------------------------------
+ * Buttons
+ * --------------------------------------------------------------------- */
+
+.button-row {
+    align: center middle;
+    height: auto;
+    padding-top: 1;
+}
+
+.button-row Button {
+    margin: 0 1;
+}
+
+Button {
+    background: $sbom-primary-600;
+    color: $sbom-text-muted;
+    border: tall $sbom-primary-700;
+}
+
+Button:hover {
+    background: $sbom-primary-700;
+    color: white;
+}
+
+Button:focus {
+    border: tall $sbom-purple;
+}
+
+Button.-primary {
+    background: $sbom-purple;
+    color: $sbom-primary;
+    border: tall $sbom-purple-hover;
+    text-style: bold;
+}
+
+Button.-primary:hover {
+    background: $sbom-purple-hover;
+    color: $sbom-primary;
+}
+
+/* Primary button focus indicator. The generic `Button:focus { border:
+ * tall $sbom-purple }` rule is invisible on the primary button because
+ * its background is already purple. Use the gradient peach instead so
+ * the focused 'Next' button reads clearly against the brand purple. */
+Button.-primary:focus {
+    border: tall $sbom-grad-peach;
+}
+
+/* ---------------------------------------------------------------------
+ * Inputs + form controls
+ * --------------------------------------------------------------------- */
+
+Input {
+    margin: 0 0 1 0;
+    background: $sbom-secondary-bg;
+    border: tall $sbom-primary-600;
+    color: white;
+}
+
+Input:focus {
+    border: tall $sbom-purple;
+}
+
+Input.-invalid {
+    border: tall #F87171;
+}
+
+Label {
+    color: $sbom-text-muted;
+    margin-top: 1;
+}
+
+RadioSet {
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+
+RadioButton {
+    background: transparent;
+    padding: 0 1;
+}
+
+/* Selected radio buttons stay readable on every background. Previously
+ * the rule was `color: $sbom-purple` which gave purple text — and the
+ * hover background is also a purple shade, so a selected-and-hovered
+ * button rendered purple-on-purple and was effectively invisible.
+ * Use white text for selected so we keep contrast across the
+ * default / focus / hover states, and lean on the bold + Textual's
+ * own (●) indicator to mark the selection. */
+RadioButton.-selected {
+    color: white;
+    text-style: bold;
+}
+
+/* Don't restyle the background when hovering an already-selected radio
+ * button — Textual's own focus / selected styling is enough, and the
+ * dark-purple hover background was the other half of the purple-on-
+ * purple readability bug. */
+RadioButton:hover {
+    background: $sbom-primary-700;
+    color: white;
+}
+
+/* ---------------------------------------------------------------------
+ * Lists + tables
+ * --------------------------------------------------------------------- */
+
+SelectionList, OptionList, ListView {
+    background: $sbom-secondary-bg;
+    border: tall $sbom-primary-600;
+    height: 1fr;
+    margin: 1 0;
+    color: $sbom-text-muted;
+}
+
+/* Discover screen — size the lockfile list to its content (one row per
+ * lockfile + a row of padding top/bottom) rather than taking 1fr. A
+ * scrollbar still kicks in if a user has an unreasonable number of
+ * lockfiles, but for typical repos (1–5) the panel stays compact. */
+#lockfile-list {
+    height: auto;
+    max-height: 20;
+}
+
+/* Product / Components: per-widget sizing now lives on the
+ * PickOrCreate widget's DEFAULT_CSS — both screens render identical
+ * pickers via the shared component. */
+
+/* Review screen — DataTable of planned components defaults to 1fr
+ * from the generic `DataTable` rule above. Override for #components-
+ * table so it sizes to "header row + one row per component", same
+ * principle as the list pickers. */
+#components-table {
+    height: auto;
+    max-height: 20;
+}
+
+/* ConfigureSbom profile picker — inline OptionList that appears
+ * beneath the augmentation radio when "Use a contact profile" is
+ * chosen. (The augmentation panel moved from ConfigureWorkflow to
+ * ConfigureSbom; the picker lives there now alongside Enrichment.)
+ * Without an explicit constraint it inherits the generic OptionList
+ * `height: 1fr` rule and balloons to 20+ rows for two profile
+ * entries, pushing the Next button off the visible terminal area.
+ * Size to content (typical workspaces have a handful of profiles)
+ * and cap so a workspace with dozens still scrolls inside the panel
+ * rather than dominating it. */
+#profile-picker {
+    height: auto;
+    max-height: 8;
+    margin: 1 0 0 0;
+}
+
+#profile-help {
+    height: auto;
+    margin: 0 0 0 0;
+    color: $sbom-text-muted;
+}
+
+/* Review screen — RichLog rendering the unified diff between the
+ * existing workflow file (if any) and what apply will write. Cap
+ * height so a large diff scrolls inside the panel instead of pushing
+ * the Apply / Back buttons off-screen. */
+#workflow-diff {
+    height: auto;
+    max-height: 20;
+}
+
+/* Apply screen — live log of apply_plan's progress. Same problem as
+ * #workflow-diff: the generic ``RichLog { height: 1fr }`` rule fills
+ * every remaining row, pushing the Continue / Back buttons under the
+ * apply panel below the visible terminal area. Symptom: user finishes
+ * apply, sees "success Wrote …" but no Continue button — wizard
+ * appears stuck. Size to content (typical apply emits <20 lines)
+ * and cap so a very chatty run still scrolls inside the panel
+ * rather than dominating the viewport. */
+#apply-log {
+    height: auto;
+    max-height: 20;
+}
+
+SelectionList:focus, OptionList:focus, ListView:focus {
+    border: tall $sbom-purple;
+}
+
+SelectionList > .selection-list--button-selected,
+OptionList > .option-list--option-highlighted {
+    background: $sbom-purple;
+    color: $sbom-primary;
+    text-style: bold;
+}
+
+DataTable {
+    height: 1fr;
+    margin: 1 0;
+    background: $sbom-secondary-bg;
+}
+
+DataTable > .datatable--header {
+    background: $sbom-primary-light;
+    color: $sbom-purple;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $sbom-purple;
+    color: $sbom-primary;
+}
+
+DataTable > .datatable--odd-row {
+    background: $sbom-secondary-bg;
+}
+
+DataTable > .datatable--even-row {
+    background: $sbom-primary-light;
+}
+
+/* ---------------------------------------------------------------------
+ * Progress + log surfaces
+ * --------------------------------------------------------------------- */
+
+/* Empty placeholder container on the authenticate screen — collapses
+ * to zero height until a LoadingIndicator is mounted inside it,
+ * otherwise it inherits Container's default 1fr and renders the empty
+ * widget's repr as visible text. */
+#auth-progress {
+    height: auto;
+    min-height: 0;
+}
+
+LoadingIndicator {
+    color: $sbom-purple;
+    background: transparent;
+}
+
+ProgressBar Bar > .bar--bar {
+    color: $sbom-purple;
+}
+
+ProgressBar Bar > .bar--complete {
+    color: $sbom-grad-peach;
+}
+
+RichLog {
+    background: $sbom-secondary-bg;
+    border: round $sbom-primary-600;
+    height: 1fr;
+    color: $sbom-text-muted;
+}
