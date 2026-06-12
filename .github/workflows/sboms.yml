@@ -6,7 +6,7 @@
 #   * staging    — every push to master  -> stage.sbomify.com
 #   * production — version tags (v*)      -> sbomify.com
 #
-# Container components SBOM the published ghcr image
+# Container components generate an SBOM from the published ghcr image
 # (ghcr.io/sbomify/sbomify-action:<tag>), which is built and pushed by the
 # CI/CD Pipeline workflow's push-images job. To guarantee that image exists
 # first, this workflow is gated on workflow_run — it only starts after

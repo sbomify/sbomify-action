@@ -11,10 +11,13 @@ root. Both writes enforce a header-sentinel contract:
 - If it's present *without* the sentinel, refuse — the user hand-wrote
   or hand-edited the file and we won't clobber it silently.
 
-We deliberately do **not** create ``.bak`` files. The wizard targets
-``.github/workflows/`` (and the repo root for sbomify.json), all of
-which are under git control; checking in both a ``foo.yml`` and a
-``foo.yml.bak`` is noise next to ``git diff`` and ``git restore``.
+Backup policy differs by file. For **workflow** files we deliberately
+do **not** create ``.bak`` copies: ``.github/workflows/`` is under git
+control, so checking in both a ``foo.yml`` and a ``foo.yml.bak`` is
+noise next to ``git diff`` and ``git restore``. For **sbomify.json**,
+which the user sometimes hand-edits between runs, ``write_sbomify_json``
+keeps a one-shot ``sbomify.json.bak`` of the previous content when an
+overwrite would change it — see that function for the rationale.
 """
 
 from __future__ import annotations

@@ -88,8 +88,8 @@ class WizardScreen(Screen[None]):
 
         Visually:
 
-            01 / 06  │  ●━━━○━━━○━━━○━━━○━━━○  │  Welcome
-            03 / 06  │  ●━━━●━━━●━━━○━━━○━━━○  │  Authenticate
+            01 / 08  │  ●━━━○━━━○━━━○━━━○━━━○━━━○━━━○  │  Welcome
+            03 / 08  │  ●━━━●━━━●━━━○━━━○━━━○━━━○━━━○  │  Authenticate
 
         - Filled purple dots are completed steps.
         - The current dot is bolded so it stands out from past steps.
