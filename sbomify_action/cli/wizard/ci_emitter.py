@@ -17,6 +17,7 @@ from __future__ import annotations
 import functools
 import logging
 import re
+import threading
 
 import requests
 
@@ -118,16 +119,18 @@ def _build_action_ref(version: str, sha: str | None) -> str:
     return f"{ACTION_REPO}@{version}"
 
 
-@functools.lru_cache(maxsize=1)
-def resolve_action_ref() -> str:
-    """Resolve the ``uses:`` ref for sbomify-action in emitted workflows.
+# Serializes resolution so the lookup is single-flight across threads. The
+# review screen resolves on a worker thread while apply can start its own
+# worker moments later; lru_cache memoizes the *result* but doesn't stop two
+# threads from both missing the empty cache and each firing a GitHub request
+# (with the risk of different pins if one call fails transiently). The lock
+# wraps the cache check + compute so exactly one network call ever happens and
+# every caller gets the identical ref.
+_RESOLVE_LOCK = threading.Lock()
 
-    Best-effort, and cached for the process so the review preview and the
-    apply write share one lookup. Online:
-    ``sbomify/sbomify-action@<sha>  # <version>``. Offline (unreachable,
-    rate-limited, or tag missing): a tag-pinned
-    ``sbomify/sbomify-action@<version>`` — still pinned, just no SHA.
-    """
+
+@functools.lru_cache(maxsize=1)
+def _resolve_action_ref_cached() -> str:
     version = _action_version()
     sha = _resolve_tag_sha(version)
     if not sha:
@@ -137,6 +140,25 @@ def resolve_action_ref() -> str:
             version,
         )
     return _build_action_ref(version, sha)
+
+
+def resolve_action_ref() -> str:
+    """Resolve the ``uses:`` ref for sbomify-action in emitted workflows.
+
+    Single-flight and cached for the process, so the review preview and the
+    apply write share exactly one lookup and always pin the same ref even when
+    their worker threads call concurrently. Online:
+    ``sbomify/sbomify-action@<sha>  # <version>``. Offline (unreachable,
+    rate-limited, or tag missing): a tag-pinned
+    ``sbomify/sbomify-action@<version>`` — still pinned, just no SHA.
+    """
+    with _RESOLVE_LOCK:
+        return _resolve_action_ref_cached()
+
+
+# Keep the cache-management surface on the public name so tests/conftest can
+# reset resolution state between runs without reaching for the private cache.
+resolve_action_ref.cache_clear = _resolve_action_ref_cached.cache_clear  # type: ignore[attr-defined]
 
 
 def _format_extension(fmt: SbomFormat) -> str:

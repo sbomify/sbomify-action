@@ -403,6 +403,51 @@ def test_resolve_action_ref_offline_is_tag_pinned() -> None:
     assert "  # " not in ref  # tag-pinned, no SHA comment
 
 
+def test_resolve_action_ref_is_single_flight_across_threads(monkeypatch) -> None:
+    # The review worker and the apply worker can call this concurrently. Even
+    # with lru_cache, two threads could both miss the empty cache and each fire
+    # a GitHub request. The single-flight lock must collapse concurrent callers
+    # to exactly one underlying _resolve_tag_sha call so they pin the same ref.
+    import threading
+    import time
+
+    ci_emitter.resolve_action_ref.cache_clear()
+    sha = "e" * 40
+    call_count = 0
+    count_lock = threading.Lock()
+
+    def _slow_resolve(_version: str) -> str:
+        nonlocal call_count
+        with count_lock:
+            call_count += 1
+        # Widen the race window: without the single-flight lock the other
+        # threads would all enter here before the first caller populates the
+        # cache, driving call_count above 1.
+        time.sleep(0.1)
+        return sha
+
+    monkeypatch.setattr(ci_emitter, "_resolve_tag_sha", _slow_resolve)
+
+    results: list[str] = []
+    results_lock = threading.Lock()
+
+    def _worker() -> None:
+        ref = ci_emitter.resolve_action_ref()
+        with results_lock:
+            results.append(ref)
+
+    threads = [threading.Thread(target=_worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    # Exactly one network resolution, and every thread saw the identical pin.
+    assert call_count == 1
+    assert results == [f"{ACTION_REPO}@{sha}  # {_action_version()}"] * 8
+    ci_emitter.resolve_action_ref.cache_clear()
+
+
 # ----------------------------------------------------------------------
 # apply_plan
 

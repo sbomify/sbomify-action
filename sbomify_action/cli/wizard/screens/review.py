@@ -74,8 +74,10 @@ class ReviewScreen(WizardScreen):
 
         ``resolve_action_ref()`` makes a synchronous GitHub request (up to
         ``_PIN_TIMEOUT`` seconds, longer if DNS/connect stalls). Running it
-        on a worker keeps ``on_mount``'s first paint instant; the result is
-        ``lru_cache``'d so apply reuses it without a second lookup.
+        on a worker keeps ``on_mount``'s first paint instant. Resolution is
+        single-flight and cached, so even if the user reaches apply while this
+        worker is still in flight, apply blocks on the same lookup rather than
+        firing a second request — both pin the identical ref.
         """
         return ci_emitter.resolve_action_ref()
 
