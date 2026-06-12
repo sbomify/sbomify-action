@@ -85,6 +85,11 @@ class WelcomeScreen(WizardScreen):
                         "Actions workflow.",
                         classes="wizard-hero-strap",
                     )
+                    # Trust chip — this tool's own source is SAST-scanned in CI.
+                    yield Static(
+                        "[#86EFAC]✓[/] [#CBCCCE]Scanned by[/] [b #8A7DFF]OpenGrep[/]",
+                        classes="wizard-hero-badge",
+                    )
                 yield Static(ASCII_WIZARD, classes="wizard-hero-mascot")
 
         # No lockfiles → no point walking the rest of the wizard.
