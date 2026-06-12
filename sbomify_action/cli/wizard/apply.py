@@ -231,6 +231,9 @@ def apply_plan(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) -
         facts=state.facts,
         api_base_url=opts.api_base_url,
         component_ids=component_ids,
+        # Pin the action step to a GitHub-resolved commit SHA (or a tag
+        # offline). Resolved here, at the authoritative write.
+        action_ref=ci_emitter.resolve_action_ref(),
         # Pass state.created_product_id (set by _resolve_product for both
         # create-new and use-existing paths). Without this, tag-strategy
         # workflows for users who picked "create new product" silently

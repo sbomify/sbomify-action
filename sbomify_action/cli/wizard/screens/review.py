@@ -150,6 +150,9 @@ class ReviewScreen(WizardScreen):
             facts=self.wizard.state.facts,
             api_base_url=self.wizard.opts.api_base_url,
             component_ids=component_ids,
+            # Show the same SHA-pinned ref the apply will write (cached, so
+            # this preview shares apply's single GitHub lookup).
+            action_ref=ci_emitter.resolve_action_ref(),
         )
         old_content = self._read_existing(target)
 

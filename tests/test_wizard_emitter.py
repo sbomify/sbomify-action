@@ -5,11 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import requests
+
 from sbomify_action.cli.wizard import apply as apply_mod
+from sbomify_action.cli.wizard import ci_emitter
 from sbomify_action.cli.wizard.ci_emitter import (
+    ACTION_REPO,
     HEADER_SENTINEL,
-    PINNED_ACTION_SHA,
-    PINNED_ACTION_VERSION,
+    _action_version,
+    _build_action_ref,
+    _resolve_tag_sha,
     emit_workflow,
 )
 from sbomify_action.cli.wizard.options import WizardOptions
@@ -64,7 +69,9 @@ def test_emit_trunk_oidc_default(tmp_path: Path) -> None:
     assert "TOKEN: ${{ secrets.SBOMIFY_TOKEN }}" not in yaml
     assert "AUGMENT: 'false'" in yaml  # skip default
     assert "REPLACE_WITH_COMPONENT_ID" in yaml  # no component_ids passed
-    assert f"sbomify/sbomify-action@{PINNED_ACTION_SHA}  # {PINNED_ACTION_VERSION}" in yaml
+    # No action_ref passed: emitter falls back to the tag-pinned ref (no
+    # network, no SHA).
+    assert f"      - uses: {ACTION_REPO}@{_action_version()}\n" in yaml
     # Trunk uses short-SHA versioning, NOT tag-stripping.
     assert "git rev-parse --short HEAD" in yaml
 
@@ -298,6 +305,92 @@ def test_emit_token_mode_no_attestation_no_permissions_block(tmp_path: Path) -> 
     yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
     assert "permissions:" not in yaml
     assert "TOKEN: ${{ secrets.SBOMIFY_TOKEN }}" in yaml
+
+
+def test_emit_uses_supplied_action_ref(tmp_path: Path) -> None:
+    """An explicit action_ref (as apply/review pass) is emitted verbatim."""
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    ref = f"{ACTION_REPO}@{'a' * 40}  # v9.9.9"
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com", action_ref=ref)
+    assert f"      - uses: {ref}\n" in yaml
+
+
+# ----------------------------------------------------------------------
+# resolve_action_ref (runtime pin resolution)
+
+
+def test_resolve_tag_sha_online_returns_commit(mocker) -> None:
+    sha = "b" * 40
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"sha": sha}
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+
+    assert _resolve_tag_sha("v26.2.0") == sha
+
+
+def test_resolve_tag_sha_offline_returns_none(mocker) -> None:
+    mocker.patch.object(ci_emitter.requests, "get", side_effect=requests.RequestException("offline"))
+    assert _resolve_tag_sha("v26.2.0") is None
+
+
+def test_resolve_tag_sha_non_200_returns_none(mocker) -> None:
+    response = MagicMock(status_code=404)
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_tag_sha("v0.0.0") is None
+
+
+def test_resolve_tag_sha_invalid_json_returns_none(mocker) -> None:
+    response = MagicMock(status_code=200)
+    response.json.side_effect = ValueError("not json")
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_tag_sha("v26.2.0") is None
+
+
+def test_resolve_tag_sha_rejects_malformed_sha(mocker) -> None:
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"sha": "not-a-real-sha"}
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_tag_sha("v26.2.0") is None
+
+
+def test_build_action_ref_sha_pinned_when_known() -> None:
+    sha = "c" * 40
+    assert _build_action_ref("v26.2.0", sha) == f"{ACTION_REPO}@{sha}  # v26.2.0"
+
+
+def test_build_action_ref_tag_pinned_when_offline() -> None:
+    # Offline fallback: still pinned to the version, just no SHA comment.
+    assert _build_action_ref("v26.2.0", None) == f"{ACTION_REPO}@v26.2.0"
+
+
+def test_action_version_falls_back_when_unknown(monkeypatch) -> None:
+    monkeypatch.setattr(ci_emitter, "_PACKAGE_VERSION", "unknown")
+    assert _action_version() == ci_emitter._FALLBACK_ACTION_VERSION
+
+
+def test_action_version_prefixes_v(monkeypatch) -> None:
+    monkeypatch.setattr(ci_emitter, "_PACKAGE_VERSION", "26.2.0")
+    assert _action_version() == "v26.2.0"
+
+
+def test_resolve_action_ref_online_includes_sha(monkeypatch) -> None:
+    sha = "d" * 40
+    ci_emitter.resolve_action_ref.cache_clear()
+    monkeypatch.setattr(ci_emitter, "_resolve_tag_sha", lambda version: sha)
+    assert ci_emitter.resolve_action_ref() == f"{ACTION_REPO}@{sha}  # {_action_version()}"
+    ci_emitter.resolve_action_ref.cache_clear()
+
+
+def test_resolve_action_ref_offline_is_tag_pinned() -> None:
+    # The autouse offline_action_pin fixture forces _resolve_tag_sha -> None.
+    ci_emitter.resolve_action_ref.cache_clear()
+    ref = ci_emitter.resolve_action_ref()
+    assert ref == f"{ACTION_REPO}@{_action_version()}"
+    assert "  # " not in ref  # tag-pinned, no SHA comment
 
 
 # ----------------------------------------------------------------------
