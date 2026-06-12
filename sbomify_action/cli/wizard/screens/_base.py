@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Callable, ClassVar
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, RadioSet, Static
 
@@ -105,7 +106,10 @@ class WizardScreen(Screen[None]):
         if too_small:
             try:
                 self.query_one("#too-small", Static).update(self._too_small_markup(width, height))
-            except Exception:  # noqa: BLE001 — node not mounted yet; next resize repaints
+            except NoMatches:
+                # The guard node isn't mounted yet (resize fired mid-compose);
+                # the next resize repaints. Narrow to NoMatches so a real
+                # rendering/markup error still surfaces instead of being swallowed.
                 pass
 
     @staticmethod

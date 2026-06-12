@@ -45,13 +45,21 @@ class PagedFormScreen(WizardScreen):
         # Enter advances / saves; Escape steps back (or pops from page 1).
         # priority=True so a focused Input can't swallow them — navigation
         # is routed through ``route_enter`` so a focused Back button still
-        # acts as Back. (Mirrors the other wizard screens.)
-        Binding("enter", "submit", "Next ▸", show=True, priority=True),
+        # acts as Back. (Mirrors the other wizard screens.) The footer hint
+        # is the page-agnostic "Continue" because Enter means Next on every
+        # page but the last and Save on the last — the primary button itself
+        # carries the precise "Next ▸" / "Save ▸" label.
+        Binding("enter", "submit", "Continue", show=True, priority=True),
         Binding("escape", "back", "Back", show=True, priority=True),
     ]
 
     def __init__(self) -> None:
         super().__init__()
+        # Fail fast on a subclass that forgot PAGE_TITLES — otherwise the
+        # indicator reads "Step 1 of 0" and the navigation math treats page 0
+        # as the last page, silently breaking the form.
+        if not self.PAGE_TITLES:
+            raise ValueError(f"{type(self).__name__} must define a non-empty PAGE_TITLES (one entry per page).")
         self._page = 0
 
     # -- subclass hooks ------------------------------------------------
