@@ -634,6 +634,8 @@ sbomify-license-db --distro alpine --version 3.20 --output alpine-3.20.json.gz
 
 </details>
 
+<a id="lifecycle-enrichment"></a>
+
 <details>
 <summary><strong>Lifecycle enrichment details</strong></summary>
 
@@ -779,6 +781,8 @@ All timestamps are in UTC (ISO 8601 format with Z suffix).
 
 </details>
 
+<a id="product-releases"></a>
+
 <details>
 <summary><strong>Product releases</strong></summary>
 
@@ -917,6 +921,8 @@ Use `actions/cache` before calling the sbomify action:
 For caching in other CI environments (GitLab, Bitbucket, Docker), see [Other CI/CD Platforms](#other-cicd-platforms).
 
 </details>
+
+<a id="other-cicd-platforms"></a>
 
 <details>
 <summary><strong>Other CI/CD platforms</strong> (GitLab, Bitbucket, Docker, pip)</summary>
