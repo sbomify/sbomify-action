@@ -7,24 +7,33 @@
 #   * production — version tags (v*)      -> sbomify.com
 #
 # Container components SBOM the published ghcr image
-# (ghcr.io/sbomify/sbomify-action:<tag>). That image must already exist when
-# this workflow runs — it is built and pushed by sbomify.yaml's push-images
-# job. On a tag/master push both workflows start together, so the build
-# workflow must publish the image before the container matrix entries here
-# reach the action step.
+# (ghcr.io/sbomify/sbomify-action:<tag>), which is built and pushed by the
+# CI/CD Pipeline workflow's push-images job. To guarantee that image exists
+# first, this workflow is gated on workflow_run — it only starts after
+# CI/CD Pipeline completes successfully, the cross-workflow equivalent of
+# `needs: push-images`.
+#
+# Because it triggers on workflow_run, GitHub always runs the copy of this
+# file on the repo's DEFAULT branch — changes only take effect once merged
+# to master. Under workflow_run github.ref is the default branch (not the
+# triggering tag), so version/docker_tag are derived from the
+# workflow_run payload below rather than the determine-version action, and
+# checkout pins head_sha so the workspace matches the built commit/tag.
 name: sboms
 on:
-  push:
-    branches: [master]
-    tags: ['v*']
-  workflow_dispatch:
+  workflow_run:
+    workflows: ['CI/CD Pipeline']
+    types: [completed]
 jobs:
   # =========================================================================
-  # Staging — master branch only -> stage.sbomify.com
+  # Staging — master branch builds only -> stage.sbomify.com
   # =========================================================================
   sbom-staging:
     name: ${{ matrix.name }}-staging
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: >-
+      github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.head_branch == 'master'
     runs-on: ubuntu-latest
     permissions:
       id-token: write   # required to mint the GitHub OIDC JWT
@@ -82,6 +91,8 @@ jobs:
             output_file: sbomify-action-container.spdx.json
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .sbomify-cache
@@ -89,9 +100,24 @@ jobs:
       - name: Generate additional packages from Dockerfile
         if: matrix.kind == 'container'
         run: ./scripts/generate_additional_packages.sh > container_additional_packages.txt
+      # Derive version/docker_tag from the workflow_run payload. Under
+      # workflow_run github.ref is the default branch, so the
+      # determine-version action would always report a staging build —
+      # replicate its logic against head_branch/head_sha instead.
       - id: version
-        uses: ./.github/actions/determine-version
-      - uses: sbomify/sbomify-action@ac8b0d423c90447f3011ef8ab5f9ff2e854c6931  # v26.2.0
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          SHORT_SHA="${HEAD_SHA:0:7}"
+          if [[ "$HEAD_BRANCH" == v* ]]; then
+            echo "version=${HEAD_BRANCH}" >> "$GITHUB_OUTPUT"
+            echo "docker_tag=${HEAD_BRANCH#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+            echo "docker_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: sbomify/sbomify-action@master
         env:
           API_BASE_URL: https://stage.sbomify.com
           OIDC_AUDIENCE: stage.sbomify.com
@@ -133,7 +159,10 @@ jobs:
   # =========================================================================
   sbom-production:
     name: ${{ matrix.name }}-production
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    if: >-
+      github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.conclusion == 'success'
+      && startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
     permissions:
       id-token: write   # required to mint the GitHub OIDC JWT
@@ -191,6 +220,8 @@ jobs:
             output_file: sbomify-action-container.spdx.json
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
         with:
           path: .sbomify-cache
@@ -198,9 +229,24 @@ jobs:
       - name: Generate additional packages from Dockerfile
         if: matrix.kind == 'container'
         run: ./scripts/generate_additional_packages.sh > container_additional_packages.txt
+      # Derive version/docker_tag from the workflow_run payload. Under
+      # workflow_run github.ref is the default branch, so the
+      # determine-version action would always report a staging build —
+      # replicate its logic against head_branch/head_sha instead.
       - id: version
-        uses: ./.github/actions/determine-version
-      - uses: sbomify/sbomify-action@ac8b0d423c90447f3011ef8ab5f9ff2e854c6931  # v26.2.0
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          SHORT_SHA="${HEAD_SHA:0:7}"
+          if [[ "$HEAD_BRANCH" == v* ]]; then
+            echo "version=${HEAD_BRANCH}" >> "$GITHUB_OUTPUT"
+            echo "docker_tag=${HEAD_BRANCH#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+            echo "docker_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: sbomify/sbomify-action@master
         env:
           COMPONENT_ID: ${{ matrix.component_id }}
           COMPONENT_NAME: ${{ matrix.component_name }}
