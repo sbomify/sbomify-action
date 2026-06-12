@@ -9,6 +9,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DataTable, RichLog, Static
+from textual.worker import Worker, WorkerState
 
 from sbomify_action.cli.wizard import ci_emitter
 from sbomify_action.cli.wizard.existing import workflow_path
@@ -58,8 +59,37 @@ class ReviewScreen(WizardScreen):
         for c in self.wizard.state.plan.create_components:
             action = "[#CBCCCE]reuse[/]" if c.existing_id is not None else "[#86EFAC]create[/]"
             table.add_row(str(c.lockfile.rel_path), c.lockfile.ecosystem, c.name, action)
+        # Paint immediately with the network-free tag-pinned ref so the
+        # screen never stalls on a GitHub request, then resolve the
+        # SHA-pinned ref on a worker thread and repaint when it lands.
+        # resolve_action_ref() makes a synchronous request (up to
+        # _PIN_TIMEOUT seconds) and used to run here on the UI thread,
+        # freezing the wizard while it waited.
         self._render_diff()
         self.query_one("#apply", Button).focus()
+        self.run_worker(self._resolve_ref_worker, name="resolve-ref", thread=True, exclusive=True)
+
+    def _resolve_ref_worker(self) -> str:
+        """Resolve the SHA-pinned action ref off the UI thread.
+
+        ``resolve_action_ref()`` makes a synchronous GitHub request (up to
+        ``_PIN_TIMEOUT`` seconds, longer if DNS/connect stalls). Running it
+        on a worker keeps ``on_mount``'s first paint instant; the result is
+        ``lru_cache``'d so apply reuses it without a second lookup.
+        """
+        return ci_emitter.resolve_action_ref()
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        """Repaint the diff with the resolved ref once the worker lands.
+
+        On worker failure (``resolve_action_ref`` is best-effort and
+        shouldn't raise, but defend anyway) we keep the network-free
+        tag-pinned preview already on screen.
+        """
+        if event.worker.name != "resolve-ref":
+            return
+        if event.state == WorkerState.SUCCESS and event.worker.result:
+            self._render_diff(event.worker.result)
 
     def action_apply(self) -> None:
         self.route_enter(self._advance)
@@ -129,7 +159,7 @@ class ReviewScreen(WizardScreen):
             f"[#CBCCCE]Build provenance  [/]  {attest_label}"
         )
 
-    def _render_diff(self) -> None:
+    def _render_diff(self, action_ref: str | None = None) -> None:
         """Compute and paint the unified diff between the existing file
         (if any) and what apply will write.
 
@@ -139,6 +169,12 @@ class ReviewScreen(WizardScreen):
         appear as ``REPLACE_WITH_COMPONENT_ID`` placeholders since we
         don't have their real ids yet; a note above the diff calls
         that out so the user isn't surprised.
+
+        ``action_ref`` is the resolved ``uses:`` pin to show. The first
+        paint (from ``on_mount``) omits it, so ``emit_workflow`` uses its
+        network-free tag-pinned fallback; the background worker then calls
+        back with the GitHub-resolved (cached) SHA-pinned ref — the same
+        one apply will write — and we repaint to match.
         """
         target = workflow_path(self.wizard.state.facts.repo_root)
         plan = self.wizard.state.plan
@@ -150,13 +186,14 @@ class ReviewScreen(WizardScreen):
             facts=self.wizard.state.facts,
             api_base_url=self.wizard.opts.api_base_url,
             component_ids=component_ids,
-            # Show the same SHA-pinned ref the apply will write (cached, so
-            # this preview shares apply's single GitHub lookup).
-            action_ref=ci_emitter.resolve_action_ref(),
+            action_ref=action_ref,
         )
         old_content = self._read_existing(target)
 
         log = self.query_one("#workflow-diff", RichLog)
+        # Repaints (worker callback) start from a blank log so the earlier
+        # tag-pinned render doesn't stack underneath the SHA-pinned one.
+        log.clear()
         any_new_placeholders = "REPLACE_WITH_COMPONENT_ID" in new_content
         if any_new_placeholders:
             log.write(
