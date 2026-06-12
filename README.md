@@ -27,6 +27,24 @@ Generate, augment, enrich, and manage SBOMs in your CI/CD pipeline. Works standa
 
 ## Quick Start
 
+The fastest way to get going is the **interactive setup wizard**. Run it from the root of your repository with the Docker image—it bundles all the tools the wizard needs, so there's nothing else to install:
+
+```bash
+docker run --rm -it \
+  -v "$(pwd):/github/workspace" \
+  -w /github/workspace \
+  ghcr.io/sbomify/sbomify-action \
+  sbomify-action wizard
+```
+
+The wizard scans your repo for lockfiles, signs you in to [sbomify](https://app.sbomify.com), registers the matching components, and writes a release-ready `.github/workflows/sboms.yml` for you—no hand-editing YAML. Pass `--dry-run` to preview the full plan without making any API changes or writing files (it still signs in to read your workspace).
+
+> **Note:** The wizard is interactive, so the `-it` flags are required, and it must run on your machine—not in CI. The volume mount (`-v "$(pwd):/github/workspace"`) is what lets it write the generated workflow back into your repo.
+
+### Or configure it by hand
+
+Prefer to write the workflow yourself, or running standalone without a sbomify account? Add the action to a workflow directly:
+
 ```yaml
 - uses: sbomify/sbomify-action@master
   env:
@@ -53,7 +71,43 @@ That's it! This generates a CycloneDX SBOM from your lockfile and enriches it wi
 - **Tag** SBOMs with product releases
 - **Attest** with GitHub's build provenance
 
+## Setup Wizard
+
+The wizard is the recommended way to onboard a repository. It's an interactive terminal UI that walks you through the whole setup. Run it with the Docker image, mounting your repository so it can write the generated workflow:
+
+```bash
+docker run --rm -it \
+  -v "$(pwd):/github/workspace" \
+  -w /github/workspace \
+  ghcr.io/sbomify/sbomify-action \
+  sbomify-action wizard
+```
+
+The Docker image bundles every tool the wizard needs. If you'd rather not use Docker, you can also install the package (`pip install sbomify-action`) and run `sbomify-action wizard` directly.
+
+**What it does:**
+
+1. Scans your repo for supported lockfiles and lets you pick which to onboard
+2. Signs you in to sbomify and picks (or creates) the product and components
+3. Lets you choose your release strategy, credential mode (OIDC trusted publishing or token), enrichment, SBOM formats, and attestation
+4. Writes a ready-to-commit `.github/workflows/sboms.yml`—and `sbomify.json` if you opt into local augmentation
+
+**Options:**
+
+| Option           | Description                                                                 |
+| ---------------- | --------------------------------------------------------------------------- |
+| `--token`        | sbomify API token (falls back to `$SBOMIFY_TOKEN`, then `$TOKEN`)           |
+| `--api-base-url` | sbomify API base URL (default: `https://app.sbomify.com`; for self-hosted)  |
+| `--repo-root`    | Repository root to scan for lockfiles (default: current directory)          |
+| `--output-dir`   | Where the workflow is written (default: `.github/workflows`; must resolve there, since that's the only path GitHub Actions loads workflows from) |
+| `--dry-run`      | Walk through the wizard and preview the plan; makes no API changes and writes no files (read-only sign-in/workspace prefetch still happens) |
+| `--debug`        | Dump debug logs after the wizard exits                                      |
+
+> **Note:** The wizard is interactive and must run on your machine—it refuses to launch in CI (`$CI`/`$GITHUB_ACTIONS`). It won't overwrite a hand-authored `sboms.yml`; it only manages workflows it generated. `sbomify-action init` is a backwards-compatible alias.
+
 ## Usage Examples
+
+The examples below show how to configure the action by hand. If you'd rather not write YAML, use the [Setup Wizard](#setup-wizard) above instead.
 
 ### Standalone (no sbomify account needed)
 
@@ -871,7 +925,7 @@ For caching in other CI environments (GitLab, Bitbucket, Docker), see [Other CI/
 
 ```yaml
 generate-sbom:
-  image: sbomifyhub/sbomify-action
+  image: ghcr.io/sbomify/sbomify-action
   cache:
     key: sbomify-cache
     paths:
@@ -896,7 +950,7 @@ pipelines:
         caches:
           - sbomify
         script:
-          - pipe: docker://sbomifyhub/sbomify-action:latest
+          - pipe: docker://ghcr.io/sbomify/sbomify-action:latest
             variables:
               SBOMIFY_CACHE_DIR: "${BITBUCKET_CLONE_DIR}/.sbomify-cache/sbomify"
               SYFT_CACHE_DIR: "${BITBUCKET_CLONE_DIR}/.sbomify-cache/syft"
@@ -926,7 +980,7 @@ docker run --rm \
   -e OUTPUT_FILE=/github/workspace/sbom.cdx.json \
   -e UPLOAD=false \
   -e ENRICH=true \
-  sbomifyhub/sbomify-action
+  ghcr.io/sbomify/sbomify-action
 ```
 
 #### pip (Advanced)
