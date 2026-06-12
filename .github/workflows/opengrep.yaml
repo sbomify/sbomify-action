@@ -22,6 +22,10 @@ permissions:
 env:
   # OpenGrep release to install (https://github.com/opengrep/opengrep/releases).
   OPENGREP_VERSION: v1.22.0
+  # SHA-256 of the opengrep_manylinux_x86 asset for OPENGREP_VERSION. The binary
+  # is verified against this before it is made executable, so a tampered/MITM'd
+  # or silently re-uploaded asset fails the build. Update both when bumping.
+  OPENGREP_SHA256: 45bcd58440e397ed52c50e953ccf5948909ea77087c9186fc7d277216f62e319
 
 jobs:
   opengrep:
@@ -49,6 +53,8 @@ jobs:
           mkdir -p "$HOME/bin"
           curl -fsSL -o "$HOME/bin/opengrep" \
             "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          # Verify integrity before the binary is ever marked executable.
+          echo "${OPENGREP_SHA256}  ${HOME}/bin/opengrep" | sha256sum -c -
           chmod +x "$HOME/bin/opengrep"
           echo "$HOME/bin" >> "$GITHUB_PATH"
           "$HOME/bin/opengrep" --version
