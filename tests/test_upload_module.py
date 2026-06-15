@@ -520,6 +520,9 @@ class TestDependencyTrackConfig(unittest.TestCase):
                 "DTRACK_API_URL": "https://dtrack.example.com/api/",
                 "DTRACK_PROJECT_ID": "project-uuid",
                 "DTRACK_AUTO_CREATE": "true",
+                "DTRACK_PROJECT_TAGS": "alpine, nightly",
+                "DTRACK_PARENT_ID": "979bac33-4c62-4e62-a64b-cd6caa43d508",
+                "DTRACK_IS_LATEST": "true",
             },
         ):
             config = DependencyTrackConfig.from_env()
@@ -530,6 +533,9 @@ class TestDependencyTrackConfig(unittest.TestCase):
             self.assertEqual(config.api_url, "https://dtrack.example.com/api")
             self.assertEqual(config.project_id, "project-uuid")
             self.assertTrue(config.auto_create)
+            self.assertEqual(config.project_tags, ["alpine", "nightly"])
+            self.assertEqual(config.parent_id, "979bac33-4c62-4e62-a64b-cd6caa43d508")
+            self.assertTrue(config.is_latest)
 
     def test_from_env_preserves_custom_paths(self):
         """Test that custom API paths are preserved."""
@@ -584,6 +590,54 @@ class TestDependencyTrackConfig(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             config = DependencyTrackConfig.from_env()
             self.assertIsNone(config)
+
+    def test_from_env_list_single(self):
+        """Test that a single tag is handled correctly"""
+        with patch.dict(
+            os.environ,
+            {
+                "DTRACK_API_KEY": "test-api-key",
+                "DTRACK_API_URL": "https://dtrack.example.com/api",
+                "DTRACK_PROJECT_TAGS": "alpine",
+            },
+            clear=True,
+        ):
+            config = DependencyTrackConfig.from_env()
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config.project_tags, ["alpine"])
+
+    def test_from_env_list_trailing_comma(self):
+        """Test that tags with a trailing comma are handled correctly"""
+        with patch.dict(
+            os.environ,
+            {
+                "DTRACK_API_KEY": "test-api-key",
+                "DTRACK_API_URL": "https://dtrack.example.com/api",
+                "DTRACK_PROJECT_TAGS": "alpine, nightly,",
+            },
+            clear=True,
+        ):
+            config = DependencyTrackConfig.from_env()
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config.project_tags, ["alpine", "nightly"])
+
+    def test_from_env_list_empty(self):
+        """Test that empty tags are handled correctly"""
+        with patch.dict(
+            os.environ,
+            {
+                "DTRACK_API_KEY": "test-api-key",
+                "DTRACK_API_URL": "https://dtrack.example.com/api",
+                "DTRACK_PROJECT_TAGS": "",
+            },
+            clear=True,
+        ):
+            config = DependencyTrackConfig.from_env()
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config.project_tags, [])
 
     def test_is_configured_with_project_id(self):
         """Test is_configured with project_id."""
@@ -761,6 +815,165 @@ class TestDependencyTrackDestination(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("CycloneDX", result.error_message)
         self.assertIn("spdx", result.error_message)
+
+    @patch("sbomify_action._upload.destinations.dependency_track.requests.put")
+    def test_upload_success_with_parent_id(self, mock_put):
+        """Test successful upload with parent id"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
+            sbom_file = f.name
+
+        try:
+            mock_response = Mock()
+            mock_response.ok = True
+            mock_response.json.return_value = {"token": "upload-token-456"}
+            mock_put.return_value = mock_response
+
+            config = DependencyTrackConfig(
+                api_key="test-key",
+                api_url="https://dtrack.example.com/api",  # Full API base URL
+                auto_create=True,
+                parent_id="979bac33-4c62-4e62-a64b-cd6caa43d508",
+            )
+            dest = DependencyTrackDestination(config=config)
+            # Component name/version now come from UploadInput
+            input = UploadInput(
+                sbom_file=sbom_file,
+                sbom_format="cyclonedx",
+                component_name="my-project",
+                component_version="1.0.0",
+            )
+
+            result = dest.upload(input)
+
+            self.assertTrue(result.success)
+
+            # Verify payload contains projectName and projectVersion from UploadInput
+            call_args = mock_put.call_args
+            payload = call_args[1]["json"]
+            self.assertEqual(payload["projectName"], "my-project")
+            self.assertEqual(payload["projectVersion"], "1.0.0")
+            self.assertTrue(payload["autoCreate"])
+            self.assertEqual(payload["parentUUID"], "979bac33-4c62-4e62-a64b-cd6caa43d508")
+        finally:
+            Path(sbom_file).unlink()
+
+    @patch("sbomify_action._upload.destinations.dependency_track.requests.put")
+    def test_upload_success_with_parent_name_and_version(self, mock_put):
+        """Test successful upload with parent name and version"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
+            sbom_file = f.name
+
+        try:
+            mock_response = Mock()
+            mock_response.ok = True
+            mock_response.json.return_value = {"token": "upload-token-456"}
+            mock_put.return_value = mock_response
+
+            config = DependencyTrackConfig(
+                api_key="test-key",
+                api_url="https://dtrack.example.com/api",  # Full API base URL
+                auto_create=True,
+                parent_name="test-parent",
+                parent_version="1.0.0",
+            )
+            dest = DependencyTrackDestination(config=config)
+            # Component name/version now come from UploadInput
+            input = UploadInput(
+                sbom_file=sbom_file,
+                sbom_format="cyclonedx",
+                component_name="my-project",
+                component_version="1.0.0",
+            )
+
+            result = dest.upload(input)
+
+            self.assertTrue(result.success)
+
+            # Verify payload contains projectName and projectVersion from UploadInput
+            call_args = mock_put.call_args
+            payload = call_args[1]["json"]
+            self.assertEqual(payload["projectName"], "my-project")
+            self.assertEqual(payload["projectVersion"], "1.0.0")
+            self.assertTrue(payload["autoCreate"])
+            self.assertEqual(payload["parentName"], "test-parent")
+            self.assertEqual(payload["parentVersion"], "1.0.0")
+        finally:
+            Path(sbom_file).unlink()
+
+    @patch("sbomify_action._upload.destinations.dependency_track.requests.put")
+    def test_upload_success_with_project_tags(self, mock_put):
+        """Test successful upload with project tags"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
+            sbom_file = f.name
+
+        try:
+            mock_response = Mock()
+            mock_response.ok = True
+            mock_response.json.return_value = {"token": "upload-token-456"}
+            mock_put.return_value = mock_response
+
+            config = DependencyTrackConfig(
+                api_key="test-key",
+                api_url="https://dtrack.example.com/api",  # Full API base URL
+                auto_create=True,
+                project_tags=["alpine", "nightly"],
+            )
+            dest = DependencyTrackDestination(config=config)
+            # Component name/version now come from UploadInput
+            input = UploadInput(
+                sbom_file=sbom_file,
+                sbom_format="cyclonedx",
+                component_name="my-project",
+                component_version="1.0.0",
+            )
+
+            result = dest.upload(input)
+
+            self.assertTrue(result.success)
+
+            # Verify payload contains projectName and projectVersion from UploadInput
+            call_args = mock_put.call_args
+            payload = call_args[1]["json"]
+            self.assertEqual(payload["projectName"], "my-project")
+            self.assertEqual(payload["projectVersion"], "1.0.0")
+            self.assertTrue(payload["autoCreate"])
+            self.assertEqual(payload["projectTags"], [{"name": "alpine"}, {"name": "nightly"}])
+        finally:
+            Path(sbom_file).unlink()
+
+    def test_upload_partial_parent_config(self):
+        """Test failed upload with partial parent config"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
+            sbom_file = f.name
+
+        try:
+            config = DependencyTrackConfig(
+                api_key="test-key",
+                api_url="https://dtrack.example.com/api",  # Full API base URL
+                auto_create=True,
+                parent_name="test-parent",
+            )
+            dest = DependencyTrackDestination(config=config)
+
+            input = UploadInput(
+                sbom_file=sbom_file,
+                sbom_format="cyclonedx",
+                component_name="my-project",
+                component_version="1.0.0",
+            )
+
+            result = dest.upload(input)
+
+            self.assertFalse(result.success)
+            self.assertIn("DTRACK_PARENT_ID", result.error_message)
+            self.assertIn("DTRACK_PARENT_NAME", result.error_message)
+            self.assertIn("DTRACK_PARENT_VERSION", result.error_message)
+        finally:
+            Path(sbom_file).unlink()
 
 
 class TestUploadOrchestrator(unittest.TestCase):
