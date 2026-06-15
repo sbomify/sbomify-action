@@ -350,6 +350,11 @@ When uploading to Dependency Track (`UPLOAD_DESTINATIONS=dependency-track`), con
 | `DTRACK_API_URL`     | Yes      | Full API base URL (e.g., `https://dtrack.example.com/api`)               |
 | `DTRACK_PROJECT_ID`  | §        | Project UUID (alternative to using `COMPONENT_NAME`/`COMPONENT_VERSION`) |
 | `DTRACK_AUTO_CREATE` | No       | Auto-create project if it doesn't exist (default: false)                 |
+| `DTRACK_PROJECT_TAGS`   | No       | Tags to add to the project (comma seperated)                             |
+| `DTRACK_PARENT_ID`      | No       | Id of the parent project                                                 |
+| `DTRACK_PARENT_NAME`    | No       | Name of the parent project                                               |
+| `DTRACK_PARENT_VERSION` | No       | Version of the parent project                                            |
+| `DTRACK_IS_LATEST`      | No       | Mark the uploaded BOM as the latest version (default: false)             |
 
 § Either `DTRACK_PROJECT_ID` **or** both `COMPONENT_NAME` and `COMPONENT_VERSION` are required
 
@@ -369,6 +374,10 @@ When uploading to Dependency Track (`UPLOAD_DESTINATIONS=dependency-track`), con
     DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
     DTRACK_API_URL: https://dtrack.example.com/api
     DTRACK_AUTO_CREATE: true
+    DTRACK_IS_LATEST: true
+    DTRACK_PROJECT_TAGS: nightly,alpine
+    DTRACK_PARENT_NAME: parent-example
+    DTRACK_PARENT_VERSION: 1.0.0
     ENRICH: true
 ```
 
