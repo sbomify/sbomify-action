@@ -377,9 +377,20 @@ def test_build_action_ref_tag_pinned_when_offline() -> None:
     assert _build_action_ref("v26.2.0", None) == f"{ACTION_REPO}@v26.2.0"
 
 
-def test_action_version_falls_back_when_unknown(monkeypatch) -> None:
+def test_action_version_falls_back_to_pyproject_when_unknown(monkeypatch) -> None:
+    # Metadata-less dev checkout: read the version from pyproject.toml rather
+    # than a hard-coded constant, so the emitted pin can't drift.
     monkeypatch.setattr(ci_emitter, "_PACKAGE_VERSION", "unknown")
-    assert _action_version() == ci_emitter._FALLBACK_ACTION_VERSION
+    pyproject_version = ci_emitter._version_from_pyproject()
+    assert pyproject_version
+    assert _action_version() == f"v{pyproject_version}"
+
+
+def test_action_version_unknown_when_no_source(monkeypatch) -> None:
+    # Neither installed metadata nor a readable pyproject.toml.
+    monkeypatch.setattr(ci_emitter, "_PACKAGE_VERSION", "unknown")
+    monkeypatch.setattr(ci_emitter, "_version_from_pyproject", lambda: None)
+    assert _action_version() == "unknown"
 
 
 def test_action_version_prefixes_v(monkeypatch) -> None:
