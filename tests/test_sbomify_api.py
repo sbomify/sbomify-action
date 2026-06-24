@@ -503,6 +503,20 @@ def test_upload_sbom_does_not_raise_on_non_2xx() -> None:
     assert response.status_code == 409
 
 
+def test_upload_sbom_sends_bom_type_param() -> None:
+    client, session = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+    client.upload_sbom("c1", b"{}", sbom_format="cyclonedx", bom_type="vex")
+    call = session.request.call_args
+    assert call.kwargs["params"] == {"bom_type": "vex"}
+
+
+def test_upload_sbom_omits_bom_type_param_by_default() -> None:
+    client, session = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+    client.upload_sbom("c1", b"{}", sbom_format="cyclonedx")
+    call = session.request.call_args
+    assert call.kwargs["params"] is None
+
+
 # ----------------------------------------------------------------------
 # OIDC trusted publishing
 

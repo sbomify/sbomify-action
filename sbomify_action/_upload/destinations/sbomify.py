@@ -133,6 +133,7 @@ class SbomifyDestination:
                 component_id=str(self._component_id),
                 sbom_payload=upload_data,
                 sbom_format=input.sbom_format,
+                bom_type=input.bom_type,
                 content_encoding=content_encoding,
             )
         except AuthError as e:

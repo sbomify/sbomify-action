@@ -14,6 +14,10 @@ if TYPE_CHECKING:
 # Supported SBOM formats (same as generation)
 SBOMFormat = Literal["cyclonedx", "spdx"]
 
+# Artifact types the sbomify backend accepts via the ?bom_type= query param.
+# None/"sbom" is the default plain SBOM upload; the others are uploaded as-is.
+VALID_BOM_TYPES = ("sbom", "vex", "cbom", "hbom")
+
 
 @dataclass
 class UploadInput:
@@ -23,6 +27,8 @@ class UploadInput:
     Attributes:
         sbom_file: Path to the SBOM file to upload
         sbom_format: Format of the SBOM ("cyclonedx" or "spdx")
+        bom_type: Artifact type to record on upload (sbom/vex/cbom/hbom). None
+            uploads as a plain SBOM; non-SBOM types are sent verbatim.
         component_name: Name of the component (used by destinations like Dependency Track)
         component_version: Version of the component (used by destinations like Dependency Track)
         validate_before_upload: Whether to validate SBOM before uploading
@@ -30,6 +36,7 @@ class UploadInput:
 
     sbom_file: str
     sbom_format: SBOMFormat
+    bom_type: Optional[str] = None
     component_name: Optional[str] = None
     component_version: Optional[str] = None
     validate_before_upload: bool = True
@@ -40,6 +47,8 @@ class UploadInput:
             raise ValueError("sbom_file is required")
         if self.sbom_format not in ("cyclonedx", "spdx"):
             raise ValueError(f"Invalid sbom_format: {self.sbom_format}")
+        if self.bom_type is not None and self.bom_type not in VALID_BOM_TYPES:
+            raise ValueError(f"Invalid bom_type: {self.bom_type}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
 
 
 class DestinationConfig(ABC):

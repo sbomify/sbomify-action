@@ -790,23 +790,29 @@ class SbomifyApiClient:
         sbom_payload: bytes,
         *,
         sbom_format: str = "cyclonedx",
+        bom_type: str | None = None,
         content_encoding: str | None = None,
         timeout: int | None = None,
     ) -> requests.Response:
         """POST raw SBOM bytes to ``/api/v1/sboms/artifact/{format}/{id}``.
 
-        The destination layer owns error-to-``UploadResult`` translation, so
-        this method returns the raw response (including non-2xx) instead of
-        raising. Network/timeout failures still bubble up as ``APIError``.
+        ``bom_type`` (sbom/vex/cbom/hbom) is forwarded as the ``?bom_type=``
+        query param when set, so the same endpoint can record a VEX or CBOM
+        rather than a plain SBOM. The destination layer owns
+        error-to-``UploadResult`` translation, so this method returns the raw
+        response (including non-2xx) instead of raising. Network/timeout
+        failures still bubble up as ``APIError``.
         """
         path = f"/api/v1/sboms/artifact/{sbom_format}/{component_id}"
         extra: dict[str, str] = {"Content-Type": "application/json"}
         if content_encoding:
             extra["Content-Encoding"] = content_encoding
+        params = {"bom_type": bom_type} if bom_type else None
         return self._request(
             "POST",
             path,
             data=sbom_payload,
+            params=params,
             extra_headers=extra,
             timeout=timeout,
         )

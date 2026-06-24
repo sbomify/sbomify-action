@@ -10,6 +10,9 @@ inputs:
   component-purl:
     description: 'Override the component PURL in the SBOM (e.g., pkg:npm/@scope/name@1.0.0)'
     required: false
+  bom-type:
+    description: 'Artifact type to record on upload: sbom (default), vex, cbom or hbom. Non-SBOM types are uploaded verbatim (no augmentation or finalization).'
+    required: false
   oidc-audience:
     description: 'OIDC audience for trusted publishing (default: sbomify.com; override for self-hosted)'
     required: false
@@ -20,6 +23,7 @@ runs:
   env:
     WORKING_DIR: ${{ inputs['working-dir'] }}
     COMPONENT_PURL: ${{ inputs['component-purl'] }}
+    BOM_TYPE: ${{ inputs['bom-type'] }}
     OIDC_AUDIENCE: ${{ inputs['oidc-audience'] }}
 branding:
   icon: 'upload-cloud'

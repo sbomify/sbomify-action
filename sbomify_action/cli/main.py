@@ -142,6 +142,9 @@ SBOMIFY_TOOL_NAME = "sbomify-action"
 SBOMIFY_VENDOR_NAME = "sbomify"
 LOCALHOST_PATTERNS = ["127.0.0.1", "localhost", "0.0.0.0"]
 VALID_SBOM_FORMATS: tuple[str, ...] = ("cyclonedx", "spdx")
+# Artifact types accepted by the backend's ?bom_type= upload param. None/"sbom"
+# is a plain SBOM; "vex"/"cbom"/"hbom" are uploaded verbatim (no finalization).
+VALID_BOM_TYPES: tuple[str, ...] = ("sbom", "vex", "cbom", "hbom")
 NONE_SENTINEL = "none"
 
 # Intermediate SBOM files for pipeline steps
@@ -226,6 +229,7 @@ class Config:
     product_releases: Optional[str | list[str]] = None
     api_base_url: str = SBOMIFY_PRODUCTION_API
     sbom_format: SBOMFormat = "cyclonedx"
+    bom_type: Optional[str] = None
     spec_version: Optional[str] = None
     oidc_audience: str | None = None
     # Set to True at runtime when config.token was obtained via OIDC exchange;
@@ -333,6 +337,12 @@ class Config:
         if self.sbom_format not in VALID_SBOM_FORMATS:
             raise ConfigurationError(
                 f"Invalid SBOM_FORMAT: '{self.sbom_format}'. Must be one of: {', '.join(VALID_SBOM_FORMATS)}"
+            )
+
+        # Validate bom_type (artifact kind recorded on upload)
+        if self.bom_type is not None and self.bom_type not in VALID_BOM_TYPES:
+            raise ConfigurationError(
+                f"Invalid BOM_TYPE: '{self.bom_type}'. Must be one of: {', '.join(VALID_BOM_TYPES)}"
             )
 
         # Validate spec_version against sbom_format
@@ -518,6 +528,7 @@ def build_config(
     product_releases: Optional[str] = None,
     api_base_url: str = SBOMIFY_PRODUCTION_API,
     sbom_format: str = "cyclonedx",
+    bom_type: Optional[str] = None,
     spec_version: Optional[str] = None,
     oidc_audience: Optional[str] = None,
 ) -> Config:
@@ -597,6 +608,7 @@ def build_config(
         product_releases=product_releases,
         api_base_url=api_base_url,
         sbom_format=sbom_format_lower,
+        bom_type=bom_type.lower() if bom_type else None,
         spec_version=spec_version,
         oidc_audience=oidc_audience,
     )
@@ -644,6 +656,7 @@ def load_config() -> Config:
         product_releases=os.getenv("PRODUCT_RELEASE"),
         api_base_url=os.getenv("API_BASE_URL", SBOMIFY_PRODUCTION_API),
         sbom_format=os.getenv("SBOM_FORMAT", "cyclonedx"),
+        bom_type=os.getenv("BOM_TYPE"),
         oidc_audience=os.getenv("OIDC_AUDIENCE"),
     )
 
@@ -1128,6 +1141,24 @@ def _log_step_end(step_num: int | float, success: bool = True) -> None:
     print_step_end(step_num, success)
 
 
+def _finalize_output_content(content: str, bom_type: Optional[str]) -> str:
+    """Return the bytes to upload after format-specific output fixes.
+
+    CycloneDX SBOMs get PURL-encoding repairs and a compositions completeness
+    indicator. Non-SBOM CycloneDX artifacts (VEX, CBOM, ...) are uploaded
+    exactly as authored — sbomify never rewrites a security artifact — so the
+    fixes are skipped. SPDX and other content pass through unchanged.
+    """
+    is_cyclonedx = '"bomFormat"' in content and '"CycloneDX"' in content
+    if not is_cyclonedx:
+        return content
+    if bom_type and bom_type != "sbom":
+        return content
+    content = _fix_purl_encoding_bugs_in_json(content)
+    content = _add_compositions_if_missing(content)
+    return content
+
+
 def run_pipeline(config: Config) -> None:
     """
     Run the SBOM pipeline with the given configuration.
@@ -1574,10 +1605,7 @@ def run_pipeline(config: Config) -> None:
         with open(final_sbom_file, "r") as f:
             content = f.read()
 
-        # Detect format and fix any PURL encoding bugs in CycloneDX
-        if '"bomFormat"' in content and '"CycloneDX"' in content:
-            content = _fix_purl_encoding_bugs_in_json(content)
-            content = _add_compositions_if_missing(content)
+        content = _finalize_output_content(content, config.bom_type)
 
         with open(config.output_file, "w") as f:
             f.write(content)
@@ -1616,6 +1644,7 @@ def run_pipeline(config: Config) -> None:
                     component_version=config.component_version,
                     destination=destination,
                     validate_before_upload=(FORMAT == "cyclonedx"),
+                    bom_type=config.bom_type,
                 )
 
                 if not upload_result.success:
@@ -2355,6 +2384,13 @@ def _parse_upload_destinations_callback(
     help="Output SBOM format.",
 )
 @click.option(
+    "--bom-type",
+    envvar="BOM_TYPE",
+    type=click.Choice(list(VALID_BOM_TYPES), case_sensitive=False),
+    default=None,
+    help="Artifact type recorded on upload (vex/cbom/hbom). Non-SBOM types are uploaded verbatim.",
+)
+@click.option(
     "--spec-version",
     envvar="SPEC_VERSION",
     default=None,
@@ -2414,6 +2450,7 @@ def cli(
     product_releases: Optional[str],
     api_base_url: str,
     sbom_format: str,
+    bom_type: Optional[str],
     spec_version: Optional[str],
     oidc_audience: Optional[str],
     working_dir: str | None,
@@ -2537,6 +2574,7 @@ def cli(
         product_releases=product_releases,
         api_base_url=api_base_url,
         sbom_format=sbom_format,
+        bom_type=bom_type,
         spec_version=spec_version,
         oidc_audience=oidc_audience,
     )

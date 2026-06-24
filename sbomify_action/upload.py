@@ -58,6 +58,7 @@ def upload_sbom(
     component_version: Optional[str] = None,
     destination: str = "sbomify",
     validate_before_upload: bool = True,
+    bom_type: Optional[str] = None,
 ) -> UploadResult:
     """
     Upload an SBOM to a specific destination.
@@ -97,6 +98,7 @@ def upload_sbom(
     input_params = UploadInput(
         sbom_file=sbom_file,
         sbom_format=sbom_format,  # type: ignore[arg-type]
+        bom_type=bom_type,
         component_name=component_name,
         component_version=component_version,
         validate_before_upload=validate_before_upload,
@@ -120,6 +122,7 @@ def upload_to_all(
     component_name: Optional[str] = None,
     component_version: Optional[str] = None,
     validate_before_upload: bool = True,
+    bom_type: Optional[str] = None,
 ) -> List[UploadResult]:
     """
     Upload an SBOM to all configured destinations.
@@ -157,6 +160,7 @@ def upload_to_all(
     input_params = UploadInput(
         sbom_file=sbom_file,
         sbom_format=sbom_format,  # type: ignore[arg-type]
+        bom_type=bom_type,
         component_name=component_name,
         component_version=component_version,
         validate_before_upload=validate_before_upload,
