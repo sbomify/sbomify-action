@@ -19,7 +19,7 @@ import sentry_sdk
 from cyclonedx.model.bom import Bom
 
 from .. import format_display_name
-from .._upload import VALID_DESTINATIONS
+from .._upload import VALID_BOM_TYPES, VALID_DESTINATIONS
 from ..additional_packages import inject_additional_packages
 from ..augmentation import augment_sbom_from_file
 from ..console import (
@@ -142,9 +142,6 @@ SBOMIFY_TOOL_NAME = "sbomify-action"
 SBOMIFY_VENDOR_NAME = "sbomify"
 LOCALHOST_PATTERNS = ["127.0.0.1", "localhost", "0.0.0.0"]
 VALID_SBOM_FORMATS: tuple[str, ...] = ("cyclonedx", "spdx")
-# Artifact types accepted by the backend's ?bom_type= upload param. None/"sbom"
-# is a plain SBOM; "vex"/"cbom"/"hbom" are uploaded verbatim (no finalization).
-VALID_BOM_TYPES: tuple[str, ...] = ("sbom", "vex", "cbom", "hbom")
 NONE_SENTINEL = "none"
 
 # Intermediate SBOM files for pipeline steps

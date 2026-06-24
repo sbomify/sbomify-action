@@ -73,6 +73,8 @@ def upload_sbom(
         component_version: Component version (for Dependency Track project)
         destination: Destination to upload to (default: "sbomify")
         validate_before_upload: Whether to validate SBOM before uploading
+        bom_type: Artifact type recorded on upload (sbom/vex/cbom/hbom). None
+            uploads a plain SBOM; non-SBOM types are sent verbatim.
 
     Returns:
         UploadResult with success status, sbom_id, and metadata
@@ -140,6 +142,8 @@ def upload_to_all(
         component_name: Component name (for Dependency Track)
         component_version: Component version (for Dependency Track)
         validate_before_upload: Whether to validate SBOM before uploading
+        bom_type: Artifact type recorded on upload (sbom/vex/cbom/hbom). None
+            uploads a plain SBOM; non-SBOM types are sent verbatim.
 
     Returns:
         List of UploadResult from each configured destination
