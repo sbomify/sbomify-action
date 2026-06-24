@@ -898,6 +898,44 @@ class TestBuildConfig(unittest.TestCase):
             self.assertEqual(config.api_base_url, "https://custom.api.com")
             self.assertEqual(config.sbom_format, "spdx")
 
+    def test_build_config_non_sbom_bom_type_forces_verbatim(self):
+        """A non-SBOM bom_type (VEX/CBOM) disables augment/enrich so the
+        artifact is uploaded exactly as authored."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            vex_file = Path(tmp_dir) / "x.vex.cdx.json"
+            vex_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            config = build_config(
+                sbom_file=str(vex_file),
+                upload=False,
+                augment=True,
+                enrich=True,
+                bom_type="vex",
+            )
+            self.assertEqual(config.bom_type, "vex")
+            self.assertFalse(config.augment)
+            self.assertFalse(config.enrich)
+
+    def test_build_config_sbom_keeps_augment_enrich(self):
+        """A plain SBOM upload still augments and enriches."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            config = build_config(
+                sbom_file=str(sbom_file),
+                upload=False,
+                augment=True,
+                enrich=True,
+            )
+            self.assertTrue(config.augment)
+            self.assertTrue(config.enrich)
+            self.assertIsNone(config.bom_type)
+
     def test_build_config_defaults(self):
         """Test build_config uses correct defaults."""
         from sbomify_action.cli.main import SBOMIFY_PRODUCTION_API, build_config

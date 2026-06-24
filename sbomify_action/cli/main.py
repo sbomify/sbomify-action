@@ -577,6 +577,16 @@ def build_config(
     sbom_format_lower: SBOMFormat = cast(SBOMFormat, sbom_format.lower())
     logger.info(f"SBOM format: {format_display_name(sbom_format_lower)}")
 
+    # Non-SBOM artifacts (VEX, CBOM, ...) are authored elsewhere and uploaded
+    # exactly as written. Augmentation and enrichment rewrite the document, so
+    # they are not applied to them regardless of the flags.
+    normalized_bom_type = bom_type.lower() if bom_type else None
+    if normalized_bom_type and normalized_bom_type != "sbom":
+        if augment or enrich:
+            logger.warning(f"BOM_TYPE={normalized_bom_type} is uploaded verbatim; ignoring AUGMENT/ENRICH.")
+        augment = False
+        enrich = False
+
     # Expand paths if provided (skip expansion for "none" sentinel)
     expanded_sbom_file = (
         sbom_file
@@ -608,7 +618,7 @@ def build_config(
         product_releases=product_releases,
         api_base_url=api_base_url,
         sbom_format=sbom_format_lower,
-        bom_type=bom_type.lower() if bom_type else None,
+        bom_type=normalized_bom_type,
         spec_version=spec_version,
         oidc_audience=oidc_audience,
     )
