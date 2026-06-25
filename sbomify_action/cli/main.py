@@ -1224,6 +1224,7 @@ def _upload_cbom(config: Config, cbom_file: str) -> None:
     """Upload the generated CBOM as a second artifact (bom_type=cbom). Best-effort:
     a CBOM upload failure is logged but does not fail the SBOM run."""
     _log_step_header(5.5, "Uploading CBOM")
+    failed: list[str] = []
     try:
         for destination in config.upload_destinations or []:
             result = upload_sbom(
@@ -1242,10 +1243,14 @@ def _upload_cbom(config: Config, cbom_file: str) -> None:
                 logger.info(f"CBOM upload to {destination} succeeded")
             else:
                 logger.warning(f"CBOM upload to {destination} failed: {result.error_message}")
-        _log_step_end(5.5)
+                failed.append(destination)
     except Exception as e:
         logger.warning(f"CBOM upload failed, continuing: {e}")
         _log_step_end(5.5, success=False)
+        return
+    # Best-effort: a CBOM upload failure does not fail the SBOM run, but the step
+    # is reported as failed so a partial failure is not hidden as success.
+    _log_step_end(5.5, success=not failed)
 
 
 def run_pipeline(config: Config) -> None:

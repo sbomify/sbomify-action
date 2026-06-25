@@ -71,3 +71,11 @@ def test_upload_cbom_swallows_failure() -> None:
     # A CBOM upload failure must not raise (never fails the SBOM run).
     with patch(f"{MOD}.upload_sbom", side_effect=RuntimeError("boom")):
         _upload_cbom(_cfg(), "/abs/cbom.json")  # no exception
+
+
+def test_upload_cbom_reports_step_failure_on_partial_failure() -> None:
+    # A failed destination is non-fatal but the step is reported as failed, not hidden.
+    failed = Mock(success=False, error_message="nope")
+    with patch(f"{MOD}.upload_sbom", return_value=failed), patch(f"{MOD}._log_step_end") as step_end:
+        _upload_cbom(_cfg(upload_destinations=["sbomify"]), "/abs/cbom.json")  # no raise
+    step_end.assert_called_with(5.5, success=False)
