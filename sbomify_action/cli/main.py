@@ -148,6 +148,7 @@ NONE_SENTINEL = "none"
 STEP_1_FILE = "step_1.json"  # Output of generation/validation
 STEP_2_FILE = "step_2.json"  # Output of augmentation
 STEP_3_FILE = "step_3.json"  # Output of enrichment
+CBOM_FILE = "cbom_output.json"  # Generated CBOM (kept out of the STEP_* cleanup)
 
 
 def _get_current_utc_timestamp() -> str:
@@ -227,6 +228,7 @@ class Config:
     api_base_url: str = SBOMIFY_PRODUCTION_API
     sbom_format: SBOMFormat = "cyclonedx"
     bom_type: Optional[str] = None
+    generate_cbom: bool = False
     spec_version: Optional[str] = None
     oidc_audience: str | None = None
     # Set to True at runtime when config.token was obtained via OIDC exchange;
@@ -526,6 +528,7 @@ def build_config(
     api_base_url: str = SBOMIFY_PRODUCTION_API,
     sbom_format: str = "cyclonedx",
     bom_type: Optional[str] = None,
+    generate_cbom: bool = False,
     spec_version: Optional[str] = None,
     oidc_audience: Optional[str] = None,
 ) -> Config:
@@ -616,6 +619,7 @@ def build_config(
         api_base_url=api_base_url,
         sbom_format=sbom_format_lower,
         bom_type=normalized_bom_type,
+        generate_cbom=generate_cbom,
         spec_version=spec_version,
         oidc_audience=oidc_audience,
     )
@@ -664,6 +668,7 @@ def load_config() -> Config:
         api_base_url=os.getenv("API_BASE_URL", SBOMIFY_PRODUCTION_API),
         sbom_format=os.getenv("SBOM_FORMAT", "cyclonedx"),
         bom_type=os.getenv("BOM_TYPE"),
+        generate_cbom=os.getenv("GENERATE_CBOM", "").strip().lower() in ("true", "1", "yes", "on"),
         oidc_audience=os.getenv("OIDC_AUDIENCE"),
     )
 
@@ -1166,6 +1171,83 @@ def _finalize_output_content(content: str, bom_type: Optional[str]) -> str:
     return content
 
 
+def _generate_cbom_and_crosslink(config: Config) -> Optional[str]:
+    """Generate a CBOM (cdxgen --include-crypto) and cross-link it with the SBOM.
+
+    Returns the CBOM file path, or None when generation was skipped or failed.
+    Best-effort: a CBOM failure is logged and never fails the SBOM run. The SBOM's
+    last-step file is mutated in place to carry the CBOM cross-reference before
+    Step 4 finalizes it.
+    """
+    from sbomify_action.cbom import crosslink_sbom_and_cbom, generate_cbom
+
+    sbom_step_file = get_last_sbom_from_last_step()
+    if not sbom_step_file:
+        logger.warning("No SBOM available to derive a CBOM from; skipping CBOM")
+        return None
+
+    _log_step_header(3.6, "CBOM Generation")
+    try:
+        scan_dir = os.getcwd()
+        if config.lock_file and config.lock_file.lower() != NONE_SENTINEL:
+            scan_dir = str(Path(config.lock_file).resolve().parent)
+
+        cbom_file = generate_cbom(CBOM_FILE, spec_version=config.spec_version or "1.7", cwd=scan_dir)
+        if not cbom_file:
+            _log_step_end(3.6, success=False)
+            return None
+
+        crosslink_sbom_and_cbom(sbom_step_file, cbom_file)
+        if config.component_version:
+            _stamp_cbom_component_version(cbom_file, config.component_version)
+
+        logger.info(f"CBOM generated and cross-linked with the SBOM: {cbom_file}")
+        _log_step_end(3.6)
+        return cbom_file
+    except Exception as e:
+        logger.warning(f"CBOM generation step failed, continuing without a CBOM: {e}")
+        _log_step_end(3.6, success=False)
+        return None
+
+
+def _stamp_cbom_component_version(cbom_file: str, version: str) -> None:
+    """Stamp the CBOM's metadata.component.version so it matches the SBOM's."""
+    import json
+
+    data = json.loads(Path(cbom_file).read_text(encoding="utf-8"))
+    component = data.setdefault("metadata", {}).setdefault("component", {})
+    component["version"] = version
+    Path(cbom_file).write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _upload_cbom(config: Config, cbom_file: str) -> None:
+    """Upload the generated CBOM as a second artifact (bom_type=cbom). Best-effort:
+    a CBOM upload failure is logged but does not fail the SBOM run."""
+    _log_step_header(5.5, "Uploading CBOM")
+    try:
+        for destination in config.upload_destinations or []:
+            result = upload_sbom(
+                sbom_file=cbom_file,
+                sbom_format="cyclonedx",
+                token=config.token,
+                component_id=config.component_id,
+                api_base_url=config.api_base_url,
+                component_name=config.component_name,
+                component_version=config.component_version,
+                destination=destination,
+                validate_before_upload=False,
+                bom_type="cbom",
+            )
+            if result.success:
+                logger.info(f"CBOM upload to {destination} succeeded")
+            else:
+                logger.warning(f"CBOM upload to {destination} failed: {result.error_message}")
+        _log_step_end(5.5)
+    except Exception as e:
+        logger.warning(f"CBOM upload failed, continuing: {e}")
+        _log_step_end(5.5, success=False)
+
+
 def run_pipeline(config: Config) -> None:
     """
     Run the SBOM pipeline with the given configuration.
@@ -1592,6 +1674,13 @@ def run_pipeline(config: Config) -> None:
         logger.info("SBOM enrichment disabled (ENRICH=false)")
         _log_step_end(3)
 
+    # Step 3.6: optional CBOM generation + SBOM<->CBOM cross-linking. Runs before
+    # finalize so the SBOM carries the cross-reference. CBOMs only make sense for an
+    # SBOM upload, not when uploading a VEX/HBOM verbatim.
+    cbom_output_file: Optional[str] = None
+    if config.generate_cbom and config.bom_type in (None, "sbom"):
+        cbom_output_file = _generate_cbom_and_crosslink(config)
+
     # Step 4: Finalize output
     _log_step_header(4, "Finalizing SBOM Output")
     try:
@@ -1690,6 +1779,10 @@ def run_pipeline(config: Config) -> None:
         _log_step_header(5, "SBOM Upload - SKIPPED")
         logger.info("SBOM upload disabled (UPLOAD=false)")
         _log_step_end(5)
+
+    # Step 5b: upload the generated CBOM as a second artifact (bom_type=cbom).
+    if cbom_output_file and config.upload:
+        _upload_cbom(config, cbom_output_file)
 
     # Step 6: Post-upload Processing (releases, signing, etc.)
     if sbom_id:
@@ -2398,6 +2491,12 @@ def _parse_upload_destinations_callback(
     help="Artifact type recorded on upload (vex/cbom/hbom). Non-SBOM types are uploaded verbatim.",
 )
 @click.option(
+    "--generate-cbom/--no-generate-cbom",
+    envvar="GENERATE_CBOM",
+    default=False,
+    help="Also generate a CBOM (cdxgen --include-crypto) and upload it as bom_type=cbom, cross-linked with the SBOM.",
+)
+@click.option(
     "--spec-version",
     envvar="SPEC_VERSION",
     default=None,
@@ -2458,6 +2557,7 @@ def cli(
     api_base_url: str,
     sbom_format: str,
     bom_type: Optional[str],
+    generate_cbom: bool,
     spec_version: Optional[str],
     oidc_audience: Optional[str],
     working_dir: str | None,
@@ -2582,6 +2682,7 @@ def cli(
         api_base_url=api_base_url,
         sbom_format=sbom_format,
         bom_type=bom_type,
+        generate_cbom=generate_cbom,
         spec_version=spec_version,
         oidc_audience=oidc_audience,
     )

@@ -13,6 +13,9 @@ inputs:
   bom-type:
     description: 'Artifact type to record on upload: sbom (default), vex, cbom or hbom. Non-SBOM types are uploaded verbatim: augmentation, enrichment and finalization are skipped.'
     required: false
+  generate-cbom:
+    description: 'Also generate a CBOM (cdxgen --include-crypto) and upload it as bom_type=cbom, cross-linked with the SBOM. Crypto detection is best-effort (Java/JS/TS source); the CBOM is marked aggregate=incomplete.'
+    required: false
   oidc-audience:
     description: 'OIDC audience for trusted publishing (default: sbomify.com; override for self-hosted)'
     required: false
@@ -24,6 +27,7 @@ runs:
     WORKING_DIR: ${{ inputs['working-dir'] }}
     COMPONENT_PURL: ${{ inputs['component-purl'] }}
     BOM_TYPE: ${{ inputs['bom-type'] }}
+    GENERATE_CBOM: ${{ inputs['generate-cbom'] }}
     OIDC_AUDIENCE: ${{ inputs['oidc-audience'] }}
 branding:
   icon: 'upload-cloud'

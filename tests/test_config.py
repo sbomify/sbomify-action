@@ -918,6 +918,19 @@ class TestBuildConfig(unittest.TestCase):
             self.assertFalse(config.augment)
             self.assertFalse(config.enrich)
 
+    def test_build_config_generate_cbom_flag(self):
+        """build_config carries the GENERATE_CBOM flag onto Config."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            on = build_config(sbom_file=str(sbom_file), upload=False, generate_cbom=True)
+            off = build_config(sbom_file=str(sbom_file), upload=False)
+            self.assertTrue(on.generate_cbom)
+            self.assertFalse(off.generate_cbom)
+
     def test_build_config_sbom_keeps_augment_enrich(self):
         """A plain SBOM upload still augments and enriches."""
         from sbomify_action.cli.main import build_config
