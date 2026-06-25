@@ -1676,10 +1676,14 @@ def run_pipeline(config: Config) -> None:
 
     # Step 3.6: optional CBOM generation + SBOM<->CBOM cross-linking. Runs before
     # finalize so the SBOM carries the cross-reference. CBOMs only make sense for an
-    # SBOM upload, not when uploading a VEX/HBOM verbatim.
+    # SBOM upload, not when uploading a VEX/HBOM verbatim, and the cross-link injects
+    # CycloneDX fields (externalReferences/serialNumber) so the SBOM must be CycloneDX.
     cbom_output_file: Optional[str] = None
     if config.generate_cbom and config.bom_type in (None, "sbom"):
-        cbom_output_file = _generate_cbom_and_crosslink(config)
+        if FORMAT == "cyclonedx":
+            cbom_output_file = _generate_cbom_and_crosslink(config)
+        else:
+            logger.info("CBOM generation skipped: cross-linking requires a CycloneDX SBOM (SBOM_FORMAT is SPDX)")
 
     # Step 4: Finalize output
     _log_step_header(4, "Finalizing SBOM Output")
@@ -2488,7 +2492,7 @@ def _parse_upload_destinations_callback(
     envvar="BOM_TYPE",
     type=click.Choice(list(VALID_BOM_TYPES), case_sensitive=False),
     default=None,
-    help="Artifact type recorded on upload (vex/cbom/hbom). Non-SBOM types are uploaded verbatim.",
+    help="Artifact type recorded on upload: sbom (default), vex, cbom or hbom. Non-SBOM types are uploaded verbatim.",
 )
 @click.option(
     "--generate-cbom/--no-generate-cbom",

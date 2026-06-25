@@ -73,8 +73,9 @@ def _add_external_bom_ref(bom: dict[str, Any], url: str, comment: str) -> None:
 
 
 def _mark_incomplete(cbom: dict[str, Any]) -> None:
-    """A scanner-derived CBOM is partial; record ``aggregate: incomplete`` so
-    consumers do not read it as a complete cryptographic inventory."""
+    """Record ``aggregate: incomplete`` when the CBOM declares no ``compositions`` of
+    its own, so consumers do not read a scanner-derived CBOM as a complete
+    cryptographic inventory. A composition the generator already set is left as-is."""
     if not cbom.get("compositions"):
         cbom["compositions"] = [{"aggregate": "incomplete"}]
 
