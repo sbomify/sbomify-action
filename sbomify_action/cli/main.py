@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Optional, TypeVar, cast
 if TYPE_CHECKING:
     import io
 
+    from sbomify_action._processors import AggregateResult
+
 import click
 import sentry_sdk
 
@@ -1128,6 +1130,29 @@ def _log_step_end(step_num: int | float, success: bool = True) -> None:
     print_step_end(step_num, success)
 
 
+def _finalize_post_upload(results: "AggregateResult") -> None:
+    """Log each post-upload processor's outcome and fail the run if any genuinely
+    failed.
+
+    A failed processor (e.g. a 403 when the OIDC/CI token tries to create a
+    release) must surface as a non-zero exit, not be swallowed as success. A
+    green CI run that silently skipped the release it was asked to cut is worse
+    than a loud failure. Skipped processors are not failures.
+    """
+    for proc_result in results.enabled_processors:
+        if proc_result.success:
+            logger.info(
+                f"Processor '{proc_result.processor_name}' completed: {proc_result.processed_items} item(s) processed"
+            )
+        else:
+            logger.error(f"Processor '{proc_result.processor_name}' failed: {proc_result.error_message}")
+
+    if results.any_failures:
+        _log_step_end(6, success=False)
+        sys.exit(1)
+    _log_step_end(6)
+
+
 def run_pipeline(config: Config) -> None:
     """
     Run the SBOM pipeline with the given configuration.
@@ -1705,27 +1730,20 @@ def run_pipeline(config: Config) -> None:
             if enabled_processors:
                 logger.info(f"Running {len(enabled_processors)} processor(s): {enabled_processors}")
                 results = orchestrator.process_all(processor_input)
-
-                # Log results
-                for proc_result in results.enabled_processors:
-                    if proc_result.success:
-                        logger.info(
-                            f"Processor '{proc_result.processor_name}' completed: {proc_result.processed_items} item(s) processed"
-                        )
-                    else:
-                        logger.error(f"Processor '{proc_result.processor_name}' failed: {proc_result.error_message}")
-
-                if results.any_failures:
-                    _log_step_end(6, success=False)
-                else:
-                    _log_step_end(6)
+                # Raises SystemExit(1) if any processor failed (e.g. a 403 cutting
+                # a release) so the failure isn't swallowed as a green run.
+                _finalize_post_upload(results)
             else:
                 logger.info("No processors enabled for this run")
                 _log_step_end(6)
         except Exception as e:
+            # A genuine crash in post-upload processing is a failure, not an
+            # optional best-effort step — surface it rather than exit 0.
+            # (SystemExit from _finalize_post_upload is a BaseException and is
+            # not caught here, so it propagates cleanly.)
             logger.error(f"Step 6 (post-upload processing) failed: {e}")
             _log_step_end(6, success=False)
-            # Don't exit here - post-upload processing is optional
+            sys.exit(1)
     elif config.product_releases and not sbom_id:
         _log_step_header(6, "Post-upload Processing - SKIPPED")
         logger.warning("Product releases specified but no SBOM ID available (upload may have been disabled or failed)")
