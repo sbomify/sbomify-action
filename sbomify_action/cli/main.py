@@ -1131,13 +1131,11 @@ def _log_step_end(step_num: int | float, success: bool = True) -> None:
 
 
 def _finalize_post_upload(results: "AggregateResult") -> None:
-    """Log each post-upload processor's outcome and fail the run if any genuinely
-    failed.
+    """Log the outcome of each processor that ran and exit non-zero if any failed.
 
-    A failed processor (e.g. a 403 when the OIDC/CI token tries to create a
-    release) must surface as a non-zero exit, not be swallowed as success. A
-    green CI run that silently skipped the release it was asked to cut is worse
-    than a loud failure. Skipped processors are not failures.
+    A failed processor (e.g. a 403 when the OIDC/CI token cuts a release) must
+    surface as a non-zero exit, not be swallowed as a green run. Skipped
+    processors don't run here, so they aren't logged and aren't failures.
     """
     for proc_result in results.enabled_processors:
         if proc_result.success:
@@ -1737,13 +1735,11 @@ def run_pipeline(config: Config) -> None:
                 logger.info("No processors enabled for this run")
                 _log_step_end(6)
         except Exception as e:
-            # A genuine crash in post-upload processing is a failure, not an
-            # optional best-effort step — surface it rather than exit 0.
-            # (SystemExit from _finalize_post_upload is a BaseException and is
-            # not caught here, so it propagates cleanly.)
+            # Crash in orchestrator setup. A processor's own failure already
+            # comes back as a failure_result (handled above), so this only
+            # catches setup/import errors; keep it non-fatal as before.
             logger.error(f"Step 6 (post-upload processing) failed: {e}")
             _log_step_end(6, success=False)
-            sys.exit(1)
     elif config.product_releases and not sbom_id:
         _log_step_header(6, "Post-upload Processing - SKIPPED")
         logger.warning("Product releases specified but no SBOM ID available (upload may have been disabled or failed)")
