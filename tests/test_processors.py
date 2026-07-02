@@ -15,7 +15,31 @@ from sbomify_action._processors import (
     SBOMProcessor,
     create_default_registry,
 )
+from sbomify_action.cli.main import _finalize_post_upload
 from sbomify_action.exceptions import APIError
+
+
+class TestFinalizePostUpload(unittest.TestCase):
+    """A failed post-upload processor (e.g. a 403 creating a release) must fail
+    the run, not be swallowed as success."""
+
+    def test_processor_failure_exits_nonzero(self):
+        results = AggregateResult(
+            results=[
+                ProcessorResult.failure_result("sbomify_releases", "[403] - Only owners and admins can create releases")
+            ]
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            _finalize_post_upload(results)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_all_success_does_not_exit(self):
+        results = AggregateResult(results=[ProcessorResult.success_result("sbomify_releases", processed_items=1)])
+        _finalize_post_upload(results)  # must not raise
+
+    def test_skipped_processor_does_not_exit(self):
+        results = AggregateResult(results=[ProcessorResult.skipped_result("sbomify_releases")])
+        _finalize_post_upload(results)  # skipped is not a failure
 
 
 class TestProcessorInput(unittest.TestCase):
