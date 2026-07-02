@@ -348,7 +348,7 @@ class Config:
         # action does not synthesize them. Reject any generation source so a generated SBOM can't
         # be uploaded mislabeled as a non-SBOM artifact.
         if self.bom_type and self.bom_type != "sbom":
-            has_real_sbom_file = bool(self.sbom_file) and self.sbom_file.lower() != NONE_SENTINEL
+            has_real_sbom_file = bool(self.sbom_file and self.sbom_file.lower() != NONE_SENTINEL)
             if self.lock_file or self.docker_image or not has_real_sbom_file:
                 raise ConfigurationError(
                     f"BOM_TYPE='{self.bom_type}' uploads a pre-authored artifact verbatim and cannot be "
