@@ -61,6 +61,42 @@ class TestConfig(unittest.TestCase):
 
         self.assertIn("Please provide one of", str(cm.exception))
 
+    def test_bom_type_non_sbom_rejects_generation(self):
+        """A non-SBOM BOM_TYPE with a generation source is rejected (it would generate an SBOM and
+        upload it mislabeled)."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            lock_file="/path/to/requirements.txt",
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("cannot be", str(cm.exception))
+
+    def test_bom_type_non_sbom_rejects_docker_generation(self):
+        """A non-SBOM BOM_TYPE with a docker image (generation) is rejected."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="hbom",
+            docker_image="alpine:latest",
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("verbatim", str(cm.exception))
+
+    def test_bom_type_non_sbom_with_real_file_ok(self):
+        """A non-SBOM BOM_TYPE with a real SBOM_FILE (pre-authored artifact) validates."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            upload=True,
+        )
+        config.validate()  # no error
+
     def test_config_validation_valid_config(self):
         """Test that Config validation passes with valid configuration."""
         config = Config(

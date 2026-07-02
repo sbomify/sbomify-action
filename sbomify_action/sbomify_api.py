@@ -794,7 +794,7 @@ class SbomifyApiClient:
         content_encoding: str | None = None,
         timeout: int | None = None,
     ) -> requests.Response:
-        """POST raw SBOM bytes to ``/api/v1/sboms/artifact/{format}/{id}``.
+        """POST a raw artifact (SBOM/VEX/CBOM/HBOM) to ``/api/v1/sboms/artifact/{format}/{id}``.
 
         ``bom_type`` (sbom/vex/cbom/hbom) is forwarded as the ``?bom_type=``
         query param when set, so the same endpoint can record a VEX or CBOM

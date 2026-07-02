@@ -344,6 +344,18 @@ class Config:
                 f"Invalid BOM_TYPE: '{self.bom_type}'. Must be one of: {', '.join(VALID_BOM_TYPES)}"
             )
 
+        # Non-SBOM artifacts (VEX/CBOM/HBOM) are authored elsewhere and uploaded verbatim; the
+        # action does not synthesize them. Reject any generation source so a generated SBOM can't
+        # be uploaded mislabeled as a non-SBOM artifact.
+        if self.bom_type and self.bom_type != "sbom":
+            has_real_sbom_file = bool(self.sbom_file) and self.sbom_file.lower() != NONE_SENTINEL
+            if self.lock_file or self.docker_image or not has_real_sbom_file:
+                raise ConfigurationError(
+                    f"BOM_TYPE='{self.bom_type}' uploads a pre-authored artifact verbatim and cannot be "
+                    "generated: provide it via SBOM_FILE (a real path), and do not set LOCK_FILE, "
+                    "DOCKER_IMAGE, or SBOM_FILE=none."
+                )
+
         # Validate spec_version against sbom_format
         if self.spec_version:
             from .._generation import CYCLONEDX_VERSIONS, SPDX_VERSIONS
@@ -1151,7 +1163,7 @@ def _log_step_end(step_num: int | float, success: bool = True) -> None:
 
 
 def _finalize_output_content(content: str, bom_type: Optional[str]) -> str:
-    """Return the bytes to upload after format-specific output fixes.
+    """Return the content to upload after format-specific output fixes.
 
     CycloneDX SBOMs get PURL-encoding repairs and a compositions completeness
     indicator. Non-SBOM CycloneDX artifacts (VEX, CBOM, ...) are uploaded
