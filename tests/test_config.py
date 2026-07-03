@@ -86,6 +86,24 @@ class TestConfig(unittest.TestCase):
             config.validate()
         self.assertIn("verbatim", str(cm.exception))
 
+    def test_bom_type_non_sbom_clears_component_overrides(self):
+        """Non-SBOM BOM_TYPE ignores document-rewriting override inputs (verbatim contract)."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            component_name="renamed",
+            component_version="9.9.9",
+            component_purl="pkg:npm/renamed@9.9.9",
+            override_name=True,
+        )
+        config.validate()
+        self.assertIsNone(config.component_name)
+        self.assertIsNone(config.component_version)
+        self.assertIsNone(config.component_purl)
+        self.assertFalse(config.override_name)
+
     def test_bom_type_non_sbom_with_real_file_ok(self):
         """A non-SBOM BOM_TYPE with a real SBOM_FILE (pre-authored artifact) validates."""
         config = Config(

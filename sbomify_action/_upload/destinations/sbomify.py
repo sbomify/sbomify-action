@@ -110,7 +110,8 @@ class SbomifyDestination:
             )
 
         format_display = "CycloneDX" if input.sbom_format == "cyclonedx" else "SPDX"
-        logger.info(f"Uploading {format_display} SBOM to component: {self._component_id}")
+        artifact_kind = input.bom_type.upper() if input.bom_type and input.bom_type != "sbom" else "SBOM"
+        logger.info(f"Uploading {format_display} {artifact_kind} to component: {self._component_id}")
 
         # Gzip-compress large payloads to avoid upstream timeouts.
         upload_data: bytes = sbom_bytes

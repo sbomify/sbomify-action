@@ -355,6 +355,16 @@ class Config:
                     "generated: provide it via SBOM_FILE (a real path), and do not set LOCK_FILE, "
                     "DOCKER_IMAGE, or SBOM_FILE=none."
                 )
+            # Component overrides rewrite the document, which breaks the verbatim contract.
+            if self.component_name or self.component_version or self.component_purl or self.override_name:
+                logger.warning(
+                    f"BOM_TYPE={self.bom_type} is uploaded verbatim; ignoring "
+                    "COMPONENT_NAME/COMPONENT_VERSION/COMPONENT_PURL/OVERRIDE_NAME."
+                )
+                self.component_name = None
+                self.component_version = None
+                self.component_purl = None
+                self.override_name = False
 
         # Validate spec_version against sbom_format
         if self.spec_version:
@@ -1162,13 +1172,35 @@ def _log_step_end(step_num: int | float, success: bool = True) -> None:
     print_step_end(step_num, success)
 
 
+def _write_final_output(src_path: str, dst_path: str, bom_type: Optional[str]) -> None:
+    """Write the final artifact to ``dst_path``.
+
+    Non-SBOM artifacts (VEX, CBOM, ...) are copied byte-for-byte so the upload matches the
+    authored file exactly (a text round-trip could normalise newlines). SBOMs go through the
+    text path so the CycloneDX fixups in :func:`_finalize_output_content` apply.
+    """
+    if bom_type and bom_type != "sbom":
+        shutil.copyfile(src_path, dst_path)
+        return
+    # Read, fix any PURL encoding bugs, and write final SBOM
+    # This fixes double-encoded %40%40 or double @@ issues
+    # Note: We preserve canonical %40 encoding per PURL spec
+    with open(src_path, "r") as f:
+        content = f.read()
+    content = _finalize_output_content(content, bom_type)
+    with open(dst_path, "w") as f:
+        f.write(content)
+
+
 def _finalize_output_content(content: str, bom_type: Optional[str]) -> str:
     """Return the content to upload after format-specific output fixes.
 
     CycloneDX SBOMs get PURL-encoding repairs and a compositions completeness
-    indicator. Non-SBOM CycloneDX artifacts (VEX, CBOM, ...) are uploaded
-    exactly as authored — sbomify never rewrites a security artifact — so the
-    fixes are skipped. SPDX and other content pass through unchanged.
+    indicator. For non-SBOM CycloneDX artifacts (VEX, CBOM, ...) this helper
+    skips those SBOM-specific fixups; the wider verbatim contract (no
+    augment/enrich, no overrides, byte-copy on write) is enforced by Config
+    validation and the finalize step. SPDX and other content pass through
+    unchanged.
     """
     is_cyclonedx = '"bomFormat"' in content and '"CycloneDX"' in content
     if not is_cyclonedx:
@@ -1464,9 +1496,15 @@ def run_pipeline(config: Config) -> None:
         logger.info(f"Applying component PURL override: {config.component_purl}")
         _apply_sbom_purl_override(STEP_1_FILE, config)
 
-    # Inject additional packages if specified (file or environment variables)
+    # Inject additional packages if specified (file or environment variables).
+    # Non-SBOM artifacts upload verbatim, so injection is skipped for them.
+    if config.bom_type and config.bom_type != "sbom":
+        logger.info(f"BOM_TYPE={config.bom_type} is uploaded verbatim; skipping additional package injection.")
+        _skip_injection = True
+    else:
+        _skip_injection = False
     try:
-        injected_count = inject_additional_packages(STEP_1_FILE)
+        injected_count = 0 if _skip_injection else inject_additional_packages(STEP_1_FILE)
         if injected_count > 0:
             logger.info(f"Successfully injected {injected_count} additional package(s) into SBOM")
         elif config.is_additional_packages_only:
@@ -1641,16 +1679,7 @@ def run_pipeline(config: Config) -> None:
         if parent_dir != Path(".") and not parent_dir.exists():
             parent_dir.mkdir(parents=True, exist_ok=True)
 
-        # Read, fix any PURL encoding bugs, and write final SBOM
-        # This fixes double-encoded %40%40 or double @@ issues
-        # Note: We preserve canonical %40 encoding per PURL spec
-        with open(final_sbom_file, "r") as f:
-            content = f.read()
-
-        content = _finalize_output_content(content, config.bom_type)
-
-        with open(config.output_file, "w") as f:
-            f.write(content)
+        _write_final_output(final_sbom_file, config.output_file, config.bom_type)
 
         # Clean up temporary files
         while temp_file := get_last_sbom_from_last_step():
@@ -2421,7 +2450,8 @@ def _parse_upload_destinations_callback(
     envvar="BOM_TYPE",
     type=click.Choice(list(VALID_BOM_TYPES), case_sensitive=False),
     default=None,
-    help="Artifact type recorded on upload (vex/cbom/hbom). Non-SBOM types are uploaded verbatim.",
+    help="Artifact type recorded on upload: sbom (default when unset), vex, cbom or hbom. "
+    "Non-SBOM types are uploaded verbatim.",
 )
 @click.option(
     "--spec-version",

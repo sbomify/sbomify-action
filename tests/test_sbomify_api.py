@@ -550,3 +550,15 @@ def test_create_oidc_binding_other_errors_raise(status: int) -> None:
     client, _ = _client_with([_FakeResponse(status, {"detail": "nope"})])
     with pytest.raises(APIError):
         client.create_oidc_binding("comp-1", "acme/widget")
+
+
+def test_upload_sbom_explicit_sbom_sends_no_bom_type_param(requests_mock_client=None):
+    """bom_type='sbom' is the default artifact kind; the request matches an unset bom_type."""
+    from unittest.mock import MagicMock, patch
+
+    from sbomify_action.sbomify_api import SbomifyApiClient
+
+    client = SbomifyApiClient("https://api.example.com", "tok")
+    with patch.object(client, "_request", return_value=MagicMock()) as req:
+        client.upload_sbom(component_id="c1", sbom_payload=b"{}", sbom_format="cyclonedx", bom_type="sbom")
+    assert req.call_args.kwargs["params"] is None

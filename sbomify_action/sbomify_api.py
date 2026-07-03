@@ -807,7 +807,7 @@ class SbomifyApiClient:
         extra: dict[str, str] = {"Content-Type": "application/json"}
         if content_encoding:
             extra["Content-Encoding"] = content_encoding
-        params = {"bom_type": bom_type} if bom_type else None
+        params = {"bom_type": bom_type} if bom_type and bom_type != "sbom" else None
         return self._request(
             "POST",
             path,

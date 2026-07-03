@@ -47,8 +47,10 @@ class UploadInput:
             raise ValueError("sbom_file is required")
         if self.sbom_format not in ("cyclonedx", "spdx"):
             raise ValueError(f"Invalid sbom_format: {self.sbom_format}")
-        if self.bom_type is not None and self.bom_type not in VALID_BOM_TYPES:
-            raise ValueError(f"Invalid bom_type: {self.bom_type}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
+        if self.bom_type is not None:
+            self.bom_type = self.bom_type.lower()
+            if self.bom_type not in VALID_BOM_TYPES:
+                raise ValueError(f"Invalid bom_type: {self.bom_type}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
 
 
 class DestinationConfig(ABC):

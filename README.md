@@ -317,7 +317,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `DOCKER_IMAGE`             | †        | Docker image name                                                                |
 | `OUTPUT_FILE`              | No       | Write final SBOM to this path                                                    |
 | `SBOM_FORMAT`              | No       | Output format: `cyclonedx` (default) or `spdx`                                   |
-| `BOM_TYPE`                 | No       | Artifact type: `sbom` (default), `vex`, `cbom` or `hbom`. Non-SBOM types upload verbatim (augmentation, enrichment and finalization are skipped) |
+| `BOM_TYPE`                 | No       | Artifact type: `sbom` (default), `vex`, `cbom` or `hbom`. Non-SBOM types upload verbatim (augmentation, enrichment, overrides and the SBOM-specific finalization fixups are skipped) |
 | `ENRICH`                   | No       | Add metadata from package registries                                             |
 | `TOKEN`                    | ‡        | sbomify API token                                                                |
 | `COMPONENT_ID`             | ‡        | sbomify component ID                                                             |
