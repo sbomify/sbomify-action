@@ -67,6 +67,15 @@ def test_upload_cbom_uses_bom_type_cbom() -> None:
     assert kwargs["sbom_format"] == "cyclonedx"
 
 
+def test_upload_cbom_skips_non_sbomify_destinations() -> None:
+    # CBOM classification is sbomify-specific; DT would ingest it as a plain SBOM.
+    result = Mock(success=True, sbom_id="cbom-1")
+    with patch(f"{MOD}.upload_sbom", return_value=result) as up:
+        _upload_cbom(_cfg(upload_destinations=["sbomify", "dependency-track"]), "/abs/cbom.json")
+    destinations = [c.kwargs["destination"] for c in up.call_args_list]
+    assert destinations == ["sbomify"]
+
+
 def test_upload_cbom_swallows_failure() -> None:
     # A CBOM upload failure must not raise (never fails the SBOM run).
     with patch(f"{MOD}.upload_sbom", side_effect=RuntimeError("boom")):

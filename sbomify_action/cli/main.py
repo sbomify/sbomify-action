@@ -1222,13 +1222,22 @@ def _stamp_cbom_component_version(cbom_file: str, version: str) -> None:
     Path(cbom_file).write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+# Only sbomify records the bom_type=cbom classification; other destinations
+# (e.g. dependency-track) would ingest the CBOM as a plain project SBOM.
+_CBOM_UPLOAD_DESTINATIONS = frozenset({"sbomify"})
+
+
 def _upload_cbom(config: Config, cbom_file: str) -> None:
     """Upload the generated CBOM as a second artifact (bom_type=cbom). Best-effort:
-    a CBOM upload failure is logged but does not fail the SBOM run."""
+    a CBOM upload failure is logged but does not fail the SBOM run. Only sbomify
+    understands the CBOM classification, so other destinations are skipped."""
     _log_step_header(5.5, "Uploading CBOM")
     failed: list[str] = []
     try:
         for destination in config.upload_destinations or []:
+            if destination not in _CBOM_UPLOAD_DESTINATIONS:
+                logger.info(f"Skipping CBOM upload to {destination}: only sbomify records CBOM artifacts")
+                continue
             result = upload_sbom(
                 sbom_file=cbom_file,
                 sbom_format="cyclonedx",
