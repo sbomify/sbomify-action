@@ -115,6 +115,20 @@ class TestConfig(unittest.TestCase):
         )
         config.validate()  # no error
 
+    def test_bom_type_non_sbom_rejects_spdx_format(self):
+        """A non-SBOM BOM_TYPE with SPDX is rejected: SPDX sanitization would rewrite the bytes."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            sbom_format="spdx",
+            upload=True,
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("CycloneDX", str(cm.exception))
+
     def test_config_validation_valid_config(self):
         """Test that Config validation passes with valid configuration."""
         config = Config(

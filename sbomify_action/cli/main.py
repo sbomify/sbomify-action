@@ -348,6 +348,13 @@ class Config:
         # action does not synthesize them. Reject any generation source so a generated SBOM can't
         # be uploaded mislabeled as a non-SBOM artifact.
         if self.bom_type and self.bom_type != "sbom":
+            # SPDX goes through a json.load/json.dump license sanitization that rewrites the
+            # bytes, which would break the verbatim upload. Non-SBOM artifacts are CycloneDX.
+            if self.sbom_format and self.sbom_format.lower() != "cyclonedx":
+                raise ConfigurationError(
+                    f"BOM_TYPE='{self.bom_type}' is only supported for CycloneDX; SBOM_FORMAT="
+                    f"'{self.sbom_format}' would be re-serialized and break the verbatim upload."
+                )
             has_real_sbom_file = bool(self.sbom_file and self.sbom_file.lower() != NONE_SENTINEL)
             if self.lock_file or self.docker_image or not has_real_sbom_file:
                 raise ConfigurationError(
