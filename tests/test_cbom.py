@@ -107,6 +107,20 @@ def test_crosslink_marks_incomplete_when_generator_set_other_compositions(tmp_pa
     assert len(incomplete) == 1
 
 
+def test_crosslink_survives_malformed_version(tmp_path: Path) -> None:
+    # A best-effort cross-link must not abort on a non-integer version field.
+    good = _bom("urn:uuid:11111111-1111-1111-1111-111111111111")
+    bad = _bom("urn:uuid:22222222-2222-2222-2222-222222222222")
+    bad["version"] = "not-a-number"
+    sbom = _write(tmp_path / "sbom.json", good)
+    cbom = _write(tmp_path / "cbom.json", bad)
+
+    crosslink_sbom_and_cbom(sbom, cbom)  # must not raise
+
+    assert json.loads(Path(cbom).read_text())["version"] == 1
+    assert _bom_refs(sbom)[0]["url"] == "urn:cdx:22222222-2222-2222-2222-222222222222/1"
+
+
 def test_crosslink_is_idempotent(tmp_path: Path) -> None:
     sbom = _write(tmp_path / "sbom.json", _bom("urn:uuid:11111111-1111-1111-1111-111111111111"))
     cbom = _write(tmp_path / "cbom.json", _bom("urn:uuid:22222222-2222-2222-2222-222222222222"))

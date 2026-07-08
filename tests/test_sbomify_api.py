@@ -517,6 +517,13 @@ def test_upload_sbom_omits_bom_type_param_by_default() -> None:
     assert call.kwargs["params"] is None
 
 
+def test_upload_sbom_omits_bom_type_param_for_default_sbom() -> None:
+    client, session = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+    client.upload_sbom("c1", b"{}", sbom_format="cyclonedx", bom_type="sbom")
+    call = session.request.call_args
+    assert call.kwargs["params"] is None
+
+
 # ----------------------------------------------------------------------
 # OIDC trusted publishing
 

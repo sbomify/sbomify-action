@@ -54,7 +54,10 @@ def _serial_and_version(bom: dict[str, Any]) -> tuple[str, int]:
     if not serial:
         serial = f"urn:uuid:{uuid.uuid4()}"
         bom["serialNumber"] = serial
-    version = int(bom.get("version") or 1)
+    try:
+        version = int(bom.get("version") or 1)
+    except (TypeError, ValueError):
+        version = 1
     bom["version"] = version
     bare_uuid = serial.rsplit(":", 1)[-1]
     return bare_uuid, version
