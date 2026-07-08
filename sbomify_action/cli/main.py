@@ -2520,7 +2520,7 @@ def _parse_upload_destinations_callback(
     envvar="BOM_TYPE",
     type=click.Choice(list(VALID_BOM_TYPES), case_sensitive=False),
     default=None,
-    help="Artifact type recorded on upload: sbom (default), vex, cbom or hbom. Non-SBOM types are uploaded verbatim.",
+    help="Artifact type recorded on upload: sbom (default), vex, cbom or hbom. Non-SBOM types skip augmentation and enrichment.",
 )
 @click.option(
     "--generate-cbom/--no-generate-cbom",
