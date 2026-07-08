@@ -1180,7 +1180,10 @@ def _write_final_output(src_path: str, dst_path: str, bom_type: Optional[str]) -
     text path so the CycloneDX fixups in :func:`_finalize_output_content` apply.
     """
     if bom_type and bom_type != "sbom":
-        shutil.copyfile(src_path, dst_path)
+        # When OUTPUT_FILE resolves to the final step file, it is already in place;
+        # copyfile would raise SameFileError, so treat copy-to-self as a no-op.
+        if os.path.realpath(src_path) != os.path.realpath(dst_path):
+            shutil.copyfile(src_path, dst_path)
         return
     # Read, fix any PURL encoding bugs, and write final SBOM
     # This fixes double-encoded %40%40 or double @@ issues

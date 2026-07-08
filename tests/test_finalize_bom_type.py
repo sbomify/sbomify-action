@@ -46,6 +46,17 @@ def test_write_final_output_copies_non_sbom_bytes_exactly(tmp_path):
     assert dst.read_bytes() == raw
 
 
+def test_write_final_output_non_sbom_same_path_is_noop(tmp_path):
+    """When OUTPUT_FILE == the final step file, a non-SBOM write is a no-op, not a SameFileError."""
+    from sbomify_action.cli.main import _write_final_output
+
+    p = tmp_path / "authored.vex.cdx.json"
+    raw = b'{"bomFormat": "CycloneDX", "specVersion": "1.6"}'
+    p.write_bytes(raw)
+    _write_final_output(str(p), str(p), "vex")  # must not raise
+    assert p.read_bytes() == raw
+
+
 def test_write_final_output_sbom_still_applies_fixups(tmp_path):
     """The plain-SBOM path still goes through the text fixups (compositions added)."""
     from sbomify_action.cli.main import _write_final_output
