@@ -552,7 +552,7 @@ def test_create_oidc_binding_other_errors_raise(status: int) -> None:
         client.create_oidc_binding("comp-1", "acme/widget")
 
 
-def test_upload_sbom_explicit_sbom_sends_no_bom_type_param():
+def test_upload_sbom_explicit_sbom_sends_no_bom_type_param() -> None:
     """bom_type='sbom' is the default artifact kind; the request matches an unset bom_type."""
     from unittest.mock import MagicMock, patch
 
