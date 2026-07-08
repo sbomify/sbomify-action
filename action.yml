@@ -13,6 +13,7 @@ inputs:
   bom-type:
     description: 'Artifact type to record on upload: sbom (default), vex, cbom or hbom. Non-SBOM types are uploaded verbatim: augmentation, enrichment, overrides and the SBOM-specific finalization fixups are skipped.'
     required: false
+    default: 'sbom'
   oidc-audience:
     description: 'OIDC audience for trusted publishing (default: sbomify.com; override for self-hosted)'
     required: false

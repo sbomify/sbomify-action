@@ -48,6 +48,8 @@ class UploadInput:
         if self.sbom_format not in ("cyclonedx", "spdx"):
             raise ValueError(f"Invalid sbom_format: {self.sbom_format}")
         if self.bom_type is not None:
+            if not isinstance(self.bom_type, str):
+                raise ValueError(f"Invalid bom_type: {self.bom_type!r}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
             self.bom_type = self.bom_type.lower()
             if self.bom_type not in VALID_BOM_TYPES:
                 raise ValueError(f"Invalid bom_type: {self.bom_type}. Must be one of: {', '.join(VALID_BOM_TYPES)}")

@@ -1533,5 +1533,17 @@ def test_upload_input_normalises_bom_type_case(tmp_path):
     assert inp.bom_type == "vex"
 
 
+def test_upload_input_non_string_bom_type_raises_value_error(tmp_path):
+    """A non-string bom_type from an untyped caller fails as ValueError, not AttributeError."""
+    import pytest
+
+    from sbomify_action._upload.protocol import UploadInput
+
+    f = tmp_path / "a.json"
+    f.write_text("{}")
+    with pytest.raises(ValueError, match="Invalid bom_type"):
+        UploadInput(sbom_file=str(f), sbom_format="cyclonedx", bom_type=123)
+
+
 if __name__ == "__main__":
     unittest.main()
