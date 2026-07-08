@@ -579,9 +579,9 @@ def build_config(
     sbom_format_lower: SBOMFormat = cast(SBOMFormat, sbom_format.lower())
     logger.info(f"SBOM format: {format_display_name(sbom_format_lower)}")
 
-    # Non-SBOM artifacts (VEX, CBOM, ...) are authored elsewhere and uploaded
-    # exactly as written. Augmentation and enrichment rewrite the document, so
-    # they are not applied to them regardless of the flags.
+    # Augmentation and enrichment rewrite the document, so they are turned off
+    # for non-SBOM artifacts (VEX, CBOM, ...) regardless of the flags. Component
+    # overrides and additional-package injection still apply if configured.
     normalized_bom_type = bom_type.lower() if bom_type else None
     if normalized_bom_type and normalized_bom_type != "sbom":
         if augment or enrich:
@@ -1159,9 +1159,9 @@ def _finalize_output_content(content: str, bom_type: Optional[str]) -> str:
     """Return the bytes to upload after format-specific output fixes.
 
     CycloneDX SBOMs get PURL-encoding repairs and a compositions completeness
-    indicator. Non-SBOM CycloneDX artifacts (VEX, CBOM, ...) are uploaded
-    exactly as authored — sbomify never rewrites a security artifact — so the
-    fixes are skipped. SPDX and other content pass through unchanged.
+    indicator. These finalization fixes are skipped for non-SBOM CycloneDX
+    artifacts (VEX, CBOM, ...) so their authored content is preserved here. SPDX
+    and other content pass through unchanged.
     """
     is_cyclonedx = '"bomFormat"' in content and '"CycloneDX"' in content
     if not is_cyclonedx:
@@ -1253,6 +1253,7 @@ def _upload_cbom(config: Config, cbom_file: str) -> None:
     # Best-effort: a CBOM upload failure does not fail the SBOM run, but the step
     # is reported as failed so a partial failure is not hidden as success.
     _log_step_end(5.5, success=not failed)
+
 
 def _finalize_post_upload(results: "AggregateResult") -> None:
     """Log the outcome of each processor that ran and exit non-zero if any failed.
