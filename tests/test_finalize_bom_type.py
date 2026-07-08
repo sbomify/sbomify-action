@@ -1,4 +1,4 @@
-"""Output finalization must leave non-SBOM artifacts (e.g. VEX) untouched."""
+"""Output finalization skips its fixes for non-SBOM artifacts (e.g. VEX, CBOM)."""
 
 from __future__ import annotations
 
@@ -17,14 +17,14 @@ def test_explicit_sbom_bom_type_still_finalized() -> None:
     assert '"compositions"' in out
 
 
-def test_vex_is_uploaded_verbatim() -> None:
-    # A VEX is an immutable security artifact: no composition injection, no
-    # PURL rewriting, byte-for-byte what was authored.
+def test_vex_skips_finalization_fixes() -> None:
+    # Finalization adds no composition and does no PURL rewriting for a VEX, so
+    # this step returns the content unchanged (earlier pipeline steps are separate).
     out = _finalize_output_content(CYCLONEDX, "vex")
     assert out == CYCLONEDX
 
 
-def test_cbom_is_uploaded_verbatim() -> None:
+def test_cbom_skips_finalization_fixes() -> None:
     out = _finalize_output_content(CYCLONEDX, "cbom")
     assert out == CYCLONEDX
 

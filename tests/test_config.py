@@ -898,9 +898,8 @@ class TestBuildConfig(unittest.TestCase):
             self.assertEqual(config.api_base_url, "https://custom.api.com")
             self.assertEqual(config.sbom_format, "spdx")
 
-    def test_build_config_non_sbom_bom_type_forces_verbatim(self):
-        """A non-SBOM bom_type (VEX/CBOM) disables augment/enrich so the
-        artifact is uploaded exactly as authored."""
+    def test_build_config_non_sbom_bom_type_disables_augment_enrich(self):
+        """A non-SBOM bom_type (VEX/CBOM) forces augment and enrich off."""
         from sbomify_action.cli.main import build_config
 
         with tempfile.TemporaryDirectory() as tmp_dir:

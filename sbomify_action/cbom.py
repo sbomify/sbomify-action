@@ -73,11 +73,13 @@ def _add_external_bom_ref(bom: dict[str, Any], url: str, comment: str) -> None:
 
 
 def _mark_incomplete(cbom: dict[str, Any]) -> None:
-    """Record ``aggregate: incomplete`` when the CBOM declares no ``compositions`` of
-    its own, so consumers do not read a scanner-derived CBOM as a complete
-    cryptographic inventory. A composition the generator already set is left as-is."""
-    if not cbom.get("compositions"):
-        cbom["compositions"] = [{"aggregate": "incomplete"}]
+    """Ensure the CBOM carries an ``aggregate: incomplete`` composition so a
+    scanner-derived CBOM is never read as a complete cryptographic inventory.
+    Compositions the generator already declared are preserved; the marker is
+    appended only when no incomplete entry is present. Idempotent."""
+    compositions = cbom.setdefault("compositions", [])
+    if not any(isinstance(c, dict) and c.get("aggregate") == "incomplete" for c in compositions):
+        compositions.append({"aggregate": "incomplete"})
 
 
 def crosslink_sbom_and_cbom(sbom_path: str, cbom_path: str) -> None:

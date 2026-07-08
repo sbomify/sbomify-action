@@ -88,6 +88,25 @@ def test_crosslink_assigns_serial_when_missing(tmp_path: Path) -> None:
     assert _bom_refs(cbom)[0]["url"] == f"urn:cdx:{bare}/1"
 
 
+def test_crosslink_marks_incomplete_when_generator_set_other_compositions(tmp_path: Path) -> None:
+    # cdxgen could emit its own compositions without an incomplete marker; the
+    # safety marker must still be added, and the generator's entry preserved.
+    sbom = _write(tmp_path / "sbom.json", _bom("urn:uuid:11111111-1111-1111-1111-111111111111"))
+    cbom_doc = _bom("urn:uuid:22222222-2222-2222-2222-222222222222")
+    cbom_doc["compositions"] = [{"aggregate": "complete", "assemblies": ["ref-a"]}]
+    cbom = _write(tmp_path / "cbom.json", cbom_doc)
+
+    crosslink_sbom_and_cbom(sbom, cbom)
+
+    compositions = json.loads(Path(cbom).read_text())["compositions"]
+    assert {"aggregate": "complete", "assemblies": ["ref-a"]} in compositions
+    assert any(c.get("aggregate") == "incomplete" for c in compositions)
+    # idempotent: a second pass adds no duplicate incomplete entry
+    crosslink_sbom_and_cbom(sbom, cbom)
+    incomplete = [c for c in json.loads(Path(cbom).read_text())["compositions"] if c.get("aggregate") == "incomplete"]
+    assert len(incomplete) == 1
+
+
 def test_crosslink_is_idempotent(tmp_path: Path) -> None:
     sbom = _write(tmp_path / "sbom.json", _bom("urn:uuid:11111111-1111-1111-1111-111111111111"))
     cbom = _write(tmp_path / "cbom.json", _bom("urn:uuid:22222222-2222-2222-2222-222222222222"))
