@@ -11,7 +11,7 @@ inputs:
     description: 'Override the component PURL in the SBOM (e.g., pkg:npm/@scope/name@1.0.0)'
     required: false
   bom-type:
-    description: 'Artifact type to record on upload: sbom (default), vex, cbom or hbom. Non-SBOM types are uploaded verbatim: augmentation, enrichment and finalization are skipped.'
+    description: 'Artifact type to record on upload: sbom (default), vex, cbom or hbom. Non-SBOM types skip augmentation and enrichment.'
     required: false
   generate-cbom:
     description: 'Also generate a CBOM (cdxgen --include-crypto) and upload it as bom_type=cbom, cross-linked with the SBOM. Crypto detection is best-effort (Java/JS/TS source); the CBOM is marked aggregate=incomplete.'

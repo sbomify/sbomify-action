@@ -317,7 +317,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `DOCKER_IMAGE`             | †        | Docker image name                                                                |
 | `OUTPUT_FILE`              | No       | Write final SBOM to this path                                                    |
 | `SBOM_FORMAT`              | No       | Output format: `cyclonedx` (default) or `spdx`                                   |
-| `BOM_TYPE`                 | No       | Artifact type: `sbom` (default), `vex`, `cbom` or `hbom`. Non-SBOM types upload verbatim (augmentation, enrichment and finalization are skipped) |
+| `BOM_TYPE`                 | No       | Artifact type: `sbom` (default), `vex`, `cbom` or `hbom`. Non-SBOM types skip augmentation and enrichment |
 | `GENERATE_CBOM`            | No       | Also generate a CBOM (`cdxgen --include-crypto`) and upload it as `bom_type=cbom`, cross-linked with the SBOM. Crypto detection is best-effort (Java/JS/TS source); the CBOM is marked `aggregate=incomplete` |
 | `ENRICH`                   | No       | Add metadata from package registries                                             |
 | `TOKEN`                    | ‡        | sbomify API token                                                                |

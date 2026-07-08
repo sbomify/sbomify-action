@@ -585,7 +585,7 @@ def build_config(
     normalized_bom_type = bom_type.lower() if bom_type else None
     if normalized_bom_type and normalized_bom_type != "sbom":
         if augment or enrich:
-            logger.warning(f"BOM_TYPE={normalized_bom_type} is uploaded verbatim; ignoring AUGMENT/ENRICH.")
+            logger.warning(f"BOM_TYPE={normalized_bom_type}: skipping augmentation and enrichment.")
         augment = False
         enrich = False
 
