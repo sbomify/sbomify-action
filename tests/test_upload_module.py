@@ -1523,10 +1523,6 @@ class TestSbomifyTimeout(unittest.TestCase):
             Path(sbom_file).unlink()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 def test_upload_input_normalises_bom_type_case(tmp_path):
     """Programmatic callers passing 'VEX' get the lowercase canonical value, not a ValueError."""
     from sbomify_action._upload.protocol import UploadInput
@@ -1535,3 +1531,7 @@ def test_upload_input_normalises_bom_type_case(tmp_path):
     f.write_text("{}")
     inp = UploadInput(sbom_file=str(f), sbom_format="cyclonedx", bom_type="VEX")
     assert inp.bom_type == "vex"
+
+
+if __name__ == "__main__":
+    unittest.main()
