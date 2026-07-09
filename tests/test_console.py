@@ -375,6 +375,26 @@ class TestDuplicateSbomError(unittest.TestCase):
             component_version="2.0.0",
         )
 
+    @patch("sbomify_action.console.IS_GITHUB_ACTIONS", True)
+    def test_print_duplicate_non_sbom_annotation_matches_guidance(self):
+        """The GHA annotation for a non-SBOM duplicate must mirror the panel:
+        the version to bump lives inside the authored document, and
+        COMPONENT_VERSION advice does not apply."""
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            print_duplicate_sbom_error(
+                component_id="c1",
+                sbom_format="cyclonedx",
+                artifact_kind="VEX",
+            )
+        annotations = [line for line in buf.getvalue().splitlines() if line.startswith("::error")]
+        self.assertTrue(annotations)
+        self.assertIn("authored document", annotations[0])
+        self.assertNotIn("component version", annotations[0])
+
 
 class TestFinalMessages(unittest.TestCase):
     """Tests for final success/failure messages."""

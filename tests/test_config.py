@@ -1083,6 +1083,30 @@ class TestBuildConfig(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 build_config(sbom_file=str(sbom_file), upload=False, bom_type=123)  # type: ignore[arg-type]
 
+    def test_build_config_falsy_non_string_bom_type_rejected(self):
+        """Only None and '' mean unset; other falsy garbage (0, False) must be
+        rejected by validation, not silently coerced to the default."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            with self.assertRaises(SystemExit):
+                build_config(sbom_file=str(sbom_file), upload=False, bom_type=0)  # type: ignore[arg-type]
+
+    def test_build_config_empty_string_bom_type_means_unset(self):
+        """An empty BOM_TYPE means unset, mirroring click's empty-envvar
+        semantics, and resolves to the sbom default."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            config = build_config(sbom_file=str(sbom_file), upload=False, bom_type="")
+            self.assertEqual(config.bom_type, "sbom")
+
     def test_cli_bom_type_option_defaults_to_sbom(self):
         """The --bom-type click option itself defaults to 'sbom' so --help and
         the parsed value agree; unset must not reach the pipeline as None."""

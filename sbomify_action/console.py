@@ -395,11 +395,14 @@ def print_duplicate_sbom_error(
     panel = Panel(content, title=f"[bold red]Duplicate {artifact_kind}[/bold red]", border_style="red")
     console.print(panel)
 
-    # Also emit GHA error annotation
-    gha_error(
-        f"{artifact_kind} already exists for this component version",
-        title=f"Duplicate {artifact_kind}",
-    )
+    # Also emit GHA error annotation, mirroring the panel guidance
+    if artifact_kind == "SBOM":
+        gha_error("SBOM already exists for this component version", title="Duplicate SBOM")
+    else:
+        gha_error(
+            f"{artifact_kind} already exists for this component; bump the version inside the authored document",
+            title=f"Duplicate {artifact_kind}",
+        )
 
 
 def print_component_not_found_error(component_id: str) -> None:

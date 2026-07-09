@@ -623,7 +623,9 @@ def build_config(
     # Non-SBOM artifacts (VEX, CBOM, ...) are authored elsewhere and uploaded
     # exactly as written. Augmentation and enrichment rewrite the document, so
     # they are not applied to them regardless of the flags.
-    normalized_bom_type = str(bom_type).lower() if bom_type else "sbom"
+    # Only None and "" mean unset (click treats an empty env var the same way);
+    # any other value must survive to validation so garbage is rejected.
+    normalized_bom_type = "sbom" if bom_type is None or bom_type == "" else str(bom_type).lower()
     if normalized_bom_type != "sbom":
         if augment or enrich:
             logger.warning(f"BOM_TYPE={normalized_bom_type} is uploaded verbatim; ignoring AUGMENT/ENRICH.")
