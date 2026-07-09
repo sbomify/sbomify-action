@@ -22,7 +22,9 @@ VALID_BOM_TYPES = ("sbom", "vex", "cbom", "hbom")
 @dataclass
 class UploadInput:
     """
-    Input parameters for SBOM upload (SBOM-specific, not destination-specific).
+    Input parameters for an artifact upload (artifact-specific, not
+    destination-specific). The artifact is an SBOM by default; ``bom_type``
+    selects a non-SBOM kind (VEX/CBOM/HBOM) uploaded verbatim.
 
     Attributes:
         sbom_file: Path to the SBOM file to upload

@@ -1,0 +1,71 @@
+"""End-to-end pipeline behavior for non-SBOM artifacts (BOM_TYPE=vex/cbom/hbom).
+
+These run the real pipeline (UPLOAD=false) in a temp working directory and pin
+the verbatim contract at the level users experience it: the bytes written to
+OUTPUT_FILE are exactly the authored bytes.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from sbomify_action.cli.main import build_config, run_pipeline
+
+AUTHORED_VEX = (
+    b'{"bomFormat": "CycloneDX",\r\n'
+    b'  "specVersion": "1.6",\n'
+    b'  "serialNumber": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",\n'
+    b'  "version": 7,\n'
+    b'  "vulnerabilities": [{"id": "CVE-2026-0001"}]}\n'
+)
+
+
+def _vex_config(tmp_path, monkeypatch, **overrides):
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "authored.vex.cdx.json"
+    src.write_bytes(AUTHORED_VEX)
+    kwargs = dict(
+        sbom_file=str(src),
+        upload=False,
+        bom_type="vex",
+        output_file="out.vex.json",
+    )
+    kwargs.update(overrides)
+    return build_config(**kwargs), src
+
+
+def test_pipeline_vex_verbatim_end_to_end(tmp_path, monkeypatch):
+    """The full pipeline must not alter a single byte of an authored VEX —
+    CRLF, key order, indentation and the document's own version survive,
+    even with additional-package injection configured."""
+    monkeypatch.setenv("ADDITIONAL_PACKAGES", "extra-package==1.0.0")
+    config, _ = _vex_config(tmp_path, monkeypatch)
+    run_pipeline(config)
+    assert (tmp_path / "out.vex.json").read_bytes() == AUTHORED_VEX
+
+
+def test_pipeline_non_sbom_rejects_spdx_content(tmp_path, monkeypatch):
+    """An SPDX-content file with a non-SBOM BOM_TYPE must fail loud in step 1:
+    the declared-format guard in Config.validate() cannot see file content, and
+    the SPDX license sanitization would rewrite the authored bytes."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "doc.json"
+    src.write_bytes(b'{"spdxVersion": "SPDX-2.3", "name": "x", "packages": []}')
+    config = build_config(
+        sbom_file=str(src),
+        upload=False,
+        bom_type="vex",
+        output_file="out.json",
+    )
+    with pytest.raises(SystemExit) as exc:
+        run_pipeline(config)
+    assert exc.value.code == 1
+
+
+def test_pipeline_output_file_colliding_with_step_file_survives_cleanup(tmp_path, monkeypatch):
+    """OUTPUT_FILE resolving to the internal step file must not be deleted by
+    the temp-file cleanup: the write is a copy-to-self no-op and the cleanup
+    loop must never unlink the final output."""
+    config, _ = _vex_config(tmp_path, monkeypatch, output_file="step_1.json")
+    run_pipeline(config)
+    assert (tmp_path / "step_1.json").read_bytes() == AUTHORED_VEX

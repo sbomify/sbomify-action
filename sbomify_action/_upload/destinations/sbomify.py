@@ -185,11 +185,23 @@ class SbomifyDestination:
                     if cleaned:
                         err_msg += f" - {cleaned}"
 
-                # Handle duplicate SBOM error with specific message
+                # Handle duplicate artifact error with specific message. Non-SBOM
+                # artifacts ignore COMPONENT_VERSION (verbatim upload), so the only
+                # actionable version is the one inside the authored document.
                 if response.status_code == 409 and error_code == "DUPLICATE_ARTIFACT":
+                    if artifact_kind == "SBOM":
+                        duplicate_msg = (
+                            "An SBOM already exists for this component version. "
+                            "Use a different version or delete the existing SBOM."
+                        )
+                    else:
+                        duplicate_msg = (
+                            f"A {artifact_kind} already exists for this component version. "
+                            f"Bump the version inside the authored document or delete the existing {artifact_kind}."
+                        )
                     return UploadResult.failure_result(
                         destination_name=self.name,
-                        error_message="An SBOM already exists for this component version. Use a different version or delete the existing SBOM.",
+                        error_message=duplicate_msg,
                         error_code=error_code,
                         validated=validated,
                         validation_error=validation_error,

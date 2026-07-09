@@ -144,6 +144,21 @@ class TestConfig(unittest.TestCase):
             config.validate()
         self.assertIn("dependency-track", str(cm.exception))
 
+    def test_bom_type_non_sbom_rejects_product_release(self):
+        """Releases hold one SBOM per component and format; tagging a VEX/CBOM
+        into a release either collides with the component's SBOM or occupies
+        its slot, so PRODUCT_RELEASE is rejected for non-SBOM artifacts."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            product_releases='["myproduct:v1.0.0"]',
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("PRODUCT_RELEASE", str(cm.exception))
+
     def test_bom_type_non_sbom_no_upload_allows_other_destinations(self):
         """With UPLOAD=false nothing is sent anywhere, so configured
         destinations are irrelevant and must not fail validation."""
@@ -1055,6 +1070,18 @@ class TestBuildConfig(unittest.TestCase):
             self.assertEqual(config.api_base_url, SBOMIFY_PRODUCTION_API)
             self.assertEqual(config.sbom_format, "cyclonedx")
             self.assertEqual(config.bom_type, "sbom")
+
+    def test_build_config_non_string_bom_type_exits_cleanly(self):
+        """A non-string bom_type from an untyped caller must exit via the
+        ConfigurationError path, not crash with AttributeError on .lower()."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            with self.assertRaises(SystemExit):
+                build_config(sbom_file=str(sbom_file), upload=False, bom_type=123)  # type: ignore[arg-type]
 
     def test_cli_bom_type_option_defaults_to_sbom(self):
         """The --bom-type click option itself defaults to 'sbom' so --help and

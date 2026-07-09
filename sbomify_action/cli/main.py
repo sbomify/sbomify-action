@@ -364,6 +364,12 @@ class Config:
                         f"BOM_TYPE='{self.bom_type}' can only be uploaded to sbomify; remove "
                         f"{', '.join(non_sbomify)} from UPLOAD_DESTINATIONS."
                     )
+            # A release holds one SBOM per component and format; tagging a non-SBOM artifact
+            # would either collide with the component's SBOM or wrongly occupy its slot.
+            if self.product_releases:
+                raise ConfigurationError(
+                    f"BOM_TYPE='{self.bom_type}' cannot be tagged into a product release; remove PRODUCT_RELEASE."
+                )
             has_real_sbom_file = bool(self.sbom_file and self.sbom_file.lower() != NONE_SENTINEL)
             if self.lock_file or self.docker_image or not has_real_sbom_file:
                 raise ConfigurationError(
@@ -617,7 +623,7 @@ def build_config(
     # Non-SBOM artifacts (VEX, CBOM, ...) are authored elsewhere and uploaded
     # exactly as written. Augmentation and enrichment rewrite the document, so
     # they are not applied to them regardless of the flags.
-    normalized_bom_type = bom_type.lower() if bom_type else "sbom"
+    normalized_bom_type = str(bom_type).lower() if bom_type else "sbom"
     if normalized_bom_type != "sbom":
         if augment or enrich:
             logger.warning(f"BOM_TYPE={normalized_bom_type} is uploaded verbatim; ignoring AUGMENT/ENRICH.")
@@ -1351,6 +1357,14 @@ def run_pipeline(config: Config) -> None:
             if FILE_TYPE == "SBOM":
                 logger.info(f"Processing existing SBOM file: {FILE}")
                 FORMAT = validate_sbom(FILE)
+                # The config-level CycloneDX-only guard sees the declared SBOM_FORMAT; an
+                # SPDX-content file would slip past it and get byte-rewritten by the SPDX
+                # license sanitization below, so re-check against the detected format.
+                if config.bom_type and config.bom_type != "sbom" and FORMAT != "cyclonedx":
+                    raise SBOMValidationError(
+                        f"BOM_TYPE='{config.bom_type}' requires a CycloneDX artifact, but the file "
+                        f"content is {FORMAT}; it would be re-serialized and break the verbatim upload."
+                    )
                 shutil.copy(FILE, STEP_1_FILE)
 
                 # Sanitize SPDX licenses in input SBOMs (e.g. RPM-style "GPLv2+", "ASL 2.0")
@@ -1701,9 +1715,12 @@ def run_pipeline(config: Config) -> None:
 
         _write_final_output(final_sbom_file, config.output_file, config.bom_type)
 
-        # Clean up temporary files
-        while temp_file := get_last_sbom_from_last_step():
-            Path(temp_file).unlink()
+        # Clean up temporary step files — never the final output itself, which
+        # OUTPUT_FILE may resolve to (the write above is then a copy-to-self no-op).
+        output_realpath = os.path.realpath(config.output_file)
+        for temp_file in (STEP_3_FILE, STEP_2_FILE, STEP_1_FILE):
+            if Path(temp_file).is_file() and os.path.realpath(temp_file) != output_realpath:
+                Path(temp_file).unlink()
 
         logger.info(f"Final {artifact_label} saved to: {config.output_file}")
         _log_step_end(4)
@@ -1745,7 +1762,9 @@ def run_pipeline(config: Config) -> None:
                             f"component_id={config.component_id}, format={FORMAT}, "
                             f"version={config.component_version}"
                         )
-                        print_duplicate_sbom_error(config.component_id, FORMAT, config.component_version)
+                        print_duplicate_sbom_error(
+                            config.component_id, FORMAT, config.component_version, artifact_kind=artifact_label
+                        )
                     elif upload_result.error_code == "COMPONENT_NOT_FOUND":
                         logger.error(
                             f"Upload to {destination} failed: component not found (component_id={config.component_id})"
