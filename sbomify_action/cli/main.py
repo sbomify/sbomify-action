@@ -1212,10 +1212,10 @@ def _write_final_output(src_path: str, dst_path: str, bom_type: Optional[str]) -
     # Read, fix any PURL encoding bugs, and write final SBOM
     # This fixes double-encoded %40%40 or double @@ issues
     # Note: We preserve canonical %40 encoding per PURL spec
-    with open(src_path, "r") as f:
+    with open(src_path, "r", encoding="utf-8") as f:
         content = f.read()
     content = _finalize_output_content(content, bom_type)
-    with open(dst_path, "w") as f:
+    with open(dst_path, "w", encoding="utf-8") as f:
         f.write(content)
 
 

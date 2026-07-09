@@ -808,6 +808,8 @@ class SbomifyApiClient:
         if content_encoding:
             extra["Content-Encoding"] = content_encoding
         # Lower-case like the rest of the stack; the backend enum is lowercase.
+        if bom_type is not None and not isinstance(bom_type, str):
+            raise ValueError(f"Invalid bom_type: {bom_type!r}. Must be a string (sbom/vex/cbom/hbom) or None.")
         normalized_bom_type = bom_type.lower() if bom_type else None
         params = {"bom_type": normalized_bom_type} if normalized_bom_type and normalized_bom_type != "sbom" else None
         return self._request(
