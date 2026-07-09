@@ -492,6 +492,7 @@ class TestSbomifyDestination(unittest.TestCase):
             self.assertIn("VEX", result.error_message)
             self.assertIn("inside the authored document", result.error_message)
             self.assertNotIn("COMPONENT_VERSION", result.error_message)
+            self.assertNotIn("for this component version", result.error_message)
         finally:
             Path(sbom_file).unlink()
 

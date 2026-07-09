@@ -196,7 +196,7 @@ class SbomifyDestination:
                         )
                     else:
                         duplicate_msg = (
-                            f"A {artifact_kind} already exists for this component version. "
+                            f"A {artifact_kind} with the same document version already exists for this component. "
                             f"Bump the version inside the authored document or delete the existing {artifact_kind}."
                         )
                     return UploadResult.failure_result(
