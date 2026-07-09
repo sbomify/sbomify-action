@@ -110,7 +110,8 @@ class SbomifyDestination:
             )
 
         format_display = "CycloneDX" if input.sbom_format == "cyclonedx" else "SPDX"
-        logger.info(f"Uploading {format_display} SBOM to component: {self._component_id}")
+        artifact_kind = input.bom_type.upper() if input.bom_type and input.bom_type != "sbom" else "SBOM"
+        logger.info(f"Uploading {format_display} {artifact_kind} to component: {self._component_id}")
 
         # Gzip-compress large payloads to avoid upstream timeouts.
         upload_data: bytes = sbom_bytes
@@ -133,6 +134,7 @@ class SbomifyDestination:
                 component_id=str(self._component_id),
                 sbom_payload=upload_data,
                 sbom_format=input.sbom_format,
+                bom_type=input.bom_type,
                 content_encoding=content_encoding,
             )
         except AuthError as e:
@@ -183,11 +185,23 @@ class SbomifyDestination:
                     if cleaned:
                         err_msg += f" - {cleaned}"
 
-                # Handle duplicate SBOM error with specific message
+                # Handle duplicate artifact error with specific message. Non-SBOM
+                # artifacts ignore COMPONENT_VERSION (verbatim upload), so the only
+                # actionable version is the one inside the authored document.
                 if response.status_code == 409 and error_code == "DUPLICATE_ARTIFACT":
+                    if artifact_kind == "SBOM":
+                        duplicate_msg = (
+                            "An SBOM already exists for this component version. "
+                            "Use a different version or delete the existing SBOM."
+                        )
+                    else:
+                        duplicate_msg = (
+                            f"A {artifact_kind} with the same document version already exists for this component. "
+                            f"Bump the version inside the authored document or delete the existing {artifact_kind}."
+                        )
                     return UploadResult.failure_result(
                         destination_name=self.name,
-                        error_message="An SBOM already exists for this component version. Use a different version or delete the existing SBOM.",
+                        error_message=duplicate_msg,
                         error_code=error_code,
                         validated=validated,
                         validation_error=validation_error,

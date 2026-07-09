@@ -503,6 +503,45 @@ def test_upload_sbom_does_not_raise_on_non_2xx() -> None:
     assert response.status_code == 409
 
 
+def test_upload_sbom_sends_bom_type_param() -> None:
+    client, session = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+    client.upload_sbom("c1", b"{}", sbom_format="cyclonedx", bom_type="vex")
+    call = session.request.call_args
+    assert call.kwargs["params"] == {"bom_type": "vex"}
+
+
+def test_upload_sbom_non_string_bom_type_raises_value_error() -> None:
+    """The public client fails a non-string bom_type as ValueError, matching
+    UploadInput, instead of an AttributeError on .lower()."""
+    client, _ = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+    with pytest.raises(ValueError, match="Invalid bom_type"):
+        client.upload_sbom("c1", b"{}", sbom_format="cyclonedx", bom_type=123)  # type: ignore[arg-type]
+
+
+def test_upload_sbom_invalid_bom_type_raises_value_error() -> None:
+    """The client rejects unknown bom_type values instead of forwarding
+    ?bom_type=nope to the backend."""
+    client, _ = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+    with pytest.raises(ValueError, match="Invalid bom_type"):
+        client.upload_sbom("c1", b"{}", sbom_format="cyclonedx", bom_type="nope")
+
+
+def test_upload_sbom_normalizes_bom_type_case() -> None:
+    """The public client API lower-cases bom_type like the rest of the stack;
+    the backend enum is lowercase and would reject ?bom_type=VEX."""
+    client, session = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+    client.upload_sbom("c1", b"{}", sbom_format="cyclonedx", bom_type="VEX")
+    call = session.request.call_args
+    assert call.kwargs["params"] == {"bom_type": "vex"}
+
+
+def test_upload_sbom_omits_bom_type_param_by_default() -> None:
+    client, session = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+    client.upload_sbom("c1", b"{}", sbom_format="cyclonedx")
+    call = session.request.call_args
+    assert call.kwargs["params"] is None
+
+
 # ----------------------------------------------------------------------
 # OIDC trusted publishing
 
@@ -536,3 +575,15 @@ def test_create_oidc_binding_other_errors_raise(status: int) -> None:
     client, _ = _client_with([_FakeResponse(status, {"detail": "nope"})])
     with pytest.raises(APIError):
         client.create_oidc_binding("comp-1", "acme/widget")
+
+
+def test_upload_sbom_explicit_sbom_sends_no_bom_type_param() -> None:
+    """bom_type='sbom' is the default artifact kind; the request matches an unset bom_type."""
+    from unittest.mock import MagicMock, patch
+
+    from sbomify_action.sbomify_api import SbomifyApiClient
+
+    client = SbomifyApiClient("https://api.example.com", "tok")
+    with patch.object(client, "_request", return_value=MagicMock()) as req:
+        client.upload_sbom(component_id="c1", sbom_payload=b"{}", sbom_format="cyclonedx", bom_type="sbom")
+    assert req.call_args.kwargs["params"] is None

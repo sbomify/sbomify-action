@@ -8,6 +8,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional, Protocol
 
+# Canonical VALID_BOM_TYPES definition lives next to the backend contract.
+from ..sbomify_api import VALID_BOM_TYPES as VALID_BOM_TYPES
+
 if TYPE_CHECKING:
     from .result import UploadResult
 
@@ -18,11 +21,15 @@ SBOMFormat = Literal["cyclonedx", "spdx"]
 @dataclass
 class UploadInput:
     """
-    Input parameters for SBOM upload (SBOM-specific, not destination-specific).
+    Input parameters for an artifact upload (artifact-specific, not
+    destination-specific). The artifact is an SBOM by default; ``bom_type``
+    selects a non-SBOM kind (VEX/CBOM/HBOM) uploaded verbatim.
 
     Attributes:
         sbom_file: Path to the SBOM file to upload
         sbom_format: Format of the SBOM ("cyclonedx" or "spdx")
+        bom_type: Artifact type to record on upload (sbom/vex/cbom/hbom). None
+            uploads as a plain SBOM; non-SBOM types are sent verbatim.
         component_name: Name of the component (used by destinations like Dependency Track)
         component_version: Version of the component (used by destinations like Dependency Track)
         validate_before_upload: Whether to validate SBOM before uploading
@@ -30,6 +37,7 @@ class UploadInput:
 
     sbom_file: str
     sbom_format: SBOMFormat
+    bom_type: Optional[str] = None
     component_name: Optional[str] = None
     component_version: Optional[str] = None
     validate_before_upload: bool = True
@@ -40,6 +48,12 @@ class UploadInput:
             raise ValueError("sbom_file is required")
         if self.sbom_format not in ("cyclonedx", "spdx"):
             raise ValueError(f"Invalid sbom_format: {self.sbom_format}")
+        if self.bom_type is not None:
+            if not isinstance(self.bom_type, str):
+                raise ValueError(f"Invalid bom_type: {self.bom_type!r}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
+            self.bom_type = self.bom_type.lower()
+            if self.bom_type not in VALID_BOM_TYPES:
+                raise ValueError(f"Invalid bom_type: {self.bom_type}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
 
 
 class DestinationConfig(ABC):

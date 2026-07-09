@@ -21,7 +21,7 @@ import sentry_sdk
 from cyclonedx.model.bom import Bom
 
 from .. import format_display_name
-from .._upload import VALID_DESTINATIONS
+from .._upload import VALID_BOM_TYPES, VALID_DESTINATIONS
 from ..additional_packages import inject_additional_packages
 from ..augmentation import augment_sbom_from_file
 from ..console import (
@@ -228,6 +228,7 @@ class Config:
     product_releases: Optional[str | list[str]] = None
     api_base_url: str = SBOMIFY_PRODUCTION_API
     sbom_format: SBOMFormat = "cyclonedx"
+    bom_type: Optional[str] = None
     spec_version: Optional[str] = None
     oidc_audience: str | None = None
     # Set to True at runtime when config.token was obtained via OIDC exchange;
@@ -336,6 +337,62 @@ class Config:
             raise ConfigurationError(
                 f"Invalid SBOM_FORMAT: '{self.sbom_format}'. Must be one of: {', '.join(VALID_SBOM_FORMATS)}"
             )
+
+        # Validate bom_type (artifact kind recorded on upload)
+        if self.bom_type is not None and self.bom_type not in VALID_BOM_TYPES:
+            raise ConfigurationError(
+                f"Invalid BOM_TYPE: '{self.bom_type}'. Must be one of: {', '.join(VALID_BOM_TYPES)}"
+            )
+
+        # Non-SBOM artifacts (VEX/CBOM/HBOM) are authored elsewhere and uploaded verbatim; the
+        # action does not synthesize them. Reject any generation source so a generated SBOM can't
+        # be uploaded mislabeled as a non-SBOM artifact.
+        if self.bom_type and self.bom_type != "sbom":
+            # SPDX goes through a json.load/json.dump license sanitization that rewrites the
+            # bytes, which would break the verbatim upload. Non-SBOM artifacts are CycloneDX.
+            if self.sbom_format and self.sbom_format.lower() != "cyclonedx":
+                raise ConfigurationError(
+                    f"BOM_TYPE='{self.bom_type}' is only supported for CycloneDX; SBOM_FORMAT="
+                    f"'{self.sbom_format}' would be re-serialized and break the verbatim upload."
+                )
+            # Only the sbomify backend records bom_type; other destinations re-encode the
+            # payload and would ingest the artifact as a plain SBOM.
+            if self.upload:
+                non_sbomify = [d for d in (self.upload_destinations or []) if d != "sbomify"]
+                if non_sbomify:
+                    raise ConfigurationError(
+                        f"BOM_TYPE='{self.bom_type}' can only be uploaded to sbomify; remove "
+                        f"{', '.join(non_sbomify)} from UPLOAD_DESTINATIONS."
+                    )
+            # A release holds one SBOM per component and format; tagging a non-SBOM artifact
+            # would either collide with the component's SBOM or wrongly occupy its slot.
+            if self.product_releases:
+                raise ConfigurationError(
+                    f"BOM_TYPE='{self.bom_type}' cannot be tagged into a product release; remove PRODUCT_RELEASE."
+                )
+            has_real_sbom_file = bool(self.sbom_file and self.sbom_file.lower() != NONE_SENTINEL)
+            if self.lock_file or self.docker_image or not has_real_sbom_file:
+                raise ConfigurationError(
+                    f"BOM_TYPE='{self.bom_type}' uploads a pre-authored artifact verbatim and cannot be "
+                    "generated: provide it via SBOM_FILE (a real path), and do not set LOCK_FILE, "
+                    "DOCKER_IMAGE, or SBOM_FILE=none."
+                )
+            # Component overrides rewrite the document, which breaks the verbatim contract.
+            if self.component_name or self.component_version or self.component_purl or self.override_name:
+                logger.warning(
+                    f"BOM_TYPE={self.bom_type} is uploaded verbatim; ignoring "
+                    "COMPONENT_NAME/COMPONENT_VERSION/COMPONENT_PURL/OVERRIDE_NAME."
+                )
+                self.component_name = None
+                self.component_version = None
+                self.component_purl = None
+                self.override_name = False
+            # Augmentation and enrichment rewrite the document, which also breaks
+            # the verbatim contract.
+            if self.augment or self.enrich:
+                logger.warning(f"BOM_TYPE={self.bom_type} is uploaded verbatim; ignoring AUGMENT/ENRICH.")
+                self.augment = False
+                self.enrich = False
 
         # Validate spec_version against sbom_format
         if self.spec_version:
@@ -520,6 +577,7 @@ def build_config(
     product_releases: Optional[str] = None,
     api_base_url: str = SBOMIFY_PRODUCTION_API,
     sbom_format: str = "cyclonedx",
+    bom_type: Optional[str] = None,
     spec_version: Optional[str] = None,
     oidc_audience: Optional[str] = None,
 ) -> Config:
@@ -568,6 +626,11 @@ def build_config(
     sbom_format_lower: SBOMFormat = cast(SBOMFormat, sbom_format.lower())
     logger.info(f"SBOM format: {format_display_name(sbom_format_lower)}")
 
+    # Only None and "" mean unset (click treats an empty env var the same way);
+    # any other value must survive to Config.validate() so garbage is rejected.
+    # The verbatim guards (ignoring AUGMENT/ENRICH etc.) live in validate().
+    normalized_bom_type = "sbom" if bom_type is None or bom_type == "" else str(bom_type).lower()
+
     # Expand paths if provided (skip expansion for "none" sentinel)
     expanded_sbom_file = (
         sbom_file
@@ -599,6 +662,7 @@ def build_config(
         product_releases=product_releases,
         api_base_url=api_base_url,
         sbom_format=sbom_format_lower,
+        bom_type=normalized_bom_type,
         spec_version=spec_version,
         oidc_audience=oidc_audience,
     )
@@ -646,6 +710,7 @@ def load_config() -> Config:
         product_releases=os.getenv("PRODUCT_RELEASE"),
         api_base_url=os.getenv("API_BASE_URL", SBOMIFY_PRODUCTION_API),
         sbom_format=os.getenv("SBOM_FORMAT", "cyclonedx"),
+        bom_type=os.getenv("BOM_TYPE"),
         oidc_audience=os.getenv("OIDC_AUDIENCE"),
     )
 
@@ -1130,6 +1195,49 @@ def _log_step_end(step_num: int | float, success: bool = True) -> None:
     print_step_end(step_num, success)
 
 
+def _write_final_output(src_path: str, dst_path: str, bom_type: Optional[str]) -> None:
+    """Write the final artifact to ``dst_path``.
+
+    Non-SBOM artifacts (VEX, CBOM, ...) are copied byte-for-byte so the upload matches the
+    authored file exactly (a text round-trip could normalise newlines). SBOMs go through the
+    text path so the CycloneDX fixups in :func:`_finalize_output_content` apply.
+    """
+    if bom_type and bom_type != "sbom":
+        # When OUTPUT_FILE resolves to the final step file, it is already in place;
+        # copyfile would raise SameFileError, so treat copy-to-self as a no-op.
+        if os.path.realpath(src_path) != os.path.realpath(dst_path):
+            shutil.copyfile(src_path, dst_path)
+        return
+    # Read, fix any PURL encoding bugs, and write final SBOM
+    # This fixes double-encoded %40%40 or double @@ issues
+    # Note: We preserve canonical %40 encoding per PURL spec
+    with open(src_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    content = _finalize_output_content(content, bom_type)
+    with open(dst_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _finalize_output_content(content: str, bom_type: Optional[str]) -> str:
+    """Return the content to upload after format-specific output fixes.
+
+    CycloneDX SBOMs get PURL-encoding repairs and a compositions completeness
+    indicator. For non-SBOM CycloneDX artifacts (VEX, CBOM, ...) this helper
+    skips those SBOM-specific fixups; the wider verbatim contract (no
+    augment/enrich, no overrides, byte-copy on write) is enforced by Config
+    validation and the finalize step. SPDX and other content pass through
+    unchanged.
+    """
+    is_cyclonedx = '"bomFormat"' in content and '"CycloneDX"' in content
+    if not is_cyclonedx:
+        return content
+    if bom_type and bom_type != "sbom":
+        return content
+    content = _fix_purl_encoding_bugs_in_json(content)
+    content = _add_compositions_if_missing(content)
+    return content
+
+
 def _finalize_post_upload(results: "AggregateResult") -> None:
     """Log the outcome of each processor that ran and exit non-zero if any failed.
 
@@ -1250,6 +1358,14 @@ def run_pipeline(config: Config) -> None:
             if FILE_TYPE == "SBOM":
                 logger.info(f"Processing existing SBOM file: {FILE}")
                 FORMAT = validate_sbom(FILE)
+                # The config-level CycloneDX-only guard sees the declared SBOM_FORMAT; an
+                # SPDX-content file would slip past it and get byte-rewritten by the SPDX
+                # license sanitization below, so re-check against the detected format.
+                if config.bom_type and config.bom_type != "sbom" and FORMAT != "cyclonedx":
+                    raise SBOMValidationError(
+                        f"BOM_TYPE='{config.bom_type}' requires a CycloneDX artifact, but the file "
+                        f"content is {FORMAT}; it would be re-serialized and break the verbatim upload."
+                    )
                 shutil.copy(FILE, STEP_1_FILE)
 
                 # Sanitize SPDX licenses in input SBOMs (e.g. RPM-style "GPLv2+", "ASL 2.0")
@@ -1414,9 +1530,15 @@ def run_pipeline(config: Config) -> None:
         logger.info(f"Applying component PURL override: {config.component_purl}")
         _apply_sbom_purl_override(STEP_1_FILE, config)
 
-    # Inject additional packages if specified (file or environment variables)
+    # Inject additional packages if specified (file or environment variables).
+    # Non-SBOM artifacts upload verbatim, so injection is skipped for them.
+    if config.bom_type and config.bom_type != "sbom":
+        logger.info(f"BOM_TYPE={config.bom_type} is uploaded verbatim; skipping additional package injection.")
+        _skip_injection = True
+    else:
+        _skip_injection = False
     try:
-        injected_count = inject_additional_packages(STEP_1_FILE)
+        injected_count = 0 if _skip_injection else inject_additional_packages(STEP_1_FILE)
         if injected_count > 0:
             logger.info(f"Successfully injected {injected_count} additional package(s) into SBOM")
         elif config.is_additional_packages_only:
@@ -1578,7 +1700,8 @@ def run_pipeline(config: Config) -> None:
         _log_step_end(3)
 
     # Step 4: Finalize output
-    _log_step_header(4, "Finalizing SBOM Output")
+    artifact_label = config.bom_type.upper() if config.bom_type and config.bom_type != "sbom" else "SBOM"
+    _log_step_header(4, f"Finalizing {artifact_label} Output")
     try:
         final_sbom_file = get_last_sbom_from_last_step()
         if not final_sbom_file:
@@ -1591,25 +1714,16 @@ def run_pipeline(config: Config) -> None:
         if parent_dir != Path(".") and not parent_dir.exists():
             parent_dir.mkdir(parents=True, exist_ok=True)
 
-        # Read, fix any PURL encoding bugs, and write final SBOM
-        # This fixes double-encoded %40%40 or double @@ issues
-        # Note: We preserve canonical %40 encoding per PURL spec
-        with open(final_sbom_file, "r") as f:
-            content = f.read()
+        _write_final_output(final_sbom_file, config.output_file, config.bom_type)
 
-        # Detect format and fix any PURL encoding bugs in CycloneDX
-        if '"bomFormat"' in content and '"CycloneDX"' in content:
-            content = _fix_purl_encoding_bugs_in_json(content)
-            content = _add_compositions_if_missing(content)
+        # Clean up temporary step files — never the final output itself, which
+        # OUTPUT_FILE may resolve to (the write above is then a copy-to-self no-op).
+        output_realpath = os.path.realpath(config.output_file)
+        for temp_file in (STEP_3_FILE, STEP_2_FILE, STEP_1_FILE):
+            if Path(temp_file).is_file() and os.path.realpath(temp_file) != output_realpath:
+                Path(temp_file).unlink()
 
-        with open(config.output_file, "w") as f:
-            f.write(content)
-
-        # Clean up temporary files
-        while temp_file := get_last_sbom_from_last_step():
-            Path(temp_file).unlink()
-
-        logger.info(f"Final SBOM saved to: {config.output_file}")
+        logger.info(f"Final {artifact_label} saved to: {config.output_file}")
         _log_step_end(4)
 
     except (FileProcessingError, OSError) as e:
@@ -1620,7 +1734,7 @@ def run_pipeline(config: Config) -> None:
     # Step 5: Upload SBOM to configured destinations
     sbom_id = None  # Store SBOM ID for potential release tagging (from sbomify)
     if config.upload:
-        _log_step_header(5, "Uploading SBOM")
+        _log_step_header(5, f"Uploading {artifact_label}")
         try:
             # Upload to each configured destination
             logger.info(f"Upload destinations: {config.upload_destinations}")
@@ -1639,6 +1753,7 @@ def run_pipeline(config: Config) -> None:
                     component_version=config.component_version,
                     destination=destination,
                     validate_before_upload=(FORMAT == "cyclonedx"),
+                    bom_type=config.bom_type,
                 )
 
                 if not upload_result.success:
@@ -1648,7 +1763,9 @@ def run_pipeline(config: Config) -> None:
                             f"component_id={config.component_id}, format={FORMAT}, "
                             f"version={config.component_version}"
                         )
-                        print_duplicate_sbom_error(config.component_id, FORMAT, config.component_version)
+                        print_duplicate_sbom_error(
+                            config.component_id, FORMAT, config.component_version, artifact_kind=artifact_label
+                        )
                     elif upload_result.error_code == "COMPONENT_NOT_FOUND":
                         logger.error(
                             f"Upload to {destination} failed: component not found (component_id={config.component_id})"
@@ -2369,6 +2486,14 @@ def _parse_upload_destinations_callback(
     help="Output SBOM format.",
 )
 @click.option(
+    "--bom-type",
+    envvar="BOM_TYPE",
+    type=click.Choice(list(VALID_BOM_TYPES), case_sensitive=False),
+    default="sbom",
+    show_default=True,
+    help="Artifact type recorded on upload. Non-SBOM types are uploaded verbatim.",
+)
+@click.option(
     "--spec-version",
     envvar="SPEC_VERSION",
     default=None,
@@ -2428,6 +2553,7 @@ def cli(
     product_releases: Optional[str],
     api_base_url: str,
     sbom_format: str,
+    bom_type: Optional[str],
     spec_version: Optional[str],
     oidc_audience: Optional[str],
     working_dir: str | None,
@@ -2551,6 +2677,7 @@ def cli(
         product_releases=product_releases,
         api_base_url=api_base_url,
         sbom_format=sbom_format,
+        bom_type=bom_type,
         spec_version=spec_version,
         oidc_audience=oidc_audience,
     )

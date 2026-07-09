@@ -58,6 +58,7 @@ def upload_sbom(
     component_version: Optional[str] = None,
     destination: str = "sbomify",
     validate_before_upload: bool = True,
+    bom_type: Optional[str] = None,
 ) -> UploadResult:
     """
     Upload an SBOM to a specific destination.
@@ -72,6 +73,10 @@ def upload_sbom(
         component_version: Component version (for Dependency Track project)
         destination: Destination to upload to (default: "sbomify")
         validate_before_upload: Whether to validate SBOM before uploading
+        bom_type: Artifact type recorded on upload (sbom/vex/cbom/hbom).
+            Meaningful only for the sbomify destination, which records it via
+            ?bom_type=; other destinations (e.g. dependency-track) ignore it and
+            may re-encode the payload. None uploads a plain SBOM.
 
     Returns:
         UploadResult with success status, sbom_id, and metadata
@@ -97,6 +102,7 @@ def upload_sbom(
     input_params = UploadInput(
         sbom_file=sbom_file,
         sbom_format=sbom_format,  # type: ignore[arg-type]
+        bom_type=bom_type,
         component_name=component_name,
         component_version=component_version,
         validate_before_upload=validate_before_upload,
@@ -120,6 +126,7 @@ def upload_to_all(
     component_name: Optional[str] = None,
     component_version: Optional[str] = None,
     validate_before_upload: bool = True,
+    bom_type: Optional[str] = None,
 ) -> List[UploadResult]:
     """
     Upload an SBOM to all configured destinations.
@@ -137,6 +144,10 @@ def upload_to_all(
         component_name: Component name (for Dependency Track)
         component_version: Component version (for Dependency Track)
         validate_before_upload: Whether to validate SBOM before uploading
+        bom_type: Artifact type recorded on upload (sbom/vex/cbom/hbom).
+            Meaningful only for the sbomify destination, which records it via
+            ?bom_type=; other destinations (e.g. dependency-track) ignore it and
+            may re-encode the payload. None uploads a plain SBOM.
 
     Returns:
         List of UploadResult from each configured destination
@@ -157,6 +168,7 @@ def upload_to_all(
     input_params = UploadInput(
         sbom_file=sbom_file,
         sbom_format=sbom_format,  # type: ignore[arg-type]
+        bom_type=bom_type,
         component_name=component_name,
         component_version=component_version,
         validate_before_upload=validate_before_upload,

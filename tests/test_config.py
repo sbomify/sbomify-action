@@ -61,6 +61,132 @@ class TestConfig(unittest.TestCase):
 
         self.assertIn("Please provide one of", str(cm.exception))
 
+    def test_bom_type_non_sbom_rejects_generation(self):
+        """A non-SBOM BOM_TYPE with a generation source is rejected (it would generate an SBOM and
+        upload it mislabeled)."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            lock_file="/path/to/requirements.txt",
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("cannot be", str(cm.exception))
+
+    def test_bom_type_non_sbom_rejects_docker_generation(self):
+        """A non-SBOM BOM_TYPE with a docker image (generation) is rejected."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="hbom",
+            docker_image="alpine:latest",
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("verbatim", str(cm.exception))
+
+    def test_bom_type_non_sbom_clears_component_overrides(self):
+        """Non-SBOM BOM_TYPE ignores document-rewriting override inputs (verbatim contract)."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            component_name="renamed",
+            component_version="9.9.9",
+            component_purl="pkg:npm/renamed@9.9.9",
+            override_name=True,
+        )
+        config.validate()
+        self.assertIsNone(config.component_name)
+        self.assertIsNone(config.component_version)
+        self.assertIsNone(config.component_purl)
+        self.assertFalse(config.override_name)
+
+    def test_bom_type_non_sbom_clears_augment_enrich(self):
+        """The verbatim guard lives in validate() itself, so directly
+        constructed configs cannot augment/enrich a non-SBOM artifact."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            augment=True,
+            enrich=True,
+        )
+        config.validate()
+        self.assertFalse(config.augment)
+        self.assertFalse(config.enrich)
+
+    def test_bom_type_non_sbom_with_real_file_ok(self):
+        """A non-SBOM BOM_TYPE with a real SBOM_FILE (pre-authored artifact) validates."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            upload=True,
+        )
+        config.validate()  # no error
+
+    def test_bom_type_non_sbom_rejects_spdx_format(self):
+        """A non-SBOM BOM_TYPE with SPDX is rejected: SPDX sanitization would rewrite the bytes."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            sbom_format="spdx",
+            upload=True,
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("CycloneDX", str(cm.exception))
+
+    def test_bom_type_non_sbom_rejects_non_sbomify_destinations(self):
+        """Non-SBOM artifacts are only recorded by the sbomify backend; other
+        destinations re-encode the payload and treat it as a plain SBOM."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            upload=True,
+            upload_destinations=["sbomify", "dependency-track"],
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("dependency-track", str(cm.exception))
+
+    def test_bom_type_non_sbom_rejects_product_release(self):
+        """Releases hold one SBOM per component and format; tagging a VEX/CBOM
+        into a release either collides with the component's SBOM or occupies
+        its slot, so PRODUCT_RELEASE is rejected for non-SBOM artifacts."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            product_releases='["myproduct:v1.0.0"]',
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("PRODUCT_RELEASE", str(cm.exception))
+
+    def test_bom_type_non_sbom_no_upload_allows_other_destinations(self):
+        """With UPLOAD=false nothing is sent anywhere, so configured
+        destinations are irrelevant and must not fail validation."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            upload=False,
+            upload_destinations=["sbomify", "dependency-track"],
+        )
+        config.validate()  # no error
+
     def test_config_validation_valid_config(self):
         """Test that Config validation passes with valid configuration."""
         config = Config(
@@ -898,6 +1024,44 @@ class TestBuildConfig(unittest.TestCase):
             self.assertEqual(config.api_base_url, "https://custom.api.com")
             self.assertEqual(config.sbom_format, "spdx")
 
+    def test_build_config_non_sbom_bom_type_forces_verbatim(self):
+        """A non-SBOM bom_type (VEX/CBOM) disables augment/enrich so the
+        artifact is uploaded exactly as authored."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            vex_file = Path(tmp_dir) / "x.vex.cdx.json"
+            vex_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            config = build_config(
+                sbom_file=str(vex_file),
+                upload=False,
+                augment=True,
+                enrich=True,
+                bom_type="vex",
+            )
+            self.assertEqual(config.bom_type, "vex")
+            self.assertFalse(config.augment)
+            self.assertFalse(config.enrich)
+
+    def test_build_config_sbom_keeps_augment_enrich(self):
+        """A plain SBOM upload still augments and enriches."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            config = build_config(
+                sbom_file=str(sbom_file),
+                upload=False,
+                augment=True,
+                enrich=True,
+            )
+            self.assertTrue(config.augment)
+            self.assertTrue(config.enrich)
+            self.assertEqual(config.bom_type, "sbom")
+
     def test_build_config_defaults(self):
         """Test build_config uses correct defaults."""
         from sbomify_action.cli.main import SBOMIFY_PRODUCTION_API, build_config
@@ -920,6 +1084,51 @@ class TestBuildConfig(unittest.TestCase):
             self.assertFalse(config.override_sbom_metadata)
             self.assertEqual(config.api_base_url, SBOMIFY_PRODUCTION_API)
             self.assertEqual(config.sbom_format, "cyclonedx")
+            self.assertEqual(config.bom_type, "sbom")
+
+    def test_build_config_non_string_bom_type_exits_cleanly(self):
+        """A non-string bom_type from an untyped caller must exit via the
+        ConfigurationError path, not crash with AttributeError on .lower()."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            with self.assertRaises(SystemExit):
+                build_config(sbom_file=str(sbom_file), upload=False, bom_type=123)  # type: ignore[arg-type]
+
+    def test_build_config_falsy_non_string_bom_type_rejected(self):
+        """Only None and '' mean unset; other falsy garbage (0, False) must be
+        rejected by validation, not silently coerced to the default."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            with self.assertRaises(SystemExit):
+                build_config(sbom_file=str(sbom_file), upload=False, bom_type=0)  # type: ignore[arg-type]
+
+    def test_build_config_empty_string_bom_type_means_unset(self):
+        """An empty BOM_TYPE means unset, mirroring click's empty-envvar
+        semantics, and resolves to the sbom default."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            config = build_config(sbom_file=str(sbom_file), upload=False, bom_type="")
+            self.assertEqual(config.bom_type, "sbom")
+
+    def test_cli_bom_type_option_defaults_to_sbom(self):
+        """The --bom-type click option itself defaults to 'sbom' so --help and
+        the parsed value agree; unset must not reach the pipeline as None."""
+        from sbomify_action.cli.main import cli
+
+        param = next(p for p in cli.params if p.name == "bom_type")
+        self.assertEqual(param.default, "sbom")
 
     def test_build_config_normalizes_sbom_format_case(self):
         """Test that build_config normalizes SBOM format to lowercase."""

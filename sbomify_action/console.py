@@ -357,35 +357,52 @@ def print_upload_summary(
             console.print(f"  Error: {error_message}")
 
 
-def print_duplicate_sbom_error(component_id: str, sbom_format: str, component_version: Optional[str] = None) -> None:
+def print_duplicate_sbom_error(
+    component_id: str,
+    sbom_format: str,
+    component_version: Optional[str] = None,
+    artifact_kind: str = "SBOM",
+) -> None:
     """
-    Print a styled error panel for duplicate SBOM upload.
+    Print a styled error panel for a duplicate artifact upload.
 
-    This provides a clear, user-friendly error message when an SBOM
+    This provides a clear, user-friendly error message when an artifact
     already exists for the component, with suggested solutions.
 
     Args:
         component_id: The component ID that has the duplicate
         sbom_format: SBOM format (cyclonedx/spdx)
         component_version: The component version that has the duplicate
+        artifact_kind: Display kind of the artifact (SBOM, VEX, CBOM, HBOM);
+            non-SBOM kinds upload verbatim, so COMPONENT_VERSION advice does
+            not apply to them
     """
     content = Text()
-    content.append("An SBOM already exists for this component.\n\n", style="bold")
+    content.append(f"A duplicate {artifact_kind} already exists for this component.\n\n", style="bold")
     content.append("Details:\n", style="cyan")
     content.append(f"  Component ID: {component_id}\n")
     if component_version:
         content.append(f"  Version: {component_version}\n")
     content.append(f"  Format: {format_display_name(sbom_format)}\n\n")
     content.append("Possible solutions:\n", style="cyan")
-    content.append("  1. Set a unique version via COMPONENT_VERSION or --component-version\n")
-    content.append("  2. Delete the existing SBOM in the sbomify dashboard\n")
+    if artifact_kind == "SBOM":
+        content.append("  1. Set a unique version via COMPONENT_VERSION or --component-version\n")
+    else:
+        content.append("  1. Bump the version inside the authored document (COMPONENT_VERSION is ignored)\n")
+    content.append(f"  2. Delete the existing {artifact_kind} in the sbomify dashboard\n")
     content.append("  3. Use a different component ID\n")
 
-    panel = Panel(content, title="[bold red]Duplicate SBOM[/bold red]", border_style="red")
+    panel = Panel(content, title=f"[bold red]Duplicate {artifact_kind}[/bold red]", border_style="red")
     console.print(panel)
 
-    # Also emit GHA error annotation
-    gha_error("SBOM already exists for this component version", title="Duplicate SBOM")
+    # Also emit GHA error annotation, mirroring the panel guidance
+    if artifact_kind == "SBOM":
+        gha_error("SBOM already exists for this component version", title="Duplicate SBOM")
+    else:
+        gha_error(
+            f"{artifact_kind} already exists for this component; bump the version inside the authored document",
+            title=f"Duplicate {artifact_kind}",
+        )
 
 
 def print_component_not_found_error(component_id: str) -> None:

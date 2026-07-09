@@ -25,6 +25,10 @@ DEFAULT_TIMEOUT = 60
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGES = 500  # Safety limit against runaway pagination.
 
+# Artifact types the sbomify backend accepts via the ?bom_type= query param.
+# None/"sbom" is the default plain SBOM upload; the others are uploaded as-is.
+VALID_BOM_TYPES = ("sbom", "vex", "cbom", "hbom")
+
 # Component types the sbomify backend accepts (mirrors
 # ``core.schemas.ComponentType``: BOM="bom", DOCUMENT="document"). There is
 # NO "sbom" value — passing one trips a server-side 422. We validate
@@ -790,23 +794,35 @@ class SbomifyApiClient:
         sbom_payload: bytes,
         *,
         sbom_format: str = "cyclonedx",
+        bom_type: str | None = None,
         content_encoding: str | None = None,
         timeout: int | None = None,
     ) -> requests.Response:
-        """POST raw SBOM bytes to ``/api/v1/sboms/artifact/{format}/{id}``.
+        """POST a raw artifact (SBOM/VEX/CBOM/HBOM) to ``/api/v1/sboms/artifact/{format}/{id}``.
 
-        The destination layer owns error-to-``UploadResult`` translation, so
-        this method returns the raw response (including non-2xx) instead of
-        raising. Network/timeout failures still bubble up as ``APIError``.
+        ``bom_type`` (sbom/vex/cbom/hbom) is forwarded as the ``?bom_type=``
+        query param when set, so the same endpoint can record a VEX or CBOM
+        rather than a plain SBOM. The destination layer owns
+        error-to-``UploadResult`` translation, so this method returns the raw
+        response (including non-2xx) instead of raising. Network/timeout
+        failures still bubble up as ``APIError``.
         """
         path = f"/api/v1/sboms/artifact/{sbom_format}/{component_id}"
         extra: dict[str, str] = {"Content-Type": "application/json"}
         if content_encoding:
             extra["Content-Encoding"] = content_encoding
+        # Lower-case like the rest of the stack; the backend enum is lowercase.
+        if bom_type is not None and not isinstance(bom_type, str):
+            raise ValueError(f"Invalid bom_type: {bom_type!r}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
+        normalized_bom_type = bom_type.lower() if bom_type else None
+        if normalized_bom_type is not None and normalized_bom_type not in VALID_BOM_TYPES:
+            raise ValueError(f"Invalid bom_type: {bom_type!r}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
+        params = {"bom_type": normalized_bom_type} if normalized_bom_type and normalized_bom_type != "sbom" else None
         return self._request(
             "POST",
             path,
             data=sbom_payload,
+            params=params,
             extra_headers=extra,
             timeout=timeout,
         )

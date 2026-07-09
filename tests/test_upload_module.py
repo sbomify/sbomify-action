@@ -64,6 +64,22 @@ class TestUploadInput(unittest.TestCase):
             UploadInput(sbom_file="sbom.json", sbom_format="invalid")  # type: ignore
         self.assertIn("Invalid sbom_format", str(ctx.exception))
 
+    def test_bom_type_defaults_to_none(self):
+        """bom_type is optional and defaults to None (plain SBOM upload)."""
+        input = UploadInput(sbom_file="sbom.json", sbom_format="cyclonedx")
+        self.assertIsNone(input.bom_type)
+
+    def test_bom_type_accepted(self):
+        """A valid bom_type is stored."""
+        input = UploadInput(sbom_file="sbom.json", sbom_format="cyclonedx", bom_type="vex")
+        self.assertEqual(input.bom_type, "vex")
+
+    def test_invalid_bom_type_raises(self):
+        """An unknown bom_type is rejected before any upload is attempted."""
+        with self.assertRaises(ValueError) as ctx:
+            UploadInput(sbom_file="sbom.json", sbom_format="cyclonedx", bom_type="nope")
+        self.assertIn("Invalid bom_type", str(ctx.exception))
+
 
 class TestUploadResult(unittest.TestCase):
     """Tests for UploadResult dataclass."""
@@ -272,6 +288,35 @@ class TestSbomifyDestination(unittest.TestCase):
             call_kwargs = mock_client.upload_sbom.call_args.kwargs
             self.assertEqual(call_kwargs["component_id"], "my-component")
             self.assertEqual(call_kwargs["sbom_format"], "cyclonedx")
+            # No bom_type by default → plain SBOM upload.
+            self.assertIsNone(call_kwargs.get("bom_type"))
+        finally:
+            Path(sbom_file).unlink()
+
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_upload_threads_bom_type(self, mock_client_cls):
+        """bom_type from the input reaches the API client (e.g. for VEX)."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
+            sbom_file = f.name
+
+        try:
+            mock_response = Mock()
+            mock_response.ok = True
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"sbom_id": "vex-1"}
+            mock_response.headers = {}
+            mock_client = Mock()
+            mock_client.upload_sbom.return_value = mock_response
+            mock_client_cls.return_value = mock_client
+
+            dest = SbomifyDestination(token="test-token", component_id="my-component")
+            input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx", bom_type="vex")
+
+            result = dest.upload(input)
+
+            self.assertTrue(result.success)
+            self.assertEqual(mock_client.upload_sbom.call_args.kwargs["bom_type"], "vex")
         finally:
             Path(sbom_file).unlink()
 
@@ -413,6 +458,41 @@ class TestSbomifyDestination(unittest.TestCase):
             self.assertEqual(result.error_code, "DUPLICATE_ARTIFACT")
             self.assertIn("already exists", result.error_message)
             self.assertIn("different version", result.error_message)
+        finally:
+            Path(sbom_file).unlink()
+
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_upload_duplicate_non_sbom_advises_document_version(self, mock_client_cls):
+        """A duplicate VEX must not advise COMPONENT_VERSION (ignored for verbatim
+        uploads); the actionable version lives inside the authored document."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump({"bomFormat": "CycloneDX", "specVersion": "1.6"}, f)
+            sbom_file = f.name
+
+        try:
+            mock_response = Mock()
+            mock_response.ok = False
+            mock_response.status_code = 409
+            mock_response.json.return_value = {
+                "detail": "Artifact already exists",
+                "error_code": "DUPLICATE_ARTIFACT",
+            }
+            mock_response.headers = {}
+            mock_client = Mock()
+            mock_client.upload_sbom.return_value = mock_response
+            mock_client_cls.return_value = mock_client
+
+            dest = SbomifyDestination(token="test-token", component_id="my-component")
+            input = UploadInput(sbom_file=sbom_file, sbom_format="cyclonedx", bom_type="vex")
+
+            result = dest.upload(input)
+
+            self.assertFalse(result.success)
+            self.assertEqual(result.error_code, "DUPLICATE_ARTIFACT")
+            self.assertIn("VEX", result.error_message)
+            self.assertIn("inside the authored document", result.error_message)
+            self.assertNotIn("COMPONENT_VERSION", result.error_message)
+            self.assertNotIn("for this component version", result.error_message)
         finally:
             Path(sbom_file).unlink()
 
@@ -1476,6 +1556,28 @@ class TestSbomifyTimeout(unittest.TestCase):
             self.assertIn("timed out", result.error_message.lower())
         finally:
             Path(sbom_file).unlink()
+
+
+def test_upload_input_normalises_bom_type_case(tmp_path):
+    """Programmatic callers passing 'VEX' get the lowercase canonical value, not a ValueError."""
+    from sbomify_action._upload.protocol import UploadInput
+
+    f = tmp_path / "a.json"
+    f.write_text("{}")
+    inp = UploadInput(sbom_file=str(f), sbom_format="cyclonedx", bom_type="VEX")
+    assert inp.bom_type == "vex"
+
+
+def test_upload_input_non_string_bom_type_raises_value_error(tmp_path):
+    """A non-string bom_type from an untyped caller fails as ValueError, not AttributeError."""
+    import pytest
+
+    from sbomify_action._upload.protocol import UploadInput
+
+    f = tmp_path / "a.json"
+    f.write_text("{}")
+    with pytest.raises(ValueError, match="Invalid bom_type"):
+        UploadInput(sbom_file=str(f), sbom_format="cyclonedx", bom_type=123)
 
 
 if __name__ == "__main__":
