@@ -1002,7 +1002,7 @@ class TestBuildConfig(unittest.TestCase):
             )
             self.assertTrue(config.augment)
             self.assertTrue(config.enrich)
-            self.assertIsNone(config.bom_type)
+            self.assertEqual(config.bom_type, "sbom")
 
     def test_build_config_defaults(self):
         """Test build_config uses correct defaults."""
@@ -1026,6 +1026,15 @@ class TestBuildConfig(unittest.TestCase):
             self.assertFalse(config.override_sbom_metadata)
             self.assertEqual(config.api_base_url, SBOMIFY_PRODUCTION_API)
             self.assertEqual(config.sbom_format, "cyclonedx")
+            self.assertEqual(config.bom_type, "sbom")
+
+    def test_cli_bom_type_option_defaults_to_sbom(self):
+        """The --bom-type click option itself defaults to 'sbom' so --help and
+        the parsed value agree; unset must not reach the pipeline as None."""
+        from sbomify_action.cli.main import cli
+
+        param = next(p for p in cli.params if p.name == "bom_type")
+        self.assertEqual(param.default, "sbom")
 
     def test_build_config_normalizes_sbom_format_case(self):
         """Test that build_config normalizes SBOM format to lowercase."""

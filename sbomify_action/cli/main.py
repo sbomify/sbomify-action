@@ -608,8 +608,8 @@ def build_config(
     # Non-SBOM artifacts (VEX, CBOM, ...) are authored elsewhere and uploaded
     # exactly as written. Augmentation and enrichment rewrite the document, so
     # they are not applied to them regardless of the flags.
-    normalized_bom_type = bom_type.lower() if bom_type else None
-    if normalized_bom_type and normalized_bom_type != "sbom":
+    normalized_bom_type = bom_type.lower() if bom_type else "sbom"
+    if normalized_bom_type != "sbom":
         if augment or enrich:
             logger.warning(f"BOM_TYPE={normalized_bom_type} is uploaded verbatim; ignoring AUGMENT/ENRICH.")
         augment = False
@@ -2459,9 +2459,9 @@ def _parse_upload_destinations_callback(
     "--bom-type",
     envvar="BOM_TYPE",
     type=click.Choice(list(VALID_BOM_TYPES), case_sensitive=False),
-    default=None,
-    help="Artifact type recorded on upload: sbom (default when unset), vex, cbom or hbom. "
-    "Non-SBOM types are uploaded verbatim.",
+    default="sbom",
+    show_default=True,
+    help="Artifact type recorded on upload. Non-SBOM types are uploaded verbatim.",
 )
 @click.option(
     "--spec-version",
