@@ -129,6 +129,34 @@ class TestConfig(unittest.TestCase):
             config.validate()
         self.assertIn("CycloneDX", str(cm.exception))
 
+    def test_bom_type_non_sbom_rejects_non_sbomify_destinations(self):
+        """Non-SBOM artifacts are only recorded by the sbomify backend; other
+        destinations re-encode the payload and treat it as a plain SBOM."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            upload=True,
+            upload_destinations=["sbomify", "dependency-track"],
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("dependency-track", str(cm.exception))
+
+    def test_bom_type_non_sbom_no_upload_allows_other_destinations(self):
+        """With UPLOAD=false nothing is sent anywhere, so configured
+        destinations are irrelevant and must not fail validation."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            upload=False,
+            upload_destinations=["sbomify", "dependency-track"],
+        )
+        config.validate()  # no error
+
     def test_config_validation_valid_config(self):
         """Test that Config validation passes with valid configuration."""
         config = Config(

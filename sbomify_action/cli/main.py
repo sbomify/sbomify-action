@@ -355,6 +355,15 @@ class Config:
                     f"BOM_TYPE='{self.bom_type}' is only supported for CycloneDX; SBOM_FORMAT="
                     f"'{self.sbom_format}' would be re-serialized and break the verbatim upload."
                 )
+            # Only the sbomify backend records bom_type; other destinations re-encode the
+            # payload and would ingest the artifact as a plain SBOM.
+            if self.upload:
+                non_sbomify = [d for d in (self.upload_destinations or []) if d != "sbomify"]
+                if non_sbomify:
+                    raise ConfigurationError(
+                        f"BOM_TYPE='{self.bom_type}' can only be uploaded to sbomify; remove "
+                        f"{', '.join(non_sbomify)} from UPLOAD_DESTINATIONS."
+                    )
             has_real_sbom_file = bool(self.sbom_file and self.sbom_file.lower() != NONE_SENTINEL)
             if self.lock_file or self.docker_image or not has_real_sbom_file:
                 raise ConfigurationError(
@@ -1676,7 +1685,8 @@ def run_pipeline(config: Config) -> None:
         _log_step_end(3)
 
     # Step 4: Finalize output
-    _log_step_header(4, "Finalizing SBOM Output")
+    artifact_label = config.bom_type.upper() if config.bom_type and config.bom_type != "sbom" else "SBOM"
+    _log_step_header(4, f"Finalizing {artifact_label} Output")
     try:
         final_sbom_file = get_last_sbom_from_last_step()
         if not final_sbom_file:
@@ -1695,7 +1705,7 @@ def run_pipeline(config: Config) -> None:
         while temp_file := get_last_sbom_from_last_step():
             Path(temp_file).unlink()
 
-        logger.info(f"Final SBOM saved to: {config.output_file}")
+        logger.info(f"Final {artifact_label} saved to: {config.output_file}")
         _log_step_end(4)
 
     except (FileProcessingError, OSError) as e:
@@ -1706,7 +1716,7 @@ def run_pipeline(config: Config) -> None:
     # Step 5: Upload SBOM to configured destinations
     sbom_id = None  # Store SBOM ID for potential release tagging (from sbomify)
     if config.upload:
-        _log_step_header(5, "Uploading SBOM")
+        _log_step_header(5, f"Uploading {artifact_label}")
         try:
             # Upload to each configured destination
             logger.info(f"Upload destinations: {config.upload_destinations}")
