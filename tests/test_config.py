@@ -104,6 +104,21 @@ class TestConfig(unittest.TestCase):
         self.assertIsNone(config.component_purl)
         self.assertFalse(config.override_name)
 
+    def test_bom_type_non_sbom_clears_augment_enrich(self):
+        """The verbatim guard lives in validate() itself, so directly
+        constructed configs cannot augment/enrich a non-SBOM artifact."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            augment=True,
+            enrich=True,
+        )
+        config.validate()
+        self.assertFalse(config.augment)
+        self.assertFalse(config.enrich)
+
     def test_bom_type_non_sbom_with_real_file_ok(self):
         """A non-SBOM BOM_TYPE with a real SBOM_FILE (pre-authored artifact) validates."""
         config = Config(

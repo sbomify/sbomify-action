@@ -387,6 +387,12 @@ class Config:
                 self.component_version = None
                 self.component_purl = None
                 self.override_name = False
+            # Augmentation and enrichment rewrite the document, which also breaks
+            # the verbatim contract.
+            if self.augment or self.enrich:
+                logger.warning(f"BOM_TYPE={self.bom_type} is uploaded verbatim; ignoring AUGMENT/ENRICH.")
+                self.augment = False
+                self.enrich = False
 
         # Validate spec_version against sbom_format
         if self.spec_version:
@@ -620,17 +626,10 @@ def build_config(
     sbom_format_lower: SBOMFormat = cast(SBOMFormat, sbom_format.lower())
     logger.info(f"SBOM format: {format_display_name(sbom_format_lower)}")
 
-    # Non-SBOM artifacts (VEX, CBOM, ...) are authored elsewhere and uploaded
-    # exactly as written. Augmentation and enrichment rewrite the document, so
-    # they are not applied to them regardless of the flags.
     # Only None and "" mean unset (click treats an empty env var the same way);
-    # any other value must survive to validation so garbage is rejected.
+    # any other value must survive to Config.validate() so garbage is rejected.
+    # The verbatim guards (ignoring AUGMENT/ENRICH etc.) live in validate().
     normalized_bom_type = "sbom" if bom_type is None or bom_type == "" else str(bom_type).lower()
-    if normalized_bom_type != "sbom":
-        if augment or enrich:
-            logger.warning(f"BOM_TYPE={normalized_bom_type} is uploaded verbatim; ignoring AUGMENT/ENRICH.")
-        augment = False
-        enrich = False
 
     # Expand paths if provided (skip expansion for "none" sentinel)
     expanded_sbom_file = (

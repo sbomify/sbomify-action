@@ -518,6 +518,14 @@ def test_upload_sbom_non_string_bom_type_raises_value_error() -> None:
         client.upload_sbom("c1", b"{}", sbom_format="cyclonedx", bom_type=123)  # type: ignore[arg-type]
 
 
+def test_upload_sbom_invalid_bom_type_raises_value_error() -> None:
+    """The client rejects unknown bom_type values instead of forwarding
+    ?bom_type=nope to the backend."""
+    client, _ = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+    with pytest.raises(ValueError, match="Invalid bom_type"):
+        client.upload_sbom("c1", b"{}", sbom_format="cyclonedx", bom_type="nope")
+
+
 def test_upload_sbom_normalizes_bom_type_case() -> None:
     """The public client API lower-cases bom_type like the rest of the stack;
     the backend enum is lowercase and would reject ?bom_type=VEX."""

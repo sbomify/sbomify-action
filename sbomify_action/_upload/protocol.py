@@ -8,15 +8,14 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional, Protocol
 
+# Canonical VALID_BOM_TYPES definition lives next to the backend contract.
+from ..sbomify_api import VALID_BOM_TYPES as VALID_BOM_TYPES
+
 if TYPE_CHECKING:
     from .result import UploadResult
 
 # Supported SBOM formats (same as generation)
 SBOMFormat = Literal["cyclonedx", "spdx"]
-
-# Artifact types the sbomify backend accepts via the ?bom_type= query param.
-# None/"sbom" is the default plain SBOM upload; the others are uploaded as-is.
-VALID_BOM_TYPES = ("sbom", "vex", "cbom", "hbom")
 
 
 @dataclass
