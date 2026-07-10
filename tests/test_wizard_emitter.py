@@ -5,11 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import requests
+
 from sbomify_action.cli.wizard import apply as apply_mod
+from sbomify_action.cli.wizard import ci_emitter
 from sbomify_action.cli.wizard.ci_emitter import (
+    ACTION_REPO,
     HEADER_SENTINEL,
-    PINNED_ACTION_SHA,
-    PINNED_ACTION_VERSION,
+    _action_version,
+    _build_action_ref,
+    _resolve_tag_sha,
     emit_workflow,
 )
 from sbomify_action.cli.wizard.options import WizardOptions
@@ -64,7 +69,9 @@ def test_emit_trunk_oidc_default(tmp_path: Path) -> None:
     assert "TOKEN: ${{ secrets.SBOMIFY_TOKEN }}" not in yaml
     assert "AUGMENT: 'false'" in yaml  # skip default
     assert "REPLACE_WITH_COMPONENT_ID" in yaml  # no component_ids passed
-    assert f"sbomify/sbomify-action@{PINNED_ACTION_SHA}  # {PINNED_ACTION_VERSION}" in yaml
+    # No action_ref passed: emitter falls back to the tag-pinned ref (no
+    # network, no SHA).
+    assert f"      - uses: {ACTION_REPO}@{_action_version()}\n" in yaml
     # Trunk uses short-SHA versioning, NOT tag-stripping.
     assert "git rev-parse --short HEAD" in yaml
 
@@ -298,6 +305,158 @@ def test_emit_token_mode_no_attestation_no_permissions_block(tmp_path: Path) -> 
     yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
     assert "permissions:" not in yaml
     assert "TOKEN: ${{ secrets.SBOMIFY_TOKEN }}" in yaml
+
+
+def test_emit_uses_supplied_action_ref(tmp_path: Path) -> None:
+    """An explicit action_ref (as apply/review pass) is emitted verbatim."""
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    ref = f"{ACTION_REPO}@{'a' * 40}  # v9.9.9"
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com", action_ref=ref)
+    assert f"      - uses: {ref}\n" in yaml
+
+
+# ----------------------------------------------------------------------
+# resolve_action_ref (runtime pin resolution)
+
+
+def test_resolve_tag_sha_online_returns_commit(mocker) -> None:
+    sha = "b" * 40
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"sha": sha}
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+
+    assert _resolve_tag_sha("v26.2.0") == sha
+
+
+def test_resolve_tag_sha_offline_returns_none(mocker) -> None:
+    mocker.patch.object(ci_emitter.requests, "get", side_effect=requests.RequestException("offline"))
+    assert _resolve_tag_sha("v26.2.0") is None
+
+
+def test_resolve_tag_sha_non_200_returns_none(mocker) -> None:
+    response = MagicMock(status_code=404)
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_tag_sha("v0.0.0") is None
+
+
+def test_resolve_tag_sha_invalid_json_returns_none(mocker) -> None:
+    response = MagicMock(status_code=200)
+    response.json.side_effect = ValueError("not json")
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_tag_sha("v26.2.0") is None
+
+
+def test_resolve_tag_sha_non_dict_json_returns_none(mocker) -> None:
+    # A proxy/error page can hand back well-formed JSON that isn't an object
+    # (list/string). ``.get`` would then raise AttributeError — assert we
+    # degrade to None instead, keeping the never-raise contract.
+    response = MagicMock(status_code=200)
+    response.json.return_value = ["not", "a", "dict"]
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_tag_sha("v26.2.0") is None
+
+
+def test_resolve_tag_sha_rejects_malformed_sha(mocker) -> None:
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"sha": "not-a-real-sha"}
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_tag_sha("v26.2.0") is None
+
+
+def test_build_action_ref_sha_pinned_when_known() -> None:
+    sha = "c" * 40
+    assert _build_action_ref("v26.2.0", sha) == f"{ACTION_REPO}@{sha}  # v26.2.0"
+
+
+def test_build_action_ref_tag_pinned_when_offline() -> None:
+    # Offline fallback: still pinned to the version, just no SHA comment.
+    assert _build_action_ref("v26.2.0", None) == f"{ACTION_REPO}@v26.2.0"
+
+
+def test_action_version_falls_back_to_pyproject_when_unknown(monkeypatch) -> None:
+    # Metadata-less dev checkout: read the version from pyproject.toml rather
+    # than a hard-coded constant, so the emitted pin can't drift.
+    monkeypatch.setattr(ci_emitter, "_PACKAGE_VERSION", "unknown")
+    pyproject_version = ci_emitter._version_from_pyproject()
+    assert pyproject_version
+    assert _action_version() == f"v{pyproject_version}"
+
+
+def test_action_version_unknown_when_no_source(monkeypatch) -> None:
+    # Neither installed metadata nor a readable pyproject.toml.
+    monkeypatch.setattr(ci_emitter, "_PACKAGE_VERSION", "unknown")
+    monkeypatch.setattr(ci_emitter, "_version_from_pyproject", lambda: None)
+    assert _action_version() == "unknown"
+
+
+def test_action_version_prefixes_v(monkeypatch) -> None:
+    monkeypatch.setattr(ci_emitter, "_PACKAGE_VERSION", "26.2.0")
+    assert _action_version() == "v26.2.0"
+
+
+def test_resolve_action_ref_online_includes_sha(monkeypatch) -> None:
+    sha = "d" * 40
+    ci_emitter.resolve_action_ref.cache_clear()
+    monkeypatch.setattr(ci_emitter, "_resolve_tag_sha", lambda version: sha)
+    assert ci_emitter.resolve_action_ref() == f"{ACTION_REPO}@{sha}  # {_action_version()}"
+    ci_emitter.resolve_action_ref.cache_clear()
+
+
+def test_resolve_action_ref_offline_is_tag_pinned() -> None:
+    # The autouse offline_action_pin fixture forces _resolve_tag_sha -> None.
+    ci_emitter.resolve_action_ref.cache_clear()
+    ref = ci_emitter.resolve_action_ref()
+    assert ref == f"{ACTION_REPO}@{_action_version()}"
+    assert "  # " not in ref  # tag-pinned, no SHA comment
+
+
+def test_resolve_action_ref_is_single_flight_across_threads(monkeypatch) -> None:
+    # The review worker and the apply worker can call this concurrently. Even
+    # with lru_cache, two threads could both miss the empty cache and each fire
+    # a GitHub request. The single-flight lock must collapse concurrent callers
+    # to exactly one underlying _resolve_tag_sha call so they pin the same ref.
+    import threading
+    import time
+
+    ci_emitter.resolve_action_ref.cache_clear()
+    sha = "e" * 40
+    call_count = 0
+    count_lock = threading.Lock()
+
+    def _slow_resolve(_version: str) -> str:
+        nonlocal call_count
+        with count_lock:
+            call_count += 1
+        # Widen the race window: without the single-flight lock the other
+        # threads would all enter here before the first caller populates the
+        # cache, driving call_count above 1.
+        time.sleep(0.1)
+        return sha
+
+    monkeypatch.setattr(ci_emitter, "_resolve_tag_sha", _slow_resolve)
+
+    results: list[str] = []
+    results_lock = threading.Lock()
+
+    def _worker() -> None:
+        ref = ci_emitter.resolve_action_ref()
+        with results_lock:
+            results.append(ref)
+
+    threads = [threading.Thread(target=_worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    # Exactly one network resolution, and every thread saw the identical pin.
+    assert call_count == 1
+    assert results == [f"{ACTION_REPO}@{sha}  # {_action_version()}"] * 8
+    ci_emitter.resolve_action_ref.cache_clear()
 
 
 # ----------------------------------------------------------------------
