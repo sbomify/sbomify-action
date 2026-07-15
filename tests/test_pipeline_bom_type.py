@@ -69,3 +69,60 @@ def test_pipeline_output_file_colliding_with_step_file_survives_cleanup(tmp_path
     config, _ = _vex_config(tmp_path, monkeypatch, output_file="step_1.json")
     run_pipeline(config)
     assert (tmp_path / "step_1.json").read_bytes() == AUTHORED_VEX
+
+
+AUTHORED_OPENVEX = (
+    b'{"@context": "https://openvex.dev/ns/v0.2.0",\r\n'
+    b'  "@id": "https://example.com/vex-1",\n'
+    b'  "author": "Author",\n'
+    b'  "timestamp": "2026-07-15T00:00:00Z",\n'
+    b'  "version": 1,\n'
+    b'  "statements": [{"vulnerability": {"name": "CVE-2026-0001"},\n'
+    b'    "products": [{"@id": "pkg:npm/a@1.0.0"}], "status": "not_affected",\n'
+    b'    "justification": "component_not_present"}]}\n'
+)
+
+AUTHORED_CSAF = (
+    b'{"document": {"category": "csaf_vex", "csaf_version": "2.0",\n'
+    b'  "publisher": {"category": "vendor", "name": "Ex", "namespace": "https://example.com"},\n'
+    b'  "title": "Example", "tracking": {"id": "EX-1", "status": "final", "version": "1",\n'
+    b'    "initial_release_date": "2026-07-15T00:00:00.000Z",\n'
+    b'    "current_release_date": "2026-07-15T00:00:00.000Z",\n'
+    b'    "revision_history": [{"date": "2026-07-15T00:00:00.000Z", "number": "1", "summary": "i"}]}},\n'
+    b'  "product_tree": {"full_product_names": [{"product_id": "P-1", "name": "Example 1.0"}]},\n'
+    b'  "vulnerabilities": [{"cve": "CVE-2026-0001",\n'
+    b'    "product_status": {"known_not_affected": ["P-1"]}}]}\n'
+)
+
+
+@pytest.mark.parametrize(
+    "authored,name",
+    [(AUTHORED_OPENVEX, "authored.openvex.json"), (AUTHORED_CSAF, "authored.csaf.json")],
+    ids=["openvex", "csaf"],
+)
+def test_pipeline_external_vex_verbatim(tmp_path, monkeypatch, authored, name):
+    """OpenVEX and CSAF VEX documents pass the pipeline byte-for-byte, exactly
+    like CycloneDX VEX: CRLF, key order, and indentation survive."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / name
+    src.write_bytes(authored)
+    config = build_config(
+        sbom_file=str(src),
+        upload=False,
+        bom_type="vex",
+        output_file="out.vex.json",
+    )
+    run_pipeline(config)
+    assert (tmp_path / "out.vex.json").read_bytes() == authored
+
+
+def test_pipeline_openvex_rejected_without_vex_bom_type(tmp_path, monkeypatch):
+    """Without BOM_TYPE=vex an OpenVEX document is not an SBOM and must fail
+    loud in step 1 rather than upload mislabeled."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "doc.json"
+    src.write_bytes(AUTHORED_OPENVEX)
+    config = build_config(sbom_file=str(src), upload=False, output_file="out.json")
+    with pytest.raises(SystemExit) as exc:
+        run_pipeline(config)
+    assert exc.value.code == 1

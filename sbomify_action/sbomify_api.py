@@ -805,9 +805,15 @@ class SbomifyApiClient:
         rather than a plain SBOM. The destination layer owns
         error-to-``UploadResult`` translation, so this method returns the raw
         response (including non-2xx) instead of raising. Network/timeout
-        failures still bubble up as ``APIError``.
+        failures still bubble up as ``APIError``. OpenVEX and CSAF VEX
+        documents go to the format-agnostic ``/artifact/vex/`` endpoint (the
+        backend detects the format from content); CycloneDX VEX keeps the
+        CycloneDX endpoint, which every deployed backend supports.
         """
-        path = f"/api/v1/sboms/artifact/{sbom_format}/{component_id}"
+        if sbom_format in ("openvex", "csaf"):
+            path = f"/api/v1/sboms/artifact/vex/{component_id}"
+        else:
+            path = f"/api/v1/sboms/artifact/{sbom_format}/{component_id}"
         extra: dict[str, str] = {"Content-Type": "application/json"}
         if content_encoding:
             extra["Content-Encoding"] = content_encoding

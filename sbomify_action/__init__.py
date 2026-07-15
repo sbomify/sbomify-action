@@ -11,7 +11,7 @@ def format_display_name(fmt: str) -> str:
         fmt: Format string ('cyclonedx' or 'spdx', case-insensitive)
 
     Returns:
-        Display name: 'CycloneDX' or 'SPDX'
+        Display name, e.g. 'CycloneDX', 'SPDX', 'OpenVEX', 'CSAF'
 
     Examples:
         >>> format_display_name("cyclonedx")
@@ -19,7 +19,7 @@ def format_display_name(fmt: str) -> str:
         >>> format_display_name("SPDX")
         'SPDX'
     """
-    return "CycloneDX" if fmt.lower() == "cyclonedx" else "SPDX"
+    return {"cyclonedx": "CycloneDX", "openvex": "OpenVEX", "csaf": "CSAF"}.get(fmt.lower(), "SPDX")
 
 
 def _get_version() -> str:

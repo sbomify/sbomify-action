@@ -510,6 +510,24 @@ def test_upload_sbom_sends_bom_type_param() -> None:
     assert call.kwargs["params"] == {"bom_type": "vex"}
 
 
+def test_upload_sbom_routes_external_vex_formats_to_vex_endpoint() -> None:
+    # OpenVEX/CSAF have no format-specific artifact endpoint; the backend's
+    # /artifact/vex/ detects the format from content.
+    for fmt in ("openvex", "csaf"):
+        client, session = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+        client.upload_sbom("c1", b"{}", sbom_format=fmt, bom_type="vex")
+        call = session.request.call_args
+        assert call.args[1].endswith("/api/v1/sboms/artifact/vex/c1"), call.args
+
+
+def test_upload_sbom_cyclonedx_vex_keeps_cyclonedx_endpoint() -> None:
+    # CycloneDX VEX stays on the endpoint every deployed backend supports.
+    client, session = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+    client.upload_sbom("c1", b"{}", sbom_format="cyclonedx", bom_type="vex")
+    call = session.request.call_args
+    assert call.args[1].endswith("/api/v1/sboms/artifact/cyclonedx/c1"), call.args
+
+
 def test_upload_sbom_non_string_bom_type_raises_value_error() -> None:
     """The public client fails a non-string bom_type as ValueError, matching
     UploadInput, instead of an AttributeError on .lower()."""

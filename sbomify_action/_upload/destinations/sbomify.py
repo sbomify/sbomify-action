@@ -109,7 +109,9 @@ class SbomifyDestination:
                 validation_error=validation_error,
             )
 
-        format_display = "CycloneDX" if input.sbom_format == "cyclonedx" else "SPDX"
+        format_display = {"cyclonedx": "CycloneDX", "spdx": "SPDX", "openvex": "OpenVEX", "csaf": "CSAF"}.get(
+            input.sbom_format, input.sbom_format
+        )
         artifact_kind = input.bom_type.upper() if input.bom_type and input.bom_type != "sbom" else "SBOM"
         logger.info(f"Uploading {format_display} {artifact_kind} to component: {self._component_id}")
 
