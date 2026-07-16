@@ -14,6 +14,7 @@ from sbomify_action.cli.wizard.ci_emitter import (
     HEADER_SENTINEL,
     _action_version,
     _build_action_ref,
+    _resolve_latest_release_tag,
     _resolve_tag_sha,
     emit_workflow,
 )
@@ -398,7 +399,71 @@ def test_action_version_prefixes_v(monkeypatch) -> None:
     assert _action_version() == "v26.2.0"
 
 
+def test_action_version_strips_local_version_segment(monkeypatch) -> None:
+    # Dev/Docker builds report PEP 440 local versions like 26.7.0+ad3dc1d.
+    # The +… build metadata is not part of any release tag and must never
+    # reach an emitted `uses:` ref.
+    monkeypatch.setattr(ci_emitter, "_PACKAGE_VERSION", "26.7.0+ad3dc1d")
+    assert _action_version() == "v26.7.0"
+
+
+def test_resolve_latest_release_tag_online(mocker) -> None:
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"tag_name": "v27.1.0"}
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_latest_release_tag() == "v27.1.0"
+
+
+def test_resolve_latest_release_tag_offline_returns_none(mocker) -> None:
+    mocker.patch.object(ci_emitter.requests, "get", side_effect=requests.RequestException("offline"))
+    assert _resolve_latest_release_tag() is None
+
+
+def test_resolve_latest_release_tag_non_200_returns_none(mocker) -> None:
+    response = MagicMock(status_code=404)
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_latest_release_tag() is None
+
+
+def test_resolve_latest_release_tag_invalid_json_returns_none(mocker) -> None:
+    response = MagicMock(status_code=200)
+    response.json.side_effect = ValueError("not json")
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_latest_release_tag() is None
+
+
+def test_resolve_latest_release_tag_non_dict_json_returns_none(mocker) -> None:
+    response = MagicMock(status_code=200)
+    response.json.return_value = ["not", "a", "dict"]
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_latest_release_tag() is None
+
+
+def test_resolve_latest_release_tag_rejects_unsafe_tag(mocker) -> None:
+    # A tag lands verbatim in emitted YAML — reject anything outside plain
+    # tag characters (whitespace, quotes, comment markers).
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"tag_name": "v1.0 # evil"}
+    mocker.patch.object(ci_emitter.requests, "get", return_value=response)
+    assert _resolve_latest_release_tag() is None
+
+
+def test_resolve_action_ref_pins_latest_release_sha(monkeypatch) -> None:
+    # Online: the emitted pin is the latest published release resolved to its
+    # commit SHA — not the running build's version, which may not exist as a
+    # tag (e.g. a dev build's 26.7.0+ad3dc1d).
+    sha = "f" * 40
+    ci_emitter.resolve_action_ref.cache_clear()
+    monkeypatch.setattr(ci_emitter, "_PACKAGE_VERSION", "26.7.0+ad3dc1d")
+    monkeypatch.setattr(ci_emitter, "_resolve_latest_release_tag", lambda: "v27.1.0")
+    monkeypatch.setattr(ci_emitter, "_resolve_tag_sha", lambda version: sha if version == "v27.1.0" else None)
+    assert ci_emitter.resolve_action_ref() == f"{ACTION_REPO}@{sha}  # v27.1.0"
+    ci_emitter.resolve_action_ref.cache_clear()
+
+
 def test_resolve_action_ref_online_includes_sha(monkeypatch) -> None:
+    # Release lookup fails (autouse fixture stubs it to None) but the tag
+    # lookup succeeds: pin the build-version tag's SHA.
     sha = "d" * 40
     ci_emitter.resolve_action_ref.cache_clear()
     monkeypatch.setattr(ci_emitter, "_resolve_tag_sha", lambda version: sha)
@@ -407,7 +472,8 @@ def test_resolve_action_ref_online_includes_sha(monkeypatch) -> None:
 
 
 def test_resolve_action_ref_offline_is_tag_pinned() -> None:
-    # The autouse offline_action_pin fixture forces _resolve_tag_sha -> None.
+    # The autouse offline_action_pin fixture forces both GitHub lookups ->
+    # None: default to the version we built, tag-pinned.
     ci_emitter.resolve_action_ref.cache_clear()
     ref = ci_emitter.resolve_action_ref()
     assert ref == f"{ACTION_REPO}@{_action_version()}"

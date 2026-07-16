@@ -37,10 +37,13 @@ logger = logging.getLogger(__name__)
 
 # The sbomify-action reference in emitted workflows is resolved at wizard run
 # time (see ``resolve_action_ref``) instead of hard-coded, so there's no
-# per-release SHA to keep in sync. We ask GitHub for the commit behind *this*
-# build's version tag and pin to @<sha> — the security guarantee per
-# SECURITY.md, since a tag rewrite then can't swap the action's code under the
-# user. Offline, we fall back to a tag-pinned (non-SHA) @<version> ref.
+# per-release SHA to keep in sync. We ask GitHub for the latest release —
+# never assuming the running build's version is a published tag (dev/Docker
+# builds carry local versions like ``26.7.0+ad3dc1d`` that don't exist as
+# tags) — and pin to @<sha>, the security guarantee per SECURITY.md, since a
+# tag rewrite then can't swap the action's code under the user. When GitHub
+# is unreachable we default to this build's version (local part stripped) as
+# a tag-pinned (non-SHA) @<version> ref.
 ACTION_REPO = "sbomify/sbomify-action"
 
 # Resolving the pin is best-effort and must never block the wizard for long;
@@ -48,6 +51,11 @@ ACTION_REPO = "sbomify/sbomify-action"
 _PIN_TIMEOUT = 3.0
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+# Sanity check on a GitHub-reported release tag before it lands verbatim in
+# an emitted YAML file: plain tag characters only (no whitespace, quotes, or
+# comment markers).
+_TAG_RE = re.compile(r"[A-Za-z0-9._\-]+")
 
 # Third-party actions used by the emitted workflow. Pinned-by-SHA per
 # SECURITY.md; bump when consuming a known-good newer release.
@@ -93,11 +101,45 @@ def _action_version() -> str:
     Prefers the running package's reported version; in a metadata-less dev
     checkout (``__version__ == "unknown"``) it reads ``project.version`` from
     ``pyproject.toml`` so there's no hard-coded version to drift.
+
+    Dev/Docker builds report PEP 440 local versions like ``26.7.0+ad3dc1d``;
+    the ``+…`` local segment is build metadata, not part of any release tag,
+    so it's stripped — the result must name a ref that can exist on GitHub.
     """
     version = (_PACKAGE_VERSION or "").strip()
     if not version or version == "unknown":
         version = (_version_from_pyproject() or "").strip()
+    version = version.split("+", 1)[0]
     return f"v{version}" if version else "unknown"
+
+
+def _resolve_latest_release_tag() -> str | None:
+    """Tag name of the latest published release per GitHub, or ``None``.
+
+    The wizard can't assume the running build's version exists as a tag
+    (dev and Docker builds carry local-version suffixes), so the emitted
+    pin is anchored to the latest actual release. Best-effort/never-raise,
+    like ``_resolve_tag_sha``.
+    """
+    url = f"https://api.github.com/repos/{ACTION_REPO}/releases/latest"
+    try:
+        response = requests.get(
+            url,
+            timeout=_PIN_TIMEOUT,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+    except requests.RequestException:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    tag = payload.get("tag_name", "")
+    return tag if isinstance(tag, str) and _TAG_RE.fullmatch(tag) else None
 
 
 def _resolve_tag_sha(version: str) -> str | None:
@@ -149,7 +191,14 @@ _RESOLVE_LOCK = threading.Lock()
 
 @functools.lru_cache(maxsize=1)
 def _resolve_action_ref_cached() -> str:
-    version = _action_version()
+    version = _resolve_latest_release_tag()
+    if not version:
+        version = _action_version()
+        logger.info(
+            "Could not resolve the latest %s release from GitHub; defaulting to this build's version %s.",
+            ACTION_REPO,
+            version,
+        )
     sha = _resolve_tag_sha(version)
     if not sha:
         logger.info(
@@ -165,10 +214,13 @@ def resolve_action_ref() -> str:
 
     Single-flight and cached for the process, so the review preview and the
     apply write share exactly one lookup and always pin the same ref even when
-    their worker threads call concurrently. Online:
-    ``sbomify/sbomify-action@<sha>  # <version>``. Offline (unreachable,
+    their worker threads call concurrently. Online: the latest published
+    release resolved to its commit,
+    ``sbomify/sbomify-action@<sha>  # <release-tag>`` — never the running
+    build's own version, which may not exist as a tag. Offline (unreachable,
     rate-limited, or tag missing): a tag-pinned
-    ``sbomify/sbomify-action@<version>`` — still pinned, just no SHA.
+    ``sbomify/sbomify-action@<version>`` defaulting to the version we built —
+    still pinned, just no SHA.
     """
     with _RESOLVE_LOCK:
         return _resolve_action_ref_cached()
