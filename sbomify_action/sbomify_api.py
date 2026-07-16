@@ -798,7 +798,10 @@ class SbomifyApiClient:
         content_encoding: str | None = None,
         timeout: int | None = None,
     ) -> requests.Response:
-        """POST a raw artifact (SBOM/VEX/CBOM/HBOM) to ``/api/v1/sboms/artifact/{format}/{id}``.
+        """POST a raw artifact (SBOM/VEX/CBOM/HBOM) to the sboms artifact API.
+
+        Most formats go to ``/api/v1/sboms/artifact/{format}/{id}``; OpenVEX and
+        CSAF go to the format-agnostic ``/api/v1/sboms/artifact/vex/{id}``.
 
         ``bom_type`` (sbom/vex/cbom/hbom) is forwarded as the ``?bom_type=``
         query param when set, so the same endpoint can record a VEX or CBOM
