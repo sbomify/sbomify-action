@@ -28,6 +28,17 @@ class ProductScreen(WizardScreen):
         from rich.markup import escape as _esc
 
         products = self.wizard.state.workspace.products if self.wizard.state.workspace else []
+        # The API returns products in no particular order — sort by name
+        # (case-insensitive) so the picker reads alphabetically. Sorting
+        # before the pre-select below keeps the pre-selected product the
+        # first visible row.
+        products = sorted(
+            products,
+            key=lambda p: (
+                str(p.get("name") or p.get("id") or "(unnamed)").casefold(),
+                str(p.get("id") or ""),
+            ),
+        )
         panel = Vertical(classes="wizard-panel")
         panel.border_title = "◆  Pick a product"
         panel.border_subtitle = f"{len(products)} existing"
