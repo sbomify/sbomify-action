@@ -44,7 +44,10 @@ def gather_repo_facts(repo_root: Path) -> RepoFacts:
         if head_ref and "/" in head_ref:
             default_branch = head_ref.split("/", 1)[1]
         current_branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_root) or None
-        tags = _git(["tag", "--list", "v*"], cwd=repo_root)
+        # Version tags: v-prefixed (v1.2.3) or bare-numeric — SemVer
+        # (1.2.3) or CalVer (2026.7.1). Mirrors the tag patterns the
+        # emitted workflow triggers on (ci_emitter._trigger_block).
+        tags = _git(["tag", "--list", "v*", "[0-9]*"], cwd=repo_root)
         has_release_tags = bool(tags)
         if remote_url and owner_repo_slug:
             visibility = detect_visibility(remote_url, owner_repo_slug)

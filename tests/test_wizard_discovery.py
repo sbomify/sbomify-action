@@ -194,6 +194,22 @@ def test_gather_repo_facts_with_release_tags(tmp_path: Path) -> None:
     assert facts.has_release_tags is True
 
 
+def test_gather_repo_facts_with_calver_release_tags(tmp_path: Path) -> None:
+    """Bare-numeric version tags (CalVer / unprefixed SemVer) count as
+    release tags — the old ``v*``-only detection missed them."""
+    _init_git_repo(tmp_path)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "T",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "T",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+    subprocess.run(["git", "tag", "2026.7.1"], cwd=tmp_path, check=True, env=env)
+    facts = gather_repo_facts(tmp_path)
+    assert facts.has_release_tags is True
+
+
 def test_gather_repo_facts_non_git_dir(tmp_path: Path) -> None:
     facts = gather_repo_facts(tmp_path)
     assert facts.is_git is False

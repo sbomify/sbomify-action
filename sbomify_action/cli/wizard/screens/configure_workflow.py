@@ -53,7 +53,7 @@ class ConfigureWorkflowScreen(WizardScreen):
                     value=not has_tags,
                 )
                 yield RadioButton(
-                    "Tag — v* git tags" + ("  [#86EFAC]✓ recommended[/]" if has_tags else ""),
+                    "Tag — version tags (v1.2.3 or 2026.7.1)" + ("  [#86EFAC]✓ recommended[/]" if has_tags else ""),
                     id="rel-tag",
                     value=has_tags,
                 )
