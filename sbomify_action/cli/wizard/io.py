@@ -28,8 +28,8 @@ from typing import Any
 
 # Marker the emitter writes on line 2 of every generated workflow. The
 # emitted line appends the generating build's version (eg.
-# ``# sbomify-action wizard v26.7.0``; releases up to 26.7.x wrote a
-# literal ``v1``), so ownership detection matches this version-agnostic
+# ``# sbomify-action wizard v26.7.0``; older releases wrote a literal
+# ``v1``), so ownership detection matches this version-agnostic
 # prefix — files stamped by any wizard version stay recognised.
 WIZARD_HEADER_SENTINEL = "# sbomify-action wizard"
 
