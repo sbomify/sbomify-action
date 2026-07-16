@@ -314,8 +314,8 @@ class CdxgenImageGenerator:
         try:
             # run_command raises SBOMGenerationError on failure (uses check=True).
             # log_errors=False: cdxgen image scanning is a fallback behind syft;
-            # a benign failure here shouldn't spam ERROR — the orchestrator
-            # surfaces a real ERROR only if every generator fails.
+            # a benign failure here shouldn't spam ERROR — if every generator
+            # fails, the pipeline raises SBOMGenerationError and the run fails.
             # (Docker-image-not-found is handled separately and still logs at
             # WARNING.)
             run_command(cmd, "cdxgen", timeout=DEFAULT_TIMEOUT, docker_image=input.docker_image, log_errors=False)
