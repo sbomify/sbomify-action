@@ -41,7 +41,8 @@ ReleaseStrategy = Literal["trunk", "tag", "manual"]
 """How the emitted workflow's ``on:`` block fires.
 
 - ``trunk`` — push to the default branch (every push is a "release").
-- ``tag`` — push of a ``v*`` tag (tag-driven releases).
+- ``tag`` — push of a version tag, ``v*`` or bare-numeric like CalVer
+  (tag-driven releases).
 - ``manual`` — ``workflow_dispatch`` only.
 """
 

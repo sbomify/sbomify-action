@@ -64,6 +64,9 @@ def test_emit_trunk_oidc_default(tmp_path: Path) -> None:
     yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
 
     assert HEADER_SENTINEL in yaml
+    # The sentinel line carries the generating build's actual version,
+    # not a hard-coded "v1".
+    assert f"{HEADER_SENTINEL} {_action_version()}\n" in yaml
     assert "name: sboms\n" in yaml
     assert "branches: [main]" in yaml
     assert "id-token: write" in yaml  # OIDC default
@@ -97,7 +100,9 @@ def test_emit_tag_strategy_uses_tag_versioning(tmp_path: Path) -> None:
         create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
     )
     yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
-    assert "tags: ['v*']" in yaml
+    # Both v-prefixed (v1.2.3) and bare-numeric (1.2.3 / CalVer 2026.7.1)
+    # version tags must fire the workflow.
+    assert "tags: ['v*', '[0-9]*']" in yaml
     # The tag-strategy version step now wraps the strip in a bash if/else so
     # workflow_dispatch from a branch falls back to the short SHA instead of
     # emitting refs/heads/<branch> (which contains slashes and breaks
