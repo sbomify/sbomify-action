@@ -126,6 +126,16 @@ def test_detect_external_vex_format_non_utf8_falls_back(tmp_path):
     assert _detect_external_vex_format(str(bad)) is None
 
 
+def test_detect_external_vex_format_list_context(tmp_path):
+    """OpenVEX @context may be a JSON-LD list; any entry under the openvex
+    namespace counts (SPDX3-style list-form contexts occur in the wild)."""
+    from sbomify_action.cli.main import _detect_external_vex_format
+
+    doc = tmp_path / "ov.json"
+    doc.write_text('{"@context": ["https://example.com/other", "https://openvex.dev/ns/v0.2.0"], "statements": []}')
+    assert _detect_external_vex_format(str(doc)) == "openvex"
+
+
 def test_pipeline_openvex_rejected_without_vex_bom_type(tmp_path, monkeypatch):
     """Without BOM_TYPE=vex an OpenVEX document is not an SBOM and must fail
     loud in step 1 rather than upload mislabeled."""

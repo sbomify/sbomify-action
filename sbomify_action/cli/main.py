@@ -1076,9 +1076,10 @@ def _detect_external_vex_format(file_path: str) -> Optional[str]:
     """Detect a non-CycloneDX VEX format from content markers.
 
     Returns "openvex" (@context under https://openvex.dev/ns — prefix-matched,
-    v0.0.1 documents lack the version suffix) or "csaf"
-    (document.category == "csaf_vex"), else None. Invalid JSON returns None so
-    validate_sbom() can report it with its usual error message.
+    v0.0.1 documents lack the version suffix; @context may be a single string or
+    a JSON-LD list, in which case any entry with the namespace prefix counts) or
+    "csaf" (document.category == "csaf_vex"), else None. Invalid JSON returns
+    None so validate_sbom() can report it with its usual error message.
     """
     try:
         with Path(file_path).open("r", encoding="utf-8") as f:
@@ -1089,8 +1090,10 @@ def _detect_external_vex_format(file_path: str) -> Optional[str]:
         return None
     if not isinstance(data, dict):
         return None
+    # @context is a single IRI string or a JSON-LD list of them.
     context = data.get("@context")
-    if isinstance(context, str) and context.startswith("https://openvex.dev/ns"):
+    contexts = context if isinstance(context, list) else [context]
+    if any(isinstance(c, str) and c.startswith("https://openvex.dev/ns") for c in contexts):
         return "openvex"
     document = data.get("document")
     if isinstance(document, dict) and document.get("category") == "csaf_vex":
