@@ -1054,7 +1054,7 @@ def validate_sbom(file_path: str) -> str:
         SBOMValidationError: If SBOM is invalid or unsupported format
     """
     try:
-        with Path(file_path).open("r", encoding="utf-8") as f:
+        with Path(file_path).open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except json.JSONDecodeError:
         raise SBOMValidationError("Invalid JSON format")
@@ -1086,7 +1086,7 @@ def _detect_external_vex_format(file_path: str) -> Optional[str]:
     None so validate_sbom() can report it with its usual error message.
     """
     try:
-        with Path(file_path).open("r", encoding="utf-8") as f:
+        with Path(file_path).open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except (json.JSONDecodeError, UnicodeDecodeError, OSError):
         # Non-UTF-8 / undecodable bytes fall back to None so validate_sbom()
@@ -1120,7 +1120,7 @@ def _detect_sbom_format_silent(file_path: str) -> str:
         SBOMValidationError: If SBOM is invalid or unsupported format
     """
     try:
-        with Path(file_path).open("r", encoding="utf-8") as f:
+        with Path(file_path).open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except json.JSONDecodeError:
         raise SBOMValidationError("Invalid JSON format")

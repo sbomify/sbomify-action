@@ -138,6 +138,24 @@ def test_validate_sbom_non_utf8_raises_validation_error(tmp_path):
         validate_sbom(str(bad))
 
 
+def test_validate_sbom_accepts_utf8_bom(tmp_path):
+    """A UTF-8 BOM (common on Windows) must not be mistaken for invalid JSON."""
+    from sbomify_action.cli.main import validate_sbom
+
+    good = tmp_path / "bom.json"
+    good.write_bytes(b'\xef\xbb\xbf{"bomFormat": "CycloneDX"}')
+    assert validate_sbom(str(good)) == "cyclonedx"
+
+
+def test_detect_external_vex_format_accepts_utf8_bom(tmp_path):
+    """A BOM-prefixed OpenVEX document is still detected, not rejected."""
+    from sbomify_action.cli.main import _detect_external_vex_format
+
+    doc = tmp_path / "ov.json"
+    doc.write_bytes(b'\xef\xbb\xbf{"@context": "https://openvex.dev/ns/v0.2.0", "statements": []}')
+    assert _detect_external_vex_format(str(doc)) == "openvex"
+
+
 def test_detect_external_vex_format_list_context(tmp_path):
     """OpenVEX @context may be a JSON-LD list; any entry under the openvex
     namespace counts (SPDX3-style list-form contexts occur in the wild)."""
