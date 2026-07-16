@@ -31,14 +31,19 @@ def create_default_registry() -> GeneratorRegistry:
       - Input: Rust lock files only (Cargo.lock)
       - Output: CycloneDX 1.4-1.6
 
-    Priority 20 - Comprehensive Multi-Ecosystem (cdxgen):
+    Priority 20 - Comprehensive Multi-Ecosystem (cdxgen, lock files):
     - CdxgenFsGenerator: Filesystem/lock file scanning
       - Input: Python, JavaScript, Java/Gradle, Go, Rust, Ruby, Dart, C++,
                PHP, .NET, Swift, Elixir, Scala
       - Output: CycloneDX 1.4-1.7 (no SPDX support)
-    - CdxgenImageGenerator: Docker image scanning
+
+    Priority 25 - Preferred Image Scanner (Syft):
+    - SyftImageGenerator: Docker image scanning
       - Input: Container images
-      - Output: CycloneDX 1.4-1.7 (no SPDX support)
+      - Output: CycloneDX 1.2-1.6, SPDX 2.2-2.3
+      - Emits the operating-system component and distro PURL qualifiers
+        that vulnerability scanners (Trivy, Dependency-Track, Grype)
+        need to detect OS packages (see issue #264)
 
     Priority 30 - Generic Multi-Ecosystem (Trivy) [TEMPORARILY DISABLED]:
     - TrivyFsGenerator: Filesystem/lock file scanning
@@ -50,14 +55,18 @@ def create_default_registry() -> GeneratorRegistry:
       - Output: CycloneDX 1.6, SPDX 2.3
     NOTE: Trivy is temporarily disabled due to recurring security vulnerabilities.
 
-    Priority 35 - Generic Multi-Ecosystem (Syft):
+    Priority 35 - Generic Multi-Ecosystem (Syft, lock files):
     - SyftFsGenerator: Filesystem/lock file scanning
       - Input: Python, JavaScript, Go, Rust, Ruby, Dart, C++, PHP, .NET,
                Swift, Elixir, Terraform (NOT Java/Gradle lock files)
       - Output: CycloneDX 1.2-1.6, SPDX 2.2-2.3
-    - SyftImageGenerator: Docker image scanning
+
+    Priority 40 - Fallback Image Scanner (cdxgen):
+    - CdxgenImageGenerator: Docker image scanning
       - Input: Container images
-      - Output: CycloneDX 1.2-1.6, SPDX 2.2-2.3
+      - Output: CycloneDX 1.4-1.7 (no SPDX support)
+      - Fallback only: its image SBOMs lack the operating-system
+        component, so Trivy/Dependency-Track can't scan them
 
     Generators are queried sequentially in priority order. The first
     generator that supports the input and requested format/version is used.
@@ -71,9 +80,13 @@ def create_default_registry() -> GeneratorRegistry:
     registry.register(CycloneDXPyGenerator())
     registry.register(CycloneDXCargoGenerator())
 
-    # Priority 20: cdxgen generators (comprehensive multi-ecosystem)
+    # Priority 20: cdxgen lock file generator (comprehensive multi-ecosystem)
     registry.register(CdxgenFsGenerator())
-    registry.register(CdxgenImageGenerator())
+
+    # Priority 25: Syft image generator — preferred for Docker images because
+    # its SBOMs carry the operating-system component that downstream
+    # vulnerability scanners (Trivy, Dependency-Track) require (issue #264)
+    registry.register(SyftImageGenerator())
 
     # Priority 30: Trivy generators - TEMPORARILY DISABLED due to recurring
     # security vulnerabilities in Trivy. To re-enable, reintroduce the
@@ -83,9 +96,12 @@ def create_default_registry() -> GeneratorRegistry:
     # registry.register(TrivyFsGenerator())
     # registry.register(TrivyImageGenerator())
 
-    # Priority 35: Syft generators (version selection, wide ecosystem support)
+    # Priority 35: Syft lock file generator (version selection, wide ecosystem support)
     registry.register(SyftFsGenerator())
-    registry.register(SyftImageGenerator())
+
+    # Priority 40: cdxgen image generator — fallback behind Syft; its image
+    # SBOMs lack the operating-system component (issue #264)
+    registry.register(CdxgenImageGenerator())
 
     return registry
 

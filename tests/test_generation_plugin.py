@@ -235,11 +235,13 @@ class TestGeneratorRegistry(unittest.TestCase):
         input = GenerationInput(docker_image="alpine:3.18", output_format="cyclonedx")
         generators = self.registry.get_generators_for(input)
 
-        # cyclonedx-py doesn't support Docker images
+        # cyclonedx-py doesn't support Docker images.
+        # Syft is preferred for images: its SBOMs carry the operating-system
+        # component that Trivy/Dependency-Track need (issue #264).
         self.assertEqual(len(generators), 3)
-        self.assertEqual(generators[0].name, "cdxgen-image")  # Priority 20
+        self.assertEqual(generators[0].name, "syft-image")  # Priority 25
         self.assertEqual(generators[1].name, "trivy-image")  # Priority 30
-        self.assertEqual(generators[2].name, "syft-image")  # Priority 35
+        self.assertEqual(generators[2].name, "cdxgen-image")  # Priority 40
 
 
 @patch("sbomify_action._generation.generators.cyclonedx_py._CYCLONEDX_PY_AVAILABLE", True)
@@ -642,7 +644,7 @@ class TestCdxgenImageGenerator(unittest.TestCase):
     def test_name_and_priority(self):
         """Test generator name and priority."""
         self.assertEqual(self.generator.name, "cdxgen-image")
-        self.assertEqual(self.generator.priority, 20)
+        self.assertEqual(self.generator.priority, 40)
 
     def test_supports_docker_images(self):
         """Test support for Docker images."""
@@ -862,7 +864,7 @@ class TestSyftImageGenerator(unittest.TestCase):
     def test_name_and_priority(self):
         """Test generator name and priority."""
         self.assertEqual(self.generator.name, "syft-image")
-        self.assertEqual(self.generator.priority, 35)
+        self.assertEqual(self.generator.priority, 25)
 
     def test_supports_docker_images(self):
         """Test support for Docker images."""

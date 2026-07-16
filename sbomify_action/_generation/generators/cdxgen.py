@@ -1,6 +1,7 @@
 """cdxgen generator plugins for filesystem and Docker image scanning.
 
-Priority: 20 (comprehensive multi-ecosystem)
+Priority: 20 for lock files (comprehensive multi-ecosystem),
+40 for Docker images (fallback behind Syft — see CdxgenImageGenerator).
 
 cdxgen is a comprehensive SBOM generator that supports many ecosystems
 and programming languages with excellent coverage.
@@ -228,6 +229,11 @@ class CdxgenImageGenerator:
 
     Uses cdxgen to scan Docker images and generate SBOMs.
 
+    Fallback behind Syft for Docker images: cdxgen image SBOMs lack the
+    `operating-system` component, so vulnerability scanners like Trivy
+    (including Dependency-Track's Trivy analyzer) can't detect OS
+    packages and scan nothing (see issue #264).
+
     Verified capabilities (cdxgen 12.0.0):
     - CycloneDX versions: 1.4, 1.5, 1.6, 1.7 (default: 1.6)
     - SPDX: Not supported
@@ -245,8 +251,9 @@ class CdxgenImageGenerator:
 
     @property
     def priority(self) -> int:
-        # Comprehensive multi-ecosystem, higher priority than Trivy/Syft
-        return 20
+        # Fallback behind Syft (25): cdxgen image SBOMs omit the
+        # operating-system component that Trivy/Dependency-Track need
+        return 40
 
     @property
     def supported_formats(self) -> list[FormatVersion]:
@@ -306,10 +313,11 @@ class CdxgenImageGenerator:
 
         try:
             # run_command raises SBOMGenerationError on failure (uses check=True).
-            # log_errors=False: cdxgen image scanning is a priority-20 fallback
-            # ahead of syft; a benign failure here shouldn't spam ERROR when syft
-            # can still succeed. (Docker-image-not-found is handled separately and
-            # still logs at WARNING.)
+            # log_errors=False: cdxgen image scanning is a fallback behind syft;
+            # a benign failure here shouldn't spam ERROR — the orchestrator
+            # surfaces a real ERROR only if every generator fails.
+            # (Docker-image-not-found is handled separately and still logs at
+            # WARNING.)
             run_command(cmd, "cdxgen", timeout=DEFAULT_TIMEOUT, docker_image=input.docker_image, log_errors=False)
 
             # Verify output file was created

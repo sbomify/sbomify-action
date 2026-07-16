@@ -1042,13 +1042,15 @@ sbomify uses a plugin architecture for SBOM generation, automatically selecting 
 
 Generators are tried in priority order. Native tools (optimized for specific ecosystems) are preferred over generic scanners. Each tool supports different ecosystems:
 
-| Priority | Generator           | Supported Ecosystems                                                                                           | Output Formats                  |
-| -------- | ------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| 10       | **cyclonedx-py**    | Python only                                                                                                    | CycloneDX 1.0–1.7               |
-| 10       | **cargo-cyclonedx** | Rust only                                                                                                      | CycloneDX 1.4–1.6               |
-| 20       | **cdxgen**          | Python, JavaScript, **Java/Gradle**, Go, Rust, Ruby, Dart, C++, PHP, .NET, Swift, Elixir, Scala, Docker images | CycloneDX 1.4–1.7               |
-| ~~30~~   | ~~**Trivy**~~       | ~~Temporarily disabled due to security vulnerabilities~~                                                        | ~~CycloneDX 1.6, SPDX 2.3~~     |
-| 35       | **Syft**            | Python, JavaScript, Go, Rust, Ruby, Dart, C++, PHP, .NET, Swift, Elixir, Terraform, Docker images              | CycloneDX 1.2–1.6, SPDX 2.2–2.3 |
+| Priority | Generator             | Supported Ecosystems                                                                              | Output Formats                  |
+| -------- | --------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------- |
+| 10       | **cyclonedx-py**      | Python only                                                                                       | CycloneDX 1.0–1.7               |
+| 10       | **cargo-cyclonedx**   | Rust only                                                                                         | CycloneDX 1.4–1.6               |
+| 20       | **cdxgen** (lockfiles) | Python, JavaScript, **Java/Gradle**, Go, Rust, Ruby, Dart, C++, PHP, .NET, Swift, Elixir, Scala   | CycloneDX 1.4–1.7               |
+| 25       | **Syft** (images)     | Docker images                                                                                     | CycloneDX 1.2–1.6, SPDX 2.2–2.3 |
+| ~~30~~   | ~~**Trivy**~~         | ~~Temporarily disabled due to security vulnerabilities~~                                           | ~~CycloneDX 1.6, SPDX 2.3~~     |
+| 35       | **Syft** (lockfiles)  | Python, JavaScript, Go, Rust, Ruby, Dart, C++, PHP, .NET, Swift, Elixir, Terraform                | CycloneDX 1.2–1.6, SPDX 2.2–2.3 |
+| 40       | **cdxgen** (images)   | Docker images (fallback: lacks the OS metadata vulnerability scanners need)                       | CycloneDX 1.4–1.7               |
 
 #### How It Works
 
@@ -1057,7 +1059,7 @@ Generators are tried in priority order. Native tools (optimized for specific eco
 3. **Java lockfiles** (pom.xml, build.gradle, gradle.lockfile) → cdxgen (best Java support)
 4. **Dart lockfiles** (pubspec.lock) → cdxgen or Syft
 5. **Other lockfiles** (package-lock.json, go.mod, etc.) → cdxgen (then Syft as fallback)
-6. **Docker images** → cdxgen (then Syft as fallback)
+6. **Docker images** → Syft (then cdxgen as fallback). Syft SBOMs include the `operating-system` component and distro PURL qualifiers that vulnerability scanners (Trivy, Grype, Dependency-Track) need to detect OS packages.
 
 If the primary generator fails or doesn't support the input, the next one in priority order is tried automatically.
 

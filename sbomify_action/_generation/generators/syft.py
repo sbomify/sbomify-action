@@ -1,6 +1,7 @@
 """Syft generator plugins for filesystem and Docker image scanning.
 
-Priority: 35 (generic multi-ecosystem, lower than Trivy)
+Priority: 35 for lock files (generic multi-ecosystem, lower than Trivy),
+25 for Docker images (preferred over cdxgen — see SyftImageGenerator).
 
 Syft is a comprehensive SBOM generator that supports version selection.
 It supports more versions than Trivy but is slightly lower priority.
@@ -176,6 +177,13 @@ class SyftImageGenerator:
 
     Uses Syft to scan Docker images and generate SBOMs.
 
+    Preferred over cdxgen for Docker images: Syft emits the
+    `operating-system` component and distro PURL qualifiers that
+    vulnerability scanners (Trivy, Dependency-Track's Trivy analyzer,
+    Grype) need to detect OS packages. cdxgen image SBOMs lack the OS
+    component, so Trivy reports "Unsupported os" and scans nothing
+    (see issue #264).
+
     Verified capabilities (Syft 1.38.2):
     - CycloneDX versions: 1.2, 1.3, 1.4, 1.5, 1.6 (default: 1.6)
     - SPDX versions: 2.2, 2.3 (default: 2.3)
@@ -192,8 +200,9 @@ class SyftImageGenerator:
 
     @property
     def priority(self) -> int:
-        # Generic multi-ecosystem, slightly lower priority than Trivy
-        return 35
+        # Preferred image scanner: unlike cdxgen, Syft's image SBOMs are
+        # consumable by downstream vulnerability scanners (Trivy/Grype)
+        return 25
 
     @property
     def supported_formats(self) -> list[FormatVersion]:
