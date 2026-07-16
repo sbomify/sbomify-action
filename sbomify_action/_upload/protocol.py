@@ -31,7 +31,8 @@ class UploadInput:
 
     Attributes:
         sbom_file: Path to the SBOM file to upload
-        sbom_format: Format of the SBOM ("cyclonedx" or "spdx")
+        sbom_format: Format of the artifact ("cyclonedx" or "spdx"; also
+            "openvex"/"csaf", valid only with bom_type="vex")
         bom_type: Artifact type to record on upload (sbom/vex/cbom/hbom). None
             uploads as a plain SBOM; non-SBOM types are sent verbatim.
         component_name: Name of the component (used by destinations like Dependency Track)

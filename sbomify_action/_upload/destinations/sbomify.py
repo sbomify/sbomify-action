@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from sbomify_action import format_display_name
 from sbomify_action.exceptions import APIError, AuthError
 from sbomify_action.logging_config import logger
 from sbomify_action.sbomify_api import SbomifyApiClient, clean_validation_error
@@ -109,9 +110,7 @@ class SbomifyDestination:
                 validation_error=validation_error,
             )
 
-        format_display = {"cyclonedx": "CycloneDX", "spdx": "SPDX", "openvex": "OpenVEX", "csaf": "CSAF"}.get(
-            input.sbom_format, input.sbom_format
-        )
+        format_display = format_display_name(input.sbom_format)
         artifact_kind = input.bom_type.upper() if input.bom_type and input.bom_type != "sbom" else "SBOM"
         logger.info(f"Uploading {format_display} {artifact_kind} to component: {self._component_id}")
 

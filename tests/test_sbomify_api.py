@@ -520,6 +520,18 @@ def test_upload_sbom_routes_external_vex_formats_to_vex_endpoint() -> None:
         assert call.args[1].endswith("/api/v1/sboms/artifact/vex/c1"), call.args
 
 
+def test_upload_sbom_external_vex_requires_vex_bom_type() -> None:
+    """OpenVEX/CSAF are only valid as a VEX; the client rejects them without
+    bom_type='vex' instead of misrouting to /artifact/vex/."""
+    for fmt in ("openvex", "csaf"):
+        client, _ = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+        with pytest.raises(ValueError, match="requires bom_type='vex'"):
+            client.upload_sbom("c1", b"{}", sbom_format=fmt, bom_type="sbom")
+        client2, _ = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])
+        with pytest.raises(ValueError, match="requires bom_type='vex'"):
+            client2.upload_sbom("c1", b"{}", sbom_format=fmt)
+
+
 def test_upload_sbom_cyclonedx_vex_keeps_cyclonedx_endpoint() -> None:
     # CycloneDX VEX stays on the endpoint every deployed backend supports.
     client, session = _client_with([_FakeResponse(200, {"sbom_id": "s1"})])

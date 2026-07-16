@@ -1054,10 +1054,14 @@ def validate_sbom(file_path: str) -> str:
         SBOMValidationError: If SBOM is invalid or unsupported format
     """
     try:
-        with Path(file_path).open("r") as f:
+        with Path(file_path).open("r", encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError:
         raise SBOMValidationError("Invalid JSON format")
+    except UnicodeDecodeError:
+        # Undecodable (non-UTF-8) bytes fail as a clean validation error rather
+        # than crashing the pipeline past step 1's SBOMValidationError handling.
+        raise SBOMValidationError("SBOM file is not valid UTF-8")
     except FileNotFoundError:
         raise SBOMValidationError(f"SBOM file not found: {file_path}")
 
@@ -1116,10 +1120,14 @@ def _detect_sbom_format_silent(file_path: str) -> str:
         SBOMValidationError: If SBOM is invalid or unsupported format
     """
     try:
-        with Path(file_path).open("r") as f:
+        with Path(file_path).open("r", encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError:
         raise SBOMValidationError("Invalid JSON format")
+    except UnicodeDecodeError:
+        # Undecodable (non-UTF-8) bytes fail as a clean validation error rather
+        # than crashing the pipeline past step 1's SBOMValidationError handling.
+        raise SBOMValidationError("SBOM file is not valid UTF-8")
     except FileNotFoundError:
         raise SBOMValidationError(f"SBOM file not found: {file_path}")
 

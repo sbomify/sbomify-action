@@ -126,6 +126,18 @@ def test_detect_external_vex_format_non_utf8_falls_back(tmp_path):
     assert _detect_external_vex_format(str(bad)) is None
 
 
+def test_validate_sbom_non_utf8_raises_validation_error(tmp_path):
+    """A non-UTF-8 SBOM fails as SBOMValidationError (handled by step 1), not an
+    uncaught UnicodeDecodeError that crashes the pipeline."""
+    from sbomify_action.cli.main import validate_sbom
+    from sbomify_action.exceptions import SBOMValidationError
+
+    bad = tmp_path / "bad.json"
+    bad.write_bytes(b'\xff\xfe{"bomFormat": "CycloneDX"}')
+    with pytest.raises(SBOMValidationError):
+        validate_sbom(str(bad))
+
+
 def test_detect_external_vex_format_list_context(tmp_path):
     """OpenVEX @context may be a JSON-LD list; any entry under the openvex
     namespace counts (SPDX3-style list-form contexts occur in the wild)."""

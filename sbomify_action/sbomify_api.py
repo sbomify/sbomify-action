@@ -823,6 +823,11 @@ class SbomifyApiClient:
         normalized_bom_type = bom_type.lower() if bom_type else None
         if normalized_bom_type is not None and normalized_bom_type not in VALID_BOM_TYPES:
             raise ValueError(f"Invalid bom_type: {bom_type!r}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
+        # OpenVEX/CSAF are only meaningful as a VEX; enforce the same constraint
+        # UploadInput does so a direct caller can't silently misroute them to the
+        # /artifact/vex/ endpoint with a wrong bom_type.
+        if sbom_format in ("openvex", "csaf") and normalized_bom_type != "vex":
+            raise ValueError(f"sbom_format={sbom_format!r} requires bom_type='vex'")
         params = {"bom_type": normalized_bom_type} if normalized_bom_type and normalized_bom_type != "sbom" else None
         return self._request(
             "POST",
