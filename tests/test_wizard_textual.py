@@ -379,6 +379,95 @@ async def test_escape_from_components_goes_back_in_any_focus_state(
         assert isinstance(app.screen, ProductScreen), "Escape on Input must pop to Product"
 
 
+async def test_components_picker_lists_existing_alphabetically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Existing components render alphabetically (case-insensitive) in the
+    picker regardless of the order the API returned them in."""
+    from textual.widgets import OptionList
+
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "uv.lock",
+            rel_path=Path("uv.lock"),
+            ecosystem="python",
+            suggested_name="widget-py",
+        )
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+    _stub_client(
+        monkeypatch,
+        products=[{"id": "p1", "name": "alpha"}],
+        components=[
+            {"id": "c-zeta", "name": "zeta"},
+            {"id": "c-alpha", "name": "Alpha"},
+            {"id": "c-mid", "name": "midway"},
+        ],
+    )
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # Welcome -> Discover
+        await pilot.pause()
+        await pilot.press("space")  # select lockfile
+        await pilot.pause()
+        await pilot.press("enter")  # Discover -> Authenticate (auto-auth)
+        await pilot.pause(1.0)  # wait for auth + auto-push to Product
+        await pilot.press("enter")  # Product -> Components
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.components import ComponentsScreen
+        from sbomify_action.cli.wizard.widgets import NEW_SENTINEL
+
+        assert isinstance(app.screen, ComponentsScreen)
+        picker = app.screen.query_one("#component-0-list", OptionList)
+        option_ids = [picker.get_option_at_index(i).id for i in range(picker.option_count)]
+        assert option_ids == [NEW_SENTINEL, "c-alpha", "c-mid", "c-zeta"]
+
+
+async def test_product_picker_lists_existing_alphabetically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Existing products render alphabetically (case-insensitive) in the
+    picker regardless of the order the API returned them in, and the
+    pre-selected product is the first visible row."""
+    from textual.widgets import OptionList
+
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "uv.lock",
+            rel_path=Path("uv.lock"),
+            ecosystem="python",
+            suggested_name="widget-py",
+        )
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+    _stub_client(
+        monkeypatch,
+        products=[
+            {"id": "p-zeta", "name": "zeta"},
+            {"id": "p-alpha", "name": "Alpha"},
+            {"id": "p-mid", "name": "midway"},
+        ],
+    )
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # Welcome -> Discover
+        await pilot.pause()
+        await pilot.press("space")  # select lockfile
+        await pilot.pause()
+        await pilot.press("enter")  # Discover -> Authenticate (auto-auth)
+        await pilot.pause(1.0)  # wait for auth + auto-push to Product
+
+        from sbomify_action.cli.wizard.screens.product import ProductScreen
+        from sbomify_action.cli.wizard.widgets import NEW_SENTINEL, PickOrCreate
+
+        assert isinstance(app.screen, ProductScreen)
+        picker = app.screen.query_one("#product-picker-list", OptionList)
+        option_ids = [picker.get_option_at_index(i).id for i in range(picker.option_count)]
+        assert option_ids == [NEW_SENTINEL, "p-alpha", "p-mid", "p-zeta"]
+        # Pre-selection tracks the sorted order: the alphabetically first
+        # product, not whichever the API happened to return first.
+        assert app.screen.query_one("#product-picker", PickOrCreate).picked_id == "p-alpha"
+
+
 async def test_enter_on_create_profile_sentinel_pushes_create_screen(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

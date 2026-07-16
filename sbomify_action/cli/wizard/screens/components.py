@@ -38,6 +38,12 @@ class ComponentsScreen(WizardScreen):
         from rich.markup import escape as _esc
 
         existing = self.wizard.state.workspace.components if self.wizard.state.workspace else []
+        # The API returns components in no particular order — sort by
+        # name (case-insensitive) so the picker reads alphabetically.
+        existing = sorted(
+            existing,
+            key=lambda c: str(c.get("name") or c.get("id") or "(unnamed)").casefold(),
+        )
         # Escape API-supplied names before passing them as picker
         # labels — PickOrCreate's OptionList renders labels as Rich
         # markup, so a component literally named "widget [pre-release]"
