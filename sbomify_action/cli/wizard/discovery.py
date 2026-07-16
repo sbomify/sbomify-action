@@ -42,6 +42,19 @@ _SKIP_DIRS = frozenset(
         ".ruff_cache",
         ".idea",
         ".vscode",
+        # AI coding-agent config dirs. Claude Code keeps agent worktrees
+        # (full repo copies) at .claude/worktrees/, so recursing would
+        # double-count every lockfile in the repo. The others hold only
+        # tool config today, but skipping them is harmless and guards
+        # against the same worktree pattern landing there.
+        ".claude",
+        ".cursor",
+        ".codex",
+        ".gemini",
+        # Common in-repo worktree conventions used by parallel-agent
+        # orchestrators (ccmanager, agent-deck, ...) and humans alike.
+        ".worktrees",
+        ".trees",
     }
 )
 
