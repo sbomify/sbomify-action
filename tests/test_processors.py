@@ -41,6 +41,21 @@ class TestFinalizePostUpload(unittest.TestCase):
         results = AggregateResult(results=[ProcessorResult.skipped_result("sbomify_releases")])
         _finalize_post_upload(results)  # skipped is not a failure
 
+    def test_partial_failure_exits_nonzero(self):
+        results = AggregateResult(
+            results=[
+                ProcessorResult.failure_result(
+                    "sbomify_releases",
+                    "Error processing product:v1.0.0: [403] - Only owners and admins can create releases",
+                    processed_items=1,
+                    failed_items=1,
+                )
+            ]
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            _finalize_post_upload(results)
+        self.assertEqual(ctx.exception.code, 1)
+
 
 class TestProcessorInput(unittest.TestCase):
     """Test ProcessorInput dataclass."""
@@ -506,6 +521,34 @@ class TestSbomifyReleasesProcessor(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertIn("API connection failed", result.error_message)
+
+    @patch("sbomify_action._processors.releases_api._client")
+    def test_process_partial_failure_is_failure(self, mock_client_factory):
+        """One release succeeding must not mask another one failing."""
+        client = Mock()
+        client.check_release_exists.return_value = False
+        client.create_release.side_effect = [
+            "new-release-id",
+            APIError("[403] - Only owners and admins can create releases"),
+        ]
+        client.tag_sbom_with_release.return_value = None
+        client.get_release_details.return_value = None
+        mock_client_factory.return_value = client
+
+        input_obj = ProcessorInput(
+            sbom_id="sbom-123",
+            product_releases=["product-a:v1.0.0", "product-b:v1.0.0"],
+            api_base_url="https://api.test.com",
+            token="test-token",
+        )
+
+        result = self.processor.process(input_obj)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.processed_items, 1)
+        self.assertEqual(result.failed_items, 1)
+        self.assertIn("Only owners and admins", result.error_message)
+        self.assertIn("new-release-id", result.metadata["release_ids"])
 
 
 class TestProcessorOrchestrator(unittest.TestCase):

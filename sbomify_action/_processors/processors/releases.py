@@ -113,7 +113,11 @@ class SbomifyReleasesProcessor:
                 errors.append(f"Error processing {release_spec}: {str(e)}")
                 logger.error(f"Error processing release {release_spec}: {e}")
 
-        if failed > 0 and processed == 0:
+        # Any failed release is fatal, including partial success (some
+        # succeeded, some failed) — a silently missing release must fail the run.
+        if failed > 0:
+            if processed > 0:
+                logger.warning(f"Partial failure: {processed} release(s) processed, {failed} failed")
             return ProcessorResult.failure_result(
                 processor_name=self.name,
                 error_message="; ".join(errors),
@@ -122,19 +126,10 @@ class SbomifyReleasesProcessor:
                 metadata={"release_ids": release_ids},
             )
 
-        # Log warning for partial success (some succeeded, some failed)
-        if failed > 0 and processed > 0:
-            logger.warning(
-                f"Partial success: {processed} release(s) processed, {failed} failed. Errors: {'; '.join(errors)}"
-            )
-
         return ProcessorResult.success_result(
             processor_name=self.name,
             processed_items=processed,
-            metadata={
-                "release_ids": release_ids,
-                "errors": errors if errors else None,
-            },
+            metadata={"release_ids": release_ids},
         )
 
     def _process_single_release(
