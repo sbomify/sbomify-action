@@ -13,7 +13,9 @@ codebase automatically when new ecosystems land.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 from sbomify_action._generation.utils import ALL_LOCK_FILES, get_lock_file_ecosystem
@@ -58,9 +60,11 @@ _SKIP_DIRS = frozenset(
     }
 )
 
-# Within a single directory we may find multiple lockfiles
-# (eg. ``uv.lock`` + ``pyproject.toml``). Smaller priority numbers win
-# — the authoritative lockfile beats the manifest.
+# Within a single directory an ecosystem may have both a lockfile and a
+# manifest (eg. ``uv.lock`` + ``pyproject.toml``). Smaller priority
+# numbers win — the authoritative lockfile beats the manifest. Priorities
+# only compete within one ecosystem; a polyglot root (``uv.lock`` +
+# ``bun.lock``) keeps one entry per ecosystem.
 _LOCKFILE_PRIORITY: dict[str, int] = {
     # Python
     "uv.lock": 10,
@@ -105,12 +109,14 @@ def slugify(value: str) -> str:
     return slug[:60]
 
 
-def _suggested_name(repo_name: str, lock_name: str) -> str:
+def _suggested_name(repo_name: str, lock_name: str, dir_name: str | None = None) -> str:
     """Build a default component-name suggestion for a lockfile.
 
-    The pattern is ``<repo-slug>-<ecosystem-or-lockfile-slug>``. The
-    suffix lets multi-language repos disambiguate (eg. ``widget-py`` vs
-    ``widget-js``) without the user having to type a name.
+    The pattern is ``<repo-slug>[-<dir-slug>]-<ecosystem-or-lockfile-slug>``.
+    The ecosystem suffix lets multi-language repos disambiguate
+    (eg. ``widget-py`` vs ``widget-js``); the optional directory slug is
+    added only when two lockfiles would otherwise suggest the same name
+    (eg. ``bun.lock`` + ``website/bun.lock``).
     """
     ecosystem = get_lock_file_ecosystem(lock_name)
     if ecosystem:
@@ -118,6 +124,8 @@ def _suggested_name(repo_name: str, lock_name: str) -> str:
     else:
         suffix = slugify(lock_name)
     base = slugify(repo_name)
+    if dir_name and (dir_slug := slugify(dir_name)):
+        base = f"{base}-{dir_slug}" if base else dir_slug
     if not suffix or suffix == base:
         return base or "component"
     return f"{base}-{suffix}" if base else suffix
@@ -126,38 +134,40 @@ def _suggested_name(repo_name: str, lock_name: str) -> str:
 def discover(repo_root: Path, *, repo_name: str | None = None) -> list[DiscoveredLockfile]:
     """Find every supported lockfile under ``repo_root``.
 
-    For each directory, only the highest-priority lockfile is kept so
-    we don't double-count (e.g. ``uv.lock`` + ``pyproject.toml`` in the
-    same dir).
+    Within each directory, only the highest-priority lockfile *per
+    ecosystem* is kept, so we don't double-count ``uv.lock`` +
+    ``pyproject.toml`` while a polyglot root (``uv.lock`` + ``bun.lock``)
+    still yields both.
     """
     repo_root = repo_root.resolve()
     repo_name = repo_name or repo_root.name
 
-    # path → best lockfile in that directory
-    best_per_dir: dict[Path, tuple[int, Path]] = {}
+    # (directory, ecosystem) → best lockfile for that ecosystem there
+    best_per_dir_eco: dict[tuple[Path, str], tuple[int, Path]] = {}
 
     for path in _walk(repo_root):
         name = path.name
         if name not in ALL_LOCK_FILES:
             continue
 
+        ecosystem = get_lock_file_ecosystem(name) or "unknown"
         priority = _LOCKFILE_PRIORITY.get(name, 99)
-        current = best_per_dir.get(path.parent)
+        key = (path.parent, ecosystem)
+        current = best_per_dir_eco.get(key)
         if current is None or priority < current[0]:
-            best_per_dir[path.parent] = (priority, path)
+            best_per_dir_eco[key] = (priority, path)
 
-        # Cap on unique directories, not on raw matches. Monorepos
-        # commonly have ``uv.lock + pyproject.toml + requirements.txt``
-        # in every project directory, so a raw-match cap of 200 would
-        # truncate at ~67 projects even though best_per_dir collapses
-        # them down to one entry per dir.
-        if len(best_per_dir) >= DISCOVERY_CAP:
+        # Cap on unique (directory, ecosystem) pairs, not raw matches.
+        # Monorepos commonly have ``uv.lock + pyproject.toml +
+        # requirements.txt`` in every project directory, so a raw-match
+        # cap of 200 would truncate at ~67 projects even though
+        # best_per_dir_eco collapses them down to one entry per pair.
+        if len(best_per_dir_eco) >= DISCOVERY_CAP:
             break
 
     found: list[DiscoveredLockfile] = []
-    for _priority, path in best_per_dir.values():
+    for (_dir, ecosystem), (_priority, path) in best_per_dir_eco.items():
         rel = path.relative_to(repo_root)
-        ecosystem = get_lock_file_ecosystem(path.name) or "unknown"
         found.append(
             DiscoveredLockfile(
                 path=path,
@@ -166,6 +176,20 @@ def discover(repo_root: Path, *, repo_name: str | None = None) -> list[Discovere
                 suggested_name=_suggested_name(repo_name, path.name),
             )
         )
+
+    # Same ecosystem in several directories (eg. ``bun.lock`` +
+    # ``website/bun.lock``) collides on the plain ``<repo>-<ecosystem>``
+    # suggestion — qualify the colliding ones with their directory.
+    name_counts = Counter(lf.suggested_name for lf in found)
+    found = [
+        replace(
+            lf,
+            suggested_name=_suggested_name(repo_name, lf.rel_path.name, dir_name=lf.rel_path.parent.name),
+        )
+        if name_counts[lf.suggested_name] > 1 and lf.rel_path.parent != Path(".")
+        else lf
+        for lf in found
+    ]
 
     found.sort(key=lambda lf: (str(lf.rel_path.parent), lf.rel_path.name))
     return found

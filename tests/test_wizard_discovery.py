@@ -39,6 +39,41 @@ def test_discover_picks_higher_priority_lockfile_per_directory(tmp_path: Path) -
     assert [lf.rel_path.name for lf in found] == ["uv.lock"]
 
 
+def test_discover_keeps_one_lockfile_per_ecosystem_in_same_directory(tmp_path: Path) -> None:
+    # Polyglot root (screenly/anthias layout): uv.lock + bun.lock live in
+    # the same directory but are different ecosystems — both must survive
+    # the per-directory dedup, while each ecosystem's manifest is still
+    # collapsed into its lockfile.
+    (tmp_path / "uv.lock").write_text("")
+    (tmp_path / "pyproject.toml").write_text("")
+    (tmp_path / "bun.lock").write_text("")
+    (tmp_path / "package.json").write_text("{}")
+    (tmp_path / "website").mkdir()
+    (tmp_path / "website" / "bun.lock").write_text("")
+
+    found = discover(tmp_path, repo_name="anthias")
+    assert [str(lf.rel_path) for lf in found] == [
+        "bun.lock",
+        "uv.lock",
+        os.path.join("website", "bun.lock"),
+    ]
+
+
+def test_discover_disambiguates_colliding_suggested_names(tmp_path: Path) -> None:
+    # Same ecosystem at root and in a subdir would both suggest
+    # ``<repo>-javascript`` — the nested one gets its directory in the name.
+    (tmp_path / "bun.lock").write_text("")
+    (tmp_path / "website").mkdir()
+    (tmp_path / "website" / "bun.lock").write_text("")
+
+    found = discover(tmp_path, repo_name="anthias")
+    names = {str(lf.rel_path): lf.suggested_name for lf in found}
+    assert names == {
+        "bun.lock": "anthias-javascript",
+        os.path.join("website", "bun.lock"): "anthias-website-javascript",
+    }
+
+
 def test_discover_recurses_into_subdirs(tmp_path: Path) -> None:
     (tmp_path / "backend").mkdir()
     (tmp_path / "backend" / "uv.lock").write_text("")
