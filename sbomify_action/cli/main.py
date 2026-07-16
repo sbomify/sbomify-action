@@ -1081,9 +1081,11 @@ def _detect_external_vex_format(file_path: str) -> Optional[str]:
     validate_sbom() can report it with its usual error message.
     """
     try:
-        with Path(file_path).open("r") as f:
+        with Path(file_path).open("r", encoding="utf-8") as f:
             data = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        # Non-UTF-8 / undecodable bytes fall back to None so validate_sbom()
+        # reports the problem with its usual error message instead of crashing.
         return None
     if not isinstance(data, dict):
         return None

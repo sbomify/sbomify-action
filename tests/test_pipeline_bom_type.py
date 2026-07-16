@@ -116,6 +116,16 @@ def test_pipeline_external_vex_verbatim(tmp_path, monkeypatch, authored, name):
     assert (tmp_path / "out.vex.json").read_bytes() == authored
 
 
+def test_detect_external_vex_format_non_utf8_falls_back(tmp_path):
+    """A file with undecodable (non-UTF-8) bytes must return None so validate_sbom
+    reports it normally, not raise UnicodeDecodeError and crash the pipeline."""
+    from sbomify_action.cli.main import _detect_external_vex_format
+
+    bad = tmp_path / "bad.json"
+    bad.write_bytes(b'\xff\xfe{"@context": "https://openvex.dev/ns"}')
+    assert _detect_external_vex_format(str(bad)) is None
+
+
 def test_pipeline_openvex_rejected_without_vex_bom_type(tmp_path, monkeypatch):
     """Without BOM_TYPE=vex an OpenVEX document is not an SBOM and must fail
     loud in step 1 rather than upload mislabeled."""

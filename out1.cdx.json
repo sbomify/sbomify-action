@@ -1,0 +1,75 @@
+{
+  "components": [
+    {
+      "bom-ref": "BomRef.3725795208167201.27998216521644836",
+      "description": "Python package for providing Mozilla's CA Bundle.",
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://pypi.org/project/certifi/"
+        },
+        {
+          "type": "vcs",
+          "url": "git+https://github.com/certifi/python-certifi"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/certifi/python-certifi"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "GPL-2.0-only OR GPL-2.0-or-later OR MPL-2.0"
+        }
+      ],
+      "name": "certifi",
+      "properties": [
+        {
+          "name": "bsi:component:filename",
+          "value": "certifi-2026.2.25-py3-none-any.whl"
+        },
+        {
+          "name": "sbomify:enrichment:source",
+          "value": "pypi.org"
+        }
+      ],
+      "publisher": "Kenneth Reitz",
+      "purl": "pkg:pypi/certifi@2025.10.5",
+      "supplier": {
+        "name": "Python Package Index (PyPI)"
+      },
+      "type": "library",
+      "version": "2025.10.5"
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "BomRef.28521112073212107.7277499071792589"
+    },
+    {
+      "ref": "BomRef.3725795208167201.27998216521644836"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "bom-ref": "BomRef.28521112073212107.7277499071792589",
+      "name": "test-app",
+      "type": "application",
+      "version": "1.0.0"
+    },
+    "timestamp": "2026-04-15T19:07:51.175469+00:00"
+  },
+  "serialNumber": "urn:uuid:c9b35eaa-798f-4575-859e-ff12b6cc483d",
+  "version": 1,
+  "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "compositions": [
+    {
+      "aggregate": "incomplete",
+      "assemblies": [
+        "BomRef.28521112073212107.7277499071792589"
+      ]
+    }
+  ]
+}

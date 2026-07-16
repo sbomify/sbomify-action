@@ -1,0 +1,73 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "name": "edge-app",
+      "version": "1.0",
+      "type": "application"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "empty-license",
+      "version": "1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": ""
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "whitespace-license",
+      "version": "2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "  "
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "already-expression",
+      "version": "3.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "dual-field",
+      "version": "4.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0-only OR AGPL-3.0-only"
+          },
+          "expression": "BSD-2-Clause"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "license-ref",
+      "version": "5.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "LicenseRef-custom-1"
+          }
+        }
+      ]
+    }
+  ]
+}

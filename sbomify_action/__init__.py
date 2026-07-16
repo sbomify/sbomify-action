@@ -8,7 +8,8 @@ def format_display_name(fmt: str) -> str:
     Use this everywhere format names are shown to users.
 
     Args:
-        fmt: Format string ('cyclonedx' or 'spdx', case-insensitive)
+        fmt: Format string ('cyclonedx', 'spdx', 'openvex', or 'csaf',
+            case-insensitive; anything unrecognized maps to 'SPDX')
 
     Returns:
         Display name, e.g. 'CycloneDX', 'SPDX', 'OpenVEX', 'CSAF'
