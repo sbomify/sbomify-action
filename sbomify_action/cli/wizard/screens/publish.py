@@ -10,7 +10,7 @@ from textual.widgets import Button, RichLog, Static
 from textual.worker import Worker, WorkerState
 
 from sbomify_action.cli.wizard import publish as publish_mod
-from sbomify_action.cli.wizard.ci_emitter import matrix_rows
+from sbomify_action.cli.wizard.ci_emitter import MatrixRow, matrix_rows
 from sbomify_action.cli.wizard.screens._base import WizardScreen
 
 # Same palette as the Apply screen's log (see styles.tcss for the token
@@ -77,7 +77,7 @@ class PublishScreen(WizardScreen):
         self._log_widget = self.query_one("#publish-log", RichLog)
         self.query_one("#publish", Button).focus()
 
-    def _rows(self) -> list:
+    def _rows(self) -> list[MatrixRow]:
         """The planned matrix rows — same helper the emitted workflow used."""
         state = self.wizard.state
         component_ids = {str(rel): cid for rel, cid in state.component_ids.items()}

@@ -141,10 +141,16 @@ def _build_env(run: PublishRun, state: WizardState, opts: WizardOptions, version
     product release named after a random commit SHA as a side effect of
     onboarding would be surprising. Releases stay CI's job.
     """
+    # The wizard's authenticate screen always constructs the client with
+    # the token string the user entered, but the client's type allows
+    # None (other flows construct it tokenless). Coerce for typing; an
+    # empty TOKEN would fail the subprocess's own config validation with
+    # a clear "token is required" error rather than anything silent.
+    token = state.require_api().token or ""
     env = {k: v for k, v in os.environ.items() if k not in _PIPELINE_ENV_VARS}
     env.update(
         {
-            "TOKEN": state.require_api().token,
+            "TOKEN": token,
             "COMPONENT_ID": run.row.component_id,
             "COMPONENT_NAME": run.row.component_name,
             "LOCK_FILE": run.row.lockfile,
@@ -174,6 +180,7 @@ def _stream_subprocess(
     interleaving. Isolated as a module-level function so tests can stub
     the subprocess boundary without faking ``Popen``.
     """
+    # nosemgrep: dangerous-subprocess-use-audit  # list-form, shell=False, fixed executable (sys.executable -c <constant>)
     proc = subprocess.Popen(  # noqa: S603 — argv is built from wizard state, not user shell input
         cmd,
         env=env,
