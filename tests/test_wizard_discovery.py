@@ -61,6 +61,19 @@ def test_discover_skips_node_modules_and_dotgit(tmp_path: Path) -> None:
     assert [str(lf.rel_path) for lf in found] == ["package.json"]
 
 
+def test_discover_skips_agent_worktree_dirs(tmp_path: Path) -> None:
+    # Claude Code keeps full repo copies under .claude/worktrees/ — those
+    # lockfiles are duplicates of the real ones and must not be discovered.
+    for agent_dir in (".claude", ".cursor", ".codex", ".gemini", ".worktrees", ".trees"):
+        nested = tmp_path / agent_dir / "worktrees" / "some-branch"
+        nested.mkdir(parents=True)
+        (nested / "uv.lock").write_text("")
+    (tmp_path / "uv.lock").write_text("")
+
+    found = discover(tmp_path)
+    assert [str(lf.rel_path) for lf in found] == ["uv.lock"]
+
+
 def test_discover_suggested_name_includes_repo_and_ecosystem(tmp_path: Path) -> None:
     (tmp_path / "uv.lock").write_text("")
     found = discover(tmp_path, repo_name="My Widget!")
