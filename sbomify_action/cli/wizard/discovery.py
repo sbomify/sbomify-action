@@ -179,12 +179,14 @@ def discover(repo_root: Path, *, repo_name: str | None = None) -> list[Discovere
 
     # Same ecosystem in several directories (eg. ``bun.lock`` +
     # ``website/bun.lock``) collides on the plain ``<repo>-<ecosystem>``
-    # suggestion — qualify the colliding ones with their directory.
+    # suggestion — qualify the colliding ones with their full relative
+    # directory path (not just the basename, which itself collides for
+    # eg. ``apps/web`` + ``packages/web``; slugify turns ``/`` into ``-``).
     name_counts = Counter(lf.suggested_name for lf in found)
     found = [
         replace(
             lf,
-            suggested_name=_suggested_name(repo_name, lf.rel_path.name, dir_name=lf.rel_path.parent.name),
+            suggested_name=_suggested_name(repo_name, lf.rel_path.name, dir_name=str(lf.rel_path.parent)),
         )
         if name_counts[lf.suggested_name] > 1 and lf.rel_path.parent != Path(".")
         else lf
