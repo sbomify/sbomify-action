@@ -14,8 +14,12 @@ from ..sbomify_api import VALID_BOM_TYPES as VALID_BOM_TYPES
 if TYPE_CHECKING:
     from .result import UploadResult
 
-# Supported SBOM formats (same as generation)
-SBOMFormat = Literal["cyclonedx", "spdx"]
+# Supported SBOM formats (same as generation), plus the two non-CycloneDX
+# VEX formats — valid only together with bom_type="vex".
+SBOMFormat = Literal["cyclonedx", "spdx", "openvex", "csaf"]
+
+# Formats a pre-authored VEX may arrive in besides CycloneDX.
+EXTERNAL_VEX_FORMATS = ("openvex", "csaf")
 
 
 @dataclass
@@ -27,7 +31,8 @@ class UploadInput:
 
     Attributes:
         sbom_file: Path to the SBOM file to upload
-        sbom_format: Format of the SBOM ("cyclonedx" or "spdx")
+        sbom_format: Format of the artifact ("cyclonedx" or "spdx"; also
+            "openvex"/"csaf", valid only with bom_type="vex")
         bom_type: Artifact type to record on upload (sbom/vex/cbom/hbom). None
             uploads as a plain SBOM; non-SBOM types are sent verbatim.
         component_name: Name of the component (used by destinations like Dependency Track)
@@ -46,7 +51,7 @@ class UploadInput:
         """Validate input parameters."""
         if not self.sbom_file:
             raise ValueError("sbom_file is required")
-        if self.sbom_format not in ("cyclonedx", "spdx"):
+        if self.sbom_format not in ("cyclonedx", "spdx", *EXTERNAL_VEX_FORMATS):
             raise ValueError(f"Invalid sbom_format: {self.sbom_format}")
         if self.bom_type is not None:
             if not isinstance(self.bom_type, str):
@@ -54,6 +59,8 @@ class UploadInput:
             self.bom_type = self.bom_type.lower()
             if self.bom_type not in VALID_BOM_TYPES:
                 raise ValueError(f"Invalid bom_type: {self.bom_type}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
+        if self.sbom_format in EXTERNAL_VEX_FORMATS and self.bom_type != "vex":
+            raise ValueError(f"sbom_format '{self.sbom_format}' is only valid for bom_type='vex'")
 
 
 class DestinationConfig(ABC):

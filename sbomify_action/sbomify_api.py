@@ -798,16 +798,25 @@ class SbomifyApiClient:
         content_encoding: str | None = None,
         timeout: int | None = None,
     ) -> requests.Response:
-        """POST a raw artifact (SBOM/VEX/CBOM/HBOM) to ``/api/v1/sboms/artifact/{format}/{id}``.
+        """POST a raw artifact (SBOM/VEX/CBOM/HBOM) to the sboms artifact API.
+
+        Most formats go to ``/api/v1/sboms/artifact/{format}/{id}``; OpenVEX and
+        CSAF go to the format-agnostic ``/api/v1/sboms/artifact/vex/{id}``.
 
         ``bom_type`` (sbom/vex/cbom/hbom) is forwarded as the ``?bom_type=``
         query param when set, so the same endpoint can record a VEX or CBOM
         rather than a plain SBOM. The destination layer owns
         error-to-``UploadResult`` translation, so this method returns the raw
         response (including non-2xx) instead of raising. Network/timeout
-        failures still bubble up as ``APIError``.
+        failures still bubble up as ``APIError``. OpenVEX and CSAF VEX
+        documents go to the format-agnostic ``/artifact/vex/`` endpoint (the
+        backend detects the format from content); CycloneDX VEX keeps the
+        CycloneDX endpoint, which every deployed backend supports.
         """
-        path = f"/api/v1/sboms/artifact/{sbom_format}/{component_id}"
+        if sbom_format in ("openvex", "csaf"):
+            path = f"/api/v1/sboms/artifact/vex/{component_id}"
+        else:
+            path = f"/api/v1/sboms/artifact/{sbom_format}/{component_id}"
         extra: dict[str, str] = {"Content-Type": "application/json"}
         if content_encoding:
             extra["Content-Encoding"] = content_encoding
@@ -817,6 +826,11 @@ class SbomifyApiClient:
         normalized_bom_type = bom_type.lower() if bom_type else None
         if normalized_bom_type is not None and normalized_bom_type not in VALID_BOM_TYPES:
             raise ValueError(f"Invalid bom_type: {bom_type!r}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
+        # OpenVEX/CSAF are only meaningful as a VEX; enforce the same constraint
+        # UploadInput does so a direct caller can't silently misroute them to the
+        # /artifact/vex/ endpoint with a wrong bom_type.
+        if sbom_format in ("openvex", "csaf") and normalized_bom_type != "vex":
+            raise ValueError(f"sbom_format={sbom_format!r} requires bom_type='vex'")
         params = {"bom_type": normalized_bom_type} if normalized_bom_type and normalized_bom_type != "sbom" else None
         return self._request(
             "POST",

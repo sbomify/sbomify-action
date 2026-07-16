@@ -1054,10 +1054,14 @@ def validate_sbom(file_path: str) -> str:
         SBOMValidationError: If SBOM is invalid or unsupported format
     """
     try:
-        with Path(file_path).open("r") as f:
+        with Path(file_path).open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except json.JSONDecodeError:
         raise SBOMValidationError("Invalid JSON format")
+    except UnicodeDecodeError:
+        # Undecodable (non-UTF-8) bytes fail as a clean validation error rather
+        # than crashing the pipeline past step 1's SBOMValidationError handling.
+        raise SBOMValidationError("SBOM file is not valid UTF-8")
     except FileNotFoundError:
         raise SBOMValidationError(f"SBOM file not found: {file_path}")
 
@@ -1070,6 +1074,35 @@ def validate_sbom(file_path: str) -> str:
         return "spdx"
     else:
         raise SBOMValidationError("Neither CycloneDX nor SPDX format found in JSON file")
+
+
+def _detect_external_vex_format(file_path: str) -> Optional[str]:
+    """Detect a non-CycloneDX VEX format from content markers.
+
+    Returns "openvex" (@context under https://openvex.dev/ns — prefix-matched,
+    v0.0.1 documents lack the version suffix; @context may be a single string or
+    a JSON-LD list, in which case any entry with the namespace prefix counts) or
+    "csaf" (document.category == "csaf_vex"), else None. Invalid JSON returns
+    None so validate_sbom() can report it with its usual error message.
+    """
+    try:
+        with Path(file_path).open("r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        # Non-UTF-8 / undecodable bytes fall back to None so validate_sbom()
+        # reports the problem with its usual error message instead of crashing.
+        return None
+    if not isinstance(data, dict):
+        return None
+    # @context is a single IRI string or a JSON-LD list of them.
+    context = data.get("@context")
+    contexts = context if isinstance(context, list) else [context]
+    if any(isinstance(c, str) and c.startswith("https://openvex.dev/ns") for c in contexts):
+        return "openvex"
+    document = data.get("document")
+    if isinstance(document, dict) and document.get("category") == "csaf_vex":
+        return "csaf"
+    return None
 
 
 def _detect_sbom_format_silent(file_path: str) -> str:
@@ -1087,10 +1120,14 @@ def _detect_sbom_format_silent(file_path: str) -> str:
         SBOMValidationError: If SBOM is invalid or unsupported format
     """
     try:
-        with Path(file_path).open("r") as f:
+        with Path(file_path).open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except json.JSONDecodeError:
         raise SBOMValidationError("Invalid JSON format")
+    except UnicodeDecodeError:
+        # Undecodable (non-UTF-8) bytes fail as a clean validation error rather
+        # than crashing the pipeline past step 1's SBOMValidationError handling.
+        raise SBOMValidationError("SBOM file is not valid UTF-8")
     except FileNotFoundError:
         raise SBOMValidationError(f"SBOM file not found: {file_path}")
 
@@ -1357,15 +1394,27 @@ def run_pipeline(config: Config) -> None:
         try:
             if FILE_TYPE == "SBOM":
                 logger.info(f"Processing existing SBOM file: {FILE}")
-                FORMAT = validate_sbom(FILE)
-                # The config-level CycloneDX-only guard sees the declared SBOM_FORMAT; an
-                # SPDX-content file would slip past it and get byte-rewritten by the SPDX
-                # license sanitization below, so re-check against the detected format.
-                if config.bom_type and config.bom_type != "sbom" and FORMAT != "cyclonedx":
-                    raise SBOMValidationError(
-                        f"BOM_TYPE='{config.bom_type}' requires a CycloneDX artifact, but the file "
-                        f"content is {FORMAT}; it would be re-serialized and break the verbatim upload."
-                    )
+                # A VEX may arrive as OpenVEX or CSAF, neither of which is an
+                # SBOM format; detect those first and copy verbatim.
+                external_vex = _detect_external_vex_format(FILE) if config.bom_type == "vex" else None
+                if external_vex:
+                    FORMAT = external_vex
+                    logger.info(f"Detected {format_display_name(FORMAT)} VEX document.")
+                else:
+                    FORMAT = validate_sbom(FILE)
+                    # The config-level CycloneDX-only guard sees the declared SBOM_FORMAT; an
+                    # SPDX-content file would slip past it and get byte-rewritten by the SPDX
+                    # license sanitization below, so re-check against the detected format.
+                    if config.bom_type and config.bom_type != "sbom" and FORMAT != "cyclonedx":
+                        accepted = (
+                            "a CycloneDX, OpenVEX, or CSAF document"
+                            if config.bom_type == "vex"
+                            else "a CycloneDX artifact"
+                        )
+                        raise SBOMValidationError(
+                            f"BOM_TYPE='{config.bom_type}' requires {accepted}, but the file "
+                            f"content is {FORMAT}; it would be re-serialized and break the verbatim upload."
+                        )
                 shutil.copy(FILE, STEP_1_FILE)
 
                 # Sanitize SPDX licenses in input SBOMs (e.g. RPM-style "GPLv2+", "ASL 2.0")
