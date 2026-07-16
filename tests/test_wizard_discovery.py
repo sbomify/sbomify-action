@@ -74,6 +74,21 @@ def test_discover_disambiguates_colliding_suggested_names(tmp_path: Path) -> Non
     }
 
 
+def test_discover_disambiguates_with_full_relative_path(tmp_path: Path) -> None:
+    # Two nested dirs sharing a basename (apps/web + packages/web) must not
+    # collide — the full relative path goes into the suggestion.
+    for parent in ("apps", "packages"):
+        (tmp_path / parent / "web").mkdir(parents=True)
+        (tmp_path / parent / "web" / "bun.lock").write_text("")
+
+    found = discover(tmp_path, repo_name="anthias")
+    names = {str(lf.rel_path): lf.suggested_name for lf in found}
+    assert names == {
+        os.path.join("apps", "web", "bun.lock"): "anthias-apps-web-javascript",
+        os.path.join("packages", "web", "bun.lock"): "anthias-packages-web-javascript",
+    }
+
+
 def test_discover_recurses_into_subdirs(tmp_path: Path) -> None:
     (tmp_path / "backend").mkdir()
     (tmp_path / "backend" / "uv.lock").write_text("")
