@@ -15,3 +15,4 @@ additional_packages.txt
 node_modules
 sbomify.json
 sbomify.json.bak
+.claude
