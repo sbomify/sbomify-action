@@ -18,6 +18,7 @@ import functools
 import logging
 import re
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 import requests
@@ -184,17 +185,34 @@ def _format_extension(fmt: SbomFormat) -> str:
     return "cdx.json" if fmt == "cyclonedx" else "spdx.json"
 
 
-def _matrix_block(
+@dataclass(frozen=True)
+class MatrixRow:
+    """One (component, format) row of the emitted workflow's matrix.
+
+    Shared between the YAML emitter and the wizard's Publish step so a
+    local publish run and the CI job agree on component id, lockfile,
+    format, and output filename for every row.
+    """
+
+    name: str
+    component_name: str
+    component_id: str
+    lockfile: str
+    sbom_format: SbomFormat
+    output_file: str
+
+
+def matrix_rows(
     components: list[PlannedComponent],
     formats: list[SbomFormat],
     component_ids: dict[str, str],
-) -> str:
-    """Render the ``matrix.include:`` rows — one per (component, format).
+) -> list[MatrixRow]:
+    """Compute the matrix rows — one per (component, format).
 
     Row ``name`` is suffixed with the format only when more than one
     format is being emitted, so single-format workflows stay readable.
     """
-    rows: list[str] = []
+    rows: list[MatrixRow] = []
     multi_format = len(formats) > 1
     # Track which component-name slugs are reused across lockfiles. When two
     # lockfiles map to the same name (eg the user accepts the same suggested
@@ -219,17 +237,34 @@ def _matrix_block(
             row_slug = name_slug
         for fmt in formats:
             ext = _format_extension(fmt)
-            row_name = f"{row_slug}-{fmt}" if multi_format else row_slug
-            output_file = f"{row_slug}.{ext}"
             rows.append(
-                "          - name: " + row_name + "\n"
-                "            component_name: " + c.name + "\n"
-                "            component_id: " + cid + "\n"
-                "            lockfile: " + rel + "\n"
-                "            sbom_format: " + fmt + "\n"
-                "            output_file: " + output_file + "\n"
+                MatrixRow(
+                    name=f"{row_slug}-{fmt}" if multi_format else row_slug,
+                    component_name=c.name,
+                    component_id=cid,
+                    lockfile=rel,
+                    sbom_format=fmt,
+                    output_file=f"{row_slug}.{ext}",
+                )
             )
-    return "".join(rows)
+    return rows
+
+
+def _matrix_block(
+    components: list[PlannedComponent],
+    formats: list[SbomFormat],
+    component_ids: dict[str, str],
+) -> str:
+    """Render the ``matrix.include:`` rows from :func:`matrix_rows`."""
+    return "".join(
+        "          - name: " + row.name + "\n"
+        "            component_name: " + row.component_name + "\n"
+        "            component_id: " + row.component_id + "\n"
+        "            lockfile: " + row.lockfile + "\n"
+        "            sbom_format: " + row.sbom_format + "\n"
+        "            output_file: " + row.output_file + "\n"
+        for row in matrix_rows(components, formats, component_ids)
+    )
 
 
 def _trigger_block(strategy: ReleaseStrategy, branch: str, lockfile_paths: list[str]) -> str:

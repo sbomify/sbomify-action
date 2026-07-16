@@ -18,8 +18,11 @@ Phases (``step_index`` on each ``WizardScreen``):
                             (when augmentation=json_config) push to
                             configure (sbomify.json) for the in-repo
                             metadata form
-  8. review + apply + done — table of planned writes → RichLog progress
-                             → summary panel + OIDC instructions
+  8. review + apply        — table of planned writes → RichLog progress
+  9. publish + done        — optional local generate-and-upload of the
+                             first SBOMs (one pipeline subprocess per
+                             matrix row) → summary panel + OIDC
+                             instructions
 """
 
 from __future__ import annotations

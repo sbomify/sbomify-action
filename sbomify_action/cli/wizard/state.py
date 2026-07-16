@@ -183,6 +183,23 @@ class Plan:
     step after each SBOM upload to produce a signed build attestation."""
 
 
+@dataclass(frozen=True)
+class PublishOutcome:
+    """Result of one local generate-and-upload run from the Publish step.
+
+    One outcome per (lockfile, format) matrix row — mirrors the rows the
+    emitted workflow would run in CI. ``error`` carries a short
+    human-readable reason when ``ok`` is False; the full subprocess
+    output already streamed to the Publish screen's log.
+    """
+
+    rel_path: str
+    sbom_format: str
+    output_file: Path
+    ok: bool
+    error: str | None = None
+
+
 @dataclass
 class WizardState:
     """All wizard state, shared across screens via the Textual App."""
@@ -259,6 +276,16 @@ class WizardState:
     "copy first URL to clipboard" action whose synthetic
     ``<dry-run:component:...>`` IDs would produce a 404 URL."""
 
+    # Populated by publish.run_publish (the Publish screen's worker).
+    publish_outcomes: list[PublishOutcome] = field(default_factory=list)
+    """One entry per attempted (lockfile, format) run, in run order.
+    Empty when the user skipped the Publish step (or hasn't reached it).
+    The Done screen renders a published-SBOMs panel from this."""
+    publish_output_dir: Path | None = None
+    """Directory the local publish runs wrote their SBOM files (and audit
+    trails) into — a session temp dir, kept after the wizard exits so the
+    user can inspect what was uploaded."""
+
     def require_api(self) -> "SbomifyApiClient":
         """Return the API client, raising if authenticate hasn't run yet."""
         if self.api is None:
@@ -286,6 +313,11 @@ class WizardState:
         self.oidc_failed_components = {}
         self.oidc_binding_note = None
         self.is_dry_run = False
+        # Publish runs against the component IDs a specific apply produced;
+        # re-applying invalidates them, so a stale outcome list must not leak
+        # into the Done summary of the new pass.
+        self.publish_outcomes = []
+        self.publish_output_dir = None
 
     def __repr__(self) -> str:
         return (

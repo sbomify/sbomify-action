@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from sbomify_action.cli.wizard.app import WizardApp
 
 
-TOTAL_STEPS = 8
+TOTAL_STEPS = 9
 
 # Responsive breakpoints (terminal cells). The wizard is a fit-to-viewport
 # TUI — nothing scrolls — so every screen has to render inside whatever the

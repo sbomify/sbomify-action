@@ -191,6 +191,6 @@ class ApplyScreen(WizardScreen):
                 # but defend in depth.
                 self.app.pop_screen()
                 return
-            from sbomify_action.cli.wizard.screens.done import DoneScreen
+            from sbomify_action.cli.wizard.screens.publish import PublishScreen
 
-            self.wizard.push_screen(DoneScreen())
+            self.wizard.push_screen(PublishScreen())
