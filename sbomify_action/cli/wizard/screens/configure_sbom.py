@@ -53,6 +53,12 @@ class ConfigureSbomScreen(WizardScreen):
         # breaking the Enter→Escape→Enter loop documented in the
         # earlier code review.
         self._json_form_visited = False
+        # Same idea for CreateProfileScreen: with "profile" as the
+        # default augmentation strategy, a zero-profile workspace can
+        # reach an Enter→Escape→Enter loop through the "+ Create new"
+        # sentinel. on_screen_resume reads this to detect the cancel
+        # and route the user out of the loop.
+        self._create_profile_visited = False
 
     def compose_body(self) -> ComposeResult:
         enrich = Vertical(classes="wizard-panel")
@@ -98,21 +104,30 @@ class ConfigureSbomScreen(WizardScreen):
                 "produces.[/]",
                 classes="wizard-help",
             )
+            # Recommended option first + default-pressed, matching every
+            # other radio group on this screen — RadioSet also parks its
+            # keyboard cursor on the first button at mount, so recommended-
+            # first keeps cursor and pressed state on the same row.
             with RadioSet(id="augmentation"):
-                yield StatefulRadioButton("Skip — leave metadata blank for now", id="aug-skip", value=True)
                 yield StatefulRadioButton(
                     "Use a contact profile (saved to sbomify)  [#86EFAC]✓ recommended[/]",
                     id="aug-profile",
+                    value=True,
                 )
                 yield StatefulRadioButton(
                     "Write a sbomify.json file (saved to the repo)",
                     id="aug-json_config",
                 )
+                yield StatefulRadioButton("Skip — leave metadata blank for now", id="aug-skip")
             picker = OptionList(
                 *self._picker_options(),
                 id="profile-picker",
             )
-            picker.display = False
+            # Visible from the start because "profile" is the initial
+            # selection — the constructor-set radio value suppresses
+            # RadioSet.Changed (Textual's ToggleButton contract), so
+            # on_radio_set_changed can't do this reveal for us.
+            picker.display = True
             yield picker
             help_text = Static(
                 "[#5E5E5E]Same profile binds to every component; re-run the wizard to change it. "
@@ -120,7 +135,7 @@ class ConfigureSbomScreen(WizardScreen):
                 id="profile-help",
                 markup=True,
             )
-            help_text.display = False
+            help_text.display = True
             yield help_text
             # Status / "Edit fields…" affordance shown only when the
             # user has selected the json_config radio. Tells them
@@ -222,6 +237,12 @@ class ConfigureSbomScreen(WizardScreen):
 
     def on_mount(self) -> None:
         self.query_one("#enrich", RadioSet).focus()
+        # Seed the picker highlight for the default "profile" strategy —
+        # on_radio_set_changed never fires for a constructor-set radio
+        # value, so its default-highlight logic doesn't run at mount.
+        # First REAL profile when one exists; with zero profiles index 0
+        # is the "+ Create new" sentinel, the bootstrap path.
+        self.query_one("#profile-picker", OptionList).highlighted = 1 if self._profiles else 0
 
     def on_screen_resume(self) -> None:
         """Called when the screen becomes active again after a sub-screen
@@ -230,7 +251,10 @@ class ConfigureSbomScreen(WizardScreen):
         auto-select it via the id CreateProfileScreen stashed on the
         plan. If ConfigureSbomifyJsonScreen was pushed and the user
         cancelled (no data on the plan), flip the augmentation back
-        to Skip so the user isn't trapped in a re-push loop.
+        to Skip so the user isn't trapped in a re-push loop. A
+        cancelled CreateProfileScreen gets the same treatment: move
+        the highlight off the "+ Create new" sentinel (or revert to
+        Skip when the workspace has zero profiles to fall back on).
         """
         workspace = self.wizard.state.workspace
         if workspace is None:
@@ -264,6 +288,7 @@ class ConfigureSbomScreen(WizardScreen):
             # Auto-select the freshly-created profile if CreateProfile
             # stashed its id; flip the augmentation radio so the user
             # sees the success directly.
+            self._create_profile_visited = False
             for idx, opt in enumerate(self._picker_options()):
                 if opt.id == target_id:
                     picker.highlighted = idx
@@ -278,6 +303,32 @@ class ConfigureSbomScreen(WizardScreen):
                 if opt.id == previous_highlighted_id:
                     picker.highlighted = idx
                     break
+
+        # Handle a cancelled CreateProfileScreen (Escape without saving).
+        # With "profile" as the default strategy, a zero-profile
+        # workspace reaches Enter→CreateProfile→Escape→Enter straight
+        # from the screen's defaults — break the loop the same way the
+        # sbomify.json form does below.
+        pressed_after_create = aug.pressed_button
+        if (
+            self._create_profile_visited
+            and not target_id
+            and pressed_after_create is not None
+            and pressed_after_create.id == "aug-profile"
+        ):
+            self._create_profile_visited = False
+            if self._profiles:
+                # Real profiles exist — move the highlight off the
+                # "+ Create new" sentinel so the next Enter advances
+                # with a real profile instead of re-pushing the form.
+                picker.highlighted = 1
+            else:
+                self._set_radio_value(aug, target_id="aug-skip")
+                self.notify(
+                    "Cancelled — augmentation reverted to Skip. Pick the radio again to retry.",
+                    title="Contact profile",
+                    severity="information",
+                )
 
         # Handle the sbomify.json form return: detect cancel-without-
         # save and flip back to Skip so the user isn't trapped in a
@@ -405,6 +456,7 @@ class ConfigureSbomScreen(WizardScreen):
             if self._picker_sentinel_highlighted():
                 from sbomify_action.cli.wizard.screens.create_profile import CreateProfileScreen
 
+                self._create_profile_visited = True
                 self.wizard.push_screen(CreateProfileScreen())
                 return
             plan.contact_profile_id = self._selected_profile_id()

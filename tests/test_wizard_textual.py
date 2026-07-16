@@ -219,8 +219,12 @@ async def test_enter_on_focused_radio_set_toggles_radio(tmp_path: Path, monkeypa
     radio, so the inline profile picker never appeared. ``route_enter``
     on ``WizardScreen`` now detects RadioSet focus and toggles the
     highlighted button instead of forwarding.
+
+    Also pins the augmentation defaults: the recommended 'Use a contact
+    profile' radio is pressed at mount, the picker is visible, and the
+    first REAL profile (not the '+ Create new' sentinel) is highlighted.
     """
-    from textual.widgets import OptionList, RadioButton, RadioSet
+    from textual.widgets import OptionList, RadioSet
 
     lockfiles = [
         DiscoveredLockfile(
@@ -279,35 +283,54 @@ async def test_enter_on_focused_radio_set_toggles_radio(tmp_path: Path, monkeypa
 
         assert isinstance(app.screen, ConfigureSbomScreen)
 
-        # Focus the augmentation RadioSet; arrow down to highlight the
-        # profile radio; press Enter to commit. Without route_enter's
-        # RadioSet branch this advances to Review and the profile
-        # picker never becomes visible. RadioSet's own bindings consume
-        # Down (move) and Enter (commit highlighted) while the screen's
-        # Enter binding falls through via route_enter.
+        # Defaults: the recommended profile radio is pressed at mount,
+        # the picker is visible, and the highlight sits on the first
+        # REAL profile — index 0 is the "+ Create new" sentinel.
         aug = app.screen.query_one("#augmentation", RadioSet)
+        pressed = aug.pressed_button
+        assert pressed is not None and pressed.id == "aug-profile", (
+            f"Recommended aug-profile must be the default, got {pressed.id if pressed else None}"
+        )
+        picker = app.screen.query_one("#profile-picker", OptionList)
+        assert picker.display is True, "Profile picker must be visible for the default profile radio"
+        assert picker.highlighted == 1, "First REAL profile must be highlighted by default, not the sentinel"
+        # Picker shows the two stub profiles plus the "+ Create new"
+        # sentinel row that hands off to CreateProfileScreen.
+        assert picker.option_count == 3
+
+        # Focus the augmentation RadioSet; arrow down twice to highlight
+        # the Skip radio; press Enter to commit. Without route_enter's
+        # RadioSet branch this advances to Review instead of toggling.
+        # RadioSet's own bindings consume Down (move) while the screen's
+        # Enter binding falls through via route_enter.
         aug.focus()
         await pilot.pause()
-        await pilot.press("down")
+        await pilot.press("down")  # -> aug-json_config
+        await pilot.pause()
+        await pilot.press("down")  # -> aug-skip
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        # Drop the unused RadioButton import warning by referencing it.
-        _ = RadioButton
 
         assert isinstance(app.screen, ConfigureSbomScreen), (
             "Enter on focused RadioSet must NOT advance — should toggle radio"
         )
         pressed = aug.pressed_button
-        assert pressed is not None and pressed.id == "aug-profile", (
-            f"Expected aug-profile after down+enter, got {pressed.id if pressed else None}"
+        assert pressed is not None and pressed.id == "aug-skip", (
+            f"Expected aug-skip after down+down+enter, got {pressed.id if pressed else None}"
         )
+        assert picker.display is False, "Profile picker must hide when Skip is selected"
 
-        picker = app.screen.query_one("#profile-picker", OptionList)
-        assert picker.display is True, "Profile picker must appear after selecting profile radio"
-        # Picker shows the two stub profiles plus the "+ Create new"
-        # sentinel row that hands off to CreateProfileScreen.
-        assert picker.option_count == 3
+        # Arrow back up to the profile radio — the picker reappears.
+        await pilot.press("up")
+        await pilot.pause()
+        await pilot.press("up")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        pressed = aug.pressed_button
+        assert pressed is not None and pressed.id == "aug-profile"
+        assert picker.display is True, "Profile picker must reappear after re-selecting profile radio"
 
 
 async def test_escape_from_components_goes_back_in_any_focus_state(
@@ -527,18 +550,13 @@ async def test_enter_on_create_profile_sentinel_pushes_create_screen(
 
         assert isinstance(app.screen, ConfigureSbomScreen)
 
-        # Toggle augmentation radio to "Use a contact profile" so the
-        # picker becomes visible; highlight the + Create new sentinel
+        # "Use a contact profile" is the default radio, so the picker
+        # is already visible; highlight the + Create new sentinel
         # (index 0) and press Enter.
         aug = app.screen.query_one("#augmentation", RadioSet)
-        aug.focus()
-        await pilot.pause()
-        await pilot.press("down")  # move to aug-profile
-        await pilot.pause()
-        await pilot.press("enter")  # commit the radio
-        await pilot.pause()
-
+        assert aug.pressed_button is not None and aug.pressed_button.id == "aug-profile"
         picker = app.screen.query_one("#profile-picker", OptionList)
+        assert picker.display is True
         picker.highlighted = 0  # + Create new sentinel
         await pilot.pause()
         # Move focus to the Next button so route_enter advances via _advance
@@ -551,6 +569,86 @@ async def test_enter_on_create_profile_sentinel_pushes_create_screen(
         assert isinstance(app.screen, CreateProfileScreen), (
             "Enter with the + Create new sentinel highlighted must push CreateProfileScreen, not advance to Review"
         )
+
+
+async def test_augmentation_default_with_no_profiles_bootstraps_create_and_cancel_reverts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With zero workspace profiles, the default recommended 'profile'
+    strategy highlights the '+ Create new' sentinel, so Enter routes to
+    CreateProfileScreen (the bootstrap path). Cancelling that form must
+    revert augmentation to Skip — otherwise the screen's own defaults
+    put the user in an Enter→Escape→Enter loop.
+    """
+    from textual.widgets import Button, OptionList, RadioSet
+
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "uv.lock",
+            rel_path=Path("uv.lock"),
+            ecosystem="python",
+            suggested_name="widget-py",
+        )
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+    _stub_client(
+        monkeypatch,
+        products=[{"id": "p1", "name": "alpha"}],
+        components=[{"id": "c1", "name": "widget-py"}],
+        profiles=[],
+    )
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(120, 60)) as pilot:
+        # Walk to ConfigureSbom.
+        await pilot.press("enter")  # Welcome -> Discover
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        await pilot.press("enter")  # Discover -> Auth (auto-auth)
+        await pilot.pause(1.0)
+        await pilot.press("enter")  # Product -> Components
+        await pilot.pause()
+        await pilot.press("enter")  # Components -> ConfigureWorkflow
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.configure_workflow import (
+            ConfigureWorkflowScreen,
+        )
+
+        assert isinstance(app.screen, ConfigureWorkflowScreen)
+        app.screen.query_one("#next", Button).focus()
+        await pilot.pause()
+        await pilot.press("enter")  # ConfigureWorkflow -> ConfigureSbom
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.configure_sbom import ConfigureSbomScreen
+        from sbomify_action.cli.wizard.screens.create_profile import CreateProfileScreen
+
+        assert isinstance(app.screen, ConfigureSbomScreen)
+        configure_screen = app.screen
+        picker = configure_screen.query_one("#profile-picker", OptionList)
+        # Zero profiles: only the sentinel row exists, and it's highlighted.
+        assert picker.option_count == 1
+        assert picker.highlighted == 0
+
+        # Advance — the sentinel routes to CreateProfileScreen.
+        configure_screen.query_one("#next", Button).focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, CreateProfileScreen)
+
+        # Cancel the form — back on ConfigureSbom, augmentation must
+        # have reverted to Skip so Enter doesn't re-push the form.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen is configure_screen
+        pressed = configure_screen.query_one("#augmentation", RadioSet).pressed_button
+        assert pressed is not None and pressed.id == "aug-skip", (
+            f"Cancelled CreateProfile must revert augmentation to Skip, got {pressed.id if pressed else None}"
+        )
+        assert picker.display is False
 
 
 async def test_enter_on_focused_back_button_goes_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
