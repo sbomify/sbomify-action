@@ -4,7 +4,10 @@ Priority: 35 for lock files (generic multi-ecosystem, lower than Trivy),
 25 for Docker images (preferred over cdxgen — see SyftImageGenerator).
 
 Syft is a comprehensive SBOM generator that supports version selection.
-It supports more versions than Trivy but is slightly lower priority.
+For lock files it supports more spec versions than Trivy but ranks
+slightly lower; for Docker images it ranks higher than both Trivy and
+cdxgen because its image SBOMs carry the OS metadata downstream
+vulnerability scanners need.
 
 Verified capabilities (Syft 1.38.2):
 - CycloneDX versions: 1.2, 1.3, 1.4, 1.5, 1.6 (default: 1.6)
