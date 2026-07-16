@@ -42,7 +42,10 @@ class ComponentsScreen(WizardScreen):
         # name (case-insensitive) so the picker reads alphabetically.
         existing = sorted(
             existing,
-            key=lambda c: str(c.get("name") or c.get("id") or "(unnamed)").casefold(),
+            key=lambda c: (
+                str(c.get("name") or c.get("id") or "(unnamed)").casefold(),
+                str(c.get("id") or ""),
+            ),
         )
         # Escape API-supplied names before passing them as picker
         # labels — PickOrCreate's OptionList renders labels as Rich

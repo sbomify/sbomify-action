@@ -34,7 +34,10 @@ class ProductScreen(WizardScreen):
         # first visible row.
         products = sorted(
             products,
-            key=lambda p: str(p.get("name") or p.get("id") or "(unnamed)").casefold(),
+            key=lambda p: (
+                str(p.get("name") or p.get("id") or "(unnamed)").casefold(),
+                str(p.get("id") or ""),
+            ),
         )
         panel = Vertical(classes="wizard-panel")
         panel.border_title = "◆  Pick a product"
