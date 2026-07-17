@@ -8,7 +8,7 @@ ARG CARGO_CYCLONEDX_VERSION=0.5.9
 ARG CRANE_VERSION=0.21.7
 ARG COSIGN_VERSION=3.1.1
 
-FROM python:3.13-slim-trixie AS fetcher
+FROM python:3.14-slim-trixie AS fetcher
 
 # Use Docker's automatic platform detection
 ARG TARGETARCH
@@ -113,7 +113,7 @@ RUN apt-get update && apt-get install -y curl xz-utils && \
 FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:88234bc9e09c2b2f6d176a3daf411419eb0370d450a08129257410de9cfafd2a AS uv-fetcher
 
 # Python builder stage
-FROM python:3.13-slim-trixie AS builder
+FROM python:3.14-slim-trixie AS builder
 
 ARG VERSION=0.0.0
 
@@ -141,7 +141,7 @@ RUN rm -rf dist/ && uv build
 RUN uv pip install dist/sbomify_action-*.whl
 
 # Final stage
-FROM python:3.13-slim-trixie
+FROM python:3.14-slim-trixie
 
 # Build arguments for dynamic labels (passed at build time)
 ARG VERSION=0.0.0
