@@ -82,7 +82,6 @@ Each step maintains an audit trail with timestamps for compliance.
 - Maintain 80%+ test coverage
 - Use `git --no-pager` for git operations
 - Never create summary/documentation files unless explicitly requested
-- Check `docs/plans/` for in-flight implementation plans before starting related work
 
 ## Git Commit Identity
 
