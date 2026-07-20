@@ -158,6 +158,61 @@ def test_discover_skips_agent_worktree_dirs(tmp_path: Path) -> None:
     assert [str(lf.rel_path) for lf in found] == ["uv.lock"]
 
 
+def test_discover_annotates_submodule_lockfiles(tmp_path: Path) -> None:
+    # Lockfiles under a .gitmodules-declared path belong to another repo —
+    # they must be flagged so the wizard can steer the user to set up
+    # SBOMs there instead.
+    (tmp_path / ".gitmodules").write_text('[submodule "lib"]\n\tpath = extern/lib\n\turl = git@example.com:lib.git\n')
+    sub = tmp_path / "extern" / "lib"
+    (sub / "nested").mkdir(parents=True)
+    (sub / "uv.lock").write_text("")
+    (sub / "nested" / "bun.lock").write_text("")  # deeper inside the submodule
+    (tmp_path / "uv.lock").write_text("")
+
+    found = discover(tmp_path)
+    by_rel = {str(lf.rel_path): lf for lf in found}
+    assert by_rel["uv.lock"].nested_repo is None
+    assert by_rel["uv.lock"].nested_repo_kind is None
+    for rel in (os.path.join("extern", "lib", "uv.lock"), os.path.join("extern", "lib", "nested", "bun.lock")):
+        assert by_rel[rel].nested_repo == "extern/lib"
+        assert by_rel[rel].nested_repo_kind == "submodule"
+
+
+def test_discover_annotates_vendored_git_clone(tmp_path: Path) -> None:
+    # A checked-in clone (its own .git dir, not declared in .gitmodules)
+    # is flagged as vendored. Submodule checkouts use a .git *file*, so
+    # that shape must be detected too.
+    clone = tmp_path / "third_party" / "libfoo"
+    clone.mkdir(parents=True)
+    (clone / ".git").mkdir()
+    (clone / "Cargo.lock").write_text("")
+
+    gitfile_repo = tmp_path / "extern" / "bar"
+    gitfile_repo.mkdir(parents=True)
+    (gitfile_repo / ".git").write_text("gitdir: ../../.git/modules/bar\n")
+    (gitfile_repo / "go.sum").write_text("")
+
+    found = discover(tmp_path)
+    by_rel = {str(lf.rel_path): lf for lf in found}
+    assert by_rel[os.path.join("third_party", "libfoo", "Cargo.lock")].nested_repo == "third_party/libfoo"
+    assert by_rel[os.path.join("third_party", "libfoo", "Cargo.lock")].nested_repo_kind == "vendored"
+    assert by_rel[os.path.join("extern", "bar", "go.sum")].nested_repo == "extern/bar"
+    assert by_rel[os.path.join("extern", "bar", "go.sum")].nested_repo_kind == "vendored"
+
+
+def test_discover_gitmodules_quoted_path(tmp_path: Path) -> None:
+    # git quotes submodule paths containing spaces — the parser must strip
+    # the quotes before comparing.
+    (tmp_path / ".gitmodules").write_text('[submodule "spacey"]\n\tpath = "my lib"\n\turl = u\n')
+    sub = tmp_path / "my lib"
+    sub.mkdir()
+    (sub / "uv.lock").write_text("")
+
+    found = discover(tmp_path)
+    assert found[0].nested_repo == "my lib"
+    assert found[0].nested_repo_kind == "submodule"
+
+
 def test_discover_suggested_name_includes_repo_and_ecosystem(tmp_path: Path) -> None:
     (tmp_path / "uv.lock").write_text("")
     found = discover(tmp_path, repo_name="My Widget!")

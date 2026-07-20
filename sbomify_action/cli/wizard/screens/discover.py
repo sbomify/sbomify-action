@@ -38,6 +38,14 @@ class DiscoverScreen(WizardScreen):
                 "[b]n[/] to select none, [b]Enter[/] when you're done.",
                 classes="wizard-help",
             )
+            if any(lf.nested_repo for lf in self.wizard.state.discovered):
+                yield Static(
+                    "[#F4B57F]Lockfiles inside submodules or vendored repos are deselected "
+                    "by default — they belong to another repository, so set up SBOMs there "
+                    "instead.[/]",
+                    id="nested-repo-note",
+                    classes="wizard-help",
+                )
             yield SelectionList[int](id="lockfile-list")
             yield Static("", id="discover-status", markup=True)
         with Horizontal(classes="button-row"):
@@ -48,7 +56,12 @@ class DiscoverScreen(WizardScreen):
         sel = self.query_one("#lockfile-list", SelectionList)
         for idx, lf in enumerate(self.wizard.state.discovered):
             label = f"{lf.rel_path}  [#5E5E5E]({lf.ecosystem})[/]"
-            sel.add_option((label, idx, True))  # default-selected
+            if lf.nested_repo:
+                kind = "submodule" if lf.nested_repo_kind == "submodule" else "vendored repo"
+                label += f"  [#F4B57F]({kind}: {lf.nested_repo})[/]"
+            # Nested-repo lockfiles default to deselected — they belong to
+            # another repository and are better tracked from there.
+            sel.add_option((label, idx, lf.nested_repo is None))
         sel.focus()
 
     def action_toggle_selection(self) -> None:
