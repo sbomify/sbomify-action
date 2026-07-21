@@ -440,6 +440,49 @@ class SbomifyApiClient:
         if not response.ok:
             logger.warning(f"Failed to set visibility for component {component_id}: [{response.status_code}]")
 
+    def list_component_sboms(
+        self,
+        component_id: str,
+        *,
+        version: str | None = None,
+        sbom_format: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List a component's SBOMs, newest first.
+
+        ``version`` / ``sbom_format`` are passed to the backend's
+        exact-match filters (``GET /api/v1/components/{id}/sboms``).
+        Each item is ``{"sbom": {id, version, format, created_at, ...},
+        "releases": [...], ...}``.
+        """
+        params: dict[str, Any] = {}
+        if version is not None:
+            params["version"] = version
+        if sbom_format is not None:
+            params["format"] = sbom_format
+        return list(
+            self._paginate(
+                f"/api/v1/components/{component_id}/sboms",
+                params=params,
+                error_context="list component SBOMs",
+            )
+        )
+
+    def find_component_sbom(self, component_id: str, version: str, sbom_format: str) -> str | None:
+        """ID of the newest SBOM at exactly ``(version, sbom_format)``, or None.
+
+        The filter params are re-checked client-side: a backend that
+        predates the server-side filters ignores unknown query params and
+        would otherwise return the full unfiltered listing, silently
+        matching the wrong SBOM.
+        """
+        for item in self.list_component_sboms(component_id, version=version, sbom_format=sbom_format):
+            sbom = item.get("sbom")
+            if not isinstance(sbom, dict):
+                continue
+            if sbom.get("version") == version and sbom.get("format") == sbom_format and sbom.get("id"):
+                return str(sbom["id"])
+        return None
+
     def get_augmentation_meta(self, component_id: str) -> dict[str, Any]:
         """Fetch augmentation metadata for a component.
 
