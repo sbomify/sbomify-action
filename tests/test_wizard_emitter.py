@@ -312,6 +312,49 @@ def test_emit_attestation_skips_nested_repo_lockfiles(tmp_path: Path) -> None:
     assert yaml.index("attest: true") < yaml.index("attest: false")
 
 
+def _nested_lockfile(tmp_path: Path) -> DiscoveredLockfile:
+    return DiscoveredLockfile(
+        path=tmp_path / "extern" / "lib" / "Cargo.lock",
+        rel_path=Path("extern") / "lib" / "Cargo.lock",
+        ecosystem="rust",
+        suggested_name="widget-rust",
+        nested_repo="extern/lib",
+        nested_repo_kind="submodule",
+    )
+
+
+def test_emit_submodule_rows_drive_attach_or_backfill(tmp_path: Path) -> None:
+    """Nested-repo lockfiles get a submodule_path matrix field, the env
+    block forwards it as SUBMODULE_PATH, and the checkout pulls
+    submodules so the backfill path can generate."""
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        create_components=[
+            PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py"),
+            PlannedComponent(lockfile=_nested_lockfile(tmp_path), name="widget-rust"),
+        ],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+    assert "            submodule_path: extern/lib\n" in yaml
+    assert "          SUBMODULE_PATH: ${{ matrix.submodule_path }}\n" in yaml
+    assert "          submodules: recursive\n" in yaml
+    # Exactly one row carries the field — the non-submodule row must not.
+    assert yaml.count("submodule_path:") == 1
+
+
+def test_emit_no_submodule_plumbing_without_nested_lockfiles(tmp_path: Path) -> None:
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+    assert "submodule_path" not in yaml
+    assert "SUBMODULE_PATH" not in yaml
+    assert "submodules: recursive" not in yaml
+
+
 def test_emit_cache_step_always_present(tmp_path: Path) -> None:
     facts = _facts(tmp_path)
     plan = Plan(

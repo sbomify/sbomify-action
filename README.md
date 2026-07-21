@@ -326,6 +326,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `COMPONENT_VERSION`        | No       | Override component version in SBOM                                               |
 | `COMPONENT_PURL`           | No       | Add or override component PURL in SBOM                                           |
 | `PRODUCT_RELEASE`          | No       | Tag SBOM with product releases (see [Product Releases](#product-releases))       |
+| `SUBMODULE_PATH`           | No       | Treat the component as a git submodule pinned at this path: resolve the pin to a version (exact version tag, else short commit SHA), attach the component's existing SBOM at that version if one exists, otherwise generate and upload it. Requires `LOCK_FILE` and the `sbomify` upload destination |
 | `UPLOAD`                   | No       | Upload SBOM (default: true)                                                      |
 | `UPLOAD_DESTINATIONS`      | No       | Comma-separated destinations: `sbomify`, `dependency-track` (default: `sbomify`) |
 | `API_BASE_URL`             | No       | Override sbomify API URL for self-hosted instances                               |

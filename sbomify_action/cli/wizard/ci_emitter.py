@@ -306,6 +306,12 @@ def _matrix_block(
                 "            sbom_format: " + fmt + "\n"
                 "            output_file: " + output_file + "\n"
             )
+            if c.lockfile.nested_repo:
+                # Drives the action's attach-or-backfill submodule mode:
+                # it resolves the pinned commit to a version, attaches the
+                # component's existing SBOM at that version when one
+                # exists, and only generates + uploads otherwise.
+                row += "            submodule_path: " + c.lockfile.nested_repo + "\n"
             if attestation:
                 if c.lockfile.nested_repo:
                     kind = "submodule" if c.lockfile.nested_repo_kind == "submodule" else "vendored repo"
@@ -395,6 +401,7 @@ def _env_block(
     enrich: bool,
     release_strategy: ReleaseStrategy,
     product_id: str | None,
+    has_submodules: bool = False,
 ) -> str:
     """The ``env:`` block under the action step.
 
@@ -425,6 +432,10 @@ def _env_block(
             "          SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft",
         ]
     )
+    if has_submodules:
+        # Empty for non-submodule rows (matrix field unset) — the action
+        # treats an empty SUBMODULE_PATH as disabled.
+        lines.append("          SUBMODULE_PATH: ${{ matrix.submodule_path }}")
     if release_strategy == "tag" and product_id:
         # PRODUCT_RELEASE is parsed by cli/main.py as a JSON list — see
         # cli/main.py's "PRODUCT_RELEASE must be a JSON list like
@@ -538,6 +549,7 @@ def emit_workflow(
     component_ids = component_ids or {}
     lockfile_paths = [str(c.lockfile.rel_path) for c in plan.create_components]
     formats = plan.sbom_formats or ["cyclonedx"]
+    has_submodules = any(c.lockfile.nested_repo for c in plan.create_components)
 
     permissions = _permissions_block(plan.credential_mode, plan.attestation)
     trigger = _trigger_block(plan.release_strategy, facts.default_branch, lockfile_paths)
@@ -549,9 +561,21 @@ def emit_workflow(
         enrich=plan.enrich,
         release_strategy=plan.release_strategy,
         product_id=product_id or plan.use_product_id,
+        has_submodules=has_submodules,
     )
     matrix = _matrix_block(plan.create_components, formats, component_ids, attestation=plan.attestation)
     attest_step = _attest_step() if plan.attestation else ""
+    if has_submodules:
+        # Submodule contents are only needed on the backfill path (no
+        # published SBOM at the pinned version yet), but the checkout has
+        # to cover it unconditionally.
+        checkout_step = (
+            f"      - uses: actions/checkout@{PINNED_CHECKOUT_SHA}  # {PINNED_CHECKOUT_VERSION}\n"
+            "        with:\n"
+            "          submodules: recursive\n"
+        )
+    else:
+        checkout_step = f"      - uses: actions/checkout@{PINNED_CHECKOUT_SHA}  # {PINNED_CHECKOUT_VERSION}\n"
 
     # Resolved by the caller (apply / review) so the GitHub lookup happens
     # once per run. Omitted by snapshot tests and ad-hoc callers — fall back
@@ -573,7 +597,7 @@ def emit_workflow(
         "        include:\n"
         f"{matrix}"
         "    steps:\n"
-        f"      - uses: actions/checkout@{PINNED_CHECKOUT_SHA}  # {PINNED_CHECKOUT_VERSION}\n"
+        f"{checkout_step}"
         f"{_cache_step()}"
         f"{version_step}"
         f"      - uses: {action_ref}\n"

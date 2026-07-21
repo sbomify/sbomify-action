@@ -1215,3 +1215,57 @@ class TestLoadConfigAndBuildConfigParity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSubmoduleConfig(unittest.TestCase):
+    """Validation rules for submodule (attach-or-backfill) mode."""
+
+    def test_submodule_path_requires_lock_file(self):
+        config = Config(
+            token="t",
+            component_id="c1",
+            sbom_file="/path/to/sbom.json",
+            submodule_path="extern/lib",
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("SUBMODULE_PATH requires LOCK_FILE", str(cm.exception))
+
+    def test_submodule_path_requires_sbomify_upload(self):
+        config = Config(
+            token="t",
+            component_id="c1",
+            lock_file="extern/lib/Cargo.lock",
+            submodule_path="extern/lib",
+            upload=False,
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("SUBMODULE_PATH requires uploading to sbomify", str(cm.exception))
+
+    def test_submodule_path_valid_config(self):
+        config = Config(
+            token="t",
+            component_id="c1",
+            lock_file="extern/lib/Cargo.lock",
+            submodule_path="extern/lib",
+        )
+        config.validate()  # must not raise
+
+    def test_empty_submodule_path_env_is_disabled(self):
+        """The emitted workflow sets SUBMODULE_PATH to an empty string on
+        non-submodule matrix rows — that must not enable submodule mode."""
+        with tempfile.NamedTemporaryFile(suffix=".json") as f:
+            with patch.dict(
+                os.environ,
+                {
+                    "SUBMODULE_PATH": "",
+                    "TOKEN": "t",
+                    "COMPONENT_ID": "c1",
+                    "SBOM_FILE": f.name,
+                    "UPLOAD": "false",
+                },
+                clear=False,
+            ):
+                config = load_config()
+        self.assertIsNone(config.submodule_path)

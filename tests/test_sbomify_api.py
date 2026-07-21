@@ -617,3 +617,63 @@ def test_upload_sbom_explicit_sbom_sends_no_bom_type_param() -> None:
     with patch.object(client, "_request", return_value=MagicMock()) as req:
         client.upload_sbom(component_id="c1", sbom_payload=b"{}", sbom_format="cyclonedx", bom_type="sbom")
     assert req.call_args.kwargs["params"] is None
+
+
+# ----------------------------------------------------------------------
+# component SBOM lookup (submodule attach-or-backfill)
+
+
+def test_list_component_sboms_passes_exact_match_filters() -> None:
+    client, session = _client_with(
+        [_FakeResponse(200, {"items": [{"sbom": {"id": "s1", "version": "v1.2.3", "format": "cyclonedx"}}]})]
+    )
+    items = client.list_component_sboms("c1", version="v1.2.3", sbom_format="cyclonedx")
+    assert [i["sbom"]["id"] for i in items] == ["s1"]
+    params = session.request.call_args.kwargs["params"]
+    assert params["version"] == "v1.2.3"
+    assert params["format"] == "cyclonedx"
+    assert "/api/v1/components/c1/sboms" in session.request.call_args.args[1]
+
+
+def test_find_component_sbom_returns_newest_match() -> None:
+    client, _ = _client_with(
+        [
+            _FakeResponse(
+                200,
+                {
+                    "items": [
+                        {"sbom": {"id": "newest", "version": "v1.2.3", "format": "cyclonedx"}},
+                        {"sbom": {"id": "older", "version": "v1.2.3", "format": "cyclonedx"}},
+                    ]
+                },
+            )
+        ]
+    )
+    assert client.find_component_sbom("c1", "v1.2.3", "cyclonedx") == "newest"
+
+
+def test_find_component_sbom_returns_none_on_miss() -> None:
+    client, _ = _client_with([_FakeResponse(200, {"items": []})])
+    assert client.find_component_sbom("c1", "v9.9.9", "cyclonedx") is None
+
+
+def test_find_component_sbom_rechecks_filters_client_side() -> None:
+    """A backend without the server-side filters (pre sbomify#1176)
+    ignores the params and returns the full unfiltered listing — the
+    client must not match the wrong version/format."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(
+                200,
+                {
+                    "items": [
+                        {"sbom": {"id": "wrong-version", "version": "8fae865", "format": "cyclonedx"}},
+                        {"sbom": {"id": "wrong-format", "version": "v1.2.3", "format": "spdx"}},
+                        {"sbom": {"id": "match", "version": "v1.2.3", "format": "cyclonedx"}},
+                        {"not-sbom-shaped": True},
+                    ]
+                },
+            )
+        ]
+    )
+    assert client.find_component_sbom("c1", "v1.2.3", "cyclonedx") == "match"
