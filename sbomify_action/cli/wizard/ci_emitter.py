@@ -307,8 +307,17 @@ def _matrix_block(
                 "            output_file: " + output_file + "\n"
             )
             if attestation:
-                attest = "false" if c.lockfile.nested_repo else "true"
-                row += "            attest: " + attest + "\n"
+                if c.lockfile.nested_repo:
+                    kind = "submodule" if c.lockfile.nested_repo_kind == "submodule" else "vendored repo"
+                    row += (
+                        f"            # Deliberately NOT signed: {c.lockfile.nested_repo} is a {kind} — "
+                        "another repository's code. An attestation from this repo's workflow\n"
+                        "            # would carry the wrong Sigstore identity and fail verification "
+                        "against the repository the code actually comes from.\n"
+                        "            attest: false\n"
+                    )
+                else:
+                    row += "            attest: true\n"
             rows.append(row)
     return "".join(rows)
 

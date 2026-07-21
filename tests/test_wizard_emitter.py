@@ -304,6 +304,9 @@ def test_emit_attestation_skips_nested_repo_lockfiles(tmp_path: Path) -> None:
     assert "            attest: true\n" in yaml  # own lockfile still attests
     assert "            attest: false\n" in yaml  # submodule row opts out
     assert "        if: ${{ matrix.attest }}\n" in yaml
+    # The opt-out must be self-documenting in the YAML: an explicit
+    # "deliberately not signed" annotation naming the nested repo.
+    assert "Deliberately NOT signed: extern/lib is a submodule" in yaml
     # The row-level flag order must match the component order: widget-py
     # (attest: true) before widget-rust (attest: false).
     assert yaml.index("attest: true") < yaml.index("attest: false")
