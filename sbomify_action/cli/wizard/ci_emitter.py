@@ -255,11 +255,21 @@ def _matrix_block(
     components: list[PlannedComponent],
     formats: list[SbomFormat],
     component_ids: dict[str, str],
+    *,
+    attestation: bool = False,
 ) -> str:
     """Render the ``matrix.include:`` rows — one per (component, format).
 
     Row ``name`` is suffixed with the format only when more than one
     format is being emitted, so single-format workflows stay readable.
+
+    When ``attestation`` is enabled every row carries an ``attest``
+    boolean gating the attest-build-provenance step. Lockfiles inside a
+    submodule / vendored repo get ``attest: false``: the attestation's
+    Sigstore identity would be *this* repo's workflow, but the SBOM
+    describes code owned by another repository — signing it here would
+    produce provenance that fails verification against the repo the
+    code actually comes from.
     """
     rows: list[str] = []
     multi_format = len(formats) > 1
@@ -288,7 +298,7 @@ def _matrix_block(
             ext = _format_extension(fmt)
             row_name = f"{row_slug}-{fmt}" if multi_format else row_slug
             output_file = f"{row_slug}.{ext}"
-            rows.append(
+            row = (
                 "          - name: " + row_name + "\n"
                 "            component_name: " + c.name + "\n"
                 "            component_id: " + cid + "\n"
@@ -296,6 +306,10 @@ def _matrix_block(
                 "            sbom_format: " + fmt + "\n"
                 "            output_file: " + output_file + "\n"
             )
+            if attestation:
+                attest = "false" if c.lockfile.nested_repo else "true"
+                row += "            attest: " + attest + "\n"
+            rows.append(row)
     return "".join(rows)
 
 
@@ -469,7 +483,13 @@ def _attest_step() -> str:
         "      # If you hit one of the unsupported configurations, either upgrade to\n"
         "      # GitHub Enterprise Cloud, make the repo public, or remove this step.\n"
         "      # Reference: https://github.com/actions/attest-build-provenance\n"
+        "      #\n"
+        "      # Matrix entries with attest: false are skipped: those SBOMs describe\n"
+        "      # code owned by another repository (a git submodule or vendored\n"
+        "      # checkout), and an attestation signed by this repo's workflow would\n"
+        "      # fail verification against the repository the code comes from.\n"
         f"      - uses: actions/attest-build-provenance@{PINNED_ATTEST_SHA}  # {PINNED_ATTEST_VERSION}\n"
+        "        if: ${{ matrix.attest }}\n"
         "        with:\n"
         "          subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'\n"
     )
@@ -521,7 +541,7 @@ def emit_workflow(
         release_strategy=plan.release_strategy,
         product_id=product_id or plan.use_product_id,
     )
-    matrix = _matrix_block(plan.create_components, formats, component_ids)
+    matrix = _matrix_block(plan.create_components, formats, component_ids, attestation=plan.attestation)
     attest_step = _attest_step() if plan.attestation else ""
 
     # Resolved by the caller (apply / review) so the GitHub lookup happens
