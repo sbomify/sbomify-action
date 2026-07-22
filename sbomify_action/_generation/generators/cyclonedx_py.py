@@ -83,6 +83,10 @@ class CycloneDXPyGenerator:
         Supports Python lock files when requesting CycloneDX format.
         Does not support Docker images or SPDX format.
         """
+        # CBOM generation is cdxgen-only; declining here keeps the orchestrator
+        # from producing a plain SBOM mislabeled as a CBOM.
+        if input.include_crypto:
+            return False
         # Check if cyclonedx-py is installed
         if not _CYCLONEDX_PY_AVAILABLE:
             return False

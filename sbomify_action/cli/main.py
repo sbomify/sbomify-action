@@ -229,6 +229,7 @@ class Config:
     api_base_url: str = SBOMIFY_PRODUCTION_API
     sbom_format: SBOMFormat = "cyclonedx"
     bom_type: Optional[str] = None
+    cbom_generate: bool = False
     spec_version: Optional[str] = None
     oidc_audience: str | None = None
     # Set to True at runtime when config.token was obtained via OIDC exchange;
@@ -344,9 +345,31 @@ class Config:
                 f"Invalid BOM_TYPE: '{self.bom_type}'. Must be one of: {', '.join(VALID_BOM_TYPES)}"
             )
 
+        # CBOM_GENERATE: the one non-SBOM type the action can synthesize, via
+        # cdxgen's crypto detection over a lock-file directory. Implies
+        # BOM_TYPE=cbom; every other non-SBOM type stays authored-verbatim.
+        if self.cbom_generate:
+            if self.bom_type not in (None, "", "sbom", "cbom"):
+                raise ConfigurationError(
+                    f"CBOM_GENERATE produces a CBOM; it cannot be combined with BOM_TYPE='{self.bom_type}'."
+                )
+            self.bom_type = "cbom"
+            if self.docker_image:
+                raise ConfigurationError(
+                    "CBOM_GENERATE scans a lock-file directory (LOCK_FILE); Docker images are not supported."
+                )
+            has_real_sbom_file = bool(self.sbom_file and self.sbom_file.lower() != NONE_SENTINEL)
+            if has_real_sbom_file:
+                raise ConfigurationError(
+                    "CBOM_GENERATE generates the CBOM; to upload a pre-authored CBOM verbatim, "
+                    "drop CBOM_GENERATE and provide it via SBOM_FILE with BOM_TYPE=cbom."
+                )
+            if not self.lock_file:
+                raise ConfigurationError("CBOM_GENERATE requires LOCK_FILE (the manifest of the project to scan).")
+
         # Non-SBOM artifacts (VEX/CBOM/HBOM) are authored elsewhere and uploaded verbatim; the
-        # action does not synthesize them. Reject any generation source so a generated SBOM can't
-        # be uploaded mislabeled as a non-SBOM artifact.
+        # action does not synthesize them (CBOM_GENERATE above is the one exception). Reject any
+        # generation source so a generated SBOM can't be uploaded mislabeled as a non-SBOM artifact.
         if self.bom_type and self.bom_type != "sbom":
             # SPDX goes through a json.load/json.dump license sanitization that rewrites the
             # bytes, which would break the verbatim upload. Non-SBOM artifacts are CycloneDX.
@@ -371,11 +394,11 @@ class Config:
                     f"BOM_TYPE='{self.bom_type}' cannot be tagged into a product release; remove PRODUCT_RELEASE."
                 )
             has_real_sbom_file = bool(self.sbom_file and self.sbom_file.lower() != NONE_SENTINEL)
-            if self.lock_file or self.docker_image or not has_real_sbom_file:
+            if not self.cbom_generate and (self.lock_file or self.docker_image or not has_real_sbom_file):
                 raise ConfigurationError(
                     f"BOM_TYPE='{self.bom_type}' uploads a pre-authored artifact verbatim and cannot be "
                     "generated: provide it via SBOM_FILE (a real path), and do not set LOCK_FILE, "
-                    "DOCKER_IMAGE, or SBOM_FILE=none."
+                    "DOCKER_IMAGE, or SBOM_FILE=none. To generate a CBOM instead, set CBOM_GENERATE=true."
                 )
             # Component overrides rewrite the document, which breaks the verbatim contract.
             if self.component_name or self.component_version or self.component_purl or self.override_name:
@@ -578,6 +601,7 @@ def build_config(
     api_base_url: str = SBOMIFY_PRODUCTION_API,
     sbom_format: str = "cyclonedx",
     bom_type: Optional[str] = None,
+    cbom_generate: bool = False,
     spec_version: Optional[str] = None,
     oidc_audience: Optional[str] = None,
 ) -> Config:
@@ -663,6 +687,7 @@ def build_config(
         api_base_url=api_base_url,
         sbom_format=sbom_format_lower,
         bom_type=normalized_bom_type,
+        cbom_generate=cbom_generate,
         spec_version=spec_version,
         oidc_audience=oidc_audience,
     )
@@ -711,6 +736,7 @@ def load_config() -> Config:
         api_base_url=os.getenv("API_BASE_URL", SBOMIFY_PRODUCTION_API),
         sbom_format=os.getenv("SBOM_FORMAT", "cyclonedx"),
         bom_type=os.getenv("BOM_TYPE"),
+        cbom_generate=evaluate_boolean(os.getenv("CBOM_GENERATE", "False")),
         oidc_audience=os.getenv("OIDC_AUDIENCE"),
     )
 
@@ -1515,6 +1541,7 @@ def run_pipeline(config: Config) -> None:
                     output_file=STEP_1_FILE,
                     output_format=config.sbom_format,
                     spec_version=config.spec_version,
+                    include_crypto=config.cbom_generate,
                 )
                 if not result.success:
                     raise SBOMGenerationError(result.error_message or "SBOM generation failed")

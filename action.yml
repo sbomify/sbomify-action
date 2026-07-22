@@ -14,6 +14,10 @@ inputs:
     description: 'Artifact type to record on upload: sbom (default), vex, cbom or hbom. Only the sbomify destination supports non-SBOM types; other upload-destinations entries are rejected for them. Non-SBOM types are uploaded verbatim: augmentation, enrichment, overrides, additional-package injection and the SBOM-specific finalization fixups are skipped.'
     required: false
     default: 'sbom'
+  cbom-generate:
+    description: 'Generate a CBOM (Cryptography Bill of Materials) from the LOCK_FILE project via cdxgen crypto detection, and upload it with bom-type cbom. Java, Python, and JS/TS source analysis plus keystores and certificates. Mutually exclusive with SBOM_FILE.'
+    required: false
+    default: 'false'
   oidc-audience:
     description: 'OIDC audience for trusted publishing (default: sbomify.com; override for self-hosted)'
     required: false
@@ -25,6 +29,7 @@ runs:
     WORKING_DIR: ${{ inputs['working-dir'] }}
     COMPONENT_PURL: ${{ inputs['component-purl'] }}
     BOM_TYPE: ${{ inputs['bom-type'] }}
+    CBOM_GENERATE: ${{ inputs['cbom-generate'] }}
     OIDC_AUDIENCE: ${{ inputs['oidc-audience'] }}
 branding:
   icon: 'upload-cloud'

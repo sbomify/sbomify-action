@@ -1215,3 +1215,49 @@ class TestLoadConfigAndBuildConfigParity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCbomGenerate(unittest.TestCase):
+    """CBOM_GENERATE: the one non-SBOM type the action synthesizes (via cdxgen)."""
+
+    def _config(self, **kw):
+        from sbomify_action.cli.main import Config
+
+        defaults = dict(token="test-token", component_id="test-component", cbom_generate=True)
+        defaults.update(kw)
+        return Config(**defaults)
+
+    def test_cbom_generate_with_lock_file_implies_cbom(self):
+        config = self._config(lock_file="/path/to/requirements.txt")
+        config.validate()
+        self.assertEqual(config.bom_type, "cbom")
+
+    def test_cbom_generate_requires_lock_file(self):
+        config = self._config()
+        with self.assertRaises(Exception) as cm:
+            config.validate()
+        self.assertIn("LOCK_FILE", str(cm.exception))
+
+    def test_cbom_generate_rejects_docker_image(self):
+        config = self._config(docker_image="alpine:3.20")
+        with self.assertRaises(Exception) as cm:
+            config.validate()
+        self.assertIn("Docker images are not supported", str(cm.exception))
+
+    def test_cbom_generate_rejects_pre_authored_sbom_file(self):
+        config = self._config(sbom_file="/path/to/authored.cbom.json")
+        with self.assertRaises(Exception) as cm:
+            config.validate()
+        self.assertIn("pre-authored", str(cm.exception))
+
+    def test_cbom_generate_rejects_conflicting_bom_type(self):
+        config = self._config(bom_type="vex", lock_file="/path/to/requirements.txt")
+        with self.assertRaises(Exception) as cm:
+            config.validate()
+        self.assertIn("cannot be combined", str(cm.exception))
+
+    def test_cbom_generate_forces_augment_enrich_off(self):
+        config = self._config(lock_file="/path/to/requirements.txt", augment=True, enrich=True)
+        config.validate()
+        self.assertFalse(config.augment)
+        self.assertFalse(config.enrich)

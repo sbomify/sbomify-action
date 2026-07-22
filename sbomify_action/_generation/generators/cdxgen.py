@@ -181,6 +181,11 @@ class CdxgenFsGenerator:
         if ecosystem != "go":
             cmd.append("--required-only")
 
+        # Cryptographic asset detection (CBOM): keystores, certificates, and
+        # source-derived algorithm inventory for the ecosystems cdxgen covers.
+        if input.include_crypto:
+            cmd.append("--include-crypto")
+
         # Fail on error to ensure we catch issues early
         cmd.append("--fail-on-error")
 
@@ -262,9 +267,14 @@ class CdxgenImageGenerator:
         """
         Check if this generator supports the given input.
 
-        Supports Docker images for CycloneDX format only.
+        Supports Docker images for CycloneDX format only. Declines
+        include_crypto inputs (container-image CBOMs are out of scope).
         Does not support SPDX or lock files (use CdxgenFsGenerator).
         """
+        # CBOM generation is cdxgen-only; declining here keeps the orchestrator
+        # from producing a plain SBOM mislabeled as a CBOM.
+        if input.include_crypto:
+            return False
         # Check if cdxgen is installed
         if not _CDXGEN_AVAILABLE:
             return False

@@ -1817,3 +1817,44 @@ class TestRegistryErrorAggregation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIncludeCrypto(unittest.TestCase):
+    """CBOM generation routes to cdxgen only; the flag rides the command line."""
+
+    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cdxgen.run_command")
+    @patch("pathlib.Path.exists")
+    def test_cdxgen_fs_appends_include_crypto(self, mock_exists, mock_run):
+        from sbomify_action._generation.generators.cdxgen import CdxgenFsGenerator
+
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_exists.return_value = True
+        generator = CdxgenFsGenerator()
+        input_params = GenerationInput(lock_file="/path/requirements.txt", include_crypto=True)
+
+        self.assertTrue(generator.supports(input_params))
+        generator.generate(input_params)
+
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--include-crypto", cmd)
+
+    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cdxgen.run_command")
+    @patch("pathlib.Path.exists")
+    def test_cdxgen_fs_omits_flag_without_include_crypto(self, mock_exists, mock_run):
+        from sbomify_action._generation.generators.cdxgen import CdxgenFsGenerator
+
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_exists.return_value = True
+        CdxgenFsGenerator().generate(GenerationInput(lock_file="/path/requirements.txt"))
+        self.assertNotIn("--include-crypto", mock_run.call_args[0][0])
+
+    def test_other_generators_decline_crypto_inputs(self):
+        from sbomify_action._generation.generators.cyclonedx_py import CycloneDXPyGenerator
+        from sbomify_action._generation.generators.syft import SyftFsGenerator
+        from sbomify_action._generation.generators.trivy import TrivyFsGenerator
+
+        crypto = GenerationInput(lock_file="/path/requirements.txt", include_crypto=True)
+        for generator_cls in (CycloneDXPyGenerator, SyftFsGenerator, TrivyFsGenerator):
+            self.assertFalse(generator_cls().supports(crypto), generator_cls.__name__)

@@ -95,6 +95,7 @@ def generate_sbom(
     output_file: str = "sbom.json",
     output_format: SBOMFormat = "cyclonedx",
     spec_version: Optional[str] = None,
+    include_crypto: bool = False,
 ) -> GenerationResult:
     """
     Generate an SBOM using the plugin architecture.
@@ -137,6 +138,7 @@ def generate_sbom(
         output_file=output_file,
         output_format=output_format,
         spec_version=spec_version,
+        include_crypto=include_crypto,
     )
 
     orchestrator = _get_orchestrator()
@@ -148,6 +150,7 @@ def process_lock_file(
     output_file: str = "step_1.json",
     output_format: SBOMFormat = "cyclonedx",
     spec_version: Optional[str] = None,
+    include_crypto: bool = False,
 ) -> GenerationResult:
     """
     Process a lock file and generate an SBOM.
@@ -182,6 +185,7 @@ def process_lock_file(
         output_file=output_file,
         output_format=output_format,
         spec_version=spec_version,
+        include_crypto=include_crypto,
     )
 
     if not result.success:
