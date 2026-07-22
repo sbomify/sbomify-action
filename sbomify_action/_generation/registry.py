@@ -75,6 +75,13 @@ class GeneratorRegistry:
         applicable = []
 
         for generator in self._generators:
+            # CBOM generation is a capability generators must opt INTO
+            # (supports_crypto = True); the default excludes them. Enforced
+            # here, at selection, so a future generator can never silently
+            # satisfy an include_crypto request with a plain SBOM.
+            if input.include_crypto and not getattr(generator, "supports_crypto", False):
+                continue
+
             # Check if generator supports this input type
             if not generator.supports(input):
                 continue

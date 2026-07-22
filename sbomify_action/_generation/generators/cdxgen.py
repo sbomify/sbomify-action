@@ -87,6 +87,11 @@ class CdxgenFsGenerator:
         return 20
 
     @property
+    def supports_crypto(self) -> bool:
+        # The one generator that can emit cryptographic assets (--include-crypto).
+        return True
+
+    @property
     def supported_formats(self) -> list[FormatVersion]:
         return [
             FormatVersion(
@@ -271,10 +276,6 @@ class CdxgenImageGenerator:
         include_crypto inputs (container-image CBOMs are out of scope).
         Does not support SPDX or lock files (use CdxgenFsGenerator).
         """
-        # CBOM generation is cdxgen-only; declining here keeps the orchestrator
-        # from producing a plain SBOM mislabeled as a CBOM.
-        if input.include_crypto:
-            return False
         # Check if cdxgen is installed
         if not _CDXGEN_AVAILABLE:
             return False

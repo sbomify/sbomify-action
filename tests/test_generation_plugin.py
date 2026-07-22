@@ -1850,11 +1850,23 @@ class TestIncludeCrypto(unittest.TestCase):
         CdxgenFsGenerator().generate(GenerationInput(lock_file="/path/requirements.txt"))
         self.assertNotIn("--include-crypto", mock_run.call_args[0][0])
 
-    def test_other_generators_decline_crypto_inputs(self):
+    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
+    def test_registry_only_selects_crypto_capable_generators(self):
+        from sbomify_action._generation.generators.cdxgen import CdxgenFsGenerator
         from sbomify_action._generation.generators.cyclonedx_py import CycloneDXPyGenerator
         from sbomify_action._generation.generators.syft import SyftFsGenerator
         from sbomify_action._generation.generators.trivy import TrivyFsGenerator
+        from sbomify_action._generation.registry import GeneratorRegistry
+
+        registry = GeneratorRegistry()
+        for generator in (CycloneDXPyGenerator(), SyftFsGenerator(), TrivyFsGenerator(), CdxgenFsGenerator()):
+            registry.register(generator)
 
         crypto = GenerationInput(lock_file="/path/requirements.txt", include_crypto=True)
-        for generator_cls in (CycloneDXPyGenerator, SyftFsGenerator, TrivyFsGenerator):
-            self.assertFalse(generator_cls().supports(crypto), generator_cls.__name__)
+        selected = registry.get_generators_for(crypto)
+        # Crypto capability is opt-in at the registry: only cdxgen-fs qualifies,
+        # so a future generator without the flag can never claim CBOM requests.
+        self.assertEqual([g.name for g in selected], ["cdxgen-fs"])
+
+        plain = GenerationInput(lock_file="/path/requirements.txt")
+        self.assertGreater(len(registry.get_generators_for(plain)), 1)

@@ -83,10 +83,6 @@ class TrivyFsGenerator:
         Supports all lock files for both CycloneDX and SPDX.
         Does not support Docker images (use TrivyImageGenerator).
         """
-        # CBOM generation is cdxgen-only; declining here keeps the orchestrator
-        # from producing a plain SBOM mislabeled as a CBOM.
-        if input.include_crypto:
-            return False
         # Check if trivy is installed
         if not _TRIVY_AVAILABLE:
             return False
@@ -223,10 +219,6 @@ class TrivyImageGenerator:
         Supports Docker images for both CycloneDX and SPDX.
         Does not support lock files (use TrivyFsGenerator).
         """
-        # CBOM generation is cdxgen-only; declining here keeps the orchestrator
-        # from producing a plain SBOM mislabeled as a CBOM.
-        if input.include_crypto:
-            return False
         # Check if trivy is installed
         if not _TRIVY_AVAILABLE:
             return False

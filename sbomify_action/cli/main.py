@@ -2576,6 +2576,14 @@ def _parse_upload_destinations_callback(
     help="Override the spec version for SBOM generation (e.g., '1.6', '2.3', '3.0.1').",
 )
 @click.option(
+    "--cbom-generate/--no-cbom-generate",
+    default=False,
+    show_default=True,
+    callback=_make_bool_envvar_callback("CBOM_GENERATE", False),
+    is_eager=True,
+    help="Generate a CBOM from the lock-file project via cdxgen crypto detection. [env: CBOM_GENERATE]",
+)
+@click.option(
     "--oidc-audience",
     envvar="OIDC_AUDIENCE",
     default=None,
@@ -2631,6 +2639,7 @@ def cli(
     sbom_format: str,
     bom_type: Optional[str],
     spec_version: Optional[str],
+    cbom_generate: bool,
     oidc_audience: Optional[str],
     working_dir: str | None,
     telemetry: bool,
@@ -2754,6 +2763,7 @@ def cli(
         api_base_url=api_base_url,
         sbom_format=sbom_format,
         bom_type=bom_type,
+        cbom_generate=cbom_generate,
         spec_version=spec_version,
         oidc_audience=oidc_audience,
     )
