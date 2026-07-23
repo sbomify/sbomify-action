@@ -115,8 +115,8 @@ def _resolve_profile_workspace(
     for key, profiles in results:
         if profiles is not None:
             logger.info(
-                "Token cannot read workspace %s; binding contact profiles to workspace %s instead "
-                "(the token appears to be scoped to it).",
+                "Workspace %s is not readable with the current API scope; binding contact "
+                "profiles to workspace %s instead (it appears to be the scoped workspace).",
                 first_key,
                 key,
             )

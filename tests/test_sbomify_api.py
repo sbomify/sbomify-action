@@ -380,13 +380,20 @@ def test_list_products_paginates() -> None:
 
 
 def test_create_product() -> None:
+    """The thin wrapper stays backward-compatible: returns the product dict."""
     client, _ = _client_with([_FakeResponse(201, {"id": "p1", "name": "X"})])
-    product, was_created = client.create_product("X")
+    product = client.create_product("X")
+    assert product["id"] == "p1"
+
+
+def test_get_or_create_product_creates() -> None:
+    client, _ = _client_with([_FakeResponse(201, {"id": "p1", "name": "X"})])
+    product, was_created = client.get_or_create_product("X")
     assert product["id"] == "p1"
     assert was_created is True
 
 
-def test_create_product_recovers_from_duplicate_name() -> None:
+def test_get_or_create_product_recovers_from_duplicate_name() -> None:
     """A DUPLICATE_NAME rejection resolves to the existing product — the
     retry-after-partial-apply path (product created, later step failed)
     must reuse the product instead of dead-ending on the duplicate."""
@@ -399,9 +406,33 @@ def test_create_product_recovers_from_duplicate_name() -> None:
             ),
         ]
     )
-    product, was_created = client.create_product("X")
+    product, was_created = client.get_or_create_product("X")
     assert product["id"] == "p-existing"
     assert was_created is False
+
+
+def test_get_or_create_product_reraises_when_not_found() -> None:
+    """A non-duplicate create failure with no matching existing product
+    must re-raise, not silently swallow the error."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(500, {"detail": "boom"}),
+            _FakeResponse(200, {"items": [], "pagination": {"has_next": False}}),
+        ]
+    )
+    with pytest.raises(APIError):
+        client.get_or_create_product("X")
+
+
+def test_get_or_create_product_propagates_plan_limit() -> None:
+    """A plan-limit failure is not a name collision — it must propagate as
+    PlanLimitError, not get masked by a name lookup."""
+    client, _ = _client_with(
+        [_FakeResponse(403, {"detail": "maximum products reached", "error_code": "BILLING_LIMIT_EXCEEDED"})]
+    )
+    with pytest.raises(PlanLimitError) as exc:
+        client.get_or_create_product("X")
+    assert exc.value.resource == "product"
 
 
 def test_create_product_plan_limit_is_clean_and_typed() -> None:

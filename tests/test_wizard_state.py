@@ -861,7 +861,7 @@ def test_apply_workflow_emission_uses_created_product_id(tmp_path: Path) -> None
     state, api = _oidc_apply_state(tmp_path, credential_mode="token")
     state.plan.create_product = "Acme Widget"
     state.plan.release_strategy = "tag"
-    api.create_product.return_value = ({"id": "prod-NEW", "name": "Acme Widget"}, True)
+    api.get_or_create_product.return_value = ({"id": "prod-NEW", "name": "Acme Widget"}, True)
 
     apply_plan(state, _real_opts(tmp_path))
 

@@ -460,32 +460,22 @@ class SbomifyApiClient:
                 return product
         return None
 
-    def create_product(self, name: str) -> tuple[dict[str, Any], bool]:
-        """Create a product with get-or-create semantics.
+    def create_product(self, name: str) -> dict[str, Any]:
+        """Create a product. Thin wrapper over ``POST /products``.
 
-        Returns ``(product, was_created)``. Mirrors ``create_component``:
-        recovers from ``DUPLICATE_NAME`` (status 400 or 409) by looking the
-        existing product up by name — without this, a retry after a
-        partially-failed apply (product created, later step failed) dies
-        here instead of reusing the product it created last time. Raises
-        ``PlanLimitError`` (with ``resource="product"``) when the team has
-        hit its product-count limit.
+        Returns the created product dict. Raises ``PlanLimitError`` (tagged
+        ``resource="product"``) when the team has hit its product-count
+        limit, and ``APIError`` for any other non-2xx (including a
+        ``DUPLICATE_NAME`` collision — callers that want get-or-create
+        semantics use :meth:`get_or_create_product`).
         """
         response = self._request("POST", "/api/v1/products", json_body={"name": name})
         if response.ok:
-            return self._safe_json_dict(response) or {}, True
+            return self._safe_json_dict(response) or {}
 
         body = self._safe_json_dict(response) or {}
         raw_detail = body.get("detail")
         error_code = body.get("error_code") or ""
-
-        if response.status_code in (400, 409) and error_code == "DUPLICATE_NAME":
-            logger.info(f"Product '{name}' already exists, retrieving existing product")
-            existing = self.get_product_by_name(name)
-            if existing is not None:
-                return existing, False
-            raise APIError(f"Product '{name}' reported as duplicate by API but could not be found via lookup")
-
         if self._is_plan_limit(response.status_code, raw_detail, error_code):
             # User-actionable, surfaced verbatim in the wizard — no status code.
             plan_msg = (
@@ -495,6 +485,28 @@ class SbomifyApiClient:
             )
             raise PlanLimitError(plan_msg, resource="product")
         raise APIError(self._build_error(f"Failed to create product '{name}'.", response))
+
+    def get_or_create_product(self, name: str) -> tuple[dict[str, Any], bool]:
+        """Create a product, recovering from a name collision.
+
+        Returns ``(product, was_created)``. On a create failure the product
+        is looked up by name and reused when found — this is what lets a
+        retry after a partially-failed apply (product created, a later step
+        failed) reuse the product instead of dead-ending on ``DUPLICATE_NAME``.
+        ``PlanLimitError`` propagates unchanged (it is not a name collision,
+        so a lookup would be wrong); any other error re-raises when no
+        existing product matches the name.
+        """
+        try:
+            return self.create_product(name), True
+        except PlanLimitError:
+            raise
+        except APIError:
+            existing = self.get_product_by_name(name)
+            if existing is not None:
+                logger.info(f"Product '{name}' already exists, reusing it")
+                return existing, False
+            raise
 
     def attach_components_to_product(self, product_id: str, component_ids: list[str]) -> None:
         """Set the full component list on a product.

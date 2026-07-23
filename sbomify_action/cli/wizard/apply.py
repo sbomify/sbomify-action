@@ -549,7 +549,7 @@ def _resolve_product(state: WizardState, log: LogFn) -> dict[str, Any] | None:
     assert state.workspace is not None  # narrowed by caller
 
     if plan.create_product:
-        product, was_created = api.create_product(plan.create_product)
+        product, was_created = api.get_or_create_product(plan.create_product)
         state.created_product_id = str(product.get("id") or "")
         verb = "Created" if was_created else "Reused existing"
         state.applied.append(f"{verb.lower()} product {product.get('name')}")
