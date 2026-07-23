@@ -29,10 +29,13 @@ if TYPE_CHECKING:
 
 TOTAL_STEPS = 8
 
-# ``[403] - `` / ``[404]`` markers that API error strings embed for logs.
-# The wizard strips them from anything it shows the user — the status code
-# is developer-facing noise next to the human-readable detail.
-_STATUS_CODE_RE = re.compile(r"\s*\[\d{3}\]\s*-?\s*")
+# HTTP status markers as ``_build_error`` emits them: ``prefix [NNN]`` at the
+# end of a clause, or ``prefix [NNN] - detail`` when a detail follows. Anchored
+# to that exact shape — the code must be a real HTTP status (1xx–5xx) AND be
+# followed by `` - `` or the end of the string — so an embedded, quoted name
+# like ``'Widget [123]'`` (the ``[123]`` is followed by ``'``, not `` - ``/end)
+# is left untouched.
+_STATUS_CODE_RE = re.compile(r"\s*\[[1-5]\d{2}\]\s*(?:-\s*|$)")
 
 
 def strip_status_codes(message: str) -> str:
@@ -41,7 +44,9 @@ def strip_status_codes(message: str) -> str:
     ``"Failed to create product 'X'. [403] - You have reached…"`` becomes
     ``"Failed to create product 'X'. You have reached…"``. Full error text
     (codes included) still lands in the debug log via the exception itself;
-    this only cleans what the TUI renders.
+    this only cleans what the TUI renders. Only markers in the shape
+    ``_build_error`` produces are stripped, so a bracketed number inside a
+    product/component name isn't mangled.
     """
     return _STATUS_CODE_RE.sub(" ", message).strip()
 

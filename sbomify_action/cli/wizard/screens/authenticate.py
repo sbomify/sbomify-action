@@ -12,7 +12,7 @@ from textual.worker import Worker, WorkerState
 
 from sbomify_action.cli.wizard.screens._base import WizardScreen, strip_status_codes
 from sbomify_action.cli.wizard.state import WorkspaceSnapshot
-from sbomify_action.exceptions import APIError, AuthError
+from sbomify_action.exceptions import APIError, AuthError, ForbiddenError
 from sbomify_action.logging_config import logger
 from sbomify_action.sbomify_api import SbomifyApiClient
 
@@ -80,10 +80,16 @@ def _resolve_profile_workspace(
     not the picked key). Verified against production: a token scoped to
     workspace A lists A's profiles fine and gets 403 for every other key.
 
-    So: try the picked key first; on failure, probe the remaining
-    workspaces in parallel and bind to the first one whose listing
-    succeeds (for a scoped token exactly one can). Returns
-    ``(None, [])`` when no workspace is readable.
+    So: try the picked key first; only when it comes back ``403 Forbidden``
+    (a definitive "this token can't touch this workspace") do we probe the
+    remaining workspaces in parallel and bind to the first that succeeds —
+    for a scoped token exactly one will. A transient failure on the picked
+    workspace (500/timeout) must NOT trigger a rebind: guessing a different
+    workspace off a blip is exactly the wrong-workspace binding this exists
+    to prevent, so we stay on the picked key with empty profiles (best-
+    effort; the picker just appears empty and a re-run recovers). Returns
+    ``(None, [])`` only when the picked workspace is forbidden and no other
+    workspace is readable either.
     """
     candidates = [str(ws.get("key")) for ws in workspaces if isinstance(ws.get("key"), str) and ws.get("key")]
     if picked_key is not None and picked_key in candidates:
@@ -102,13 +108,22 @@ def _resolve_profile_workspace(
     # Try the picked workspace alone first — the common case (unscoped
     # token, or a scoped token whose workspace IS the picked one) needs
     # exactly one request.
-    first_key, first_profiles = _probe(candidates[0])
-    if first_profiles is not None:
-        return first_key, first_profiles
+    picked = candidates[0]
+    try:
+        return picked, SbomifyApiClient(base_url, token).list_contact_profiles(picked)
+    except ForbiddenError:
+        # Scope denial — the token can't read the picked workspace. Fall
+        # through to probing the others.
+        pass
+    except APIError as e:
+        # Transient/unknown failure — don't rebind to a different workspace
+        # off a blip. Stay on the picked key with empty profiles.
+        logger.warning("Could not list contact profiles for workspace %s: %s", picked, e)
+        return picked, []
 
     rest = candidates[1:]
     if not rest:
-        logger.warning("Could not list contact profiles for workspace %s", first_key)
+        logger.warning("Workspace %s is not readable with the current API scope, and no other exists", picked)
         return None, []
     with ThreadPoolExecutor(max_workers=min(8, len(rest))) as pool:
         results = list(pool.map(_probe, rest))
@@ -117,7 +132,7 @@ def _resolve_profile_workspace(
             logger.info(
                 "Workspace %s is not readable with the current API scope; binding contact "
                 "profiles to workspace %s instead (it appears to be the scoped workspace).",
-                first_key,
+                picked,
                 key,
             )
             return key, profiles

@@ -17,7 +17,7 @@ from typing import Any, Iterator
 
 import requests
 
-from sbomify_action.exceptions import APIError, AuthError, PlanLimitError
+from sbomify_action.exceptions import APIError, AuthError, ForbiddenError, PlanLimitError
 from sbomify_action.http_client import get_default_headers
 from sbomify_action.logging_config import logger
 
@@ -604,6 +604,12 @@ class SbomifyApiClient:
         if response.status_code == 404:
             logger.debug("Contact profiles endpoint not available for workspace %s", team_key)
             return []
+        if response.status_code == 403:
+            # Scope denial — this token can't read this workspace. Raise a
+            # typed error so callers (the wizard's workspace resolver) can
+            # tell it apart from a transient failure and switch workspaces
+            # only on a genuine 403, never on a 500/timeout.
+            raise ForbiddenError(self._build_error("Failed to list contact profiles.", response))
         if not response.ok:
             raise APIError(self._build_error("Failed to list contact profiles.", response))
         try:

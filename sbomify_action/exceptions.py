@@ -87,6 +87,14 @@ class AuthError(APIError):
     """Raised when the sbomify API rejects credentials (401)."""
 
 
+class ForbiddenError(APIError):
+    """Raised when the sbomify API returns 403 — authenticated but not
+    permitted (e.g. a workspace-scoped token reaching a workspace outside
+    its scope). Distinct from ``AuthError`` (401, bad credentials) so callers
+    can tell "this token can't touch this resource" apart from a transient
+    failure and react accordingly."""
+
+
 class PlanLimitError(APIError):
     """Raised when an API operation fails due to plan limits (e.g., max components).
 

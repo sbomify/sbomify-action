@@ -490,6 +490,17 @@ def test_list_contact_profiles_404_returns_empty() -> None:
     assert client.list_contact_profiles("acme-team") == []
 
 
+def test_list_contact_profiles_403_raises_forbidden() -> None:
+    """A 403 raises the typed ForbiddenError (a subclass of APIError) so the
+    wizard's workspace resolver can tell scope denial apart from a transient
+    failure and only switch workspaces on the former."""
+    from sbomify_action.exceptions import ForbiddenError
+
+    client, _ = _client_with([_FakeResponse(403, {"detail": "Forbidden"})])
+    with pytest.raises(ForbiddenError):
+        client.list_contact_profiles("acme-team")
+
+
 def test_list_contact_profiles_success() -> None:
     # Real endpoint returns a bare list — `[{...}, {...}]` — not a
     # paginated envelope. Filtered out non-dict entries defensively.

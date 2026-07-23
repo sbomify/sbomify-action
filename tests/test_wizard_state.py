@@ -356,7 +356,7 @@ def test_resolve_profile_workspace_probes_when_picked_key_forbidden(monkeypatch)
     returning [] here made the wizard show an empty profile picker and
     create new profiles in the wrong workspace."""
     from sbomify_action.cli.wizard.screens import authenticate as auth_mod
-    from sbomify_action.exceptions import APIError
+    from sbomify_action.exceptions import ForbiddenError
 
     class _FakeClient:
         def __init__(self, base_url: str, token: str) -> None:
@@ -364,7 +364,7 @@ def test_resolve_profile_workspace_probes_when_picked_key_forbidden(monkeypatch)
 
         def list_contact_profiles(self, key: str) -> list[dict[str, object]]:
             if key != "scoped":
-                raise APIError("Failed to list contact profiles. [403] - Forbidden")
+                raise ForbiddenError("Failed to list contact profiles. [403] - Forbidden")
             return [{"id": "cp-scoped", "name": "Default"}]
 
     monkeypatch.setattr(auth_mod, "SbomifyApiClient", _FakeClient)
@@ -374,20 +374,47 @@ def test_resolve_profile_workspace_probes_when_picked_key_forbidden(monkeypatch)
     assert profiles[0]["id"] == "cp-scoped"
 
 
-def test_resolve_profile_workspace_none_readable(monkeypatch) -> None:
-    """When no workspace listing succeeds the resolver returns (None, [])
-    rather than binding profile creation to a workspace the token can't
-    verify — writing into an unverified workspace is the failure mode
-    this exists to prevent."""
+def test_resolve_profile_workspace_stays_put_on_transient_error(monkeypatch) -> None:
+    """A transient (non-403) failure on the picked workspace must NOT trigger
+    a rebind — guessing a different workspace off a 500/timeout is the exact
+    wrong-workspace binding this function exists to prevent. Stay on the
+    picked key with empty profiles and never probe the others."""
     from sbomify_action.cli.wizard.screens import authenticate as auth_mod
     from sbomify_action.exceptions import APIError
+
+    probed: list[str] = []
 
     class _FakeClient:
         def __init__(self, base_url: str, token: str) -> None:
             pass
 
         def list_contact_profiles(self, key: str) -> list[dict[str, object]]:
-            raise APIError("Forbidden")
+            probed.append(key)
+            if key == "picked":
+                raise APIError("Failed to list contact profiles. [500] - boom")
+            return [{"id": "leaked", "name": "Other"}]
+
+    monkeypatch.setattr(auth_mod, "SbomifyApiClient", _FakeClient)
+    workspaces = [{"key": "picked"}, {"key": "other"}]
+    team_key, profiles = auth_mod._resolve_profile_workspace("https://x", "t", workspaces, "picked")
+    assert team_key == "picked"
+    assert profiles == []
+    assert probed == ["picked"], "must not probe other workspaces on a transient error"
+
+
+def test_resolve_profile_workspace_none_readable(monkeypatch) -> None:
+    """When the picked workspace is forbidden and no other is readable, the
+    resolver returns (None, []) rather than binding profile creation to a
+    workspace the token can't verify."""
+    from sbomify_action.cli.wizard.screens import authenticate as auth_mod
+    from sbomify_action.exceptions import ForbiddenError
+
+    class _FakeClient:
+        def __init__(self, base_url: str, token: str) -> None:
+            pass
+
+        def list_contact_profiles(self, key: str) -> list[dict[str, object]]:
+            raise ForbiddenError("Forbidden")
 
     monkeypatch.setattr(auth_mod, "SbomifyApiClient", _FakeClient)
     team_key, profiles = auth_mod._resolve_profile_workspace("https://x", "t", [{"key": "a"}, {"key": "b"}], "a")
@@ -404,6 +431,15 @@ def test_strip_status_codes() -> None:
     )
     assert strip_status_codes("Authentication failed [401]") == "Authentication failed"
     assert strip_status_codes("no codes here") == "no codes here"
+    # A bracketed number inside a (quoted) name is not an HTTP marker — the
+    # regex is anchored to `` - ``/end-of-string, and here `[123]` is followed
+    # by a quote, so only the real `[404]` marker is stripped.
+    assert (
+        strip_status_codes("Failed to create component 'Widget [123]'. [404] - not found")
+        == "Failed to create component 'Widget [123]'. not found"
+    )
+    # A non-HTTP code (outside 1xx–5xx) is left alone.
+    assert strip_status_codes("weird [999] token") == "weird [999] token"
 
 
 def test_sbomify_json_has_wizard_sentinel_helpers(tmp_path: Path) -> None:
