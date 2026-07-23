@@ -1236,7 +1236,7 @@ def _write_final_output(src_path: str, dst_path: str, bom_type: Optional[str]) -
     """Write the final artifact to ``dst_path``.
 
     Non-SBOM artifacts (VEX, CBOM, ...) are copied byte-for-byte so the upload matches the
-    authored file exactly (a text round-trip could normalise newlines). SBOMs go through the
+    authored file exactly (a text round-trip could normalize newlines). SBOMs go through the
     text path so the CycloneDX fixups in :func:`_finalize_output_content` apply.
     """
     if bom_type and bom_type != "sbom":

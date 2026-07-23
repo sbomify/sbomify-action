@@ -56,7 +56,7 @@ class ConfigureSbomifyJsonScreen(PagedFormScreen):
 
     step_index = 7
     step_title = "Configure (sbomify.json)"
-    step_subtitle = "Organisational metadata written to the repo, version-controlled alongside the code."
+    step_subtitle = "Organizational metadata written to the repo, version-controlled alongside the code."
 
     PAGE_TITLES = ["Supplier", "Manufacturer · author · security", "Lifecycle"]
 

@@ -6,7 +6,7 @@ new one). Collects the minimal-but-CycloneDX-aligned fields that
 sbomify's ``ContactProfileCreateSchema`` requires:
 
   - Profile name (free-text label, internal)
-  - Organisation entity (supplier + manufacturer) with name + email +
+  - Organization entity (supplier + manufacturer) with name + email +
     optional phone / address / website
   - At least one security contact on the entity — both the backend
     schema and CRA compliance require it
@@ -20,11 +20,13 @@ ConfigureSbom, which auto-selects the freshly-created profile.
 
 from __future__ import annotations
 
+from rich.markup import escape as rich_escape
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Input, Static
 from textual.worker import Worker, WorkerState
 
+from sbomify_action.cli.wizard.screens._base import strip_status_codes
 from sbomify_action.cli.wizard.screens._paged import PagedFormScreen
 from sbomify_action.exceptions import APIError
 from sbomify_action.logging_config import logger
@@ -39,7 +41,7 @@ class CreateProfileScreen(PagedFormScreen):
 
     The field set doesn't fit an 80×24 terminal, so it's split into two
     fit-to-viewport pages (see ``PagedFormScreen``): identity +
-    organisation, then security contact + author.
+    organization, then security contact + author.
     """
 
     step_index = 7
@@ -49,7 +51,7 @@ class CreateProfileScreen(PagedFormScreen):
         "and the EU CRA list as minimum SBOM elements."
     )
 
-    PAGE_TITLES = ["Identity & organisation", "Security & author"]
+    PAGE_TITLES = ["Identity & organization", "Security & author"]
 
     def compose_page(self, index: int) -> ComposeResult:
         if index == 0:
@@ -81,17 +83,17 @@ class CreateProfileScreen(PagedFormScreen):
                 id="profile-name",
             )
 
-        # Organisation entity — fills the Supplier Name minimum element.
+        # Organization entity — fills the Supplier Name minimum element.
         org = Vertical(classes="wizard-panel")
-        org.border_title = "◇  Organisation"
+        org.border_title = "◇  Organization"
         org.border_subtitle = "supplier + manufacturer (CycloneDX entity)"
         with org:
             yield Static(
                 "[#F4B57F]Name and email required[/] — feed the SBOM's [b]supplier[/] and [b]manufacturer[/] fields.",
                 classes="wizard-help",
             )
-            yield Input(placeholder="Organisation name (e.g. Acme Inc.)", id="org-name")
-            yield Input(placeholder="Organisation email (e.g. hello@acme.com)", id="org-email")
+            yield Input(placeholder="Organization name (e.g. Acme Inc.)", id="org-name")
+            yield Input(placeholder="Organization email (e.g. hello@acme.com)", id="org-email")
             yield Input(placeholder="Phone (optional)", id="org-phone")
             yield Input(placeholder="Address (optional)", id="org-address")
             yield Input(
@@ -145,16 +147,16 @@ class CreateProfileScreen(PagedFormScreen):
         sec_name = self.query_one("#sec-name", Input).value.strip()
         sec_email = self.query_one("#sec-email", Input).value.strip()
 
-        # Profile name + organisation live on page 1, the security contact
+        # Profile name + organization live on page 1, the security contact
         # on page 2. Jump to whichever page owns the first missing field so
         # the error lands next to the empty input.
         missing: list[str] = []
         if not name:
             missing.append("profile name")
         if not org_name:
-            missing.append("organisation name")
+            missing.append("organization name")
         if not org_email:
-            missing.append("organisation email")
+            missing.append("organization email")
         if not sec_name:
             missing.append("security contact name")
         if not sec_email:
@@ -234,7 +236,9 @@ class CreateProfileScreen(PagedFormScreen):
             # error message, which is both confusing and re-prompts
             # the user to submit a duplicate.
             if isinstance(result, str):
-                self._set_status(f"[#F87171]✗  {result}[/]")
+                # API/exception text: drop the developer-facing status code
+                # and escape stray ``[`` so it can't be parsed as markup.
+                self._set_status(f"[#F87171]✗  {rich_escape(strip_status_codes(result))}[/]")
                 self.next_button.disabled = False
                 return
             if isinstance(result, dict) and result.get("id"):

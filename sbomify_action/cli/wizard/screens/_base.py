@@ -13,6 +13,7 @@ always see where they are without needing to re-orient.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Callable, ClassVar
 
 from textual import events
@@ -27,6 +28,23 @@ if TYPE_CHECKING:
 
 
 TOTAL_STEPS = 8
+
+# ``[403] - `` / ``[404]`` markers that API error strings embed for logs.
+# The wizard strips them from anything it shows the user — the status code
+# is developer-facing noise next to the human-readable detail.
+_STATUS_CODE_RE = re.compile(r"\s*\[\d{3}\]\s*-?\s*")
+
+
+def strip_status_codes(message: str) -> str:
+    """Remove HTTP status-code markers from an API error message.
+
+    ``"Failed to create product 'X'. [403] - You have reached…"`` becomes
+    ``"Failed to create product 'X'. You have reached…"``. Full error text
+    (codes included) still lands in the debug log via the exception itself;
+    this only cleans what the TUI renders.
+    """
+    return _STATUS_CODE_RE.sub(" ", message).strip()
+
 
 # Responsive breakpoints (terminal cells). The wizard is a fit-to-viewport
 # TUI — nothing scrolls — so every screen has to render inside whatever the

@@ -249,7 +249,7 @@ async def test_enter_on_focused_radio_set_toggles_radio(tmp_path: Path, monkeypa
 
     app = WizardApp(_opts(tmp_path))
     # Larger viewport so the augmentation panel + profile picker + Next
-    # button all render — Textual focus/visibility behaviour can shift
+    # button all render — Textual focus/visibility behavior can shift
     # when widgets are clipped on tiny pilot terminals.
     async with app.run_test(size=(120, 60)) as pilot:
         # Walk to ConfigureSbom (where Augmentation now lives — moved
@@ -342,7 +342,7 @@ async def test_escape_from_components_goes_back_in_any_focus_state(
     The Components screen mounts one PickOrCreate per lockfile; depending
     on auto-match the user may be focused on the OptionList (existing
     picked) or the "Create new" Input (no auto-match). Both paths must
-    honour the screen's Escape binding so Back navigation isn't trapped
+    honor the screen's Escape binding so Back navigation isn't trapped
     by whichever widget happened to take focus.
     """
     from textual.widgets import Input, OptionList
@@ -576,7 +576,7 @@ async def test_augmentation_default_with_no_profiles_bootstraps_create_and_cance
 ) -> None:
     """With zero workspace profiles, the default recommended 'profile'
     strategy highlights the '+ Create new' sentinel, so Enter routes to
-    CreateProfileScreen (the bootstrap path). Cancelling that form must
+    CreateProfileScreen (the bootstrap path). Canceling that form must
     revert augmentation to Skip — otherwise the screen's own defaults
     put the user in an Enter→Escape→Enter loop.
     """
@@ -646,7 +646,7 @@ async def test_augmentation_default_with_no_profiles_bootstraps_create_and_cance
         assert app.screen is configure_screen
         pressed = configure_screen.query_one("#augmentation", RadioSet).pressed_button
         assert pressed is not None and pressed.id == "aug-skip", (
-            f"Cancelled CreateProfile must revert augmentation to Skip, got {pressed.id if pressed else None}"
+            f"Canceled CreateProfile must revert augmentation to Skip, got {pressed.id if pressed else None}"
         )
         assert picker.display is False
 
@@ -700,3 +700,99 @@ async def test_enter_on_focused_back_button_goes_back(tmp_path: Path, monkeypatc
         assert isinstance(app.screen, WelcomeScreen), (
             "Enter on focused Back button must pop the screen, not advance forward"
         )
+
+
+async def test_apply_plan_limit_offers_reuse_and_retries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A product plan-limit failure with exactly one existing product must
+    repurpose the primary button as "use existing & retry" — flipping the
+    plan to the existing product and re-running apply in place. "Back and
+    retry" alone is a dead end: retrying the same create-product plan
+    fails identically.
+    """
+    from textual.widgets import Button
+
+    from sbomify_action.cli.wizard import apply as apply_mod
+    from sbomify_action.cli.wizard.screens.apply import ApplyScreen
+    from sbomify_action.cli.wizard.state import WorkspaceSnapshot
+    from sbomify_action.exceptions import PlanLimitError
+
+    _stub_discovery(monkeypatch, [])
+    calls: list[tuple[str | None, str | None]] = []
+
+    def fake_apply(state, opts, *, log=None):  # noqa: ANN001, ANN202
+        calls.append((state.plan.create_product, state.plan.use_product_id))
+        if len(calls) == 1:
+            raise PlanLimitError(
+                "Could not create product 'Notipus': you have reached the maximum 1 products allowed by your plan.",
+                resource="product",
+            )
+
+    monkeypatch.setattr(apply_mod, "apply_plan", fake_apply)
+
+    app = WizardApp(_opts(tmp_path, dry_run=False))
+    async with app.run_test() as pilot:
+        app.state.api = MagicMock()
+        app.state.workspace = WorkspaceSnapshot(products=[{"id": "p1", "name": "Existing"}], team_key="acme")
+        app.state.plan.create_product = "Notipus"
+        app.push_screen(ApplyScreen())
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, ApplyScreen)
+        continue_btn = screen.query_one("#continue", Button)
+        assert not continue_btn.disabled, "reuse-existing must be actionable after a product plan-limit failure"
+        assert "retry" in str(continue_btn.label).lower()
+        # The pinned banner must NOT leak the HTTP status code.
+        banner = screen.query_one("#apply-error-banner")
+        assert "[403]" not in str(banner.render())
+
+        screen.on_button_pressed(Button.Pressed(continue_btn))
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        # Second apply ran with the plan flipped to the existing product.
+        assert calls == [("Notipus", None), (None, "p1")]
+        assert not screen.query_one("#continue", Button).disabled
+
+
+async def test_apply_plan_limit_back_jumps_to_product_screen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With several existing products the wizard can't pick one for the
+    user — Back must jump straight to the Pick-a-product step (not strand
+    the user on Review, where Apply would fail identically)."""
+    from sbomify_action.cli.wizard import apply as apply_mod
+    from sbomify_action.cli.wizard.screens.apply import ApplyScreen
+    from sbomify_action.cli.wizard.screens.product import ProductScreen
+    from sbomify_action.cli.wizard.state import WorkspaceSnapshot
+    from sbomify_action.exceptions import PlanLimitError
+
+    _stub_discovery(monkeypatch, [])
+
+    def fake_apply(state, opts, *, log=None):  # noqa: ANN001, ANN202
+        raise PlanLimitError("plan limit reached", resource="product")
+
+    monkeypatch.setattr(apply_mod, "apply_plan", fake_apply)
+
+    app = WizardApp(_opts(tmp_path, dry_run=False))
+    async with app.run_test() as pilot:
+        app.state.api = MagicMock()
+        app.state.workspace = WorkspaceSnapshot(
+            products=[{"id": "p1", "name": "One"}, {"id": "p2", "name": "Two"}],
+            team_key="acme",
+        )
+        app.state.plan.create_product = "Another"
+        product_screen = ProductScreen()
+        app.push_screen(product_screen)
+        await pilot.pause()
+        app.push_screen(ApplyScreen())
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, ApplyScreen)
+        screen._go_back()
+        await pilot.pause()
+        assert app.screen is product_screen, "Back after a product plan-limit must land on the product step"

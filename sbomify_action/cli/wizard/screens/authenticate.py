@@ -10,7 +10,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import Button, Input, LoadingIndicator, Static
 from textual.worker import Worker, WorkerState
 
-from sbomify_action.cli.wizard.screens._base import WizardScreen
+from sbomify_action.cli.wizard.screens._base import WizardScreen, strip_status_codes
 from sbomify_action.cli.wizard.state import WorkspaceSnapshot
 from sbomify_action.exceptions import APIError, AuthError
 from sbomify_action.logging_config import logger
@@ -60,6 +60,69 @@ def _pick_default_workspace_key(workspaces: list[dict[str, object]]) -> str | No
             if member.get("is_me") and member.get("is_default_team"):
                 return key
     return fallback
+
+
+def _resolve_profile_workspace(
+    base_url: str,
+    token: str,
+    workspaces: list[dict[str, object]],
+    picked_key: str | None,
+) -> tuple[str | None, list[dict[str, object]]]:
+    """Return ``(team_key, contact_profiles)`` for the workspace the token can read.
+
+    ``GET /api/v1/workspaces/`` is NOT filtered by token scope, so
+    ``_pick_default_workspace_key`` can pick a workspace a scoped token has
+    no access to. When that happens the contact-profile listing 403s — and
+    silently treating that as "no profiles" is worse than it looks: the
+    wizard then shows an empty picker for a workspace that has profiles,
+    and a profile created from the wizard lands in the WRONG workspace
+    (the products/components endpoints resolve via the token's bound team,
+    not the picked key). Verified against production: a token scoped to
+    workspace A lists A's profiles fine and gets 403 for every other key.
+
+    So: try the picked key first; on failure, probe the remaining
+    workspaces in parallel and bind to the first one whose listing
+    succeeds (for a scoped token exactly one can). Returns
+    ``(None, [])`` when no workspace is readable.
+    """
+    candidates = [str(ws.get("key")) for ws in workspaces if isinstance(ws.get("key"), str) and ws.get("key")]
+    if picked_key is not None and picked_key in candidates:
+        candidates.remove(picked_key)
+        candidates.insert(0, picked_key)
+    if not candidates:
+        return None, []
+
+    def _probe(key: str) -> tuple[str, list[dict[str, object]] | None]:
+        try:
+            return key, SbomifyApiClient(base_url, token).list_contact_profiles(key)
+        except APIError as e:
+            logger.debug("Contact-profile probe failed for workspace %s: %s", key, e)
+            return key, None
+
+    # Try the picked workspace alone first — the common case (unscoped
+    # token, or a scoped token whose workspace IS the picked one) needs
+    # exactly one request.
+    first_key, first_profiles = _probe(candidates[0])
+    if first_profiles is not None:
+        return first_key, first_profiles
+
+    rest = candidates[1:]
+    if not rest:
+        logger.warning("Could not list contact profiles for workspace %s", first_key)
+        return None, []
+    with ThreadPoolExecutor(max_workers=min(8, len(rest))) as pool:
+        results = list(pool.map(_probe, rest))
+    for key, profiles in results:
+        if profiles is not None:
+            logger.info(
+                "Token cannot read workspace %s; binding contact profiles to workspace %s instead "
+                "(the token appears to be scoped to it).",
+                first_key,
+                key,
+            )
+            return key, profiles
+    logger.warning("Could not list contact profiles for any workspace the user belongs to")
+    return None, []
 
 
 def _workspace_display_name(workspaces: list[dict[str, object]], key: str | None) -> str | None:
@@ -201,23 +264,6 @@ class AuthenticateScreen(WizardScreen):
             logger.warning("Could not list workspaces: %s", e)
             workspaces = []
         team_key = _pick_default_workspace_key(workspaces)
-        if len(workspaces) > 1:
-            picked_name = next(
-                (
-                    str(ws.get("name") or ws.get("key"))
-                    for ws in workspaces
-                    if isinstance(ws.get("key"), str) and ws.get("key") == team_key
-                ),
-                "(unknown)",
-            )
-            logger.warning(
-                "You belong to %d workspaces; the wizard will use %r (key=%s) — your "
-                "default workspace. If you intended to onboard a different "
-                "workspace, change the default in the sbomify UI and re-run.",
-                len(workspaces),
-                picked_name,
-                team_key,
-            )
 
         def _list_products() -> list[dict[str, object]]:
             return SbomifyApiClient(base_url, token).list_products()
@@ -225,30 +271,34 @@ class AuthenticateScreen(WizardScreen):
         def _list_components() -> list[dict[str, object]]:
             return SbomifyApiClient(base_url, token).list_components()
 
-        def _list_profiles() -> list[dict[str, object]]:
-            if team_key is None:
-                return []
-            try:
-                return SbomifyApiClient(base_url, token).list_contact_profiles(team_key)
-            except APIError as e:
-                # Non-fatal — Augmentation just appears empty in that case.
-                logger.warning("Could not list contact profiles: %s", e)
-                return []
+        def _list_profiles() -> tuple[str | None, list[dict[str, object]]]:
+            return _resolve_profile_workspace(base_url, token, workspaces, team_key)
 
         try:
             with ThreadPoolExecutor(max_workers=3) as pool:
                 # Submit all three first so they run concurrently — chaining
                 # ``submit(...).result()`` would block on each future before
-                # the next is submitted, serialising the calls and defeating
+                # the next is submitted, serializing the calls and defeating
                 # the entire reason for the pool.
                 products_future = pool.submit(_list_products)
                 components_future = pool.submit(_list_components)
                 profiles_future = pool.submit(_list_profiles)
                 products = products_future.result()
                 components = components_future.result()
-                profiles = profiles_future.result()
+                team_key, profiles = profiles_future.result()
         except APIError as e:
             return None, None, f"Workspace fetch failed: {e}"
+
+        if len(workspaces) > 1:
+            bound_name = _workspace_display_name(workspaces, team_key) or "(unknown)"
+            logger.warning(
+                "You belong to %d workspaces; the wizard is bound to %r (key=%s). If you "
+                "intended to onboard a different workspace, use a token scoped to that "
+                "workspace (or change your default workspace in the sbomify UI) and re-run.",
+                len(workspaces),
+                bound_name,
+                team_key,
+            )
 
         workspace = WorkspaceSnapshot(
             products=products,
@@ -306,11 +356,15 @@ class AuthenticateScreen(WizardScreen):
         self.wizard.push_screen(ProductScreen())
 
     def _on_auth_error(self, message: str) -> None:
+        from rich.markup import escape as rich_escape
+
         self.query_one("#auth-progress", Container).remove_children()
         self.query_one("#submit", Button).disabled = False
         self.query_one("#token", Input).disabled = False
         self.query_one("#token", Input).focus()
-        self._set_status(f"[#F87171]{message}[/]")
+        # API error text: drop the developer-facing status code and escape
+        # stray ``[`` so it can't be parsed as markup.
+        self._set_status(f"[#F87171]{rich_escape(strip_status_codes(message))}[/]")
 
     def _set_status(self, markup: str) -> None:
         self.query_one("#auth-status", Static).update(markup)

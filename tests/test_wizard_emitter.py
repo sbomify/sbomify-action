@@ -634,7 +634,7 @@ def test_apply_plan_create_new_product(tmp_path: Path) -> None:
     state = _state(tmp_path)
     api = state.api
     assert api is not None
-    api.create_product.return_value = {"id": "prod-new", "name": "Widget"}
+    api.create_product.return_value = ({"id": "prod-new", "name": "Widget"}, True)
     api.get_or_create_component.return_value = ("comp-1", True)
 
     state.plan = Plan(

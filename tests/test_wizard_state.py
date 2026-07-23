@@ -55,7 +55,7 @@ def test_require_api_raises_when_unset(tmp_path: Path) -> None:
         state.require_api()
 
 
-def test_wizard_state_repr_summarises(tmp_path: Path) -> None:
+def test_wizard_state_repr_summarizes(tmp_path: Path) -> None:
     state = WizardState(facts=_facts(tmp_path))
     state.workspace = WorkspaceSnapshot(products=[{"id": "p1"}])
     state.selected = [
@@ -275,7 +275,7 @@ def test_write_sbomify_json_sentinel_wins_over_payload_collision(tmp_path: Path)
     # payload's override attempt.
     assert data[WIZARD_JSON_SENTINEL_KEY]["managed"] is True
     assert data[WIZARD_JSON_SENTINEL_KEY]["version"] == 1
-    # Sentinel-helpers still recognises the file as wizard-owned.
+    # Sentinel-helpers still recognizes the file as wizard-owned.
     assert sbomify_json_has_wizard_sentinel(path) is True
     # The non-sentinel payload still made it through.
     assert data["supplier"] == {"name": "Acme"}
@@ -323,6 +323,87 @@ def test_pick_default_workspace_key_handles_empty_and_missing_members() -> None:
     assert _pick_default_workspace_key([{"key": "lone"}]) == "lone"  # no members block
     # Non-string key entries are skipped.
     assert _pick_default_workspace_key([{"key": 42}, {"key": "real"}]) == "real"
+
+
+def test_resolve_profile_workspace_uses_picked_key_when_readable(monkeypatch) -> None:
+    """The common case — unscoped token, or scoped token whose workspace is
+    the picked one — binds to the picked key with a single request."""
+    from sbomify_action.cli.wizard.screens import authenticate as auth_mod
+
+    calls: list[str] = []
+
+    class _FakeClient:
+        def __init__(self, base_url: str, token: str) -> None:
+            pass
+
+        def list_contact_profiles(self, key: str) -> list[dict[str, object]]:
+            calls.append(key)
+            return [{"id": "cp1", "name": "Default"}]
+
+    monkeypatch.setattr(auth_mod, "SbomifyApiClient", _FakeClient)
+    workspaces = [{"key": "alpha"}, {"key": "beta"}]
+    team_key, profiles = auth_mod._resolve_profile_workspace("https://x", "t", workspaces, "beta")
+    assert team_key == "beta"
+    assert profiles[0]["id"] == "cp1"
+    assert calls == ["beta"]
+
+
+def test_resolve_profile_workspace_probes_when_picked_key_forbidden(monkeypatch) -> None:
+    """A scoped token can't read the is_default_team-picked workspace —
+    ``/api/v1/workspaces/`` isn't filtered by token scope, so the picker
+    can land on a workspace the token has no access to. The resolver must
+    probe the rest and bind to the workspace the token CAN read; silently
+    returning [] here made the wizard show an empty profile picker and
+    create new profiles in the wrong workspace."""
+    from sbomify_action.cli.wizard.screens import authenticate as auth_mod
+    from sbomify_action.exceptions import APIError
+
+    class _FakeClient:
+        def __init__(self, base_url: str, token: str) -> None:
+            pass
+
+        def list_contact_profiles(self, key: str) -> list[dict[str, object]]:
+            if key != "scoped":
+                raise APIError("Failed to list contact profiles. [403] - Forbidden")
+            return [{"id": "cp-scoped", "name": "Default"}]
+
+    monkeypatch.setattr(auth_mod, "SbomifyApiClient", _FakeClient)
+    workspaces = [{"key": "default"}, {"key": "other"}, {"key": "scoped"}]
+    team_key, profiles = auth_mod._resolve_profile_workspace("https://x", "t", workspaces, "default")
+    assert team_key == "scoped"
+    assert profiles[0]["id"] == "cp-scoped"
+
+
+def test_resolve_profile_workspace_none_readable(monkeypatch) -> None:
+    """When no workspace listing succeeds the resolver returns (None, [])
+    rather than binding profile creation to a workspace the token can't
+    verify — writing into an unverified workspace is the failure mode
+    this exists to prevent."""
+    from sbomify_action.cli.wizard.screens import authenticate as auth_mod
+    from sbomify_action.exceptions import APIError
+
+    class _FakeClient:
+        def __init__(self, base_url: str, token: str) -> None:
+            pass
+
+        def list_contact_profiles(self, key: str) -> list[dict[str, object]]:
+            raise APIError("Forbidden")
+
+    monkeypatch.setattr(auth_mod, "SbomifyApiClient", _FakeClient)
+    team_key, profiles = auth_mod._resolve_profile_workspace("https://x", "t", [{"key": "a"}, {"key": "b"}], "a")
+    assert team_key is None
+    assert profiles == []
+
+
+def test_strip_status_codes() -> None:
+    from sbomify_action.cli.wizard.screens._base import strip_status_codes
+
+    assert (
+        strip_status_codes("Failed to create product 'Notipus'. [403] - You have reached the maximum 1 products.")
+        == "Failed to create product 'Notipus'. You have reached the maximum 1 products."
+    )
+    assert strip_status_codes("Authentication failed [401]") == "Authentication failed"
+    assert strip_status_codes("no codes here") == "no codes here"
 
 
 def test_sbomify_json_has_wizard_sentinel_helpers(tmp_path: Path) -> None:
@@ -780,7 +861,7 @@ def test_apply_workflow_emission_uses_created_product_id(tmp_path: Path) -> None
     state, api = _oidc_apply_state(tmp_path, credential_mode="token")
     state.plan.create_product = "Acme Widget"
     state.plan.release_strategy = "tag"
-    api.create_product.return_value = {"id": "prod-NEW", "name": "Acme Widget"}
+    api.create_product.return_value = ({"id": "prod-NEW", "name": "Acme Widget"}, True)
 
     apply_plan(state, _real_opts(tmp_path))
 

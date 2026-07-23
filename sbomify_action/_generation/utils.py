@@ -414,7 +414,7 @@ def run_command(
         )
     except subprocess.TimeoutExpired:
         elapsed = int(time.time() - start_time)
-        # Honour log_errors here too: a cdxgen timeout on, say, a Python
+        # Honor log_errors here too: a cdxgen timeout on, say, a Python
         # lockfile is the same benign priority-chain fallback as a non-zero
         # exit — it shouldn't spam red ERROR when a later generator succeeds.
         timeout_msg = f"{command_name} command timed out after {elapsed}s (limit: {timeout}s)"

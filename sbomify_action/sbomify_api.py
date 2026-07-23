@@ -275,7 +275,7 @@ class SbomifyApiClient:
         yield from self._paginate("/api/v1/components", error_context=error_context)
 
     def list_components(self) -> list[dict[str, Any]]:
-        """Materialise the full list of components."""
+        """Materialize the full list of components."""
         return list(self.iter_components())
 
     def list_components_by_name(self) -> dict[str, str]:
@@ -357,9 +357,29 @@ class SbomifyApiClient:
                 return existing_id, False
             raise APIError(f"Component '{name}' reported as duplicate by API but could not be found via lookup")
 
-        if response.status_code == 403 and isinstance(raw_detail, str) and "maximum" in raw_detail.lower():
-            raise PlanLimitError(err_msg)
+        if self._is_plan_limit(response.status_code, raw_detail, error_code):
+            # Plan-limit messages are user-actionable and surfaced verbatim in
+            # UIs (the wizard's apply banner) — keep them human: no status code.
+            plan_msg = f"Could not create component '{name}': {raw_detail}" if raw_detail else err_msg
+            raise PlanLimitError(plan_msg, resource="component")
         raise APIError(err_msg)
+
+    @staticmethod
+    def _is_plan_limit(status_code: int, raw_detail: Any, error_code: str) -> bool:
+        """True when a create was rejected because the team's plan limit is hit.
+
+        The backend tags these with ``error_code: BILLING_LIMIT_EXCEEDED``
+        (verified against ``core/apis._check_billing_limits``); the string
+        match on the raw detail is kept as a fallback for older deployments
+        that predate the error code. Only a *string* detail counts — a
+        pydantic list-detail whose collapsed text contains "maximum" is a
+        validation error, not a plan limit.
+        """
+        if status_code != 403:
+            return False
+        if error_code == "BILLING_LIMIT_EXCEEDED":
+            return True
+        return isinstance(raw_detail, str) and "maximum" in raw_detail.lower()
 
     def get_or_create_component(
         self,
@@ -433,11 +453,48 @@ class SbomifyApiClient:
             raise APIError(self._build_error(f"Failed to fetch product {product_id}.", response))
         return self._safe_json_dict(response) or {}
 
-    def create_product(self, name: str) -> dict[str, Any]:
+    def get_product_by_name(self, name: str) -> dict[str, Any] | None:
+        """Find a product by exact name match, or None."""
+        for product in self._paginate("/api/v1/products", error_context=f"look up product '{name}'"):
+            if product.get("name") == name:
+                return product
+        return None
+
+    def create_product(self, name: str) -> tuple[dict[str, Any], bool]:
+        """Create a product with get-or-create semantics.
+
+        Returns ``(product, was_created)``. Mirrors ``create_component``:
+        recovers from ``DUPLICATE_NAME`` (status 400 or 409) by looking the
+        existing product up by name — without this, a retry after a
+        partially-failed apply (product created, later step failed) dies
+        here instead of reusing the product it created last time. Raises
+        ``PlanLimitError`` (with ``resource="product"``) when the team has
+        hit its product-count limit.
+        """
         response = self._request("POST", "/api/v1/products", json_body={"name": name})
-        if not response.ok:
-            raise APIError(self._build_error(f"Failed to create product '{name}'.", response))
-        return self._safe_json_dict(response) or {}
+        if response.ok:
+            return self._safe_json_dict(response) or {}, True
+
+        body = self._safe_json_dict(response) or {}
+        raw_detail = body.get("detail")
+        error_code = body.get("error_code") or ""
+
+        if response.status_code in (400, 409) and error_code == "DUPLICATE_NAME":
+            logger.info(f"Product '{name}' already exists, retrieving existing product")
+            existing = self.get_product_by_name(name)
+            if existing is not None:
+                return existing, False
+            raise APIError(f"Product '{name}' reported as duplicate by API but could not be found via lookup")
+
+        if self._is_plan_limit(response.status_code, raw_detail, error_code):
+            # User-actionable, surfaced verbatim in the wizard — no status code.
+            plan_msg = (
+                f"Could not create product '{name}': {raw_detail}"
+                if isinstance(raw_detail, str) and raw_detail
+                else f"Could not create product '{name}': your plan's product limit has been reached."
+            )
+            raise PlanLimitError(plan_msg, resource="product")
+        raise APIError(self._build_error(f"Failed to create product '{name}'.", response))
 
     def attach_components_to_product(self, product_id: str, component_ids: list[str]) -> None:
         """Set the full component list on a product.
@@ -490,7 +547,7 @@ class SbomifyApiClient:
         ``/api/v1/workspaces`` returns 301 (redirect, may drop bodies on
         non-GET). The nested routes (``/{key}/contact-profiles`` etc.)
         do NOT accept a trailing slash; they 404 when one is present.
-        Do not "normalise" the slashes here — each route's shape is
+        Do not "normalize" the slashes here — each route's shape is
         dictated by the backend's mount config and verified by
         integration probing.
 
@@ -541,9 +598,16 @@ class SbomifyApiClient:
             data = response.json()
         except ValueError:
             raise APIError("Failed to list contact profiles: invalid JSON response from API")
-        if not isinstance(data, list):
-            return []
-        return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        # Accept a paginated envelope too — the shape every other list
+        # endpoint uses — so a future backend migration of this route
+        # doesn't silently return [] and hide every existing profile.
+        if isinstance(data, dict):
+            items = data.get("items")
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+        return []
 
     def create_contact_profile(self, team_key: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Create a contact profile in a workspace.
@@ -556,16 +620,38 @@ class SbomifyApiClient:
         CISA / EU CRA list as minimum elements. Returns the created
         profile dict (with the new ``id``) on 201; raises ``APIError``
         on validation / permission failure.
+
+        Recovers from ``DUPLICATE_NAME`` (status 400 or 409) by looking
+        the existing profile up by name and returning it. This matters
+        for a lost-response resubmit: a first POST that created the
+        profile but whose result the caller never saw (canceled worker,
+        dropped connection) would otherwise dead-end every retry on the
+        duplicate error even though the profile is right there.
         """
         response = self._request(
             "POST",
             f"/api/v1/workspaces/{team_key}/contact-profiles",
             json_body=payload,
         )
-        if not response.ok:
-            raise APIError(self._build_error("Failed to create contact profile.", response))
-        data = self._safe_json_dict(response)
-        return data or {}
+        if response.ok:
+            return self._safe_json_dict(response) or {}
+
+        body = self._safe_json_dict(response) or {}
+        error_code = body.get("error_code") or ""
+        name = payload.get("name")
+        if response.status_code in (400, 409) and error_code == "DUPLICATE_NAME" and isinstance(name, str):
+            logger.info(f"Contact profile '{name}' already exists, retrieving existing profile")
+            for profile in self.list_contact_profiles(team_key):
+                if profile.get("name") == name:
+                    return profile
+            # The duplicate exists but isn't in the list the token can see —
+            # fall through to a message that points at the dashboard instead
+            # of the raw constraint error.
+            raise APIError(
+                f"A contact profile named '{name}' already exists in this workspace but could not "
+                "be retrieved. Check Settings → Contacts in the sbomify dashboard."
+            )
+        raise APIError(self._build_error("Failed to create contact profile.", response))
 
     # ------------------------------------------------------------------
     # releases

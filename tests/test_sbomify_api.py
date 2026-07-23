@@ -381,8 +381,48 @@ def test_list_products_paginates() -> None:
 
 def test_create_product() -> None:
     client, _ = _client_with([_FakeResponse(201, {"id": "p1", "name": "X"})])
-    product = client.create_product("X")
+    product, was_created = client.create_product("X")
     assert product["id"] == "p1"
+    assert was_created is True
+
+
+def test_create_product_recovers_from_duplicate_name() -> None:
+    """A DUPLICATE_NAME rejection resolves to the existing product — the
+    retry-after-partial-apply path (product created, later step failed)
+    must reuse the product instead of dead-ending on the duplicate."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(400, {"error_code": "DUPLICATE_NAME", "detail": "exists"}),
+            _FakeResponse(
+                200,
+                {"items": [{"id": "p-existing", "name": "X"}], "pagination": {"has_next": False}},
+            ),
+        ]
+    )
+    product, was_created = client.create_product("X")
+    assert product["id"] == "p-existing"
+    assert was_created is False
+
+
+def test_create_product_plan_limit_is_clean_and_typed() -> None:
+    """The plan-limit 403 raises PlanLimitError tagged with the resource,
+    and the message carries the human detail without the status code."""
+    detail = "You have reached the maximum 1 products allowed by your plan. You currently have 1 products."
+    client, _ = _client_with([_FakeResponse(403, {"detail": detail, "error_code": "BILLING_LIMIT_EXCEEDED"})])
+    with pytest.raises(PlanLimitError) as exc:
+        client.create_product("Notipus")
+    assert exc.value.resource == "product"
+    message = str(exc.value)
+    assert detail in message
+    assert "[403]" not in message
+
+
+def test_create_component_plan_limit_is_clean_and_typed() -> None:
+    client, _ = _client_with([_FakeResponse(403, {"detail": "maximum components reached"})])
+    with pytest.raises(PlanLimitError) as exc:
+        client.create_component("foo", component_type="bom")
+    assert exc.value.resource == "component"
+    assert "[403]" not in str(exc.value)
 
 
 def test_attach_components_unions_existing() -> None:
@@ -425,6 +465,50 @@ def test_list_contact_profiles_success() -> None:
     client, _ = _client_with([_FakeResponse(200, [{"id": "cp1", "name": "Team"}])])
     profiles = client.list_contact_profiles("acme-team")
     assert profiles[0]["id"] == "cp1"
+
+
+def test_list_contact_profiles_accepts_paginated_envelope() -> None:
+    """A future backend migration to the `{items: [...]}` envelope must not
+    silently hide every existing profile."""
+    client, _ = _client_with([_FakeResponse(200, {"items": [{"id": "cp1", "name": "Team"}]})])
+    profiles = client.list_contact_profiles("acme-team")
+    assert profiles[0]["id"] == "cp1"
+
+
+def test_create_contact_profile_recovers_from_duplicate_name() -> None:
+    """A DUPLICATE_NAME rejection resolves to the existing profile — a
+    resubmit whose first POST created the profile but lost the response
+    must succeed instead of dead-ending on the constraint error."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(
+                400,
+                {
+                    "detail": "Could not save contact profile due to a database constraint (possibly a duplicate name)",
+                    "error_code": "DUPLICATE_NAME",
+                },
+            ),
+            _FakeResponse(200, [{"id": "cp-existing", "name": "Default"}]),
+        ]
+    )
+    profile = client.create_contact_profile("acme-team", {"name": "Default", "entities": []})
+    assert profile["id"] == "cp-existing"
+
+
+def test_create_contact_profile_duplicate_not_found_points_at_dashboard() -> None:
+    """When the duplicate exists but the token can't see it in the list,
+    the error points the user at the dashboard instead of the raw
+    constraint text."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(400, {"detail": "constraint", "error_code": "DUPLICATE_NAME"}),
+            _FakeResponse(200, []),
+        ]
+    )
+    with pytest.raises(APIError) as exc:
+        client.create_contact_profile("acme-team", {"name": "Default", "entities": []})
+    assert "already exists" in str(exc.value)
+    assert "dashboard" in str(exc.value)
 
 
 def test_list_workspaces_returns_workspace_keys() -> None:

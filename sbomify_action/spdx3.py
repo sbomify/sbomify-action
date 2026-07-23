@@ -124,7 +124,7 @@ _SOFTWARE_PROPERTY_RENAMES: dict[str, str] = {
 # Map HashAlgorithm enum names (upper) to enum values
 _HASH_ALGORITHMS: dict[str, HashAlgorithm] = {a.name.lower(): a for a in HashAlgorithm}
 
-# The spdx_tools writer serialises enum names via snake_case_to_camel_case
+# The spdx_tools writer serializes enum names via snake_case_to_camel_case
 # (producing camelCase strings).  We build lookup dicts that accept both the
 # camelCase and raw snake_case forms.  _s2c is imported at module top.
 
@@ -575,7 +575,7 @@ def parse_spdx3_data(data: dict[str, Any]) -> Spdx3Payload:
             continue
 
         elem_type = elem.get("type") or elem.get("@type", "")
-        # Normalise aliases
+        # Normalize aliases
         elem_type = _TYPE_ALIASES.get(elem_type, elem_type)
 
         try:
@@ -704,7 +704,7 @@ def write_spdx3_file(
 ) -> None:
     """Write a :class:`Payload` to a JSON-LD ``.json`` file.
 
-    Uses ``spdx_tools``' converter to serialise model objects, then wraps
+    Uses ``spdx_tools``' converter to serialize model objects, then wraps
     them with the official ``@context`` URL.
 
     Args:

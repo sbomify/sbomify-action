@@ -88,7 +88,16 @@ class AuthError(APIError):
 
 
 class PlanLimitError(APIError):
-    """Raised when an API operation fails due to plan limits (e.g., max components)."""
+    """Raised when an API operation fails due to plan limits (e.g., max components).
+
+    ``resource`` names what hit the limit (``"product"`` or ``"component"``)
+    so UI layers (e.g. the wizard's apply screen) can offer a targeted
+    recovery path — reuse an existing product vs. reuse existing components.
+    """
+
+    def __init__(self, message: str, *, resource: str | None = None) -> None:
+        super().__init__(message)
+        self.resource = resource
 
 
 class OIDCError(APIError):

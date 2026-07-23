@@ -56,7 +56,7 @@ class DoneScreen(WizardScreen):
                 # Failures are tracked per-component now, so a partial success
                 # falls through to the manual-fallback branch and lists ONLY
                 # the failed components rather than blanket-listing all of
-                # them (the prior behaviour, which made users re-bind already-
+                # them (the prior behavior, which made users re-bind already-
                 # bound components and hit 409 errors).
                 oidc = Vertical(classes="wizard-panel-emphasis")
                 oidc.border_title = "✓  OIDC trusted publishing is set up"
@@ -147,7 +147,7 @@ class DoneScreen(WizardScreen):
             lines.append(f"     [#5E5E5E]reason: {state.attach_error}[/]")
         # Dry-run "would write" rows use a muted glyph + label so the user
         # can tell from the summary that nothing actually hit disk. The
-        # real-apply branch keeps the existing green ✓ + "Wrote" labelling.
+        # real-apply branch keeps the existing green ✓ + "Wrote" labeling.
         if state.is_dry_run:
             for path in state.written_files:
                 lines.append(f"[#5E5E5E]◌  would write[/]  {path}")

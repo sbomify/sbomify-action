@@ -233,7 +233,7 @@ class ReviewScreen(WizardScreen):
 
     @staticmethod
     def _stylise(line: str) -> str:
-        """Colour a single unified-diff line, escaping Rich markup."""
+        """Color a single unified-diff line, escaping Rich markup."""
         # Escape stray '[' that might be Rich markup in the file content.
         escaped = line.replace("[", r"\[")
         if line.startswith("+++") or line.startswith("---"):
