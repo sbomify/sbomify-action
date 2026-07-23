@@ -456,6 +456,27 @@ def test_create_component_plan_limit_is_clean_and_typed() -> None:
     assert "[403]" not in str(exc.value)
 
 
+def test_create_component_plan_limit_non_string_detail_stays_clean() -> None:
+    """A BILLING_LIMIT_EXCEEDED 403 whose detail is a structured list (not a
+    plain string) must not leak the raw repr or the status code into the
+    user-facing message — it falls back to a generic human sentence."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(
+                403,
+                {"detail": [{"msg": "limit"}], "error_code": "BILLING_LIMIT_EXCEEDED"},
+            )
+        ]
+    )
+    with pytest.raises(PlanLimitError) as exc:
+        client.create_component("foo", component_type="bom")
+    message = str(exc.value)
+    assert exc.value.resource == "component"
+    assert "[403]" not in message
+    assert "{'msg'" not in message and "[{" not in message
+    assert "your plan's component limit has been reached" in message
+
+
 def test_attach_components_unions_existing() -> None:
     client, session = _client_with(
         [

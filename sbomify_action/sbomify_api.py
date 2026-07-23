@@ -358,11 +358,23 @@ class SbomifyApiClient:
             raise APIError(f"Component '{name}' reported as duplicate by API but could not be found via lookup")
 
         if self._is_plan_limit(response.status_code, raw_detail, error_code):
-            # Plan-limit messages are user-actionable and surfaced verbatim in
-            # UIs (the wizard's apply banner) — keep them human: no status code.
-            plan_msg = f"Could not create component '{name}': {raw_detail}" if raw_detail else err_msg
-            raise PlanLimitError(plan_msg, resource="component")
+            raise PlanLimitError(self._plan_limit_message("component", name, raw_detail), resource="component")
         raise APIError(err_msg)
+
+    @staticmethod
+    def _plan_limit_message(resource: str, name: str, raw_detail: Any) -> str:
+        """Build a human, status-code-free plan-limit message.
+
+        Plan-limit errors are surfaced verbatim in the UI (the wizard's apply
+        banner), so the message must never carry an HTTP status marker or a
+        raw structured ``detail``. Uses the backend's string detail only when
+        it is actually a non-empty string — a list/dict detail (pydantic-shaped
+        or otherwise) falls back to a generic sentence rather than being
+        interpolated as a Python repr.
+        """
+        if isinstance(raw_detail, str) and raw_detail:
+            return f"Could not create {resource} '{name}': {raw_detail}"
+        return f"Could not create {resource} '{name}': your plan's {resource} limit has been reached."
 
     @staticmethod
     def _is_plan_limit(status_code: int, raw_detail: Any, error_code: str) -> bool:
@@ -477,13 +489,7 @@ class SbomifyApiClient:
         raw_detail = body.get("detail")
         error_code = body.get("error_code") or ""
         if self._is_plan_limit(response.status_code, raw_detail, error_code):
-            # User-actionable, surfaced verbatim in the wizard — no status code.
-            plan_msg = (
-                f"Could not create product '{name}': {raw_detail}"
-                if isinstance(raw_detail, str) and raw_detail
-                else f"Could not create product '{name}': your plan's product limit has been reached."
-            )
-            raise PlanLimitError(plan_msg, resource="product")
+            raise PlanLimitError(self._plan_limit_message("product", name, raw_detail), resource="product")
         raise APIError(self._build_error(f"Failed to create product '{name}'.", response))
 
     def get_or_create_product(self, name: str) -> tuple[dict[str, Any], bool]:
