@@ -1847,6 +1847,9 @@ class TestIncludeCrypto(unittest.TestCase):
         CdxgenFsGenerator().generate(GenerationInput(lock_file="/path/requirements.txt"))
         self.assertNotIn("--include-crypto", mock_run.call_args[0][0])
 
+    @patch("sbomify_action._generation.generators.syft._SYFT_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.trivy._TRIVY_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cyclonedx_py._CYCLONEDX_PY_AVAILABLE", True)
     @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
     def test_registry_only_selects_crypto_capable_generators(self):
         from sbomify_action._generation.generators.cdxgen import CdxgenFsGenerator
