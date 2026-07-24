@@ -349,7 +349,7 @@ class Config:
         # cdxgen's crypto detection over a lock-file directory. Implies
         # BOM_TYPE=cbom; every other non-SBOM type stays authored-verbatim.
         if self.cbom_generate:
-            if self.bom_type not in (None, "", "sbom", "cbom"):
+            if self.bom_type not in (None, "sbom", "cbom"):
                 raise ConfigurationError(
                     f"CBOM_GENERATE produces a CBOM; it cannot be combined with BOM_TYPE='{self.bom_type}'."
                 )
