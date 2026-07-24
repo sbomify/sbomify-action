@@ -109,6 +109,8 @@ def generate_sbom(
         output_file: Path to save the generated SBOM
         output_format: Desired SBOM format ("cyclonedx" or "spdx")
         spec_version: Specific spec version (None = use generator default)
+        include_crypto: Ask the generator for cryptographic-asset evidence
+            (CBOM); only generators that support it are selected
 
     Returns:
         GenerationResult with output file path and metadata
@@ -160,6 +162,8 @@ def process_lock_file(
         output_file: Path to save the generated SBOM (default: "step_1.json")
         output_format: Desired SBOM format ("cyclonedx" or "spdx")
         spec_version: Specific spec version (None = use generator default)
+        include_crypto: Ask the generator for cryptographic-asset evidence
+            (CBOM); only generators that support it are selected
 
     Returns:
         GenerationResult with output file path and metadata

@@ -1234,25 +1234,25 @@ class TestCbomGenerate(unittest.TestCase):
 
     def test_cbom_generate_requires_lock_file(self):
         config = self._config()
-        with self.assertRaises(Exception) as cm:
+        with self.assertRaises(ConfigurationError) as cm:
             config.validate()
         self.assertIn("LOCK_FILE", str(cm.exception))
 
     def test_cbom_generate_rejects_docker_image(self):
         config = self._config(docker_image="alpine:3.20")
-        with self.assertRaises(Exception) as cm:
+        with self.assertRaises(ConfigurationError) as cm:
             config.validate()
         self.assertIn("Docker images are not supported", str(cm.exception))
 
     def test_cbom_generate_rejects_pre_authored_sbom_file(self):
         config = self._config(sbom_file="/path/to/authored.cbom.json")
-        with self.assertRaises(Exception) as cm:
+        with self.assertRaises(ConfigurationError) as cm:
             config.validate()
         self.assertIn("pre-authored", str(cm.exception))
 
     def test_cbom_generate_rejects_conflicting_bom_type(self):
         config = self._config(bom_type="vex", lock_file="/path/to/requirements.txt")
-        with self.assertRaises(Exception) as cm:
+        with self.assertRaises(ConfigurationError) as cm:
             config.validate()
         self.assertIn("cannot be combined", str(cm.exception))
 

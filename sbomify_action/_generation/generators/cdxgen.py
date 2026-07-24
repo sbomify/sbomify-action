@@ -284,6 +284,11 @@ class CdxgenImageGenerator:
         if not input.is_docker_image:
             return False
 
+        # Container-image CBOMs are out of scope; decline crypto requests
+        # explicitly rather than relying on registry selection order.
+        if input.include_crypto:
+            return False
+
         # Only supports CycloneDX format (cdxgen doesn't output SPDX)
         if input.output_format != "cyclonedx":
             return False
