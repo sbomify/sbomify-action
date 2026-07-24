@@ -1634,8 +1634,10 @@ def run_pipeline(config: Config) -> None:
     # Step 1.4: Transitive Dependency Discovery (for lockfiles that support expansion)
     # Note: Steps 1.x are substeps of the main SBOM generation step (Step 1).
     # These run after initial generation but before Step 2 (Validation/Augmentation).
-    # Uses registry pattern to check if any expander supports the lockfile
-    if config.lock_file and not config.is_additional_packages_only:
+    # Uses registry pattern to check if any expander supports the lockfile.
+    # CBOM generation skips it: injecting package dependencies would rewrite
+    # the generated crypto document.
+    if config.lock_file and not config.is_additional_packages_only and not config.cbom_generate:
         from sbomify_action._dependency_expansion import supports_dependency_expansion
 
         if supports_dependency_expansion(config.lock_file):
@@ -1678,8 +1680,10 @@ def run_pipeline(config: Config) -> None:
                 _log_step_end(1.4, success=False)
                 # Don't fail the entire process - this is an enhancement
 
-    # Step 1.5: Hash Enrichment from Lockfile (if lockfile was used for generation)
-    if config.lock_file and not config.is_additional_packages_only:
+    # Step 1.5: Hash Enrichment from Lockfile (if lockfile was used for generation).
+    # Skipped for CBOM generation: package hashes belong to SBOM components,
+    # and the generated CBOM must be preserved as generated.
+    if config.lock_file and not config.is_additional_packages_only and not config.cbom_generate:
         _log_step_header(1.5, "Hash Enrichment from Lockfile")
         try:
             from sbomify_action._hash_enrichment import enrich_sbom_with_hashes
