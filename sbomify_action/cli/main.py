@@ -364,7 +364,7 @@ class Config:
                     "CBOM_GENERATE generates the CBOM; to upload a pre-authored CBOM verbatim, "
                     "drop CBOM_GENERATE and provide it via SBOM_FILE with BOM_TYPE=cbom."
                 )
-            if not self.lock_file:
+            if not self.lock_file or self.lock_file.lower() == NONE_SENTINEL:
                 raise ConfigurationError("CBOM_GENERATE requires LOCK_FILE (the manifest of the project to scan).")
 
         # Non-SBOM artifacts (VEX/CBOM/HBOM) are authored elsewhere and uploaded verbatim; the

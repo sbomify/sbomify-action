@@ -1234,6 +1234,15 @@ class TestCbomGenerate(unittest.TestCase):
             config.validate()
         self.assertIn("LOCK_FILE", str(cm.exception))
 
+    def test_cbom_generate_rejects_none_sentinel_lock_file(self):
+        # With additional packages configured, additional-packages-only mode
+        # would otherwise proceed and upload an empty document labeled cbom.
+        config = self._config(lock_file="none")
+        with patch("sbomify_action.additional_packages.has_additional_packages_configured", return_value=True):
+            with self.assertRaises(ConfigurationError) as cm:
+                config.validate()
+        self.assertIn("LOCK_FILE", str(cm.exception))
+
     def test_cbom_generate_rejects_docker_image(self):
         config = self._config(docker_image="alpine:3.20")
         with self.assertRaises(ConfigurationError) as cm:
