@@ -83,6 +83,8 @@ class GenerationInput:
         output_file: Path to save the generated SBOM
         output_format: Desired SBOM format ("cyclonedx" or "spdx")
         spec_version: Specific spec version (None = use generator default)
+        include_crypto: Include cryptographic assets (CBOM); only cdxgen
+            supports this, so other generators decline the input
     """
 
     lock_file: Optional[str] = None
@@ -90,6 +92,7 @@ class GenerationInput:
     output_file: str = "sbom.json"
     output_format: SBOMFormat = "cyclonedx"
     spec_version: Optional[str] = None
+    include_crypto: bool = False
 
     def __post_init__(self) -> None:
         """Validate input parameters."""

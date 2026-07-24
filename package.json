@@ -10,6 +10,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@cyclonedx/cdxgen": "cyclonedx/cdxgen"
+    "@cyclonedx/cdxgen": "^12.0.0"
   }
 }

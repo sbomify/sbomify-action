@@ -308,6 +308,45 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 
 </details>
 
+## CBOM (Cryptography Bill of Materials)
+
+A CBOM inventories the cryptographic assets in your project: algorithms, keys, certificates, and protocols. sbomify ingests every CBOM lineage (legacy IBM CBOM 1.0, CycloneDX 1.6, and 1.7), derives a crypto inventory, and grades post-quantum readiness. Three ways to get one into sbomify:
+
+### Generate with this action (cdxgen)
+
+The action can generate a CBOM from your project via [cdxgen](https://github.com/cdxgen/cdxgen) crypto detection (Java and Python projects, JS/TS source analysis, keystores, and certificates), and upload it with `bom-type: cbom`:
+
+```yaml
+- uses: sbomify/sbomify-action@master
+  with:
+    cbom-generate: true
+  env:
+    TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
+    COMPONENT_ID: 'your-component-id'
+    LOCK_FILE: 'pom.xml'
+```
+
+`CBOM_GENERATE` implies `BOM_TYPE=cbom`, requires `LOCK_FILE` (the manifest of the project to scan), and keeps augmentation and enrichment off. Docker images are not supported for CBOM generation.
+
+### Pass through a CBOM from cbomkit-action (Java, Python)
+
+[cbomkit-action](https://github.com/cbomkit/cbomkit-action) runs PQCA's sonar-cryptography source scanner. Generate in one step, upload verbatim in the next (Java projects must be built first; see `CBOMKIT_JAVA_REQUIRE_BUILD` in its docs):
+
+```yaml
+- uses: cbomkit/cbomkit-action@v2
+  id: cbom
+- uses: sbomify/sbomify-action@master
+  env:
+    TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
+    COMPONENT_ID: 'your-component-id'
+    SBOM_FILE: ${{ steps.cbom.outputs.pattern }}
+    BOM_TYPE: 'cbom'
+```
+
+### Pass through any other CBOM
+
+Any CycloneDX CBOM (from [cbomkit-theia](https://github.com/cbomkit/cbomkit-theia) container scans, commercial scanners, or hand-authored) uploads verbatim the same way: point `SBOM_FILE` at it and set `BOM_TYPE: cbom`. The document bytes are never modified.
+
 ## Configuration
 
 | Variable                   | Required | Description                                                                      |
@@ -318,6 +357,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `OUTPUT_FILE`              | No       | Write final SBOM to this path                                                    |
 | `SBOM_FORMAT`              | No       | Output format: `cyclonedx` (default) or `spdx`                                   |
 | `BOM_TYPE`                 | No       | Artifact type: `sbom` (default), `vex`, `cbom` or `hbom`. Non-SBOM types upload verbatim to sbomify only (augmentation, enrichment, overrides, additional-package injection and the SBOM-specific finalization fixups are skipped; `dependency-track` in `UPLOAD_DESTINATIONS` and `PRODUCT_RELEASE` are rejected). Note: sbomify auto-classifies CycloneDX documents containing cryptographic assets as `cbom` |
+| `CBOM_GENERATE`            | No       | Generate a CBOM from `LOCK_FILE` via cdxgen crypto detection and upload it as `bom_type=cbom` (implies `BOM_TYPE=cbom`; augmentation/enrichment stay off; Docker images unsupported) |
 | `ENRICH`                   | No       | Add metadata from package registries                                             |
 | `TOKEN`                    | ‡        | sbomify API token                                                                |
 | `COMPONENT_ID`             | ‡        | sbomify component ID                                                             |

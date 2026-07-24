@@ -87,6 +87,11 @@ class CdxgenFsGenerator:
         return 20
 
     @property
+    def supports_crypto(self) -> bool:
+        # The one generator that can emit cryptographic assets (--include-crypto).
+        return True
+
+    @property
     def supported_formats(self) -> list[FormatVersion]:
         return [
             FormatVersion(
@@ -181,6 +186,11 @@ class CdxgenFsGenerator:
         if ecosystem != "go":
             cmd.append("--required-only")
 
+        # Cryptographic asset detection (CBOM): keystores, certificates, and
+        # source-derived algorithm inventory for the ecosystems cdxgen covers.
+        if input.include_crypto:
+            cmd.append("--include-crypto")
+
         # Fail on error to ensure we catch issues early
         cmd.append("--fail-on-error")
 
@@ -262,7 +272,8 @@ class CdxgenImageGenerator:
         """
         Check if this generator supports the given input.
 
-        Supports Docker images for CycloneDX format only.
+        Supports Docker images for CycloneDX format only. Declines
+        include_crypto inputs (container-image CBOMs are out of scope).
         Does not support SPDX or lock files (use CdxgenFsGenerator).
         """
         # Check if cdxgen is installed
@@ -271,6 +282,11 @@ class CdxgenImageGenerator:
 
         # Only supports Docker images
         if not input.is_docker_image:
+            return False
+
+        # Container-image CBOMs are out of scope; decline crypto requests
+        # explicitly rather than relying on registry selection order.
+        if input.include_crypto:
             return False
 
         # Only supports CycloneDX format (cdxgen doesn't output SPDX)

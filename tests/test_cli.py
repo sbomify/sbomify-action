@@ -703,5 +703,39 @@ class TestEvaluateBoolean(unittest.TestCase):
             self.assertFalse(evaluate_boolean(value), f"'{value}' should be False (case-insensitive)")
 
 
+class TestCbomGenerateCliWiring(unittest.TestCase):
+    """CBOM_GENERATE must reach the real Click entrypoint, not just build_config."""
+
+    def setUp(self):
+        self.runner = CliRunner()
+
+    @patch.object(cli_main_module, "run_pipeline")
+    @patch.object(cli_main_module, "setup_dependencies")
+    @patch.object(cli_main_module, "initialize_sentry")
+    def _invoke(self, args, env, mock_sentry, mock_deps, mock_run):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            lock_file = Path(tmp_dir) / "requirements.txt"
+            lock_file.write_text("requests==2.28.0")
+            base = ["--lock-file", str(lock_file), "--no-upload", "--token", "t", "--component-id", "c"]
+            result = self.runner.invoke(cli, base + args, env=env)
+            self.assertEqual(result.exit_code, 0, result.output)
+            mock_run.assert_called_once()
+            return mock_run.call_args[0][0]
+
+    def test_env_var_reaches_config(self):
+        config = self._invoke([], {"CBOM_GENERATE": "true"})
+        self.assertTrue(config.cbom_generate)
+        self.assertEqual(config.bom_type, "cbom")
+
+    def test_flag_reaches_config(self):
+        config = self._invoke(["--cbom-generate"], {})
+        self.assertTrue(config.cbom_generate)
+
+    def test_default_is_off(self):
+        config = self._invoke([], {})
+        self.assertFalse(config.cbom_generate)
+        self.assertEqual(config.bom_type, "sbom")
+
+
 if __name__ == "__main__":
     unittest.main()
