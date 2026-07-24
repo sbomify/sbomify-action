@@ -1213,7 +1213,6 @@ class TestLoadConfigAndBuildConfigParity(unittest.TestCase):
             self.assertEqual(config_from_env.sbom_format, config_from_args.sbom_format)
 
 
-
 class TestCbomGenerate(unittest.TestCase):
     """CBOM_GENERATE: the one non-SBOM type the action synthesizes (via cdxgen)."""
 
@@ -1258,6 +1257,7 @@ class TestCbomGenerate(unittest.TestCase):
         config.validate()
         self.assertFalse(config.augment)
         self.assertFalse(config.enrich)
+
 
 if __name__ == "__main__":
     unittest.main()

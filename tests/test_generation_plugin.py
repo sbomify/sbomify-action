@@ -1815,7 +1815,6 @@ class TestRegistryErrorAggregation(unittest.TestCase):
         self.assertIn("second error", result.error_message)
 
 
-
 class TestIncludeCrypto(unittest.TestCase):
     """CBOM generation routes to cdxgen only; the flag rides the command line."""
 
@@ -1870,6 +1869,7 @@ class TestIncludeCrypto(unittest.TestCase):
 
         plain = GenerationInput(lock_file="/path/requirements.txt")
         self.assertGreater(len(registry.get_generators_for(plain)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

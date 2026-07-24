@@ -703,7 +703,6 @@ class TestEvaluateBoolean(unittest.TestCase):
             self.assertFalse(evaluate_boolean(value), f"'{value}' should be False (case-insensitive)")
 
 
-
 class TestCbomGenerateCliWiring(unittest.TestCase):
     """CBOM_GENERATE must reach the real Click entrypoint, not just build_config."""
 
@@ -736,6 +735,7 @@ class TestCbomGenerateCliWiring(unittest.TestCase):
         config = self._invoke([], {})
         self.assertFalse(config.cbom_generate)
         self.assertEqual(config.bom_type, "sbom")
+
 
 if __name__ == "__main__":
     unittest.main()
