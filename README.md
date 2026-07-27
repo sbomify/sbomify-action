@@ -317,7 +317,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `DOCKER_IMAGE`             | †        | Docker image name                                                                |
 | `OUTPUT_FILE`              | No       | Write final SBOM to this path                                                    |
 | `SBOM_FORMAT`              | No       | Output format: `cyclonedx` (default) or `spdx`                                   |
-| `SPEC_VERSION`             | No       | Spec version to **generate**, e.g. `1.6` (CycloneDX) or `2.2`/`2.3` (SPDX). Defaults to 2.3 for SPDX and to the latest the selected generator supports for CycloneDX. SPDX 3.0.1 cannot be generated — see [Format Support](#format-support) |
+| `SPEC_VERSION`             | No       | Spec version to **generate**, e.g. `1.7` (CycloneDX) or `2.2` (SPDX). Defaults to 1.6 for CycloneDX and 2.3 for SPDX. SPDX 3.0.1 cannot be generated — see [Format Support](#format-support) |
 | `BOM_TYPE`                 | No       | Artifact type: `sbom` (default), `vex`, `cbom` or `hbom`. Non-SBOM types upload verbatim to sbomify only (augmentation, enrichment, overrides, additional-package injection and the SBOM-specific finalization fixups are skipped; `dependency-track` in `UPLOAD_DESTINATIONS` and `PRODUCT_RELEASE` are rejected). Note: sbomify auto-classifies CycloneDX documents containing cryptographic assets as `cbom` |
 | `ENRICH`                   | No       | Add metadata from package registries                                             |
 | `TOKEN`                    | ‡        | sbomify API token                                                                |
@@ -1066,7 +1066,7 @@ If the primary generator fails or doesn't support the input, the next one in pri
 
 Control the output format with the `SBOM_FORMAT` environment variable:
 
-- **CycloneDX** (`SBOM_FORMAT=cyclonedx`): Default format. Uses the latest version supported by the selected generator; override with `SPEC_VERSION`.
+- **CycloneDX** (`SBOM_FORMAT=cyclonedx`): Default format. Emits 1.6 — every generator's default — not the newest version it could produce; override with `SPEC_VERSION`.
 - **SPDX** (`SBOM_FORMAT=spdx`): Uses Syft, which emits 2.2/2.3. Defaults to 2.3; select 2.2 with `SPEC_VERSION=2.2`.
 
 SPDX **3.0.1** is not generated — no generator emits it, and `SPEC_VERSION=3.0.1` fails with `No generator found for input`. It is supported as *input*: an existing 3.0.1 document passed via `SBOM_FILE` is parsed, augmented/enriched, and written back as 3.0.1 by sbomify-action's own SPDX 3 reader/writer.
