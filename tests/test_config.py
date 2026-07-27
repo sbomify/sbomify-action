@@ -1213,5 +1213,52 @@ class TestLoadConfigAndBuildConfigParity(unittest.TestCase):
             self.assertEqual(config_from_env.sbom_format, config_from_args.sbom_format)
 
 
+class TestSpecVersionValidation(unittest.TestCase):
+    """SPEC_VERSION must be rejected up front when nothing can generate it.
+
+    These versions used to pass config validation and then fail mid-run with
+    "No generator found for input", which reads like a missing tool rather than
+    an unsupported request.
+    """
+
+    def _config(self, sbom_format: str, spec_version: str) -> Config:
+        return Config(
+            token="test-token",
+            component_id="test-component",
+            lock_file="/path/to/requirements.txt",
+            sbom_format=sbom_format,
+            spec_version=spec_version,
+        )
+
+    def test_spdx_301_rejected_with_input_only_hint(self):
+        """SPDX 3.0.1 has no generator; the error should point at SBOM_FILE."""
+        with self.assertRaises(ConfigurationError) as cm:
+            self._config("spdx", "3.0.1").validate()
+
+        message = str(cm.exception)
+        self.assertIn("cannot be generated", message)
+        self.assertIn("SBOM_FILE", message)
+
+    def test_cyclonedx_xml_only_versions_rejected(self):
+        """CycloneDX 1.0/1.1 predate JSON, which is all this tool emits."""
+        for version in ("1.0", "1.1"):
+            with self.subTest(version=version):
+                with self.assertRaises(ConfigurationError) as cm:
+                    self._config("cyclonedx", version).validate()
+
+                self.assertIn("JSON in 1.2", str(cm.exception))
+
+    def test_generatable_versions_accepted(self):
+        """The versions a bundled generator can actually emit still validate."""
+        for sbom_format, version in (
+            ("cyclonedx", "1.2"),
+            ("cyclonedx", "1.7"),
+            ("spdx", "2.2"),
+            ("spdx", "2.3"),
+        ):
+            with self.subTest(sbom_format=sbom_format, version=version):
+                self._config(sbom_format, version).validate()
+
+
 if __name__ == "__main__":
     unittest.main()

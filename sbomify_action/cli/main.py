@@ -399,13 +399,23 @@ class Config:
             from .._generation import CYCLONEDX_VERSIONS, SPDX_VERSIONS
 
             if self.sbom_format == "cyclonedx" and self.spec_version not in CYCLONEDX_VERSIONS:
+                hint = ""
+                if self.spec_version in ("1.0", "1.1"):
+                    hint = " CycloneDX only added JSON in 1.2, and this tool emits JSON."
                 raise ConfigurationError(
                     f"Invalid spec_version '{self.spec_version}' for CycloneDX. "
-                    f"Supported: {', '.join(CYCLONEDX_VERSIONS)}"
+                    f"Supported: {', '.join(CYCLONEDX_VERSIONS)}.{hint}"
                 )
             if self.sbom_format == "spdx" and self.spec_version not in SPDX_VERSIONS:
+                hint = ""
+                if self.spec_version == "3.0.1":
+                    hint = (
+                        " SPDX 3.0.1 cannot be generated -- no bundled generator emits it."
+                        " It is supported as input: pass an existing 3.0.1 document via SBOM_FILE"
+                        " and it is processed and written back as 3.0.1."
+                    )
                 raise ConfigurationError(
-                    f"Invalid spec_version '{self.spec_version}' for SPDX. Supported: {', '.join(SPDX_VERSIONS)}"
+                    f"Invalid spec_version '{self.spec_version}' for SPDX. Supported: {', '.join(SPDX_VERSIONS)}.{hint}"
                 )
 
         # Validate product releases format
