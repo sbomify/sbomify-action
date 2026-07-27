@@ -385,6 +385,23 @@ PickOrCreate > OptionList {
     max-height: 20;
 }
 
+/* Publish screen — unlike #apply-log, the publish log streams the full
+ * pipeline output of each subprocess (hundreds of lines), so the panel
+ * is the screen's 1fr flex region (like #diff-panel) and the log
+ * scrolls inside it. The planned-runs list above the log stays
+ * content-sized. */
+#publish-panel {
+    height: 1fr;
+}
+
+#publish-log {
+    height: 1fr;
+}
+
+#publish-planned {
+    height: auto;
+}
+
 SelectionList:focus, OptionList:focus, ListView:focus {
     border: tall $sbom-purple;
 }

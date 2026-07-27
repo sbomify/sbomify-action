@@ -34,6 +34,7 @@ _HELP_BODY = (
     "  06  Configure (SBOM content)\n"
     "  07  Review the plan (diff before commit)\n"
     "  08  Apply — write workflow + finalise components\n"
+    "  09  Publish — generate & upload your first SBOMs (optional)\n"
     "\n"
     "[#5E5E5E]Press [b]?[/] or [b]Esc[/] to close this help.[/]"
 )

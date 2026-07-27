@@ -700,3 +700,92 @@ async def test_enter_on_focused_back_button_goes_back(tmp_path: Path, monkeypatc
         assert isinstance(app.screen, WelcomeScreen), (
             "Enter on focused Back button must pop the screen, not advance forward"
         )
+
+
+async def test_publish_screen_skip_advances_to_done_without_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Skip must land on Done with publish_outcomes untouched, so the Done
+    screen renders exactly as it did before the Publish step existed."""
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "uv.lock",
+            rel_path=Path("uv.lock"),
+            ecosystem="python",
+            suggested_name="widget-py",
+        )
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        # Stage state as if apply just finished.
+        from sbomify_action.cli.wizard.screens.done import DoneScreen
+        from sbomify_action.cli.wizard.screens.publish import PublishScreen
+        from sbomify_action.cli.wizard.state import PlannedComponent
+
+        app.state.plan.create_components = [PlannedComponent(lockfile=lockfiles[0], name="widget-py")]
+        app.state.component_ids = {Path("uv.lock"): "comp-1"}
+
+        app.push_screen(PublishScreen())
+        await pilot.pause()
+        assert isinstance(app.screen, PublishScreen)
+
+        from textual.widgets import Button
+
+        app.screen.query_one("#skip", Button).press()
+        await pilot.pause()
+
+        assert isinstance(app.screen, DoneScreen)
+        assert app.state.publish_outcomes == []
+
+
+async def test_publish_screen_runs_worker_then_continues_to_done(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Publish now → worker runs run_publish → button becomes Continue → Done."""
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "uv.lock",
+            rel_path=Path("uv.lock"),
+            ecosystem="python",
+            suggested_name="widget-py",
+        )
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+
+    ran: list[object] = []
+
+    def fake_run_publish(state: object, opts: object, *, log: object) -> bool:
+        ran.append(state)
+        log("success", "Published widget-py (cyclonedx) to sbomify")
+        return True
+
+    monkeypatch.setattr("sbomify_action.cli.wizard.publish.run_publish", fake_run_publish)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        from sbomify_action.cli.wizard.screens.done import DoneScreen
+        from sbomify_action.cli.wizard.screens.publish import PublishScreen
+        from sbomify_action.cli.wizard.state import PlannedComponent
+
+        app.state.plan.create_components = [PlannedComponent(lockfile=lockfiles[0], name="widget-py")]
+        app.state.component_ids = {Path("uv.lock"): "comp-1"}
+
+        app.push_screen(PublishScreen())
+        await pilot.pause()
+
+        from textual.widgets import Button
+
+        app.screen.query_one("#publish", Button).press()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert ran, "run_publish was never invoked by the worker"
+        publish_btn = app.screen.query_one("#publish", Button)
+        assert str(publish_btn.label) == "Continue ▸"
+        assert publish_btn.disabled is False
+
+        publish_btn.press()
+        await pilot.pause()
+        assert isinstance(app.screen, DoneScreen)

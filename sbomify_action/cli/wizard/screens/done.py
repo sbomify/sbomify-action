@@ -13,7 +13,7 @@ from sbomify_action.cli.wizard.screens._base import WizardScreen
 class DoneScreen(WizardScreen):
     """Phase 6c — summary + next steps."""
 
-    step_index = 8
+    step_index = 9
     step_title = "Done"
     step_subtitle = "All set. Here's what you'll want to do next."
 
@@ -38,6 +38,24 @@ class DoneScreen(WizardScreen):
         applied.border_subtitle = "From zero to SBOM hero"
         with applied:
             yield Static(self._applied_summary(), classes="wizard-muted")
+
+        # Publish step outcome — only when the user actually ran it
+        # (Skip leaves publish_outcomes empty and this panel absent, so
+        # the Done screen reads exactly as it did before the step existed).
+        outcomes = self.wizard.state.publish_outcomes
+        if outcomes:
+            failed = [o for o in outcomes if not o.ok]
+            if self.wizard.state.is_dry_run:
+                published = Vertical(classes="wizard-panel")
+                published.border_title = "◌  Publish (dry-run preview)"
+            elif failed:
+                published = Vertical(classes="wizard-panel")
+                published.border_title = f"⚠  Published {len(outcomes) - len(failed)} of {len(outcomes)} SBOM(s)"
+            else:
+                published = Vertical(classes="wizard-panel-emphasis")
+                published.border_title = "✓  First SBOMs published"
+            with published:
+                yield Static(self._published_summary(), classes="wizard-muted")
 
         if self.wizard.state.plan.credential_mode == "oidc":
             state = self.wizard.state
@@ -156,6 +174,38 @@ class DoneScreen(WizardScreen):
                 lines.append(f"[#86EFAC]✓[/]  [#CBCCCE]Wrote[/]      {path}")
         if not lines:
             lines.append("[#5E5E5E]◌  (nothing applied)[/]")
+        return "\n".join(lines)
+
+    def _published_summary(self) -> str:
+        """One line per publish run + where the local SBOM files live.
+
+        Dry-run renders "would publish" phrasing since nothing was
+        generated or uploaded; error strings are escaped because they
+        quote subprocess/exception text that can contain ``[``.
+        """
+        from rich.markup import escape as _esc
+
+        state = self.wizard.state
+        lines: list[str] = []
+        for outcome in state.publish_outcomes:
+            label = f"{outcome.rel_path}  [#5E5E5E]({outcome.sbom_format})[/]"
+            if state.is_dry_run:
+                lines.append(f"[#5E5E5E]◌  would publish[/]  {label}")
+            elif outcome.ok:
+                lines.append(f"[#86EFAC]✓[/]  [#CBCCCE]Published[/]  {label}")
+            else:
+                reason = _esc(outcome.error or "failed")
+                lines.append(f"[#F87171]✗[/]  [#CBCCCE]Failed   [/]  {label}  [#5E5E5E]{reason}[/]")
+        if state.is_dry_run:
+            lines.append("")
+            lines.append("[#5E5E5E]Re-run without --dry-run to actually publish.[/]")
+        else:
+            if any(not o.ok for o in state.publish_outcomes):
+                lines.append("")
+                lines.append("[#5E5E5E]Failed runs are not fatal — CI retries on the next push.[/]")
+            if state.publish_output_dir:
+                lines.append("")
+                lines.append(f"[#5E5E5E]Generated files kept in {_esc(str(state.publish_output_dir))}[/]")
         return "\n".join(lines)
 
     def _oidc_success(self) -> str:
