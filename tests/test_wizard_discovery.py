@@ -155,14 +155,27 @@ def _stub_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _init_git_repo(path: Path, *, remote: str = "git@github.com:acme/widget.git") -> None:
-    env = {
+def _git_env() -> dict[str, str]:
+    """Git environment for the throwaway repos these tests build.
+
+    ``GIT_CONFIG_GLOBAL``/``GIT_CONFIG_SYSTEM`` are pinned to os.devnull so the
+    developer's own git config cannot leak in. Without that, settings such as
+    ``tag.gpgsign = true`` turn ``git tag v1.0.0`` into a signed tag, which
+    needs a message and fails with "no tag message?".
+    """
+    return {
         **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
         "GIT_AUTHOR_NAME": "T",
         "GIT_AUTHOR_EMAIL": "t@t",
         "GIT_COMMITTER_NAME": "T",
         "GIT_COMMITTER_EMAIL": "t@t",
     }
+
+
+def _init_git_repo(path: Path, *, remote: str = "git@github.com:acme/widget.git") -> None:
+    env = _git_env()
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True, env=env)
     subprocess.run(["git", "remote", "add", "origin", remote], cwd=path, check=True, env=env)
     (path / "README.md").write_text("# test")
@@ -182,14 +195,7 @@ def test_gather_repo_facts_parses_owner_repo(tmp_path: Path) -> None:
 
 def test_gather_repo_facts_with_release_tags(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
-    env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "T",
-        "GIT_AUTHOR_EMAIL": "t@t",
-        "GIT_COMMITTER_NAME": "T",
-        "GIT_COMMITTER_EMAIL": "t@t",
-    }
-    subprocess.run(["git", "tag", "v1.0.0"], cwd=tmp_path, check=True, env=env)
+    subprocess.run(["git", "tag", "v1.0.0"], cwd=tmp_path, check=True, env=_git_env())
     facts = gather_repo_facts(tmp_path)
     assert facts.has_release_tags is True
 
@@ -198,14 +204,7 @@ def test_gather_repo_facts_with_calver_release_tags(tmp_path: Path) -> None:
     """Bare-numeric version tags (CalVer / unprefixed SemVer) count as
     release tags — the old ``v*``-only detection missed them."""
     _init_git_repo(tmp_path)
-    env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "T",
-        "GIT_AUTHOR_EMAIL": "t@t",
-        "GIT_COMMITTER_NAME": "T",
-        "GIT_COMMITTER_EMAIL": "t@t",
-    }
-    subprocess.run(["git", "tag", "2026.7.1"], cwd=tmp_path, check=True, env=env)
+    subprocess.run(["git", "tag", "2026.7.1"], cwd=tmp_path, check=True, env=_git_env())
     facts = gather_repo_facts(tmp_path)
     assert facts.has_release_tags is True
 
