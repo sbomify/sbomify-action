@@ -1146,7 +1146,7 @@ sbomify attempts to populate these fields for each component:
 
 ## Format Support
 
-- **CycloneDX**: 1.3, 1.4, 1.5, 1.6, 1.7 (JSON) — generate and process
+- **CycloneDX**: 1.2, 1.3, 1.4, 1.5, 1.6, 1.7 (JSON) — generate and process. 1.0/1.1 are XML-only in the CycloneDX spec, so they cannot be produced here
 - **SPDX**: 2.2, 2.3 (JSON) — generate and process
 - **SPDX**: 3.0.1 (JSON-LD) — process only; supply an existing document via `SBOM_FILE`. Generation is not supported, since no bundled generator emits 3.0.1
 
