@@ -1237,7 +1237,11 @@ class TestSpecVersionValidation(unittest.TestCase):
 
         message = str(cm.exception)
         self.assertIn("cannot be generated", message)
+        # Both working routes must be named, and additional-packages-only mode is
+        # reachable through either sentinel -- see the tests below that exercise them.
         self.assertIn("SBOM_FILE", message)
+        self.assertIn("LOCK_FILE=none", message)
+        self.assertIn("SBOM_FILE=none", message)
 
     def test_cyclonedx_xml_only_versions_rejected(self):
         """CycloneDX 1.0/1.1 predate JSON, which is all this tool emits."""

@@ -420,9 +420,9 @@ class Config:
                 if self.spec_version == "3.0.1":
                     hint = (
                         " SPDX 3.0.1 cannot be generated from a lock file or Docker image --"
-                        " no generator plugin emits it. It is available two other ways:"
-                        " pass an existing 3.0.1 document via SBOM_FILE, or use"
-                        " additional-packages-only mode (LOCK_FILE=none)."
+                        " no generator plugin emits it. Two other routes produce it:"
+                        " pass an existing 3.0.1 document as SBOM_FILE, or use"
+                        " additional-packages-only mode (LOCK_FILE=none or SBOM_FILE=none)."
                     )
                 raise ConfigurationError(
                     f"Invalid spec_version '{self.spec_version}' for SPDX. Supported: {', '.join(SPDX_VERSIONS)}.{hint}"
