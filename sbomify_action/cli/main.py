@@ -394,18 +394,38 @@ class Config:
                 self.augment = False
                 self.enrich = False
 
-        # Validate spec_version against sbom_format
-        if self.spec_version:
+        # Validate spec_version against sbom_format.
+        #
+        # Only lock files and Docker images run through the generator plugins whose
+        # capabilities these tuples describe, so the check is scoped to them:
+        #   * additional-packages-only mode builds the document itself and can
+        #     bootstrap SPDX 3.0.1 (additional_packages.create_empty_sbom)
+        #   * a real SBOM_FILE never consults spec_version at all
+        # Enforcing generator limits on those would reject workflows that work.
+        uses_generator_plugin = not self.is_additional_packages_only and bool(self.lock_file or self.docker_image)
+
+        if self.spec_version and uses_generator_plugin:
             from .._generation import CYCLONEDX_VERSIONS, SPDX_VERSIONS
 
             if self.sbom_format == "cyclonedx" and self.spec_version not in CYCLONEDX_VERSIONS:
+                hint = ""
+                if self.spec_version in ("1.0", "1.1"):
+                    hint = " CycloneDX only added JSON in 1.2, and this tool emits JSON."
                 raise ConfigurationError(
                     f"Invalid spec_version '{self.spec_version}' for CycloneDX. "
-                    f"Supported: {', '.join(CYCLONEDX_VERSIONS)}"
+                    f"Supported: {', '.join(CYCLONEDX_VERSIONS)}.{hint}"
                 )
             if self.sbom_format == "spdx" and self.spec_version not in SPDX_VERSIONS:
+                hint = ""
+                if self.spec_version == "3.0.1":
+                    hint = (
+                        " SPDX 3.0.1 cannot be generated from a lock file or Docker image --"
+                        " no generator plugin emits it. Two other routes produce it:"
+                        " pass an existing 3.0.1 document as SBOM_FILE, or use"
+                        " additional-packages-only mode (LOCK_FILE=none or SBOM_FILE=none)."
+                    )
                 raise ConfigurationError(
-                    f"Invalid spec_version '{self.spec_version}' for SPDX. Supported: {', '.join(SPDX_VERSIONS)}"
+                    f"Invalid spec_version '{self.spec_version}' for SPDX. Supported: {', '.join(SPDX_VERSIONS)}.{hint}"
                 )
 
         # Validate product releases format
