@@ -24,10 +24,13 @@ SBOMFormat = Literal["cyclonedx", "spdx"]
 # "CDX > JSON is not supported by CycloneDX in schema version 1.0".
 CYCLONEDX_VERSIONS = ("1.2", "1.3", "1.4", "1.5", "1.6", "1.7")
 
-# SPDX versions that can be *generated*. 3.0.1 is deliberately absent: no
-# bundled generator emits it. It is still supported as input -- an existing
-# 3.0.1 document passed via SBOM_FILE is parsed and written back as 3.0.1 by
-# spdx3.py -- which is why serialization.SUPPORTED_SPDX_VERSIONS does list it.
+# SPDX versions the *generator plugins* in this package can emit from a lock
+# file or Docker image. 3.0.1 is deliberately absent: no plugin produces it.
+# It is not unreachable overall, so this tuple must not be read as "every SPDX
+# version the CLI can output" -- 3.0.1 also arrives via
+# additional_packages.create_empty_sbom (additional-packages-only mode) and via
+# spdx3.py, which parses an existing 3.0.1 document and writes it back. That
+# wider set is what serialization.SUPPORTED_SPDX_VERSIONS describes.
 SPDX_VERSIONS = ("2.2", "2.3")
 
 # =============================================================================

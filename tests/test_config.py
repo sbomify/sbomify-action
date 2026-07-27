@@ -1259,6 +1259,47 @@ class TestSpecVersionValidation(unittest.TestCase):
             with self.subTest(sbom_format=sbom_format, version=version):
                 self._config(sbom_format, version).validate()
 
+    def test_docker_image_input_also_validated(self):
+        """Docker images go through the generator plugins too."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            docker_image="alpine:latest",
+            sbom_format="spdx",
+            spec_version="3.0.1",
+        )
+        with self.assertRaises(ConfigurationError):
+            config.validate()
+
+    def test_additional_packages_only_may_request_spdx3(self):
+        """additional-packages-only mode builds the document itself and can
+        bootstrap SPDX 3.0.1, so the generator-plugin limits must not apply."""
+        for source in ("lock_file", "sbom_file"):
+            with self.subTest(source=source):
+                config = Config(
+                    token="test-token",
+                    component_id="test-component",
+                    sbom_format="spdx",
+                    spec_version="3.0.1",
+                    **{source: "none"},
+                )
+                # The mode itself requires packages to inject; supply them so the
+                # only thing under test is the spec_version check.
+                with patch.dict(os.environ, {"ADDITIONAL_PACKAGES": "pkg:pypi/requests@2.31.0"}):
+                    config.validate()  # no error
+
+    def test_real_sbom_file_input_not_version_checked(self):
+        """A real SBOM_FILE never consults spec_version, so setting one that no
+        generator emits must not block the run."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            sbom_file="/path/to/existing.spdx.json",
+            sbom_format="spdx",
+            spec_version="3.0.1",
+        )
+        config.validate()  # no error
+
 
 if __name__ == "__main__":
     unittest.main()
