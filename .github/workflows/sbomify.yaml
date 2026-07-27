@@ -1048,7 +1048,6 @@ jobs:
   docker-meta:
     name: Docker Build Metadata
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     permissions:
       contents: read
     outputs:
@@ -1106,7 +1105,6 @@ jobs:
       - cle-integration-test
       - augmentation-integration-test
       - docker-meta
-    if: github.event_name == 'push'
     permissions:
       packages: write
       contents: read
@@ -1126,6 +1124,7 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
@@ -1133,11 +1132,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
+        if: github.event_name == 'push'
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           username: sbomifyhub
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # On pull_request this builds only -- no registry, no push -- so the
+      # arm64 image is actually compiled in review. Pushing by digest stays
+      # limited to push events, where the registry secrets exist.
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -1153,11 +1156,12 @@ jobs:
             COMMIT_SHA=${{ github.sha }}
             BUILD_DATE=${{ needs.docker-meta.outputs.build_date }}
             VCS_REF=${{ github.ref_name }}
-          outputs: type=image,"name=${{ needs.docker-meta.outputs.ghcr_repo }},${{ needs.docker-meta.outputs.dockerhub_repo }}",push-by-digest=true,name-canonical=true,push=true
+          outputs: ${{ github.event_name == 'push' && format('type=image,"name={0},{1}",push-by-digest=true,name-canonical=true,push=true', needs.docker-meta.outputs.ghcr_repo, needs.docker-meta.outputs.dockerhub_repo) || 'type=cacheonly' }}
           cache-from: type=gha,scope=build-${{ matrix.slug }}
-          cache-to: type=gha,mode=max,scope=build-${{ matrix.slug }}
+          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope=build-{0}', matrix.slug) || '' }}
 
       - name: Export digest
+        if: github.event_name == 'push'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
@@ -1165,6 +1169,7 @@ jobs:
           touch "${{ runner.temp }}/digests/${DIGEST#sha256:}"
 
       - name: Upload digest
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digests-${{ matrix.slug }}

@@ -121,6 +121,18 @@ ARG VERSION=0.0.0
 RUN apt-get update && \
     apt-get install -y build-essential libxml2-dev libxslt-dev
 
+# pipdeptree is a meson/cargo package from 4.0.0 on and publishes no linux
+# aarch64 wheels, so on arm64 uv builds it from the sdist and needs a Rust
+# toolchain. Reuse the pinned one from rust-builder rather than pulling a
+# second (and differently versioned) toolchain from apt.
+# Only bin/ is copied: on arm64 rust-builder runs `cargo install`, so
+# CARGO_HOME also holds registry/git crate caches that are useless here.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo
+ENV PATH="/usr/local/cargo/bin:$PATH"
+COPY --from=rust-builder /usr/local/rustup /usr/local/rustup
+COPY --from=rust-builder /usr/local/cargo/bin /usr/local/cargo/bin
+
 COPY --from=uv-fetcher /uv /uvx /usr/local/bin/
 
 WORKDIR /app
