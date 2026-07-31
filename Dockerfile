@@ -201,8 +201,21 @@ COPY --from=fetcher /usr/local/bin/bomctl /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/syft /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/crane /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/cosign /usr/local/bin/
-# cargo-cyclonedx: pre-built for amd64, compiled for arm64
+# cargo-cyclonedx: pre-built for amd64, compiled for arm64.
+#
+# It is a cargo *subcommand*, not a self-contained SBOM tool: it shells out to
+# `cargo metadata` to resolve the dependency graph and to `rustc` for the host
+# target triple. Shipping the binary alone leaves it unusable --
+#   "Failed to invoke rustc! Is it in your $PATH?"  (platform.rs:24)
+# -- so the toolchain has to come along. Confirmed both are required: hiding
+# cargo fails on metadata, hiding rustc panics on the target lookup.
 COPY --from=rust-builder /usr/local/cargo/bin/cargo-cyclonedx /usr/local/bin/
+COPY --from=rust-builder /usr/local/rustup /usr/local/rustup
+COPY --from=rust-builder /usr/local/cargo/bin/cargo /usr/local/cargo/bin/cargo
+COPY --from=rust-builder /usr/local/cargo/bin/rustc /usr/local/cargo/bin/rustc
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo
+ENV PATH="/usr/local/cargo/bin:$PATH"
 COPY --from=node-fetcher /usr/local/bin/bun /usr/local/bin/
 COPY --from=node-fetcher /app/node_modules /app/node_modules
 COPY --from=builder /opt/venv /opt/venv
