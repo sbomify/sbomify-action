@@ -138,12 +138,15 @@ class CycloneDXCargoGenerator:
         output_file_abs = str(Path(input.output_file).resolve())
 
         # cargo-cyclonedx has no --output-file: it always writes into the project
-        # directory, naming the file after the crate. --override-filename sets the
-        # stem and --format supplies the extension, so we write to a scratch name
-        # inside the project and move it to the caller's path afterwards. The name
-        # is prefixed to avoid colliding with a real "<crate>.json" in the repo.
+        # tree, naming the file after the crate. --override-filename sets the stem
+        # and --format supplies the extension, so we write to a scratch name and
+        # move it to the caller's path afterwards. The dot prefix avoids colliding
+        # with a real "<crate>.json" in the repo.
+        #
+        # For a workspace it writes one file per member crate, in each member's
+        # own directory, and nothing at the root -- so collect recursively rather
+        # than assuming a single file next to Cargo.lock.
         scratch_stem = ".sbomify-cargo-cyclonedx"
-        produced = project_dir / f"{scratch_stem}.json"
 
         cmd = [
             "cargo-cyclonedx",
@@ -158,11 +161,14 @@ class CycloneDXCargoGenerator:
 
         logger.info(f"Running cargo-cyclonedx for {input.lock_file_name} (CycloneDX {spec_version})")
 
+        produced: list[Path] = []
         try:
             # run_command raises SBOMGenerationError on failure (uses check=True)
             run_command(cmd, "cargo-cyclonedx", timeout=300, cwd=str(project_dir))
 
-            if not produced.exists():
+            produced = sorted(project_dir.rglob(f"{scratch_stem}.json"))
+
+            if not produced:
                 return GenerationResult.failure_result(
                     error_message="cargo-cyclonedx completed but output file not created",
                     sbom_format="cyclonedx",
@@ -170,12 +176,30 @@ class CycloneDXCargoGenerator:
                     generator_name=self.name,
                 )
 
+            if len(produced) > 1:
+                # A cargo workspace: one SBOM per member crate, and merging them
+                # is not this generator's job. Decline so the orchestrator falls
+                # through to a generator that emits a single document for the
+                # whole workspace (cdxgen reads Cargo.lock and does exactly that).
+                return GenerationResult.failure_result(
+                    error_message=(
+                        f"cargo-cyclonedx produced {len(produced)} SBOMs "
+                        "(cargo workspace with multiple member crates); "
+                        "falling back to a generator that emits one document"
+                    ),
+                    sbom_format="cyclonedx",
+                    spec_version=spec_version,
+                    generator_name=self.name,
+                )
+
             Path(output_file_abs).parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(produced), output_file_abs)
+            shutil.move(str(produced[0]), output_file_abs)
         finally:
-            # Never leave the scratch file behind in someone's repo, including
-            # when generation failed partway through.
-            produced.unlink(missing_ok=True)
+            # Never leave scratch files behind in someone's repo -- including the
+            # per-crate ones a workspace scatters, and including when generation
+            # failed partway through.
+            for leftover in project_dir.rglob(f"{scratch_stem}.json"):
+                leftover.unlink(missing_ok=True)
 
         return GenerationResult.success_result(
             output_file=output_file_abs,
