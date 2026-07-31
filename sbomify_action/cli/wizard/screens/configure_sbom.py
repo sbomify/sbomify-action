@@ -7,7 +7,7 @@ the "when/how does the workflow run?" half.
 
 Enrichment and augmentation are grouped together because they're both
 metadata-source choices — enrichment pulls package data from external
-registries (PyPI, deps.dev, Repology), augmentation pulls organisational
+registries (PyPI, deps.dev, Repology), augmentation pulls organizational
 metadata (supplier / contacts) from a sbomify contact profile.
 """
 
@@ -93,10 +93,10 @@ class ConfigureSbomScreen(WizardScreen):
         ]
         aug = Vertical(classes="wizard-panel")
         aug.border_title = "◆  Augmentation"
-        aug.border_subtitle = "organisational metadata (supplier, contacts, authors)"
+        aug.border_subtitle = "organizational metadata (supplier, contacts, authors)"
         with aug:
             yield Static(
-                "[#5E5E5E]Lockfiles never carry organisational metadata — who the supplier is, "
+                "[#5E5E5E]Lockfiles never carry organizational metadata — who the supplier is, "
                 "who authored the SBOM, how to contact security. Both [b]Supplier Name[/] and "
                 "[b]Author of SBOM Data[/] are minimum elements under [b]NTIA[/], [b]CISA[/], "
                 "and the [b]EU Cyber Resilience Act[/], so SBOMs without them fail compliance "
@@ -250,9 +250,9 @@ class ConfigureSbomScreen(WizardScreen):
         gained a new profile — rebuild the picker so it appears, and
         auto-select it via the id CreateProfileScreen stashed on the
         plan. If ConfigureSbomifyJsonScreen was pushed and the user
-        cancelled (no data on the plan), flip the augmentation back
+        canceled (no data on the plan), flip the augmentation back
         to Skip so the user isn't trapped in a re-push loop. A
-        cancelled CreateProfileScreen gets the same treatment: move
+        canceled CreateProfileScreen gets the same treatment: move
         the highlight off the "+ Create new" sentinel (or revert to
         Skip when the workspace has zero profiles to fall back on).
         """
@@ -272,7 +272,7 @@ class ConfigureSbomScreen(WizardScreen):
             return
         # Snapshot the previous selection so we can preserve it across
         # the clear+add rebuild when there's no fresh auto-select
-        # target. Without this, a cancelled CreateProfileScreen leaves
+        # target. Without this, a canceled CreateProfileScreen leaves
         # picker.highlighted=None and the next Enter silently downgrades
         # augmentation to "skip".
         previous_highlighted_id: str | None = None
@@ -304,7 +304,7 @@ class ConfigureSbomScreen(WizardScreen):
                     picker.highlighted = idx
                     break
 
-        # Handle a cancelled CreateProfileScreen (Escape without saving).
+        # Handle a canceled CreateProfileScreen (Escape without saving).
         # With "profile" as the default strategy, a zero-profile
         # workspace reaches Enter→CreateProfile→Escape→Enter straight
         # from the screen's defaults — break the loop the same way the
@@ -325,7 +325,7 @@ class ConfigureSbomScreen(WizardScreen):
             else:
                 self._set_radio_value(aug, target_id="aug-skip")
                 self.notify(
-                    "Cancelled — augmentation reverted to Skip. Pick the radio again to retry.",
+                    "Canceled — augmentation reverted to Skip. Pick the radio again to retry.",
                     title="Contact profile",
                     severity="information",
                 )
@@ -343,7 +343,7 @@ class ConfigureSbomScreen(WizardScreen):
             self._json_form_visited = False
             self._set_radio_value(aug, target_id="aug-skip")
             self.notify(
-                "Cancelled — augmentation reverted to Skip. Pick the radio again to retry.",
+                "Canceled — augmentation reverted to Skip. Pick the radio again to retry.",
                 title="sbomify.json",
                 severity="information",
             )

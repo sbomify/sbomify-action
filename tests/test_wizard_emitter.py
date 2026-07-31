@@ -634,7 +634,7 @@ def test_apply_plan_create_new_product(tmp_path: Path) -> None:
     state = _state(tmp_path)
     api = state.api
     assert api is not None
-    api.create_product.return_value = {"id": "prod-new", "name": "Widget"}
+    api.get_or_create_product.return_value = ({"id": "prod-new", "name": "Widget"}, True)
     api.get_or_create_component.return_value = ("comp-1", True)
 
     state.plan = Plan(
@@ -651,7 +651,7 @@ def test_apply_plan_create_new_product(tmp_path: Path) -> None:
     )
     apply_mod.apply_plan(state, opts)
 
-    api.create_product.assert_called_once_with("Widget")
+    api.get_or_create_product.assert_called_once_with("Widget")
     assert state.created_product_id == "prod-new"
 
 
@@ -688,6 +688,7 @@ def test_apply_plan_dry_run_skips_api_mutations_and_writes(tmp_path: Path) -> No
     # attach, no patch, no OIDC binding.
     api.get_or_create_component.assert_not_called()
     api.create_product.assert_not_called()
+    api.get_or_create_product.assert_not_called()
     api.attach_components_to_product.assert_not_called()
     api.patch_component.assert_not_called()
     api.create_oidc_binding.assert_not_called()

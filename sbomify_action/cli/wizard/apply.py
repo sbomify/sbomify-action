@@ -405,7 +405,7 @@ def _per_component_best_effort(
     relative-path to error message. Catches only ``APIError`` (which is
     the parent of ``AuthError`` per exceptions.py and includes the
     ConnectionError/Timeout shims in sbomify_api._request); anything
-    else escapes and aborts the apply, which is the right behaviour for
+    else escapes and aborts the apply, which is the right behavior for
     programming errors. ``label`` is interpolated into per-failure
     warning messages ("Could not {label} for foo (cid): …").
     """
@@ -549,10 +549,11 @@ def _resolve_product(state: WizardState, log: LogFn) -> dict[str, Any] | None:
     assert state.workspace is not None  # narrowed by caller
 
     if plan.create_product:
-        product = api.create_product(plan.create_product)
+        product, was_created = api.get_or_create_product(plan.create_product)
         state.created_product_id = str(product.get("id") or "")
-        state.applied.append(f"created product {product.get('name')}")
-        log("success", f"Created product {product.get('name')}")
+        verb = "Created" if was_created else "Reused existing"
+        state.applied.append(f"{verb.lower()} product {product.get('name')}")
+        log("success" if was_created else "info", f"{verb} product {product.get('name')}")
         return product
 
     if plan.use_product_id:

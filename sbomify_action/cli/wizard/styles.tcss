@@ -23,7 +23,7 @@ $sbom-grad-peach: #F4B57F;
 /* NOTE: we intentionally do NOT redefine Textual's built-in design
  * tokens ($accent, $primary, $panel, …). Those are referenced by
  * Textual's own internal stylesheet (e.g. ``hatch: right $panel;``)
- * with shape expectations that don't accept arbitrary hex colours.
+ * with shape expectations that don't accept arbitrary hex colors.
  * Instead, every selector below uses our $sbom-* variables directly. */
 
 /* ---------------------------------------------------------------------

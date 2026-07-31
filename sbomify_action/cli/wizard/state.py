@@ -34,7 +34,7 @@ AugmentationStrategy = Literal["profile", "skip", "json_config"]
   fields the user fills in on the Configure (sbomify.json) screen.
   The action's ``json_config`` provider reads it at workflow run time.
 - ``skip`` — set ``AUGMENT: 'false'``; the user will manage metadata
-  out-of-band (or accept blank organisational fields).
+  out-of-band (or accept blank organizational fields).
 """
 
 ReleaseStrategy = Literal["trunk", "tag", "manual"]

@@ -528,7 +528,7 @@ class TestPyPISource:
     def test_fetch_captures_pypi_blake2b_256_digest(self, mock_session):
         """PyPI's JSON API emits BLAKE2b-256 under the `blake2b_256` key
         (underscore, not hyphen). Previously our algorithm mapping only
-        recognised the hyphenated canonical form, so every BLAKE2b hash
+        recognized the hyphenated canonical form, so every BLAKE2b hash
         from a PyPI wheel was silently dropped during enrichment. Pin
         the mapping so a regression gets caught immediately.
         """
@@ -556,7 +556,7 @@ class TestPyPISource:
         metadata = source.fetch(purl, mock_session)
 
         assert metadata is not None
-        # All three digests must land in the normalised hashes map.
+        # All three digests must land in the normalized hashes map.
         assert metadata.hashes == {
             "blake2b_256": "1" * 64,
             "md5": "2" * 32,
@@ -867,7 +867,7 @@ class TestPyPISource:
             fetch() method relies on. `PackageURL.from_string` actually
             preserves `..` in the name field (verified empirically) — so
             a real PURL would do, too — but the shim keeps the unit test
-            independent of how the third-party parser may normalise in
+            independent of how the third-party parser may normalize in
             the future."""
 
             name = ".."
@@ -893,7 +893,7 @@ class TestPyPISource:
         class _Shim:
             # `:` in the version bypasses PackageURL quoting — construct
             # the attacker-controlled shape directly to make sure the fix
-            # holds regardless of parser normalisation.
+            # holds regardless of parser normalization.
             name = "foo"
             version = ":latest"
 
@@ -911,7 +911,7 @@ class TestPyPISource:
 
     def test_fetch_encodes_special_characters_in_purl_components(self, mock_session):
         """Safe special characters survive but are percent-encoded in the URL,
-        so `requests` cannot normalise them into path traversal."""
+        so `requests` cannot normalize them into path traversal."""
         from sbomify_action._enrichment.sources import pypi as pypi_module
 
         pypi_module._cache.clear()
@@ -3566,7 +3566,7 @@ class TestBSIEnrichmentFields:
         ],
     )
     def test_bsi_filename_extensions_derive_correctly(self, filename, expected_archive, expected_exec):
-        """Each recognised archive / executable filename extension maps to
+        """Each recognized archive / executable filename extension maps to
         the expected BSI boolean-style property values."""
         from sbomify_action._enrichment.metadata import NormalizedMetadata
         from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
@@ -3691,9 +3691,9 @@ class TestBSIEnrichmentFields:
             f"got hashes={list(component.hashes)!r}"
         )
 
-    def test_component_hashes_initialised_when_hashes_is_none(self):
-        """Components deserialised from some inputs can legitimately have
-        `hashes is None`. The hash-enrichment path must initialise the
+    def test_component_hashes_initialized_when_hashes_is_none(self):
+        """Components deserialized from some inputs can legitimately have
+        `hashes is None`. The hash-enrichment path must initialize the
         collection instead of iterating None (which would raise)."""
         from sbomify_action._enrichment.metadata import NormalizedMetadata
         from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
@@ -3900,7 +3900,7 @@ class TestBSIEnrichmentFields:
         assert str(hashes[0].content) == "f" * 128
 
     def test_cyclonedx_hash_whitespace_trimmed_and_lowercased(self):
-        """Algorithm keys and hex content are normalised."""
+        """Algorithm keys and hex content are normalized."""
         from sbomify_action._enrichment.metadata import NormalizedMetadata
         from sbomify_action.enrichment import _apply_metadata_to_cyclonedx_component
 
@@ -3922,7 +3922,7 @@ class TestBSIEnrichmentFields:
         _apply_metadata_to_cyclonedx_component(component, metadata)
         assert len(list(component.hashes)) == 0
 
-    # --- P2 #6: enriched licences marked as BSI "original/declared" --------------
+    # --- P2 #6: enriched licenses marked as BSI "original/declared" --------------
 
     def test_enriched_license_marked_declared(self):
         from sbomify_action._enrichment.metadata import NormalizedMetadata
@@ -3931,10 +3931,10 @@ class TestBSIEnrichmentFields:
         component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
         metadata = NormalizedMetadata(licenses=["BSD-3-Clause"])
         _apply_metadata_to_cyclonedx_component(component, metadata)
-        licences = list(component.licenses)
-        assert len(licences) == 1
+        licenses = list(component.licenses)
+        assert len(licenses) == 1
         # CycloneDX LicenseExpression exposes the enum via .acknowledgement
-        ack = getattr(licences[0], "acknowledgement", None)
+        ack = getattr(licenses[0], "acknowledgement", None)
         assert ack is not None
         assert str(ack.value) == "declared"
 
@@ -3943,7 +3943,7 @@ class TestBSIEnrichmentFields:
         [
             # CDX 1.3 / 1.4 / 1.5: license.acknowledgement did not exist in
             # the schema. cyclonedx-python-lib's version-specific outputter
-            # drops the field on serialisation. If we emit it on a <1.6
+            # drops the field on serialization. If we emit it on a <1.6
             # BOM we must NOT see it in the output JSON.
             ("1.3", False),
             ("1.4", False),
@@ -3954,7 +3954,7 @@ class TestBSIEnrichmentFields:
         ],
     )
     def test_acknowledgement_serialization_is_version_gated(self, spec_version, expect_acknowledgement):
-        """Locks the serialisation-time contract: license.acknowledgement is
+        """Locks the serialization-time contract: license.acknowledgement is
         dropped on CDX <1.6 and present on >=1.6. The enrichment helper
         unconditionally attaches `acknowledgement=declared`; the cyclonedx-
         python-lib outputter is responsible for the version filter. If that
@@ -3984,16 +3984,16 @@ class TestBSIEnrichmentFields:
         payload = _json.loads(out)
 
         emitted = payload.get("components", [{}])[0]
-        licence_entries = emitted.get("licenses", [])
-        assert licence_entries, f"no licence emitted for CDX {spec_version}"
-        first = licence_entries[0]
-        # LicenseExpression may serialise the field at the top level or nest
+        license_entries = emitted.get("licenses", [])
+        assert license_entries, f"no license emitted for CDX {spec_version}"
+        first = license_entries[0]
+        # LicenseExpression may serialize the field at the top level or nest
         # it under "license" depending on the library version; probe both.
         body = first if "acknowledgement" in first else first.get("license", {})
         present = "acknowledgement" in body
         assert present is expect_acknowledgement, (
             f"CDX {spec_version}: expected acknowledgement "
-            f"{'present' if expect_acknowledgement else 'absent'}, got {licence_entries!r}"
+            f"{'present' if expect_acknowledgement else 'absent'}, got {license_entries!r}"
         )
         if expect_acknowledgement:
             assert body.get("acknowledgement") == "declared"
