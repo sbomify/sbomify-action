@@ -59,6 +59,40 @@ def test_discover_keeps_one_lockfile_per_ecosystem_in_same_directory(tmp_path: P
     ]
 
 
+def test_discover_finds_rust_via_cargo_toml_when_no_lockfile(tmp_path: Path) -> None:
+    """A library crate without a committed Cargo.lock is still Rust.
+
+    ``cargo new --lib`` gitignores Cargo.lock by convention, so plenty of Rust
+    repos have only the manifest. Cargo.toml used to be absent from
+    RUST_LOCK_FILES, which made those repos look like they contained no Rust at
+    all -- in a polyglot repo the wizard would silently offer only the other
+    ecosystem.
+    """
+    (tmp_path / "Cargo.toml").write_text("")
+    (tmp_path / "bun.lock").write_text("")
+    (tmp_path / "package.json").write_text("{}")
+
+    found = discover(tmp_path, repo_name="dslf")
+    assert [(str(lf.rel_path), lf.ecosystem) for lf in found] == [
+        ("Cargo.toml", "rust"),
+        ("bun.lock", "javascript"),
+    ]
+
+
+def test_discover_prefers_cargo_lock_over_cargo_toml(tmp_path: Path) -> None:
+    """With both present the lockfile wins, and Rust yields exactly one entry."""
+    (tmp_path / "Cargo.lock").write_text("")
+    (tmp_path / "Cargo.toml").write_text("")
+    (tmp_path / "bun.lock").write_text("")
+    (tmp_path / "package.json").write_text("{}")
+
+    found = discover(tmp_path, repo_name="dslf")
+    assert [(str(lf.rel_path), lf.ecosystem) for lf in found] == [
+        ("Cargo.lock", "rust"),
+        ("bun.lock", "javascript"),
+    ]
+
+
 def test_discover_disambiguates_colliding_suggested_names(tmp_path: Path) -> None:
     # Same ecosystem at root and in a subdir would both suggest
     # ``<repo>-javascript`` — the nested one gets its directory in the name.

@@ -26,7 +26,13 @@ PYTHON_LOCK_FILES = [
     "uv.lock",
 ]
 
-RUST_LOCK_FILES = ["Cargo.lock"]
+# Cargo.toml is the manifest fallback, mirroring pyproject.toml / package.json /
+# go.mod in the other ecosystems. It matters for Rust in particular because
+# `cargo new --lib` gitignores Cargo.lock by convention, so a library crate often
+# has no lockfile committed at all -- without the manifest, such a repo looks like
+# it contains no Rust to the wizard and to LOCK_FILE validation.
+# Cargo.lock stays first and outranks it (see the wizard's _LOCKFILE_PRIORITY).
+RUST_LOCK_FILES = ["Cargo.lock", "Cargo.toml"]
 
 JAVASCRIPT_LOCK_FILES = [
     "package.json",
