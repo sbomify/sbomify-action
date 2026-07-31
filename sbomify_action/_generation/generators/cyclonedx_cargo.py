@@ -7,9 +7,10 @@ Supported inputs:
 - Cargo.lock
 
 Supported outputs:
-- CycloneDX 1.4-1.6 (via --spec-version)
+- CycloneDX 1.3-1.5 (via --spec-version; the tool does not emit 1.6)
 """
 
+import shutil
 from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
@@ -42,8 +43,8 @@ class CycloneDXCargoGenerator:
     and should be preferred over generic tools.
 
     Verified capabilities (cargo-cyclonedx 0.5.7):
-    - CycloneDX versions: 1.4, 1.5, 1.6
-    - Default version: 1.6
+    - CycloneDX versions: 1.3, 1.4, 1.5
+    - Default version: 1.5
     - Version selection: --spec-version flag
     """
 
@@ -136,6 +137,14 @@ class CycloneDXCargoGenerator:
         # Convert output file to absolute path since we're changing cwd
         output_file_abs = str(Path(input.output_file).resolve())
 
+        # cargo-cyclonedx has no --output-file: it always writes into the project
+        # directory, naming the file after the crate. --override-filename sets the
+        # stem and --format supplies the extension, so we write to a scratch name
+        # inside the project and move it to the caller's path afterwards. The name
+        # is prefixed to avoid colliding with a real "<crate>.json" in the repo.
+        scratch_stem = ".sbomify-cargo-cyclonedx"
+        produced = project_dir / f"{scratch_stem}.json"
+
         cmd = [
             "cargo-cyclonedx",
             "cyclonedx",
@@ -143,23 +152,30 @@ class CycloneDXCargoGenerator:
             spec_version,
             "--format",
             "json",
-            "--output-file",
-            output_file_abs,
+            "--override-filename",
+            scratch_stem,
         ]
 
         logger.info(f"Running cargo-cyclonedx for {input.lock_file_name} (CycloneDX {spec_version})")
 
-        # run_command raises SBOMGenerationError on failure (uses check=True)
-        run_command(cmd, "cargo-cyclonedx", timeout=300, cwd=str(project_dir))
+        try:
+            # run_command raises SBOMGenerationError on failure (uses check=True)
+            run_command(cmd, "cargo-cyclonedx", timeout=300, cwd=str(project_dir))
 
-        # Verify output file was created
-        if not Path(output_file_abs).exists():
-            return GenerationResult.failure_result(
-                error_message="cargo-cyclonedx completed but output file not created",
-                sbom_format="cyclonedx",
-                spec_version=spec_version,
-                generator_name=self.name,
-            )
+            if not produced.exists():
+                return GenerationResult.failure_result(
+                    error_message="cargo-cyclonedx completed but output file not created",
+                    sbom_format="cyclonedx",
+                    spec_version=spec_version,
+                    generator_name=self.name,
+                )
+
+            Path(output_file_abs).parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(produced), output_file_abs)
+        finally:
+            # Never leave the scratch file behind in someone's repo, including
+            # when generation failed partway through.
+            produced.unlink(missing_ok=True)
 
         return GenerationResult.success_result(
             output_file=output_file_abs,

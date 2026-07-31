@@ -1,6 +1,8 @@
 """Tests for the CycloneDXCargoGenerator plugin."""
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from sbomify_action._generation import (
@@ -17,6 +19,7 @@ from sbomify_action._generation.protocol import (
     CARGO_CYCLONEDX_DEFAULT,
     CARGO_CYCLONEDX_VERSIONS,
 )
+from sbomify_action.exceptions import SBOMGenerationError
 
 
 @patch("sbomify_action._generation.generators.cyclonedx_cargo._CARGO_CYCLONEDX_AVAILABLE", True)
@@ -86,18 +89,44 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
         )
         self.assertTrue(self.generator.supports(gen_input))
 
-    def test_supports_version_1_6(self):
-        """Test support for CycloneDX 1.6."""
+    def test_declines_version_1_6(self):
+        """1.6 must be declined: cargo-cyclonedx cannot emit it.
+
+        `cargo-cyclonedx --help` offers only 1.3, 1.4 and 1.5. Claiming 1.6 made
+        supports() accept a request the binary then rejected with
+        "invalid value '1.6' for '--spec-version'". Declining lets the
+        orchestrator fall through to cdxgen, which does emit 1.6.
+        """
         gen_input = GenerationInput(
             lock_file="/path/Cargo.lock",
             output_format="cyclonedx",
             spec_version="1.6",
         )
+        self.assertFalse(self.generator.supports(gen_input))
+
+    def test_supports_version_1_3(self):
+        """1.3 is supported by the tool and was previously not advertised."""
+        gen_input = GenerationInput(
+            lock_file="/path/Cargo.lock",
+            output_format="cyclonedx",
+            spec_version="1.3",
+        )
         self.assertTrue(self.generator.supports(gen_input))
+
+    def test_default_version_is_one_the_tool_accepts(self):
+        """The default is used when no spec_version is requested, so a default
+        the binary rejects breaks every unqualified invocation."""
+        from sbomify_action._generation.protocol import (
+            CARGO_CYCLONEDX_DEFAULT,
+            CARGO_CYCLONEDX_VERSIONS,
+        )
+
+        self.assertIn(CARGO_CYCLONEDX_DEFAULT, CARGO_CYCLONEDX_VERSIONS)
+        self.assertEqual(CARGO_CYCLONEDX_VERSIONS, ("1.3", "1.4", "1.5"))
 
     def test_does_not_support_unsupported_versions(self):
         """Test that unsupported versions are rejected."""
-        for version in ["1.0", "1.1", "1.2", "1.3", "1.7", "2.0"]:
+        for version in ["1.0", "1.1", "1.2", "1.6", "1.7", "2.0"]:
             gen_input = GenerationInput(
                 lock_file="/path/Cargo.lock",
                 output_format="cyclonedx",
@@ -109,20 +138,27 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
             )
 
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
-    @patch("sbomify_action._generation.generators.cyclonedx_cargo.Path")
-    def test_generate_success(self, mock_path_class, mock_run):
-        """Test successful generation."""
-        mock_run.return_value = MagicMock(returncode=0)
+    def test_generate_success(self, mock_run):
+        """Test successful generation against a real directory.
 
-        # Mock Path.exists() to return True for output file check
-        mock_path_instance = MagicMock()
-        mock_path_instance.exists.return_value = True
-        mock_path_instance.resolve.return_value = "/abs/path/sbom.json"
-        mock_path_instance.parent.resolve.return_value = "/path/to"
-        mock_path_class.return_value = mock_path_instance
+        Uses a temp project rather than mocking Path: the generator moves the
+        file cargo-cyclonedx writes into the project, and a mocked Path cannot
+        exercise that.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            project.mkdir()
+            (project / "Cargo.lock").write_text("")
+            output = Path(tmp) / "sbom.json"
 
-        gen_input = GenerationInput(lock_file="/path/to/Cargo.lock", output_file="sbom.json")
-        result = self.generator.generate(gen_input)
+            def _run(cmd, name, timeout=None, cwd=None):
+                stem = cmd[cmd.index("--override-filename") + 1]
+                (Path(cwd) / f"{stem}.json").write_text('{"bomFormat": "CycloneDX"}')
+                return MagicMock(returncode=0)
+
+            mock_run.side_effect = _run
+            gen_input = GenerationInput(lock_file=str(project / "Cargo.lock"), output_file=str(output))
+            result = self.generator.generate(gen_input)
 
         self.assertTrue(result.success)
         self.assertEqual(result.sbom_format, "cyclonedx")
@@ -241,80 +277,116 @@ class TestCycloneDXCargoToolAvailability(unittest.TestCase):
 
 
 class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):
-    """Tests for cargo-cyclonedx command line arguments."""
+    """Tests for the cargo-cyclonedx invocation.
+
+    These use a real temp directory rather than mocking ``Path``. cargo-cyclonedx
+    has no --output-file: it writes into the project directory and names the file
+    after the crate, so the generator passes --override-filename and moves the
+    result to the caller's path. Mocking Path hid that contract entirely -- the
+    old tests passed while the real invocation failed with
+    "unexpected argument '--output-file'".
+    """
 
     def setUp(self):
-        """Set up test fixtures."""
         self.generator = CycloneDXCargoGenerator()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.project = Path(self._tmp.name) / "project"
+        self.project.mkdir()
+        (self.project / "Cargo.lock").write_text("")
+        self.output = Path(self._tmp.name) / "out" / "sbom.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _fake_run(self, produced_body='{"bomFormat": "CycloneDX"}'):
+        """Stand in for cargo-cyclonedx, writing where the real tool would."""
+
+        def _run(cmd, name, timeout=None, cwd=None):
+            stem = cmd[cmd.index("--override-filename") + 1]
+            (Path(cwd) / f"{stem}.json").write_text(produced_body)
+            return MagicMock(returncode=0)
+
+        return _run
 
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
-    @patch("sbomify_action._generation.generators.cyclonedx_cargo.Path")
-    def test_command_includes_spec_version(self, mock_path_class, mock_run):
-        """Test that command includes --spec-version flag."""
-        mock_run.return_value = MagicMock(returncode=0)
-
-        mock_path_instance = MagicMock()
-        mock_path_instance.exists.return_value = True
-        mock_path_instance.resolve.return_value = "/abs/path/sbom.json"
-        mock_path_instance.parent.resolve.return_value = "/path/to"
-        mock_path_class.return_value = mock_path_instance
-
-        gen_input = GenerationInput(
-            lock_file="/path/to/Cargo.lock",
-            output_file="sbom.json",
-            spec_version="1.5",
+    def test_command_shape(self, mock_run):
+        mock_run.side_effect = self._fake_run()
+        result = self.generator.generate(
+            GenerationInput(
+                lock_file=str(self.project / "Cargo.lock"),
+                output_file=str(self.output),
+                spec_version="1.5",
+            )
         )
-        self.generator.generate(gen_input)
 
-        # Check that run_command was called with correct arguments
-        mock_run.assert_called_once()
         cmd = mock_run.call_args[0][0]
-
-        self.assertIn("cargo-cyclonedx", cmd)
-        self.assertIn("cyclonedx", cmd)
+        self.assertEqual(cmd[:2], ["cargo-cyclonedx", "cyclonedx"])
         self.assertIn("--spec-version", cmd)
         self.assertIn("1.5", cmd)
-
-    @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
-    @patch("sbomify_action._generation.generators.cyclonedx_cargo.Path")
-    def test_command_includes_json_format(self, mock_path_class, mock_run):
-        """Test that command includes --format json flag."""
-        mock_run.return_value = MagicMock(returncode=0)
-
-        mock_path_instance = MagicMock()
-        mock_path_instance.exists.return_value = True
-        mock_path_instance.resolve.return_value = "/abs/path/sbom.json"
-        mock_path_instance.parent.resolve.return_value = "/path/to"
-        mock_path_class.return_value = mock_path_instance
-
-        gen_input = GenerationInput(lock_file="/path/to/Cargo.lock", output_file="sbom.json")
-        self.generator.generate(gen_input)
-
-        cmd = mock_run.call_args[0][0]
         self.assertIn("--format", cmd)
         self.assertIn("json", cmd)
+        self.assertIn("--override-filename", cmd)
+        # The flag the tool does not have.
+        self.assertNotIn("--output-file", cmd)
+        self.assertTrue(result.success)
 
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
-    @patch("sbomify_action._generation.generators.cyclonedx_cargo.Path")
-    def test_command_runs_in_project_directory(self, mock_path_class, mock_run):
-        """Test that command runs in the directory containing Cargo.lock."""
-        mock_run.return_value = MagicMock(returncode=0)
-
-        mock_path_instance = MagicMock()
-        mock_path_instance.exists.return_value = True
-        mock_path_instance.resolve.return_value = "/abs/path/sbom.json"
-        mock_path_instance.parent.resolve.return_value = "/project/dir"
-        mock_path_class.return_value = mock_path_instance
-
-        gen_input = GenerationInput(
-            lock_file="/project/dir/Cargo.lock",
-            output_file="sbom.json",
+    def test_runs_in_project_directory(self, mock_run):
+        mock_run.side_effect = self._fake_run()
+        self.generator.generate(
+            GenerationInput(
+                lock_file=str(self.project / "Cargo.lock"),
+                output_file=str(self.output),
+            )
         )
-        self.generator.generate(gen_input)
+        self.assertEqual(mock_run.call_args[1]["cwd"], str(self.project.resolve()))
 
-        # Check that cwd was passed to run_command
-        mock_run.assert_called_once()
-        self.assertEqual(mock_run.call_args[1]["cwd"], "/project/dir")
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
+    def test_output_is_moved_to_requested_path(self, mock_run):
+        """The tool writes into the project; the caller asked for somewhere else."""
+        mock_run.side_effect = self._fake_run()
+        result = self.generator.generate(
+            GenerationInput(
+                lock_file=str(self.project / "Cargo.lock"),
+                output_file=str(self.output),
+            )
+        )
+
+        self.assertTrue(result.success)
+        self.assertTrue(self.output.exists(), "output should exist at the requested path")
+        self.assertIn("CycloneDX", self.output.read_text())
+
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
+    def test_scratch_file_is_not_left_in_the_repo(self, mock_run):
+        """Generating must not litter the user's working tree."""
+        mock_run.side_effect = self._fake_run()
+        self.generator.generate(
+            GenerationInput(
+                lock_file=str(self.project / "Cargo.lock"),
+                output_file=str(self.output),
+            )
+        )
+        leftovers = [p.name for p in self.project.iterdir() if p.name != "Cargo.lock"]
+        self.assertEqual(leftovers, [])
+
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
+    def test_scratch_file_cleaned_up_when_the_tool_fails(self, mock_run):
+        def _boom(cmd, name, timeout=None, cwd=None):
+            stem = cmd[cmd.index("--override-filename") + 1]
+            (Path(cwd) / f"{stem}.json").write_text("partial")
+            raise SBOMGenerationError("cargo-cyclonedx blew up")
+
+        mock_run.side_effect = _boom
+        result = self.generator.generate(
+            GenerationInput(
+                lock_file=str(self.project / "Cargo.lock"),
+                output_file=str(self.output),
+            )
+        )
+
+        self.assertFalse(result.success)
+        leftovers = [p.name for p in self.project.iterdir() if p.name != "Cargo.lock"]
+        self.assertEqual(leftovers, [])
 
 
 if __name__ == "__main__":

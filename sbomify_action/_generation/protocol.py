@@ -57,8 +57,16 @@ CDXGEN_CYCLONEDX_VERSIONS = ("1.4", "1.5", "1.6", "1.7")
 CDXGEN_CYCLONEDX_DEFAULT = "1.6"
 
 # cargo-cyclonedx (native Rust generator) - CycloneDX only
-CARGO_CYCLONEDX_VERSIONS = ("1.4", "1.5", "1.6")
-CARGO_CYCLONEDX_DEFAULT = "1.6"
+# Mirror what the tool accepts, not what the rest of the pipeline can emit.
+# `cargo-cyclonedx --help`: "The CycloneDX specification version to output:
+# `1.3`, `1.4` or `1.5`". Claiming 1.6 here made supports() accept a request the
+# binary then rejected with "invalid value '1.6' for '--spec-version'", and
+# because 1.6 was also the default, *every* invocation failed that way.
+#
+# With the real set declared, supports() correctly declines a 1.6 request and
+# the orchestrator falls through to cdxgen, which does emit 1.6.
+CARGO_CYCLONEDX_VERSIONS = ("1.3", "1.4", "1.5")
+CARGO_CYCLONEDX_DEFAULT = "1.5"
 
 
 @dataclass
