@@ -44,6 +44,23 @@ DOWNLOAD_TIMEOUT = 120
 # Cache directory (XDG compliant)
 DEFAULT_CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "sbomify" / "license-db"
 
+
+def _github_auth_headers() -> Dict[str, str]:
+    """Authorization header for the GitHub API when a token is available.
+
+    The releases API is rate limited to 60 requests/hour per IP when
+    unauthenticated, and CI runners share IPs, so this call fails
+    intermittently there. The failure is silent -- assets come back empty, the
+    database is skipped, and enrichment quietly continues with the other
+    sources -- which is why it surfaces as a flaky integration test rather than
+    an error. An authenticated call gets 5000/hour.
+
+    No token is required: without one the behaviour is exactly as before.
+    """
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 # Local generation is disabled by default (too slow for Ubuntu/Debian - takes hours)
 # Set SBOMIFY_ENABLE_LICENSE_DB_GENERATION=true to enable local generation fallback
 DISABLE_LOCAL_GENERATION = os.environ.get("SBOMIFY_ENABLE_LICENSE_DB_GENERATION", "").lower() not in (
@@ -486,6 +503,7 @@ class LicenseDBSource:
                 GITHUB_RELEASES_API,
                 params={"per_page": MAX_RELEASES_TO_CHECK},
                 timeout=DEFAULT_TIMEOUT,
+                headers=_github_auth_headers(),
             )
             response.raise_for_status()
 

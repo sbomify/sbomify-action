@@ -167,6 +167,12 @@ jobs:
           OUTPUT_FILE: alpine-enriched.cdx.json
           ENRICH: "true"
           UPLOAD: "false"
+          # The license database is fetched from this repo's GitHub releases.
+          # Unauthenticated that API allows 60 requests/hour per IP, and runners
+          # share IPs, so it intermittently 403s and enrichment silently degrades:
+          #   Failed to fetch releases: 403 ... rate limit exceeded
+          # which then fails the assertion below. Authenticated gets 5000/hour.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate and enrich Alpine SBOM (SPDX)
         run: |
@@ -180,6 +186,7 @@ jobs:
           OUTPUT_FILE: alpine-enriched.spdx.json
           ENRICH: "true"
           UPLOAD: "false"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify CycloneDX license database enrichment
         run: |
