@@ -15,6 +15,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Static
+from textual.worker import Worker, WorkerState
 
 from sbomify_action.cli.wizard.screens._base import WizardScreen, strip_status_codes
 from sbomify_action.cli.wizard.state import PlannedComponent
@@ -180,14 +181,19 @@ class ComponentsScreen(WizardScreen):
         except Exception as e:  # noqa: BLE001
             return None, f"Unexpected error: {e}"
 
-    async def on_worker_state_changed(self, event) -> None:
-        from textual.worker import WorkerState
-
+    async def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.worker.name != "reload-components":
             return
         if event.state == WorkerState.SUCCESS:
-            components, error = event.worker.result
             self._reloading = False
+            result = event.worker.result
+            if result is None:
+                # Shouldn't happen -- _reload_worker always returns a tuple --
+                # but a silent unpack of None would be a TypeError inside a
+                # message handler, which Textual swallows into a crash screen.
+                self._set_status("[#F87171]Reload failed: worker returned no result.[/]")
+                return
+            components, error = result
             if error is not None:
                 self._set_status(f"[#F87171]Reload failed: {strip_status_codes(error)}[/]")
                 return
