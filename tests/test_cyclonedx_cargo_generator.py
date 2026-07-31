@@ -370,6 +370,37 @@ class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):
         self.assertEqual(leftovers, [])
 
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
+    def test_workspace_defers_to_another_generator(self, mock_run):
+        """A cargo workspace yields one SBOM per member crate, not one document.
+
+        cargo-cyclonedx writes into each member's own directory and nothing at
+        the workspace root, so the naive "look next to Cargo.lock" approach both
+        failed and left the per-crate files behind. Decline instead, so the
+        orchestrator falls through to a generator that emits a single document.
+        """
+
+        def _workspace_run(cmd, name, timeout=None, cwd=None):
+            stem = cmd[cmd.index("--override-filename") + 1]
+            for member in ("alpha", "beta"):
+                d = Path(cwd) / "crates" / member
+                d.mkdir(parents=True, exist_ok=True)
+                (d / f"{stem}.json").write_text('{"bomFormat": "CycloneDX"}')
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = _workspace_run
+        result = self.generator.generate(
+            GenerationInput(
+                lock_file=str(self.project / "Cargo.lock"),
+                output_file=str(self.output),
+            )
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("workspace", result.error_message)
+        # And nothing is left scattered through the member crates.
+        self.assertEqual(list(self.project.rglob(".sbomify-cargo-cyclonedx.json")), [])
+
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
     def test_scratch_file_cleaned_up_when_the_tool_fails(self, mock_run):
         def _boom(cmd, name, timeout=None, cwd=None):
             stem = cmd[cmd.index("--override-filename") + 1]
