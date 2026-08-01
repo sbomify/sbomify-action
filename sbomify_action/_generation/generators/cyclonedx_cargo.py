@@ -178,10 +178,10 @@ class CycloneDXCargoGenerator:
 
             if len(produced) > 1:
                 # A cargo workspace: one SBOM per member crate, and merging them
-                # is not this generator's job. Decline so the orchestrator falls
-                # through to a generator that emits a single document for the
-                # whole workspace (cdxgen reads Cargo.lock and does exactly that).
-                return GenerationResult.failure_result(
+                # is not this generator's job. Decline -- explicitly, so the
+                # orchestrator hands the input on instead of treating a routing
+                # decision as a defect and aborting the run.
+                return GenerationResult.declined_result(
                     error_message=(
                         f"cargo-cyclonedx produced {len(produced)} SBOMs "
                         "(cargo workspace with multiple member crates); "

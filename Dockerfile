@@ -163,10 +163,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 # This creates a default profile based on the container's compiler/OS settings
 RUN conan profile detect --force
 
-# Marks our own image. Runtime tools are fetched on demand only in here,
-# where we decide what the toolchain is. A pip install keeps whatever the
-# user has: silently downloading cdxgen there would change which generator
-# wins and quietly alter the SBOM they get.
+# Marks our own image. Inside it the toolset is fixed, so a generator that
+# claims an input and then fails is a defect we shipped -- the orchestrator
+# refuses to quietly substitute a lower-priority tool and hide it.
 ENV SBOMIFY_IN_CONTAINER=1
 
 ENV PYTHONUNBUFFERED=1
