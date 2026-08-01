@@ -2,7 +2,6 @@ ARG UV_VERSION=0.10.8
 ARG BUN_VERSION=1.3.10
 
 # Define tool versions
-ARG BOMCTL_VERSION=0.4.3
 ARG SYFT_VERSION=1.46.0
 ARG CARGO_CYCLONEDX_VERSION=0.5.9
 ARG CRANE_VERSION=0.21.7
@@ -14,7 +13,6 @@ FROM python:3.14-slim-trixie AS fetcher
 ARG TARGETARCH
 
 # Re-declare global ARGs needed in this stage
-ARG BOMCTL_VERSION
 ARG SYFT_VERSION
 ARG CRANE_VERSION
 ARG COSIGN_VERSION
@@ -26,19 +24,6 @@ RUN apt-get update && \
     apt-get install -y curl unzip
 
 # NOTE: Trivy installation removed - temporarily disabled due to security vulnerabilities
-
-# Install bomctl (uses linux_amd64 / linux_arm64 naming)
-RUN curl -sL \
-        -o bomctl_${BOMCTL_VERSION}_linux_${TARGETARCH}.tar.gz \
-        "https://github.com/bomctl/bomctl/releases/download/v${BOMCTL_VERSION}/bomctl_${BOMCTL_VERSION}_linux_${TARGETARCH}.tar.gz" && \
-    curl -sL \
-        -o bomctl_checksum.txt \
-        "https://github.com/bomctl/bomctl/releases/download/v${BOMCTL_VERSION}/bomctl_${BOMCTL_VERSION}_checksums.txt" && \
-    sha256sum --ignore-missing -c bomctl_checksum.txt && \
-    tar xvfz bomctl_${BOMCTL_VERSION}_linux_${TARGETARCH}.tar.gz && \
-    chmod +x /tmp/bomctl && \
-    mv bomctl /usr/local/bin && \
-    rm -rf /tmp/*
 
 # Install Syft (uses linux_amd64 / linux_arm64 naming)
 RUN curl -sL \
@@ -197,7 +182,6 @@ RUN apt-get update && \
 # This reduces the base image size by ~330MB for non-Java workloads
 
 # Copy tools from fetcher
-COPY --from=fetcher /usr/local/bin/bomctl /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/syft /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/crane /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/cosign /usr/local/bin/
