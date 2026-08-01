@@ -48,6 +48,16 @@ def fallback_is_a_bug() -> bool:
     return Path("/.dockerenv").exists()
 
 
+class _DowngradeRefused(SBOMGenerationError):
+    """Raised by strict mode to abort rather than silently downgrade.
+
+    A dedicated type so the retry loop can let *this* through while still
+    letting a generator's own SBOMGenerationError take the normal fallback
+    path. Catching the base class here would abort for pip users too, which
+    is exactly the behaviour strict mode is not supposed to change.
+    """
+
+
 def _degraded_message(failed: str, remaining: list[str], error: str) -> str:
     """Explain a silent quality downgrade that we are refusing to perform."""
     return (
@@ -213,16 +223,16 @@ class GeneratorRegistry:
                     # A routing decision, not a defect: always hand on.
                     logger.info(f"Generator {generator.name} declined this input: {result.error_message}")
                 elif strict and remaining:
-                    raise SBOMGenerationError(_degraded_message(generator.name, remaining, str(result.error_message)))
+                    raise _DowngradeRefused(_degraded_message(generator.name, remaining, str(result.error_message)))
                 else:
                     self._warn_degraded(generator.name, remaining, str(result.error_message))
-            except SBOMGenerationError:
+            except _DowngradeRefused:
                 raise
             except Exception as e:
                 remaining = [g.name for g in generators[index + 1 :]]
                 errors.append(f"{generator.name}: {e}")
                 if strict and remaining:
-                    raise SBOMGenerationError(_degraded_message(generator.name, remaining, str(e))) from e
+                    raise _DowngradeRefused(_degraded_message(generator.name, remaining, str(e))) from e
                 self._warn_degraded(generator.name, remaining, str(e))
 
         # All generators failed - check if it's a tool availability issue

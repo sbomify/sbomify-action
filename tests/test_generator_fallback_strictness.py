@@ -33,6 +33,8 @@ class _Stub:
         return True
 
     def generate(self, input):
+        if self._outcome == "raise-sbomgen":
+            raise SBOMGenerationError(self._error)
         if self._outcome == "success":
             return GenerationResult.success_result(
                 output_file=input.output_file,
@@ -161,3 +163,31 @@ def test_marker_controls_strictness(monkeypatch):
     assert fallback_is_a_bug() is True
     monkeypatch.setenv("SBOMIFY_ALLOW_GENERATOR_FALLBACK", "1")
     assert fallback_is_a_bug() is False
+
+
+def test_generator_raising_sbomgenerationerror_still_falls_back_outside(outside_container, tmp_path):
+    """Strict mode must not change the pip path, even for typed errors.
+
+    run_command raises SBOMGenerationError, so a generator that forgets to
+    catch it propagates one. Catching the base class in the retry loop made
+    that abort for pip users too -- the exact behaviour strict mode is meant
+    to leave alone. Only the internal _DowngradeRefused may bypass fallback.
+    """
+    registry = GeneratorRegistry()
+    registry.register(_Stub("cyclonedx-py", 10, "raise-sbomgen", "cyclonedx-py exploded"))
+    registry.register(_Stub("syft-fs", 35, "success"))
+
+    result = registry.generate(_input(tmp_path), validate=False)
+
+    assert result.success
+    assert result.generator_name == "syft-fs"
+
+
+def test_generator_raising_sbomgenerationerror_aborts_in_container(in_container, tmp_path):
+    """...but in our own image it is still a defect we shipped."""
+    registry = GeneratorRegistry()
+    registry.register(_Stub("cyclonedx-py", 10, "raise-sbomgen", "cyclonedx-py exploded"))
+    registry.register(_Stub("syft-fs", 35, "success"))
+
+    with pytest.raises(SBOMGenerationError, match="cyclonedx-py exploded"):
+        registry.generate(_input(tmp_path), validate=False)
