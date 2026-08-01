@@ -69,7 +69,9 @@ FROM oven/bun:${BUN_VERSION}-debian@sha256:367842b35abbdf23f39e23c71f3a08eee940f
 
 WORKDIR /app
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+# --production omits devDependencies (@types/bun and the TypeScript peer it
+# drags in); only cdxgen is needed to run.
+RUN bun install --frozen-lockfile --production
 
 # cargo-cyclonedx builder stage
 # Downloads pre-built binary for amd64, compiles from source for arm64
@@ -133,7 +135,10 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN uv venv /opt/venv
 # Use --active so uv installs into the existing VIRTUAL_ENV (/opt/venv) instead of .venv
 # Use --frozen to avoid lockfile validation after version override
-RUN uv sync --frozen --active
+# Use --no-dev because uv syncs the `dev` dependency-group by default, which
+# shipped mypy, pytest, pre-commit, coverage and ruff into the published image
+# (218MB -> 91MB for /opt/venv). Nothing in the runtime path imports them.
+RUN uv sync --frozen --active --no-dev
 RUN rm -rf dist/ && uv build
 RUN uv pip install dist/sbomify_action-*.whl
 
