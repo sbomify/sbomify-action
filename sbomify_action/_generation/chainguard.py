@@ -9,7 +9,6 @@ import binascii
 import json
 import os
 import platform
-import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,7 +22,9 @@ from cyclonedx.model.contact import OrganizationalEntity
 from cyclonedx.model.tool import Tool
 from packageurl import PackageURL
 
+from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.runtimes import ensure_runtime
 from sbomify_action.serialization import serialize_cyclonedx_bom
 
 
@@ -75,6 +76,7 @@ def _get_current_platform() -> str:
 
 def _run_crane(args: list[str]) -> str:
     """Run a crane command and return stdout."""
+    ensure_runtime("crane")
     cmd = ["crane"] + args
     logger.debug(f"Running: {' '.join(cmd)}")
     # nosemgrep: dangerous-subprocess-use-audit  # list-form, shell=False, fixed executable
@@ -84,6 +86,7 @@ def _run_crane(args: list[str]) -> str:
 
 def _run_cosign(args: list[str]) -> str:
     """Run a cosign command and return stdout."""
+    ensure_runtime("cosign")
     cmd = ["cosign"] + args
     logger.debug(f"Running: {' '.join(cmd)}")
     # nosemgrep: dangerous-subprocess-use-audit  # list-form, shell=False, fixed executable
@@ -299,8 +302,13 @@ def detect_chainguard_image(docker_image: str) -> ChainguardBaseImage | None:
     Returns ChainguardBaseImage with the per-architecture digest, or None if not detected.
     Requires crane to be available on PATH.
     """
-    if not shutil.which("crane"):
-        logger.debug("crane not found on PATH, skipping Chainguard detection")
+    # Detection needs crane, which is fetched on demand. Keep the historical
+    # contract: if it cannot be made available, Chainguard detection is
+    # skipped rather than failing the whole run.
+    try:
+        ensure_runtime("crane")
+    except SBOMGenerationError as e:
+        logger.debug(f"crane unavailable, skipping Chainguard detection: {e}")
         return None
 
     # Path A: Direct Chainguard image
@@ -324,8 +332,12 @@ def fetch_chainguard_sbom(info: ChainguardBaseImage) -> dict[str, Any]:
     Raises:
         RuntimeError: If SBOM cannot be fetched or parsed
     """
-    if not shutil.which("cosign"):
-        raise RuntimeError("cosign not found on PATH, cannot fetch Chainguard SBOM")
+    # cosign is fetched on demand rather than baked into the image: it is
+    # 141MB and only this Chainguard path uses it.
+    try:
+        ensure_runtime("cosign")
+    except SBOMGenerationError as e:
+        raise RuntimeError(f"cosign unavailable, cannot fetch Chainguard SBOM: {e}") from e
 
     image_with_digest = f"{info.image_ref}@{info.digest}"
     logger.info(f"Fetching Chainguard SBOM for {image_with_digest}")
