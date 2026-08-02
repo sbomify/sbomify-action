@@ -55,3 +55,11 @@ updates:
       cargo:
         patterns:
           - "*"
+  - package-ecosystem: "maven"
+    directory: "/tools"
+    schedule:
+      interval: "weekly"
+    groups:
+      maven:
+        patterns:
+          - "*"

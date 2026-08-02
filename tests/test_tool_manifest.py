@@ -40,20 +40,21 @@ def test_versions_come_from_native_lockfiles_on_master():
     if "frozen from the lockfile" in manifest:
         pytest.skip("manifest is frozen; this is a built artifact, not a source tree")
 
-    for name in ("syft", "cargo-cyclonedx", "cosign", "crane"):
+    for name in ("syft", "cargo-cyclonedx", "cosign", "crane", "maven"):
         assert f"[tool.{name}]" in manifest
-    # The four lockfile-owned tools must declare where their version lives.
-    assert manifest.count("version_from") == 4
+    # Every tool with a native manifest must declare where its version lives:
+    # syft, cosign, crane (go.mod), cargo-cyclonedx (Cargo.lock), maven (pom.xml).
+    assert manifest.count("version_from") == 5
 
 
 def test_lockfiles_are_the_ones_dependabot_watches():
     """The manifest must point at files a Dependabot ecosystem covers."""
     root = Path(__file__).resolve().parent.parent
-    for rel in ("tools/go.mod", "tools/go.sum", "tools/Cargo.toml", "tools/Cargo.lock"):
+    for rel in ("tools/go.mod", "tools/go.sum", "tools/Cargo.toml", "tools/Cargo.lock", "tools/pom.xml"):
         assert (root / rel).exists(), f"{rel} is missing"
 
     config = (root / ".github" / "dependabot.yml").read_text()
-    for ecosystem in ("gomod", "cargo"):
+    for ecosystem in ("gomod", "cargo", "maven"):
         assert f'package-ecosystem: "{ecosystem}"' in config, f"{ecosystem} is not configured"
 
 
@@ -109,7 +110,8 @@ def test_runtimes_are_built_from_the_manifest():
         assert spec.version == tool.version
         assert tool.assets is not None
         for arch, asset in tool.assets.items():
-            assert spec.assets[arch].sha256 == asset.sha256
+            assert spec.assets[arch].digest == asset.digest
+            assert spec.assets[arch].algorithm == asset.algorithm
             assert spec.assets[arch].url == asset.url
 
 
@@ -139,11 +141,25 @@ def test_every_runtime_tool_can_actually_be_fetched():
         assert tool.assets, f"{name} has no assets"
         assert set(tool.assets) == {"amd64", "arm64"}, f"{name} is missing an architecture"
         for arch, asset in tool.assets.items():
-            assert re.fullmatch(r"[0-9a-f]{64}", asset.sha256), f"{name}/{arch} digest is malformed"
+            expected = {"sha256": 64, "sha512": 128}[asset.algorithm]
+            assert re.fullmatch(rf"[0-9a-f]{{{expected}}}", asset.digest), (
+                f"{name}/{arch} {asset.algorithm} digest is malformed"
+            )
             assert asset.url.startswith("https://"), f"{name}/{arch} must be fetched over https"
-            assert tool.version in asset.url, (
-                f"{name}/{arch}: url does not mention {tool.version} -- a version bump that "
-                "left the URL behind would fetch the old binary and still pass its checksum"
+            # Vendors spell the same version differently in a URL: Adoptium
+            # uses both 21.0.12%2B8 and 21.0.12_8 for 21.0.12+8. Accept any
+            # encoding of the separator, but insist the version is in there --
+            # a bump that left the URL behind would fetch the old binary and
+            # still pass its checksum, which is the worst possible outcome.
+            candidates = {
+                tool.version,
+                tool.version.replace("+", "%2B"),
+                tool.version.replace("+", "_"),
+                tool.version.replace("+", "-"),
+                tool.version.replace("+", "."),
+            }
+            assert any(c in asset.url for c in candidates), (
+                f"{name}/{arch}: url does not mention {tool.version} in any encoding"
             )
 
 

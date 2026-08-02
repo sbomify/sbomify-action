@@ -1,5 +1,4 @@
 ARG UV_VERSION=0.10.8
-ARG BUN_VERSION=1.3.10
 
 # Define tool versions
 ARG SYFT_VERSION=1.46.0
@@ -33,15 +32,6 @@ RUN curl -sL \
     chmod +x /tmp/syft && \
     mv syft /usr/local/bin && \
     rm -rf /tmp/*
-
-# Node/Bun stage for cdxgen
-FROM oven/bun:${BUN_VERSION}-debian@sha256:367842b35abbdf23f39e23c71f3a08eee940ff2679a14e08a5afcf4a1436cd89 AS node-fetcher
-
-WORKDIR /app
-COPY package.json bun.lock ./
-# --production omits devDependencies (@types/bun and the TypeScript peer it
-# drags in); only cdxgen is needed to run.
-RUN bun install --frozen-lockfile --production
 
 # cargo-cyclonedx builder stage
 # Downloads pre-built binary for amd64, compiles from source for arm64
@@ -165,15 +155,9 @@ RUN apt-get update && \
 COPY --from=fetcher /usr/local/bin/syft /usr/local/bin/
 # cargo-cyclonedx: pre-built for amd64, compiled for arm64
 COPY --from=rust-builder /usr/local/cargo/bin/cargo-cyclonedx /usr/local/bin/
-COPY --from=node-fetcher /usr/local/bin/bun /usr/local/bin/
-COPY --from=node-fetcher /app/node_modules /app/node_modules
 COPY --from=builder /opt/venv /opt/venv
 
-ENV PATH="/app/node_modules/.bin:/opt/venv/bin:$PATH"
-
-# Make 'node' and 'npm' invoke 'bun' so tools that expect them actually run bun (compatibility shim)
-RUN ln -s /usr/local/bin/bun /usr/local/bin/node && \
-    ln -s /usr/local/bin/bun /usr/local/bin/npm
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Initialize Conan profile for C/C++ package metadata lookups
 # This creates a default profile based on the container's compiler/OS settings
