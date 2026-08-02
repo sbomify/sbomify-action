@@ -114,6 +114,21 @@ _locks: dict[str, threading.Lock] = {name: threading.Lock() for name in RUNTIMES
 _resolved: dict[str, Path] = {}
 
 
+def fetching_is_enabled() -> bool:
+    """Whether we may fetch a tool that is not already present.
+
+    True inside our own image, where the toolchain is ours to decide. False
+    for pip installs: downloading a tool there would change which generator
+    the chain selects, and so change the SBOM the user gets, without them
+    asking for it. Set SBOMIFY_FETCH_RUNTIMES=1 to opt in anywhere.
+    """
+    if os.environ.get("SBOMIFY_FETCH_RUNTIMES", "").lower() in ("1", "true", "yes"):
+        return True
+    if os.environ.get("SBOMIFY_IN_CONTAINER", "").lower() in ("1", "true", "yes"):
+        return True
+    return Path("/.dockerenv").exists()
+
+
 def current_arch() -> str:
     """Map the host machine to the arch keys used in RUNTIMES."""
     machine = platform.machine().lower()
