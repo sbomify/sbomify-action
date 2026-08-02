@@ -30,14 +30,14 @@
 #   assets          runtime only: per-arch url + sha256
 
 [tool.syft]
-version = "1.46.0"
+version_from = { file = "tools/go.mod", module = "github.com/anchore/syft" }
 stage = "image"
 purl = "pkg:golang/github.com/anchore/syft@v{version}"
 github_repo = "anchore/syft"
 dockerfile_arg = "SYFT_VERSION"
 
 [tool.cargo-cyclonedx]
-version = "0.5.9"
+version_from = { file = "tools/Cargo.lock", package = "cargo-cyclonedx" }
 stage = "image"
 purl = "pkg:cargo/cargo-cyclonedx@{version}"
 github_repo = "CycloneDX/cyclonedx-rust-cargo"
@@ -66,7 +66,8 @@ dockerfile_arg = "UV_VERSION"
 # ---------------------------------------------------------------------------
 
 [tool.cosign]
-version = "3.1.1"
+# Version comes from tools/go.mod -- do not restate it here.
+version_from = { file = "tools/go.mod", module = "github.com/sigstore/cosign/v3" }
 stage = "runtime"
 purl = "pkg:golang/github.com/sigstore/cosign@v{version}"
 github_repo = "sigstore/cosign"
@@ -81,7 +82,7 @@ url = "https://github.com/sigstore/cosign/releases/download/v3.1.1/cosign-linux-
 sha256 = "2ec865872e331c32fd12b08dae15332d3f92c0aa029219589684a4903ca85d11"
 
 [tool.crane]
-version = "0.21.7"
+version_from = { file = "tools/go.mod", module = "github.com/google/go-containerregistry" }
 stage = "runtime"
 purl = "pkg:golang/github.com/google/go-containerregistry@v{version}"
 github_repo = "google/go-containerregistry"

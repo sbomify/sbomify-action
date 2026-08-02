@@ -13,6 +13,7 @@ has to be recorded somewhere that both can agree on.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -20,6 +21,57 @@ from pathlib import Path
 import tomllib
 
 _MANIFEST = Path(__file__).with_name("tools.toml")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _version_from_go_mod(path: Path, module: str) -> str:
+    """Read a module's pinned version out of go.mod.
+
+    Parsed rather than shelled out to `go list` so this works in the published
+    image, which has no Go toolchain.
+    """
+    pattern = re.compile(rf"^\s*{re.escape(module)}\s+(v\S+)", re.M)
+    match = pattern.search(path.read_text())
+    if not match:
+        raise ManifestError(f"{module} not found in {path}")
+    return match.group(1).lstrip("v")
+
+
+def _version_from_cargo_lock(path: Path, package: str) -> str:
+    """Read a crate's pinned version out of Cargo.lock."""
+    data = tomllib.loads(path.read_text())
+    for entry in data.get("package", []):
+        if entry.get("name") == package:
+            return str(entry["version"])
+    raise ManifestError(f"{package} not found in {path}")
+
+
+def _resolve_version(name: str, body: dict[str, object]) -> str:
+    """Take the version from the ecosystem's own lockfile where one owns it.
+
+    Restating versions in this file would put them out of Dependabot's reach
+    and create a second place to bump -- which is exactly the drift this
+    manifest exists to stop. Only tools with no native manifest carry a
+    literal `version` here.
+    """
+    if "version" in body:
+        return str(body["version"])
+
+    source = body.get("version_from")
+    assert source is None or isinstance(source, dict)
+    if not source:
+        raise ManifestError(f"{name}: needs either version or version_from")
+
+    path = _REPO_ROOT / source["file"]
+    if not path.exists():
+        raise ManifestError(f"{name}: {source['file']} not found (looked in {path})")
+
+    if "module" in source:
+        return _version_from_go_mod(path, source["module"])
+    if "package" in source:
+        return _version_from_cargo_lock(path, source["package"])
+    raise ManifestError(f"{name}: version_from needs a module (go.mod) or package (Cargo.lock)")
+
 
 #: Tools baked into the published container image.
 STAGE_IMAGE = "image"
@@ -117,7 +169,7 @@ def load_tools() -> dict[str, Tool]:
 
         tools[name] = Tool(
             name=name,
-            version=body["version"],
+            version=_resolve_version(name, body),
             stage=stage,
             purl=body["purl"],
             github_repo=body.get("github_repo"),
