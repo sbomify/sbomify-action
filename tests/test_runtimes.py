@@ -74,7 +74,6 @@ def test_fetches_verifies_and_puts_on_path(monkeypatch):
     spec = _raw_spec(payload)
     _register(monkeypatch, spec)
     _serve(monkeypatch, payload)
-    monkeypatch.setattr(runtimes.shutil, "which", lambda _: None)
 
     bin_dir = ensure_runtime("faketool")
 
@@ -89,7 +88,6 @@ def test_rejects_a_tampered_download(monkeypatch):
     spec = _raw_spec(b"the-bytes-we-pinned")
     _register(monkeypatch, spec)
     _serve(monkeypatch, b"malicious-substitute")
-    monkeypatch.setattr(runtimes.shutil, "which", lambda _: None)
 
     with pytest.raises(SBOMGenerationError, match="Checksum mismatch"):
         ensure_runtime("faketool")
@@ -103,7 +101,6 @@ def test_reuses_an_already_extracted_prefix(monkeypatch):
     payload = b"binary-content"
     spec = _raw_spec(payload)
     _register(monkeypatch, spec)
-    monkeypatch.setattr(runtimes.shutil, "which", lambda _: None)
 
     calls = {"n": 0}
 
@@ -120,21 +117,27 @@ def test_reuses_an_already_extracted_prefix(monkeypatch):
     assert calls["n"] == 1, "second call re-downloaded instead of reusing the prefix"
 
 
-def test_prefers_a_tool_already_on_path(monkeypatch, tmp_path):
-    """Baked-in or developer-installed tools must not trigger a download."""
-    spec = _raw_spec(b"unused")
+def test_ignores_a_tool_already_on_path(monkeypatch, tmp_path):
+    """The pinned artifact must win over whatever happens to be installed.
+
+    Each release hard-codes the tool versions it was built against and its
+    SBOM names them. Using a different binary found on PATH would mean
+    running one thing and reporting another.
+    """
+    payload = b"the-pinned-bytes"
+    spec = _raw_spec(payload)
     _register(monkeypatch, spec)
-    existing = tmp_path / "bin" / "faketool"
-    existing.parent.mkdir(parents=True)
-    existing.touch()
-    monkeypatch.setattr(runtimes.shutil, "which", lambda n: str(existing) if n == "faketool" else None)
+    _serve(monkeypatch, payload)
 
-    def explode(*a, **k):
-        raise AssertionError("should not download a tool that is already present")
+    impostor = tmp_path / "bin" / "faketool"
+    impostor.parent.mkdir(parents=True)
+    impostor.write_bytes(b"a different build entirely")
+    monkeypatch.setattr(runtimes.shutil, "which", lambda n: str(impostor) if n == "faketool" else None)
 
-    monkeypatch.setattr(runtimes.requests, "get", explode)
+    bin_dir = ensure_runtime("faketool")
 
-    assert ensure_runtime("faketool") == existing.parent
+    assert bin_dir != impostor.parent, "used the binary on PATH instead of the pinned one"
+    assert (bin_dir / "faketool").read_bytes() == payload
 
 
 def test_extracts_a_named_member_from_an_archive(monkeypatch):
@@ -158,7 +161,6 @@ def test_extracts_a_named_member_from_an_archive(monkeypatch):
     )
     _register(monkeypatch, spec)
     _serve(monkeypatch, payload)
-    monkeypatch.setattr(runtimes.shutil, "which", lambda _: None)
 
     bin_dir = ensure_runtime("tool")
     assert (bin_dir / "tool").read_bytes() == b"the-tool"
@@ -184,7 +186,6 @@ def test_refuses_path_traversal_in_archives(monkeypatch):
     )
     _register(monkeypatch, spec)
     _serve(monkeypatch, payload)
-    monkeypatch.setattr(runtimes.shutil, "which", lambda _: None)
 
     with pytest.raises(SBOMGenerationError, match="unsafe archive entry"):
         ensure_runtime("evil")
@@ -231,7 +232,6 @@ def test_partial_download_is_not_left_in_the_cache(monkeypatch):
     """A download that dies mid-stream must not leave a usable-looking file."""
     spec = _raw_spec(b"complete-payload")
     _register(monkeypatch, spec)
-    monkeypatch.setattr(runtimes.shutil, "which", lambda _: None)
 
     class _Dying(_FakeResponse):
         def iter_content(self, chunk_size=1):
