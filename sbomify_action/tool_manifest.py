@@ -251,8 +251,7 @@ def load_tools() -> dict[str, Tool]:
             # payload under a wrapper directory default to "bin"; a bare
             # binary stays at the prefix root.
             bin_subdir=str(
-                body.get("bin_subdir")
-                or ("bin" if body.get("strip_container") or body.get("rust_dist") else "")
+                body.get("bin_subdir") or ("bin" if body.get("strip_container") or body.get("rust_dist") else "")
             ),
             assets=assets,
         )
