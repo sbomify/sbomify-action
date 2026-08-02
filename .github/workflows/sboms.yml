@@ -93,6 +93,51 @@ jobs:
             lockfile: bun.lock
             sbom_format: spdx
             output_file: sbomify-action-frontend.spdx.json
+          # The tools we ship and fetch are dependencies too, and until now the
+          # only record of them was a hand-written list of three bare PURLs with
+          # no transitive dependencies. These two lockfiles carry 612 components
+          # between them (471 Go, 139 Cargo).
+          #
+          # staging_id/prod_id are placeholders: the components do not exist in
+          # sbomify yet. UPLOAD is switched off automatically while that is true,
+          # so CI still generates and validates the SBOMs -- catching a broken
+          # lockfile -- without publishing them anywhere.
+          - name: go-tools-cyclonedx
+            kind: source
+            is_action: false
+            component_name: sbomify Action Go Tools
+            staging_id: PLACEHOLDER_GO_TOOLS_STAGING
+            prod_id: PLACEHOLDER_GO_TOOLS_PROD
+            lockfile: tools/go.mod
+            sbom_format: cyclonedx
+            output_file: sbomify-action-go-tools.cdx.json
+          - name: go-tools-spdx
+            kind: source
+            is_action: false
+            component_name: sbomify Action Go Tools
+            staging_id: PLACEHOLDER_GO_TOOLS_STAGING
+            prod_id: PLACEHOLDER_GO_TOOLS_PROD
+            lockfile: tools/go.mod
+            sbom_format: spdx
+            output_file: sbomify-action-go-tools.spdx.json
+          - name: rust-tools-cyclonedx
+            kind: source
+            is_action: false
+            component_name: sbomify Action Rust Tools
+            staging_id: PLACEHOLDER_RUST_TOOLS_STAGING
+            prod_id: PLACEHOLDER_RUST_TOOLS_PROD
+            lockfile: tools/Cargo.lock
+            sbom_format: cyclonedx
+            output_file: sbomify-action-rust-tools.cdx.json
+          - name: rust-tools-spdx
+            kind: source
+            is_action: false
+            component_name: sbomify Action Rust Tools
+            staging_id: PLACEHOLDER_RUST_TOOLS_STAGING
+            prod_id: PLACEHOLDER_RUST_TOOLS_PROD
+            lockfile: tools/Cargo.lock
+            sbom_format: spdx
+            output_file: sbomify-action-rust-tools.spdx.json
           - name: container-cyclonedx
             kind: container
             is_action: false
@@ -165,7 +210,9 @@ jobs:
           ADDITIONAL_PACKAGES_FILE: ${{ matrix.kind == 'container' && 'container_additional_packages.txt' || '' }}
           PRODUCT_RELEASE: '["${{ steps.cfg.outputs.product_release_id }}:${{ steps.cfg.outputs.version }}"]'
           SBOM_FORMAT: ${{ matrix.sbom_format }}
-          UPLOAD: 'true'
+          # Generate and validate, but do not publish, while the component
+          # id is still a placeholder.
+          UPLOAD: ${{ startsWith(matrix.staging_id, 'PLACEHOLDER') && 'false' || 'true' }}
           AUGMENT: 'true'
           ENRICH: 'true'
           OUTPUT_FILE: ${{ matrix.output_file }}
