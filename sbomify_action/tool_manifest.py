@@ -49,10 +49,16 @@ def _version_from_cargo_lock(path: Path, package: str) -> str:
 def _version_from_pom(path: Path, artifact: str) -> str:
     """Read a dependency's pinned version out of a pom.xml.
 
-    defusedxml because this parses a file from the repo, and the safe parser
-    costs nothing.
+    Prefers defusedxml, but falls back to the stdlib parser: this module is
+    imported by scripts that CI runs outside the project virtualenv, and a
+    missing hardening library must not stop the build. The fallback is
+    acceptable here specifically -- the file is tools/pom.xml from our own
+    repository, and ElementTree does not expand external entities at all.
     """
-    from defusedxml import ElementTree
+    try:
+        from defusedxml import ElementTree
+    except ModuleNotFoundError:  # pragma: no cover - depends on the environment
+        from xml.etree import ElementTree  # type: ignore[no-redef]  # noqa: S405
 
     ns = {"m": "http://maven.apache.org/POM/4.0.0"}
     root = ElementTree.parse(path).getroot()
