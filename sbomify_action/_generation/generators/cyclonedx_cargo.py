@@ -95,6 +95,16 @@ class CycloneDXCargoGenerator:
         if input.lock_file_name != "Cargo.lock":
             return False
 
+        # ...and only alongside a Cargo.toml. cargo-cyclonedx drives
+        # `cargo metadata`, which needs the manifest, not just the lock:
+        #   error: manifest path `.../Cargo.toml` does not exist
+        # Claiming the input and then failing is a defect from the
+        # orchestrator's point of view, and in strict mode aborts the run.
+        # Declining here lets a generic generator take a lone Cargo.lock,
+        # which is a routing decision rather than a failure.
+        if input.lock_file and not (Path(input.lock_file).parent / "Cargo.toml").exists():
+            return False
+
         # Check version if specified
         if input.spec_version:
             if input.spec_version not in CARGO_CYCLONEDX_VERSIONS:

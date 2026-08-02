@@ -890,6 +890,21 @@ class TestSyftImageGenerator(unittest.TestCase):
         self.assertFalse(self.generator.supports(input))
 
 
+class TestDartRouting(unittest.TestCase):
+    """Dart must go straight to syft.
+
+    cdxgen crashes on pubspec.lock with "TypeError: Cannot read properties of
+    undefined (reading 'bom-ref')" and always has. The chain used to hide it
+    by falling back; now cdxgen simply does not claim the input.
+    """
+
+    def test_cdxgen_does_not_claim_pubspec_lock(self):
+        from sbomify_action._generation.utils import CDXGEN_LOCK_FILES, SYFT_LOCK_FILES
+
+        self.assertNotIn("pubspec.lock", CDXGEN_LOCK_FILES)
+        self.assertIn("pubspec.lock", SYFT_LOCK_FILES)
+
+
 class TestRegistryGenerateWithFallback(unittest.TestCase):
     """Tests for registry generate with fallback behavior."""
 
@@ -954,96 +969,6 @@ class TestRegistryGenerateWithFallback(unittest.TestCase):
         # Should succeed with mock generator
         self.assertTrue(result.success)
         self.assertEqual(result.generator_name, "mock-generator")
-
-    @patch("sbomify_action._generation.generators.syft._SYFT_AVAILABLE", True)
-    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
-    @patch("sbomify_action._generation.generators.syft.run_command")
-    @patch("sbomify_action._generation.generators.cdxgen.run_command")
-    def test_dart_fallback_cdxgen_to_syft(self, mock_cdxgen_run, mock_syft_run):
-        """Test that Dart pubspec.lock falls back from cdxgen to Syft on failure.
-
-        This test verifies the fix for the cdxgen TypeError bug where
-        parentComponent is undefined when processing certain Dart files.
-        """
-        import os
-        import tempfile
-
-        # Create a temporary output file for Syft
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write('{"bomFormat": "CycloneDX", "specVersion": "1.6", "components": []}')
-            temp_output = f.name
-
-        try:
-            # cdxgen fails with the TypeError bug
-            mock_cdxgen_run.side_effect = SBOMGenerationError("cdxgen command failed with return code 1")
-
-            # Syft succeeds and creates output file
-            def syft_side_effect(*args, **kwargs):
-                # Extract output file from command args
-                cmd = args[0]
-                for i, arg in enumerate(cmd):
-                    if arg == "-o" or arg.startswith("cyclonedx-json@"):
-                        if "=" in arg:
-                            output_file = arg.split("=")[-1]
-                            # Create the output file
-                            with open(output_file, "w") as f:
-                                f.write('{"bomFormat": "CycloneDX", "specVersion": "1.6", "components": []}')
-                            break
-                return MagicMock(returncode=0)
-
-            mock_syft_run.side_effect = syft_side_effect
-
-            registry = GeneratorRegistry()
-            registry.register(CdxgenFsGenerator())  # Priority 20
-            registry.register(SyftFsGenerator())  # Priority 35
-
-            input = GenerationInput(
-                lock_file="/path/pubspec.lock",
-                output_file=temp_output,
-                output_format="cyclonedx",
-                spec_version="1.6",
-            )
-            result = registry.generate(input, validate=False)
-
-            # Should fall back to Syft and succeed
-            self.assertTrue(result.success, f"Expected success but got: {result.error_message}")
-            self.assertEqual(result.generator_name, "syft-fs")
-
-            # Verify cdxgen was tried first
-            mock_cdxgen_run.assert_called_once()
-
-            # Verify Syft was tried as fallback
-            mock_syft_run.assert_called_once()
-        finally:
-            # Clean up temp file
-            if os.path.exists(temp_output):
-                os.unlink(temp_output)
-
-    @patch("sbomify_action._generation.generators.syft._SYFT_AVAILABLE", True)
-    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
-    def test_dart_both_generators_available(self):
-        """Test that both cdxgen and Syft support Dart pubspec.lock files."""
-        registry = GeneratorRegistry()
-        registry.register(CdxgenFsGenerator())  # Priority 20
-        registry.register(SyftFsGenerator())  # Priority 35
-
-        input = GenerationInput(
-            lock_file="/path/pubspec.lock",
-            output_file="sbom.json",
-            output_format="cyclonedx",
-            spec_version="1.6",
-        )
-
-        generators = registry.get_generators_for(input)
-        generator_names = [g.name for g in generators]
-
-        # Both should support Dart
-        self.assertIn("cdxgen-fs", generator_names)
-        self.assertIn("syft-fs", generator_names)
-
-        # cdxgen should come first (lower priority number = higher priority)
-        self.assertEqual(generators[0].name, "cdxgen-fs")
-        self.assertEqual(generators[1].name, "syft-fs")
 
 
 class TestUtilsFunctions(unittest.TestCase):
@@ -1860,3 +1785,54 @@ class TestRustManifestSupport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCycloneDXPyPipenvPath(unittest.TestCase):
+    """`cyclonedx-py pipenv` takes the project directory, not the lock file.
+
+    Passing the file made it look for Pipfile.lock/Pipfile.lock and fail on
+    every Pipenv project. Nobody noticed because the orchestrator quietly
+    fell back to syft; strict mode is what surfaced it.
+    """
+
+    @patch("sbomify_action._generation.generators.cyclonedx_py._CYCLONEDX_PY_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cyclonedx_py.run_command")
+    def test_pipenv_is_given_the_directory(self, mock_run):
+        import tempfile
+        from pathlib import Path as _Path
+
+        work = _Path(tempfile.mkdtemp())
+        (work / "Pipfile.lock").write_text("{}")
+        gen = CycloneDXPyGenerator()
+        gen.generate(
+            GenerationInput(
+                lock_file=str(work / "Pipfile.lock"),
+                output_file=str(work / "out.json"),
+                output_format="cyclonedx",
+            )
+        )
+
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[1], "pipenv")
+        self.assertEqual(cmd[2], str(work), "pipenv must receive the directory")
+
+    @patch("sbomify_action._generation.generators.cyclonedx_py._CYCLONEDX_PY_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cyclonedx_py.run_command")
+    def test_requirements_is_still_given_the_file(self, mock_run):
+        import tempfile
+        from pathlib import Path as _Path
+
+        work = _Path(tempfile.mkdtemp())
+        (work / "requirements.txt").write_text("")
+        gen = CycloneDXPyGenerator()
+        gen.generate(
+            GenerationInput(
+                lock_file=str(work / "requirements.txt"),
+                output_file=str(work / "out.json"),
+                output_format="cyclonedx",
+            )
+        )
+
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[1], "requirements")
+        self.assertEqual(cmd[2], str(work / "requirements.txt"))

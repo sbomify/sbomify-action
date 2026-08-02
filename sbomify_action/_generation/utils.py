@@ -114,7 +114,12 @@ CDXGEN_LOCK_FILES = (
     + GO_LOCK_FILES
     + RUST_LOCK_FILES
     + RUBY_LOCK_FILES
-    + DART_LOCK_FILES
+    # DART_LOCK_FILES is deliberately absent: cdxgen crashes on pubspec.lock
+    # with "TypeError: Cannot read properties of undefined (reading
+    # 'bom-ref')". It has always crashed; the orchestrator used to fall back
+    # to syft and nobody saw it. Syft reads the same file and returns 233
+    # components, so route there directly instead of claiming an input we
+    # cannot handle.
     + CPP_LOCK_FILES
     + PHP_LOCK_FILES
     + DOTNET_LOCK_FILES

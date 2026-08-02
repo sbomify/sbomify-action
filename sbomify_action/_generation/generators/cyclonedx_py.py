@@ -139,13 +139,21 @@ class CycloneDXPyGenerator:
         else:
             return self._generate_standard(input, subcommand, spec_version)
 
+    #: Subcommands that take the project directory rather than the lock file.
+    #: `cyclonedx-py requirements` wants the file; `pipenv` wants the directory
+    #: and appends the filename itself, so handing it the file produced
+    #: "Could not open lock file: .../Pipfile.lock/Pipfile.lock" on every run.
+    #: It failed silently for as long as the orchestrator fell back to syft.
+    DIRECTORY_SUBCOMMANDS = {"pipenv"}
+
     def _generate_standard(self, input: GenerationInput, subcommand: str, spec_version: str) -> GenerationResult:
         """Generate SBOM for requirements.txt or Pipfile.lock."""
         assert input.lock_file is not None  # guaranteed by caller
+        target = str(Path(input.lock_file).parent) if subcommand in self.DIRECTORY_SUBCOMMANDS else input.lock_file
         cmd = [
             "cyclonedx-py",
             subcommand,
-            input.lock_file,
+            target,
             "--spec-version",
             spec_version,
             "--output-file",

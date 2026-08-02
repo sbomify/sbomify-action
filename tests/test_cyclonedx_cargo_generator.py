@@ -1,5 +1,6 @@
 """Tests for the CycloneDXCargoGenerator plugin."""
 
+import pathlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,7 +53,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
 
     def test_supports_cargo_lock(self):
         """Test support for Cargo.lock files."""
-        gen_input = GenerationInput(lock_file="/path/to/Cargo.lock", output_format="cyclonedx")
+        gen_input = GenerationInput(lock_file=CARGO_LOCK, output_format="cyclonedx")
         self.assertTrue(self.generator.supports(gen_input))
 
     def test_does_not_support_other_lock_files(self):
@@ -63,7 +64,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
 
     def test_does_not_support_spdx(self):
         """Test that SPDX format is not supported."""
-        gen_input = GenerationInput(lock_file="/path/Cargo.lock", output_format="spdx")
+        gen_input = GenerationInput(lock_file=CARGO_LOCK, output_format="spdx")
         self.assertFalse(self.generator.supports(gen_input))
 
     def test_does_not_support_docker_images(self):
@@ -74,7 +75,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
     def test_supports_version_1_4(self):
         """Test support for CycloneDX 1.4."""
         gen_input = GenerationInput(
-            lock_file="/path/Cargo.lock",
+            lock_file=CARGO_LOCK,
             output_format="cyclonedx",
             spec_version="1.4",
         )
@@ -83,7 +84,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
     def test_supports_version_1_5(self):
         """Test support for CycloneDX 1.5."""
         gen_input = GenerationInput(
-            lock_file="/path/Cargo.lock",
+            lock_file=CARGO_LOCK,
             output_format="cyclonedx",
             spec_version="1.5",
         )
@@ -98,7 +99,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
         orchestrator fall through to cdxgen, which does emit 1.6.
         """
         gen_input = GenerationInput(
-            lock_file="/path/Cargo.lock",
+            lock_file=CARGO_LOCK,
             output_format="cyclonedx",
             spec_version="1.6",
         )
@@ -107,7 +108,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
     def test_supports_version_1_3(self):
         """1.3 is supported by the tool and was previously not advertised."""
         gen_input = GenerationInput(
-            lock_file="/path/Cargo.lock",
+            lock_file=CARGO_LOCK,
             output_format="cyclonedx",
             spec_version="1.3",
         )
@@ -128,7 +129,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
         """Test that unsupported versions are rejected."""
         for version in ["1.0", "1.1", "1.2", "1.6", "1.7", "2.0"]:
             gen_input = GenerationInput(
-                lock_file="/path/Cargo.lock",
+                lock_file=CARGO_LOCK,
                 output_format="cyclonedx",
                 spec_version=version,
             )
@@ -170,7 +171,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
         """Test generation failure."""
         mock_run.return_value = MagicMock(returncode=1, stderr="Error message")
 
-        gen_input = GenerationInput(lock_file="/path/to/Cargo.lock", output_file="sbom.json")
+        gen_input = GenerationInput(lock_file=CARGO_LOCK, output_file="sbom.json")
         result = self.generator.generate(gen_input)
 
         self.assertFalse(result.success)
@@ -180,7 +181,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
     def test_unsupported_version_returns_failure(self):
         """Test that unsupported version returns failure result."""
         gen_input = GenerationInput(
-            lock_file="/path/Cargo.lock",
+            lock_file=CARGO_LOCK,
             output_format="cyclonedx",
             spec_version="2.0",  # Invalid version
         )
@@ -221,7 +222,7 @@ class TestCycloneDXCargoGeneratorPriority(unittest.TestCase):
         registry = create_default_registry()
 
         gen_input = GenerationInput(
-            lock_file="/path/Cargo.lock",
+            lock_file=CARGO_LOCK,
             output_format="cyclonedx",
         )
 
@@ -241,7 +242,7 @@ class TestCycloneDXCargoGeneratorPriority(unittest.TestCase):
         registry.register(CycloneDXCargoGenerator())  # Priority 10
 
         gen_input = GenerationInput(
-            lock_file="/path/Cargo.lock",
+            lock_file=CARGO_LOCK,
             output_format="cyclonedx",
         )
 
@@ -252,6 +253,15 @@ class TestCycloneDXCargoGeneratorPriority(unittest.TestCase):
         self.assertEqual(generators[0].name, "cyclonedx-cargo")
         self.assertEqual(generators[1].name, "cdxgen-fs")
         self.assertEqual(generators[2].name, "trivy-fs")
+
+
+# cyclonedx-cargo drives `cargo metadata`, which needs Cargo.toml, so the
+# generator now declines a lock file with no manifest beside it. These tests
+# therefore have to point at something that looks like a real crate.
+_CRATE = pathlib.Path(tempfile.mkdtemp())
+(_CRATE / "Cargo.toml").write_text('[package]\nname = "demo"\nversion = "0.1.0"\n')
+(_CRATE / "Cargo.lock").write_text("version = 3\n")
+CARGO_LOCK = str(_CRATE / "Cargo.lock")
 
 
 class TestCycloneDXCargoToolAvailability(unittest.TestCase):
@@ -265,14 +275,14 @@ class TestCycloneDXCargoToolAvailability(unittest.TestCase):
         picking cargo-cyclonedx and failing at generate() time with a spurious
         ERROR. Mirrors the cyclonedx-py / syft availability guards."""
         generator = CycloneDXCargoGenerator()
-        gen_input = GenerationInput(lock_file="/path/to/Cargo.lock", output_format="cyclonedx")
+        gen_input = GenerationInput(lock_file=CARGO_LOCK, output_format="cyclonedx")
         self.assertFalse(generator.supports(gen_input))
 
     @patch("sbomify_action._generation.generators.cyclonedx_cargo._CARGO_CYCLONEDX_AVAILABLE", True)
     def test_supports_when_tool_available(self):
         """Sanity: with the tool available, the Cargo.lock is supported."""
         generator = CycloneDXCargoGenerator()
-        gen_input = GenerationInput(lock_file="/path/to/Cargo.lock", output_format="cyclonedx")
+        gen_input = GenerationInput(lock_file=CARGO_LOCK, output_format="cyclonedx")
         self.assertTrue(generator.supports(gen_input))
 
 
@@ -422,3 +432,33 @@ class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCargoLockWithoutManifest(unittest.TestCase):
+    """A lone Cargo.lock must be declined, not claimed and then failed.
+
+    The sample database carries a bare Cargo.lock. cyclonedx-cargo drives
+    `cargo metadata`, which needs Cargo.toml, so claiming it produced
+
+        error: manifest path `.../Cargo.toml` does not exist
+
+    every time. Under strict mode that aborts the run instead of quietly
+    handing off to syft, which is how it was found -- declining lets a
+    generic generator take it, which is a routing decision rather than a
+    defect.
+    """
+
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo._CARGO_CYCLONEDX_AVAILABLE", True)
+    def test_declines_a_lock_file_with_no_manifest(self):
+        lone = pathlib.Path(tempfile.mkdtemp())
+        (lone / "Cargo.lock").write_text("version = 3\n")
+
+        gen_input = GenerationInput(lock_file=str(lone / "Cargo.lock"), output_format="cyclonedx")
+
+        self.assertFalse(CycloneDXCargoGenerator().supports(gen_input))
+
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo._CARGO_CYCLONEDX_AVAILABLE", True)
+    def test_claims_it_when_the_manifest_is_present(self):
+        gen_input = GenerationInput(lock_file=CARGO_LOCK, output_format="cyclonedx")
+
+        self.assertTrue(CycloneDXCargoGenerator().supports(gen_input))
