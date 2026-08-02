@@ -569,7 +569,7 @@ name = "importlib-metadata"
 version = "9.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp", marker = "python_full_version < '3.15'" },
+    { name = "zipp" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a9/01/15bb152d77b21318514a96f43af312635eb2500c96b55398d020c93d86ea/importlib_metadata-9.0.0.tar.gz", hash = "sha256:a4f57ab599e6a2e3016d7595cfd72eb4661a5106e787a95bcc90c7105b831efc", size = 56405, upload-time = "2026-03-20T06:42:56.999Z" }
 wheels = [
@@ -1801,8 +1801,10 @@ dependencies = [
     { name = "cyclonedx-bom" },
     { name = "cyclonedx-python-lib" },
     { name = "defusedxml" },
+    { name = "jsonschema" },
     { name = "packageurl-python" },
     { name = "pipdeptree" },
+    { name = "referencing" },
     { name = "requests" },
     { name = "rich" },
     { name = "sentry-sdk" },
@@ -1813,7 +1815,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "jsonschema" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -1835,8 +1836,10 @@ requires-dist = [
     { name = "cyclonedx-bom", specifier = ">=7.2.1,<8" },
     { name = "cyclonedx-python-lib", specifier = ">=11.5.0,<12" },
     { name = "defusedxml", specifier = ">=0.7.1" },
+    { name = "jsonschema", specifier = ">=4.25.1" },
     { name = "packageurl-python", specifier = ">=0.17.6" },
     { name = "pipdeptree", specifier = ">=2.0.0" },
+    { name = "referencing", specifier = ">=0.28.4" },
     { name = "requests", specifier = ">=2.32.3,<3" },
     { name = "rich", specifier = ">=14.2.0" },
     { name = "sentry-sdk", specifier = ">=2.21.0,<3" },
@@ -1847,7 +1850,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "jsonschema", specifier = ">=4.25.1" },
     { name = "mypy", specifier = ">=1.19.1" },
     { name = "pre-commit", specifier = ">=4.2.0,<5" },
     { name = "pytest", specifier = ">=9.0.3,<10" },

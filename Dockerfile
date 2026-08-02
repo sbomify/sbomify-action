@@ -2,7 +2,6 @@ ARG UV_VERSION=0.10.8
 ARG BUN_VERSION=1.3.10
 
 # Define tool versions
-ARG BOMCTL_VERSION=0.4.3
 ARG SYFT_VERSION=1.46.0
 ARG CARGO_CYCLONEDX_VERSION=0.5.9
 
@@ -12,7 +11,6 @@ FROM python:3.14-slim-trixie AS fetcher
 ARG TARGETARCH
 
 # Re-declare global ARGs needed in this stage
-ARG BOMCTL_VERSION
 ARG SYFT_VERSION
 
 WORKDIR /tmp
@@ -22,19 +20,6 @@ RUN apt-get update && \
     apt-get install -y curl unzip
 
 # NOTE: Trivy installation removed - temporarily disabled due to security vulnerabilities
-
-# Install bomctl (uses linux_amd64 / linux_arm64 naming)
-RUN curl -sL \
-        -o bomctl_${BOMCTL_VERSION}_linux_${TARGETARCH}.tar.gz \
-        "https://github.com/bomctl/bomctl/releases/download/v${BOMCTL_VERSION}/bomctl_${BOMCTL_VERSION}_linux_${TARGETARCH}.tar.gz" && \
-    curl -sL \
-        -o bomctl_checksum.txt \
-        "https://github.com/bomctl/bomctl/releases/download/v${BOMCTL_VERSION}/bomctl_${BOMCTL_VERSION}_checksums.txt" && \
-    sha256sum --ignore-missing -c bomctl_checksum.txt && \
-    tar xvfz bomctl_${BOMCTL_VERSION}_linux_${TARGETARCH}.tar.gz && \
-    chmod +x /tmp/bomctl && \
-    mv bomctl /usr/local/bin && \
-    rm -rf /tmp/*
 
 # Install Syft (uses linux_amd64 / linux_arm64 naming)
 RUN curl -sL \
@@ -54,7 +39,9 @@ FROM oven/bun:${BUN_VERSION}-debian@sha256:367842b35abbdf23f39e23c71f3a08eee940f
 
 WORKDIR /app
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+# --production omits devDependencies (@types/bun and the TypeScript peer it
+# drags in); only cdxgen is needed to run.
+RUN bun install --frozen-lockfile --production
 
 # cargo-cyclonedx builder stage
 # Downloads pre-built binary for amd64, compiles from source for arm64
@@ -118,7 +105,10 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN uv venv /opt/venv
 # Use --active so uv installs into the existing VIRTUAL_ENV (/opt/venv) instead of .venv
 # Use --frozen to avoid lockfile validation after version override
-RUN uv sync --frozen --active
+# Use --no-dev because uv syncs the `dev` dependency-group by default, which
+# shipped mypy, pytest, pre-commit, coverage and ruff into the published image
+# (218MB -> 91MB for /opt/venv). Nothing in the runtime path imports them.
+RUN uv sync --frozen --active --no-dev
 RUN rm -rf dist/ && uv build
 RUN uv pip install dist/sbomify_action-*.whl
 
@@ -167,7 +157,6 @@ RUN apt-get update && \
 # This reduces the base image size by ~330MB for non-Java workloads
 
 # Copy tools from fetcher
-COPY --from=fetcher /usr/local/bin/bomctl /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/syft /usr/local/bin/
 # cargo-cyclonedx: pre-built for amd64, compiled for arm64
 COPY --from=rust-builder /usr/local/cargo/bin/cargo-cyclonedx /usr/local/bin/

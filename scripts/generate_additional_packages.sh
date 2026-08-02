@@ -22,16 +22,10 @@ if [ ! -f "$DOCKERFILE" ]; then
   exit 1
 fi
 
-BOMCTL_VERSION=$(extract_version "BOMCTL" "$DOCKERFILE")
 SYFT_VERSION=$(extract_version "SYFT" "$DOCKERFILE")
 CARGO_CYCLONEDX_VERSION=$(extract_version "CARGO_CYCLONEDX" "$DOCKERFILE")
 UV_VERSION=$(extract_version "UV" "$DOCKERFILE")
 BUN_VERSION=$(extract_version "BUN" "$DOCKERFILE")
-
-if [ -z "$BOMCTL_VERSION" ]; then
-  echo "ERROR: Could not extract BOMCTL_VERSION from Dockerfile" >&2
-  exit 1
-fi
 
 if [ -z "$SYFT_VERSION" ]; then
   echo "ERROR: Could not extract SYFT_VERSION from Dockerfile" >&2
@@ -54,7 +48,6 @@ if [ -z "$BUN_VERSION" ]; then
 fi
 
 # Export for sourcing
-export BOMCTL_VERSION
 export SYFT_VERSION
 export CARGO_CYCLONEDX_VERSION
 export UV_VERSION
@@ -62,7 +55,6 @@ export BUN_VERSION
 
 # When executed directly (not sourced), output PURLs
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  echo "pkg:golang/github.com/bomctl/bomctl@v${BOMCTL_VERSION}"
   echo "pkg:golang/github.com/anchore/syft@v${SYFT_VERSION}"
   echo "pkg:cargo/cargo-cyclonedx@${CARGO_CYCLONEDX_VERSION}"
 fi
