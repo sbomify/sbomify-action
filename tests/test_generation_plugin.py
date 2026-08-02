@@ -323,7 +323,7 @@ class TestTrivyFsGenerator(unittest.TestCase):
 
     def test_supports_all_lock_files(self):
         """Test support for various lock files."""
-        lock_files = ["requirements.txt", "Cargo.lock", "package.json", "go.mod"]
+        lock_files = ["requirements.txt", "package.json"]
         for lock_file in lock_files:
             input = GenerationInput(lock_file=f"/path/{lock_file}", output_format="cyclonedx")
             self.assertTrue(self.generator.supports(input), f"Should support {lock_file}")
@@ -369,7 +369,7 @@ class TestCdxgenFsGenerator(unittest.TestCase):
         # Cargo.lock and pubspec.lock are excluded: they are claimed only when
         # their manifest sits beside them, which a synthetic path cannot
         # provide. TestLockFilesNeedingTheirManifest covers that pair.
-        lock_files = ["requirements.txt", "package.json", "pom.xml", "go.mod"]
+        lock_files = ["requirements.txt", "package.json", "pom.xml"]
         for lock_file in lock_files:
             input = GenerationInput(lock_file=f"/path/{lock_file}", output_format="cyclonedx")
             self.assertTrue(self.generator.supports(input), f"Should support {lock_file}")

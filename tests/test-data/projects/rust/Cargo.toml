@@ -1,0 +1,11 @@
+[package]
+name = "sbomify-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# A couple of small, stable crates: enough to exercise a real dependency
+# graph without the fixture becoming a maintenance burden.
+[dependencies]
+itoa = "1"
+ryu = "1"

@@ -1,0 +1,119 @@
+"""The intended generator must win for each ecosystem.
+
+The design is a slim core image that pulls in what an ecosystem needs so the
+SBOM is the best available for it -- not merely that some SBOM appears. The
+fallback chain quietly undermines that: when the intended generator declines
+or fails, a lower-priority one produces output that looks like success.
+
+Three defects lived that way until strict mode surfaced them, and all three
+were invisible because syft covered for the tool that should have run. These
+tests assert the routing directly, against fixtures that look like real
+projects -- manifest as well as lock file -- so a regression fails here
+rather than silently degrading someone's SBOM.
+
+Routing only: no generator is executed, so this stays fast and needs no
+network. scripts/ecosystem_matrix.py runs the real thing and checks output
+quality.
+"""
+
+from pathlib import Path
+
+import pytest
+
+from sbomify_action._generation.generator import create_default_registry
+from sbomify_action._generation.protocol import GenerationInput
+
+PROJECTS = Path(__file__).parent / "test-data" / "projects"
+
+#: (fixture directory, lock file, generator that must produce the SBOM).
+#:
+#: cyclonedx-py and cyclonedx-cargo are native and outrank cdxgen; cdxgen
+#: outranks syft everywhere it applies. uv.lock is cdxgen's because
+#: cyclonedx-py explicitly does not support it.
+INTENDED = [
+    ("python-requirements", "requirements.txt", "cyclonedx-py"),
+    ("python-pipenv", "Pipfile.lock", "cyclonedx-py"),
+    ("python-uv", "uv.lock", "cdxgen-fs"),
+    ("rust", "Cargo.lock", "cyclonedx-cargo"),
+    ("javascript", "package-lock.json", "cdxgen-fs"),
+    ("java", "pom.xml", "cdxgen-fs"),
+    ("go", "go.mod", "syft-fs"),
+    ("ruby", "Gemfile.lock", "cdxgen-fs"),
+    ("dart", "pubspec.lock", "cdxgen-fs"),
+    ("elixir", "mix.lock", "cdxgen-fs"),
+    ("cpp", "conan.lock", "cdxgen-fs"),
+]
+
+
+@pytest.mark.parametrize(("project", "lock_file", "expected"), INTENDED)
+def test_intended_generator_is_first_in_the_chain(project, lock_file, expected, monkeypatch):
+    """The best tool for the ecosystem must be the one that gets asked first."""
+    # Availability is probed at import time against PATH, which a developer
+    # machine will not have. Routing is what is under test, not installation.
+    for module, flag in (
+        ("cyclonedx_py", "_CYCLONEDX_PY_AVAILABLE"),
+        ("cyclonedx_cargo", "_CARGO_CYCLONEDX_AVAILABLE"),
+        ("cdxgen", "_CDXGEN_AVAILABLE"),
+        ("syft", "_SYFT_AVAILABLE"),
+    ):
+        monkeypatch.setattr(f"sbomify_action._generation.generators.{module}.{flag}", True)
+
+    lock = PROJECTS / project / lock_file
+    assert lock.exists(), f"fixture missing: {lock}"
+
+    generators = create_default_registry().get_generators_for(
+        GenerationInput(lock_file=str(lock), output_format="cyclonedx")
+    )
+
+    assert generators, f"{project}: nothing claims {lock_file}"
+    assert generators[0].name == expected, (
+        f"{project}: expected {expected} to run first, got "
+        f"{[g.name for g in generators]} -- a lower-priority generator taking over "
+        f"produces a worse SBOM while still looking like success"
+    )
+
+
+@pytest.mark.parametrize(("project", "lock_file", "_expected"), INTENDED)
+def test_every_fixture_carries_its_manifest(project, lock_file, _expected):
+    """A lock file without its manifest exercises the fallback, not the design.
+
+    That is exactly how the bare fixtures in the parent directory hid three
+    defects, so the projects here must not repeat it.
+    """
+    from sbomify_action._generation.utils import LOCK_FILE_MANIFESTS, has_required_manifest
+
+    lock = PROJECTS / project / lock_file
+    required = LOCK_FILE_MANIFESTS.get(lock_file)
+    if required:
+        assert (lock.parent / required).exists(), (
+            f"{project}: {lock_file} needs {required} beside it or the generator declines"
+        )
+    assert has_required_manifest(str(lock))
+
+
+def test_jvm_has_no_fallback():
+    """Nothing but cdxgen reads JVM build files.
+
+    Worth pinning: syft catalogs compiled jars, not pom.xml or gradle, so if
+    cdxgen ever stops claiming these the ecosystem goes unserved rather than
+    degrading to something worse.
+    """
+    from sbomify_action._generation.utils import CDXGEN_LOCK_FILES, SYFT_LOCK_FILES
+
+    for build_file in ("pom.xml", "build.gradle", "build.gradle.kts", "build.sbt"):
+        assert build_file in CDXGEN_LOCK_FILES, build_file
+        assert build_file not in SYFT_LOCK_FILES, build_file
+
+
+def test_no_supported_lock_file_is_unserved():
+    """Every discoverable lock file must have a generator that claims it."""
+    from sbomify_action._generation.utils import (
+        ALL_LOCK_FILES,
+        CDXGEN_LOCK_FILES,
+        CYCLONEDX_PY_LOCK_FILES,
+        SYFT_LOCK_FILES,
+    )
+
+    claimed = set(CDXGEN_LOCK_FILES) | set(SYFT_LOCK_FILES) | set(CYCLONEDX_PY_LOCK_FILES) | {"Cargo.lock"}
+    unserved = sorted(set(ALL_LOCK_FILES) - claimed)
+    assert unserved == [], f"discoverable but no generator claims them: {unserved}"

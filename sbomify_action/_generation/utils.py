@@ -112,7 +112,13 @@ CDXGEN_LOCK_FILES = (
     PYTHON_LOCK_FILES
     + JAVASCRIPT_LOCK_FILES
     + JAVA_LOCK_FILES  # Best tool for Java/Gradle lock files
-    + GO_LOCK_FILES
+    # GO_LOCK_FILES is deliberately absent. cdxgen hits an internal purl error
+    # on go.mod ("Invalid purl: name is a required field"): with
+    # --fail-on-error it exits 1, and without it emits a document with 0
+    # components. Syft reads the same go.mod/go.sum and returns 190. It has
+    # never worked here -- the chain fell back to syft and the failure was
+    # invisible. Routing to the tool that actually produces the better SBOM
+    # is the whole point, so Go goes to syft directly.
     + RUST_LOCK_FILES
     + RUBY_LOCK_FILES
     + DART_LOCK_FILES
