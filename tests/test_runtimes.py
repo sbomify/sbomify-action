@@ -251,3 +251,26 @@ def test_partial_download_is_not_left_in_the_cache(monkeypatch):
         ensure_runtime("faketool")
 
     assert not list(Path(cache_root()).rglob("faketool")), "partial download left behind"
+
+
+def test_fetching_is_disabled_outside_our_image(monkeypatch):
+    """A pip install must keep whatever toolchain the user has.
+
+    Fetching a tool the user did not install would change which generator
+    the chain selects, and so change the SBOM they get, without them asking.
+    That is how the alpine license-db check broke: cdxgen became "available"
+    on a bare runner, displaced syft, and enrichment silently degraded.
+    """
+    monkeypatch.delenv("SBOMIFY_IN_CONTAINER", raising=False)
+    monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+    monkeypatch.setattr(runtimes, "Path", lambda _: type("P", (), {"exists": lambda s: False})())
+    assert runtimes.fetching_is_enabled() is False
+
+    monkeypatch.setenv("SBOMIFY_IN_CONTAINER", "1")
+    assert runtimes.fetching_is_enabled() is True
+
+
+def test_fetching_can_be_opted_into_anywhere(monkeypatch):
+    monkeypatch.delenv("SBOMIFY_IN_CONTAINER", raising=False)
+    monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
+    assert runtimes.fetching_is_enabled() is True

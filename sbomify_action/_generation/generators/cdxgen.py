@@ -15,7 +15,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import RUNTIMES, ensure_runtime
+from sbomify_action.runtimes import RUNTIMES, ensure_runtime, fetching_is_enabled
 from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
@@ -43,7 +43,7 @@ from ..utils import (
 _CDXGEN_PATH: str | None
 _CDXGEN_AVAILABLE, _CDXGEN_PATH = check_tool_available("cdxgen")
 if not _CDXGEN_AVAILABLE:
-    _CDXGEN_AVAILABLE = "cdxgen" in RUNTIMES
+    _CDXGEN_AVAILABLE = "cdxgen" in RUNTIMES and fetching_is_enabled()
 
 # Mapping from ecosystem names to cdxgen --type values
 # See: https://cyclonedx.github.io/cdxgen/#/PROJECT_TYPES
