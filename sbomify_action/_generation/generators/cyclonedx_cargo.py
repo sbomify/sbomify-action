@@ -15,6 +15,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.runtimes import ensure_runtime
 from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
@@ -158,6 +159,15 @@ class CycloneDXCargoGenerator:
             "--override-filename",
             scratch_stem,
         ]
+
+        # cargo-cyclonedx is a cargo subcommand: it shells out to `cargo
+        # metadata` for the dependency graph and to `rustc` for the host target
+        # triple, and fails without either. The toolchain is fetched rather
+        # than baked in -- ~630MB to support a 7MB subcommand -- and fetched
+        # unconditionally rather than "only if cargo is missing", because
+        # preferring whatever cargo is on PATH would run one toolchain while
+        # the SBOM names the pinned one.
+        ensure_runtime("rust")
 
         logger.info(f"Running cargo-cyclonedx for {input.lock_file_name} (CycloneDX {spec_version})")
 

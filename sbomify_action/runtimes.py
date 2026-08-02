@@ -79,11 +79,12 @@ class RuntimeSpec:
 
     name: str
     version: str
-    assets: dict[str, Asset]
+    assets: dict[str, list[Asset]]
     kind: str = "raw"
     member: str | None = None
     bin_subdir: str = ""
     strip_container: bool = False
+    rust_dist: bool = False
     env: dict[str, str] = field(default_factory=dict)
 
 
@@ -101,9 +102,13 @@ def _load_runtimes() -> dict[str, RuntimeSpec]:
             kind=tool.kind,
             member=tool.member,
             strip_container=tool.strip_container,
+            rust_dist=tool.rust_dist,
             bin_subdir=tool.bin_subdir,
             env=tool.env,
-            assets={arch: Asset(url=a.url, algorithm=a.algorithm, digest=a.digest) for arch, a in tool.assets.items()},
+            assets={
+                arch: [Asset(url=a.url, algorithm=a.algorithm, digest=a.digest) for a in arch_assets]
+                for arch, arch_assets in tool.assets.items()
+            },
         )
     return specs
 
@@ -238,11 +243,12 @@ def _reject_traversal(name: str) -> None:
 
 def _materialize(spec: RuntimeSpec, arch: str, prefix: Path) -> None:
     """Populate prefix with the runtime, atomically."""
-    asset = spec.assets[arch]
+    assets = spec.assets[arch]
+    asset = assets[0]
     staging = Path(tempfile.mkdtemp(prefix=f".{spec.name}-", dir=prefix.parent))
     try:
         bin_dir = staging / spec.bin_subdir if spec.bin_subdir else staging
-        if not spec.strip_container:
+        if not spec.strip_container and not spec.rust_dist:
             # Deliberately not pre-created for strip_container: the archive
             # brings its own bin/, and shutil.move onto an existing directory
             # moves *into* it, producing bin/bin.
@@ -252,6 +258,35 @@ def _materialize(spec: RuntimeSpec, arch: str, prefix: Path) -> None:
             target = bin_dir / spec.name
             _download_verified(asset, target)
             target.chmod(0o755)
+        elif spec.rust_dist:
+            # cargo and rustc ship as separate tarballs, each nesting
+            # <pkg>-<ver>-<triple>/<component>/{bin,lib} plus an install.sh we
+            # do not want to run. Merging the component directories ourselves
+            # gives a plain prefix where bin/cargo finds ../lib as it expects.
+            for index, one in enumerate(assets):
+                archive = staging / f"{spec.name}-{index}-archive"
+                unpacked = staging / f".unpack-{index}"
+                unpacked.mkdir()
+                _download_verified(one, archive)
+                _extract(archive, spec, unpacked)
+                archive.unlink(missing_ok=True)
+                for top in unpacked.iterdir():
+                    if not top.is_dir():
+                        continue
+                    for component in top.iterdir():
+                        if not component.is_dir():
+                            continue
+                        for item in component.iterdir():
+                            target = staging / item.name
+                            if item.is_dir():
+                                shutil.copytree(item, target, dirs_exist_ok=True, symlinks=True)
+                            else:
+                                target.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.copy2(item, target, follow_symlinks=False)
+                shutil.rmtree(unpacked, ignore_errors=True)
+            for binary in bin_dir.iterdir() if bin_dir.is_dir() else ():
+                if binary.is_file():
+                    binary.chmod(0o755)
         elif spec.strip_container:
             # jdk-21.0.12+8/, apache-maven-3.9.9/, go/ -- each wraps everything
             # in one versioned directory. Lifting its contents gives a prefix
@@ -282,7 +317,8 @@ def _materialize(spec: RuntimeSpec, arch: str, prefix: Path) -> None:
             if spec.member:
                 (bin_dir / spec.member).chmod(0o755)
 
-        (staging / _READY).write_text(f"{spec.name} {spec.version} {asset.algorithm}:{asset.digest}\n")
+        digests = " ".join(f"{a.algorithm}:{a.digest}" for a in assets)
+        (staging / _READY).write_text(f"{spec.name} {spec.version} {digests}\n")
         # Atomic when it wins; another process getting there first is fine,
         # since both prefixes were built from the same pinned digest.
         try:

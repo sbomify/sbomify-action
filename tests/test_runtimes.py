@@ -63,9 +63,13 @@ def _raw_spec(payload: bytes, name: str = "faketool") -> RuntimeSpec:
         version="1.0.0",
         kind="raw",
         assets={
-            arch: Asset(
-                url=f"https://example.invalid/{name}", algorithm="sha256", digest=hashlib.sha256(payload).hexdigest()
-            )
+            arch: [
+                Asset(
+                    url=f"https://example.invalid/{name}",
+                    algorithm="sha256",
+                    digest=hashlib.sha256(payload).hexdigest(),
+                )
+            ]
             for arch in ("amd64", "arm64")
         },
     )
@@ -157,9 +161,11 @@ def test_extracts_a_named_member_from_an_archive(monkeypatch):
         kind="tar.gz",
         member="tool",
         assets={
-            arch: Asset(
-                url="https://example.invalid/t.tgz", algorithm="sha256", digest=hashlib.sha256(payload).hexdigest()
-            )
+            arch: [
+                Asset(
+                    url="https://example.invalid/t.tgz", algorithm="sha256", digest=hashlib.sha256(payload).hexdigest()
+                )
+            ]
             for arch in ("amd64", "arm64")
         },
     )
@@ -184,9 +190,11 @@ def test_refuses_path_traversal_in_archives(monkeypatch):
         version="1.0.0",
         kind="tar.gz",
         assets={
-            arch: Asset(
-                url="https://example.invalid/e.tgz", algorithm="sha256", digest=hashlib.sha256(payload).hexdigest()
-            )
+            arch: [
+                Asset(
+                    url="https://example.invalid/e.tgz", algorithm="sha256", digest=hashlib.sha256(payload).hexdigest()
+                )
+            ]
             for arch in ("amd64", "arm64")
         },
     )
@@ -225,10 +233,12 @@ def test_every_pinned_runtime_covers_both_architectures():
     """A missing arch would only surface on arm64 users' machines."""
     for name, spec in runtimes.RUNTIMES.items():
         assert set(spec.assets) == {"amd64", "arm64"}, f"{name} is missing an architecture"
-        for arch, asset in spec.assets.items():
-            expected = {"sha256": 64, "sha512": 128}[asset.algorithm]
-            assert len(asset.digest) == expected, f"{name}/{arch} digest length is wrong"
-            assert asset.url.startswith("https://"), f"{name}/{arch} must be fetched over https"
+        for arch, arch_assets in spec.assets.items():
+            assert arch_assets, f"{name}/{arch} has no assets"
+            for asset in arch_assets:
+                expected = {"sha256": 64, "sha512": 128}[asset.algorithm]
+                assert len(asset.digest) == expected, f"{name}/{arch} digest length is wrong"
+                assert asset.url.startswith("https://"), f"{name}/{arch} must be fetched over https"
 
 
 def test_current_arch_is_supported():

@@ -178,3 +178,40 @@ sha256 = "1fc94b57134d51669c72173ad5d49fd62afb0f1db9bf3f798fd98ee423f8d730"
 [tool.go.assets.arm64]
 url = "https://go.dev/dl/go1.24.13.linux-arm64.tar.gz"
 sha256 = "74d97be1cc3a474129590c67ebf748a96e72d9f3a2b6fef3ed3275de591d49b3"
+
+# cargo-cyclonedx is a cargo subcommand: it shells out to `cargo metadata` for
+# the dependency graph and to `rustc` for the host target triple, and fails
+# without either. Baking a rustup toolchain in to satisfy a 7MB subcommand
+# costs ~630MB, more than the whole rest of the image.
+#
+# These two standalone dist tarballs are 92MB together. rust-std is
+# deliberately absent: cargo-cyclonedx compiles nothing, and dropping it saves
+# a further 181MB -- verified by removing lib/rustlib from a full toolchain,
+# which changes nothing, while removing the rest of lib/ breaks it.
+[tool.rust]
+version = "1.97.1"
+stage = "runtime"
+purl = "pkg:generic/rust@{version}"
+github_repo = "rust-lang/rust"
+kind = "tar.xz"
+rust_dist = true
+bin_subdir = "bin"
+# cargo writes its registry index to CARGO_HOME, which defaults to $HOME/.cargo
+# and is unwritable when HOME is "/".
+env = { CARGO_HOME = "{prefix}/.cargo" }
+
+[[tool.rust.assets.amd64]]
+url = "https://static.rust-lang.org/dist/cargo-1.97.1-x86_64-unknown-linux-gnu.tar.xz"
+sha256 = "e1be5f5ff7f7f80ca506fb65770b759edbdc6d303781ed71c5de8ec8a8394779"
+
+[[tool.rust.assets.amd64]]
+url = "https://static.rust-lang.org/dist/rustc-1.97.1-x86_64-unknown-linux-gnu.tar.xz"
+sha256 = "9819d0a32d56bd339585319c80260e332779f5541fd66838ab7e016d6c814819"
+
+[[tool.rust.assets.arm64]]
+url = "https://static.rust-lang.org/dist/cargo-1.97.1-aarch64-unknown-linux-gnu.tar.xz"
+sha256 = "8f70bcaccea5ba4db187c3fd4d64e24592b4e16af513497201f5909d61691dbe"
+
+[[tool.rust.assets.arm64]]
+url = "https://static.rust-lang.org/dist/rustc-1.97.1-aarch64-unknown-linux-gnu.tar.xz"
+sha256 = "b344b81f0cd4c2246c7da8b197fe7a339d7dd02bb15cb69b2524115d9c75224c"

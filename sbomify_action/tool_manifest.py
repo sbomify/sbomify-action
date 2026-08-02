@@ -150,7 +150,10 @@ class Tool:
     bin_subdir: str = ""
     #: Environment the tool needs, with "{prefix}" substituted at fetch time.
     env: dict[str, str] = field(default_factory=dict)
-    assets: dict[str, ToolAsset] | None = None
+    #: Rust ships cargo and rustc as separate tarballs that unpack into one
+    #: prefix, so an arch can carry more than one artifact.
+    rust_dist: bool = False
+    assets: dict[str, list[ToolAsset]] | None = None
 
     @property
     def package_url(self) -> str:
@@ -199,13 +202,19 @@ def load_tools() -> dict[str, Tool]:
         assets = None
         if raw_assets := body.get("assets"):
             assets = {}
-            for arch, a in raw_assets.items():
-                found = [alg for alg in DIGEST_ALGORITHMS if alg in a]
-                if len(found) != 1:
-                    raise ManifestError(
-                        f"{name}/{arch}: give exactly one of {', '.join(DIGEST_ALGORITHMS)}, got {found or 'none'}"
-                    )
-                assets[arch] = ToolAsset(url=a["url"], algorithm=found[0], digest=a[found[0]])
+            for arch, raw in raw_assets.items():
+                # One table, or an array of them when a tool needs several
+                # artifacts unpacked into the same prefix.
+                entries = raw if isinstance(raw, list) else [raw]
+                built = []
+                for a in entries:
+                    found = [alg for alg in DIGEST_ALGORITHMS if alg in a]
+                    if len(found) != 1:
+                        raise ManifestError(
+                            f"{name}/{arch}: give exactly one of {', '.join(DIGEST_ALGORITHMS)}, got {found or 'none'}"
+                        )
+                    built.append(ToolAsset(url=a["url"], algorithm=found[0], digest=a[found[0]]))
+                assets[arch] = built
 
         if stage == STAGE_RUNTIME:
             # A runtime tool with no assets cannot be fetched, and the failure
@@ -216,13 +225,15 @@ def load_tools() -> dict[str, Tool]:
             if missing:
                 raise ManifestError(f"{name}: no asset for {', '.join(sorted(missing))}")
             expected_length = {"sha256": 64, "sha512": 128}
-            for arch, asset in assets.items():
-                if len(asset.digest) != expected_length[asset.algorithm]:
-                    raise ManifestError(
-                        f"{name}/{arch}: {asset.algorithm} must be {expected_length[asset.algorithm]} hex characters"
-                    )
-                if not asset.url.startswith("https://"):
-                    raise ManifestError(f"{name}/{arch}: url must be https")
+            for arch, arch_assets in assets.items():
+                for asset in arch_assets:
+                    if len(asset.digest) != expected_length[asset.algorithm]:
+                        raise ManifestError(
+                            f"{name}/{arch}: {asset.algorithm} must be "
+                            f"{expected_length[asset.algorithm]} hex characters"
+                        )
+                    if not asset.url.startswith("https://"):
+                        raise ManifestError(f"{name}/{arch}: url must be https")
 
         tools[name] = Tool(
             name=name,
@@ -234,8 +245,15 @@ def load_tools() -> dict[str, Tool]:
             kind=body.get("kind", "raw"),
             member=body.get("member"),
             strip_container=bool(body.get("strip_container", False)),
+            rust_dist=bool(body.get("rust_dist", False)),
             env=dict(body.get("env") or {}),
-            bin_subdir=str(body.get("bin_subdir", "bin") if body.get("strip_container") else ""),
+            # An explicit bin_subdir always wins. Layouts that nest the
+            # payload under a wrapper directory default to "bin"; a bare
+            # binary stays at the prefix root.
+            bin_subdir=str(
+                body.get("bin_subdir")
+                or ("bin" if body.get("strip_container") or body.get("rust_dist") else "")
+            ),
             assets=assets,
         )
 

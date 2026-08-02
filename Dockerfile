@@ -163,9 +163,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 # This creates a default profile based on the container's compiler/OS settings
 RUN conan profile detect --force
 
-# Marks our own image. Inside it the toolset is fixed, so a generator that
-# claims an input and then fails is a defect we shipped -- the orchestrator
-# refuses to quietly substitute a lower-priority tool and hide it.
+# Marks our own image, which two behaviours key off:
+#   - runtime tools are fetched on demand only in here, where we decide the
+#     toolchain; a pip install keeps whatever the user has
+#   - a generator that claims an input and then fails is a defect we shipped,
+#     so the orchestrator aborts rather than quietly substituting a
+#     lower-priority tool and hiding it
 ENV SBOMIFY_IN_CONTAINER=1
 
 ENV PYTHONUNBUFFERED=1

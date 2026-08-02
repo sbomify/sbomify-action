@@ -109,10 +109,11 @@ def test_runtimes_are_built_from_the_manifest():
         tool = manifest_runtime[name]
         assert spec.version == tool.version
         assert tool.assets is not None
-        for arch, asset in tool.assets.items():
-            assert spec.assets[arch].digest == asset.digest
-            assert spec.assets[arch].algorithm == asset.algorithm
-            assert spec.assets[arch].url == asset.url
+        for arch, arch_assets in tool.assets.items():
+            for i, asset in enumerate(arch_assets):
+                assert spec.assets[arch][i].digest == asset.digest
+                assert spec.assets[arch][i].algorithm == asset.algorithm
+                assert spec.assets[arch][i].url == asset.url
 
 
 def test_runtime_tools_are_absent_from_the_image_sbom():
@@ -140,11 +141,12 @@ def test_every_runtime_tool_can_actually_be_fetched():
     for name, tool in tools_for_stage(STAGE_RUNTIME).items():
         assert tool.assets, f"{name} has no assets"
         assert set(tool.assets) == {"amd64", "arm64"}, f"{name} is missing an architecture"
-        for arch, asset in tool.assets.items():
-            expected = {"sha256": 64, "sha512": 128}[asset.algorithm]
-            assert re.fullmatch(rf"[0-9a-f]{{{expected}}}", asset.digest), (
-                f"{name}/{arch} {asset.algorithm} digest is malformed"
-            )
+        for arch, arch_assets in tool.assets.items():
+            for asset in arch_assets:
+                expected = {"sha256": 64, "sha512": 128}[asset.algorithm]
+                assert re.fullmatch(rf"[0-9a-f]{{{expected}}}", asset.digest), (
+                    f"{name}/{arch} {asset.algorithm} digest is malformed"
+                )
             assert asset.url.startswith("https://"), f"{name}/{arch} must be fetched over https"
             # Vendors spell the same version differently in a URL: Adoptium
             # uses both 21.0.12%2B8 and 21.0.12_8 for 21.0.12+8. Accept any
