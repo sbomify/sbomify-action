@@ -40,6 +40,7 @@ import requests
 
 from .exceptions import SBOMGenerationError
 from .logging_config import logger
+from .tool_manifest import STAGE_RUNTIME, tools_for_stage
 
 # Download tuning. Runtimes range from ~12MB (crane) to ~190MB (a full JDK),
 # so the read timeout is generous while the connect timeout stays short.
@@ -84,48 +85,25 @@ class RuntimeSpec:
     env: dict[str, str] = field(default_factory=dict)
 
 
-# Pinned runtimes. Digests come from the upstream checksum files and must be
-# updated together with the version. Keep these in sync with the Dockerfile's
-# build-time pins for anything that is still baked in.
-RUNTIMES: dict[str, RuntimeSpec] = {
-    "cosign": RuntimeSpec(
-        name="cosign",
-        version="3.1.1",
-        kind="raw",
-        assets={
-            "amd64": Asset(
-                url="https://github.com/sigstore/cosign/releases/download/v3.1.1/cosign-linux-amd64",
-                sha256="ae1ecd212663f3693ad9edf8b1a183900c9a52d3155ba6e354237f9a0f6463fc",
-            ),
-            "arm64": Asset(
-                url="https://github.com/sigstore/cosign/releases/download/v3.1.1/cosign-linux-arm64",
-                sha256="2ec865872e331c32fd12b08dae15332d3f92c0aa029219589684a4903ca85d11",
-            ),
-        },
-    ),
-    "crane": RuntimeSpec(
-        name="crane",
-        version="0.21.7",
-        kind="tar.gz",
-        member="crane",
-        assets={
-            "amd64": Asset(
-                url=(
-                    "https://github.com/google/go-containerregistry/releases/download/"
-                    "v0.21.7/go-containerregistry_Linux_x86_64.tar.gz"
-                ),
-                sha256="1a57bc98207fa1c0d04bf760699099e26f8383499bfd55b99c1b919a928a7230",
-            ),
-            "arm64": Asset(
-                url=(
-                    "https://github.com/google/go-containerregistry/releases/download/"
-                    "v0.21.7/go-containerregistry_Linux_arm64.tar.gz"
-                ),
-                sha256="b6ee979d9411dfb05ce35ab9e156fe5de7def11a230764a7856ffa2eb971fa88",
-            ),
-        },
-    ),
-}
+# Runtime specs are built from tools.toml rather than written out here, so
+# that versions, URLs and digests live in exactly one place -- see
+# tool_manifest.py for why that matters once the build and runtime SBOMs
+# describe different sets of software.
+def _load_runtimes() -> dict[str, RuntimeSpec]:
+    specs: dict[str, RuntimeSpec] = {}
+    for name, tool in tools_for_stage(STAGE_RUNTIME).items():
+        assert tool.assets is not None  # guaranteed by the manifest validation
+        specs[name] = RuntimeSpec(
+            name=name,
+            version=tool.version,
+            kind=tool.kind,
+            member=tool.member,
+            assets={arch: Asset(url=a.url, sha256=a.sha256) for arch, a in tool.assets.items()},
+        )
+    return specs
+
+
+RUNTIMES: dict[str, RuntimeSpec] = _load_runtimes()
 
 _locks: dict[str, threading.Lock] = {name: threading.Lock() for name in RUNTIMES}
 _resolved: dict[str, Path] = {}

@@ -22,6 +22,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from sbomify_action import tool_manifest
+from sbomify_action.tool_manifest import STAGE_RUNTIME, load_tools
+
 
 @dataclass
 class ToolInfo:
@@ -30,6 +33,7 @@ class ToolInfo:
     name: str
     env_var: str
     github_repo: str
+    stage: str = "image"
     current_version: Optional[str] = None
     latest_version: Optional[str] = None
     error: Optional[str] = None
@@ -55,17 +59,28 @@ class ToolInfo:
         return "OK"
 
 
-# Tools to check - maps ENV variable name to GitHub repo
-TOOLS = [
-    ToolInfo(name="syft", env_var="SYFT_VERSION", github_repo="anchore/syft"),
-    ToolInfo(
-        name="cargo-cyclonedx",
-        env_var="CARGO_CYCLONEDX_VERSION",
-        github_repo="CycloneDX/cyclonedx-rust-cargo",
-    ),
-    ToolInfo(name="crane", env_var="CRANE_VERSION", github_repo="google/go-containerregistry"),
-    ToolInfo(name="cosign", env_var="COSIGN_VERSION", github_repo="sigstore/cosign"),
-]
+def _tools_from_manifest() -> list[ToolInfo]:
+    """Every pinned tool that has an upstream we can query.
+
+    Derived from tools.toml rather than restated here. The previous hardcoded
+    list is exactly how cosign and crane fell out of monitoring when they
+    moved from the Dockerfile to on-demand fetching: nothing failed, they just
+    silently stopped being checked, and both went stale.
+    """
+    return [
+        ToolInfo(
+            name=name,
+            env_var=tool.dockerfile_arg or "",
+            github_repo=tool.github_repo,
+            stage=tool.stage,
+            current_version=tool.version,
+        )
+        for name, tool in sorted(load_tools().items())
+        if tool.github_repo
+    ]
+
+
+TOOLS = _tools_from_manifest()
 
 
 def find_project_root() -> Path:
@@ -163,11 +178,13 @@ def get_latest_github_release(repo: str, timeout: int = DEFAULT_TIMEOUT) -> tupl
 
         data = json.loads(result.stdout)
         tag = data.get("tag_name", "")
-        # Strip 'v' prefix if present (e.g., "v0.67.2" -> "0.67.2")
-        version = tag.lstrip("v")
-        # Handle cargo-cyclonedx which uses "cargo-cyclonedx-X.Y.Z" format
-        if version.startswith("cargo-cyclonedx-"):
-            version = version.replace("cargo-cyclonedx-", "")
+        # Release tags carry project-specific prefixes: "v1.50.0" (syft),
+        # "cargo-cyclonedx-0.5.9", "bun-v1.3.14". Strip everything up to the
+        # first digit so the comparison is against a bare version -- otherwise
+        # a tool is reported permanently outdated because the prefix never
+        # matches the pinned value.
+        match = re.search(r"\d.*$", tag)
+        version = match.group(0) if match else tag
         return version, None
     except subprocess.TimeoutExpired:
         return None, "Request timed out"
@@ -189,9 +206,6 @@ def check_all_tools(dockerfile_path: Path, timeout: int = DEFAULT_TIMEOUT) -> li
     Returns:
         List of ToolInfo objects with version information
     """
-    # Parse current versions from Dockerfile
-    current_versions = parse_dockerfile(dockerfile_path)
-
     results = []
 
     for tool in TOOLS:
@@ -200,10 +214,9 @@ def check_all_tools(dockerfile_path: Path, timeout: int = DEFAULT_TIMEOUT) -> li
             name=tool.name,
             env_var=tool.env_var,
             github_repo=tool.github_repo,
+            stage=tool.stage,
+            current_version=tool.current_version,
         )
-
-        # Get current version from Dockerfile
-        tool_info.current_version = current_versions.get(tool.env_var)
 
         # Get latest version from GitHub
         latest, error = get_latest_github_release(tool.github_repo, timeout=timeout)
@@ -278,14 +291,19 @@ def print_table(tools: list[ToolInfo]) -> None:
         print(colorize(f"{error_count} tool(s) had errors fetching latest version.", "yellow"))
 
     if outdated_count > 0:
-        msg = f"{outdated_count} tool(s) are outdated. Run with --update to update Dockerfile."
+        msg = f"{outdated_count} tool(s) are outdated. Run with --update to bump the pins in tools.toml."
         print(colorize(msg, "yellow"))
     elif error_count == 0:
         print(colorize("All tools are up to date!", "green"))
 
 
-def update_dockerfile(dockerfile_path: Path, tools: list[ToolInfo]) -> int:
-    """Update the Dockerfile with latest versions.
+def update_pins(dockerfile_path: Path, tools: list[ToolInfo]) -> int:
+    """Bump pinned versions in tools.toml, and the matching Dockerfile ARGs.
+
+    Runtime tools are deliberately skipped. Their pin is a version *and* a
+    SHA256, and bumping the version alone would leave every user's download
+    failing its checksum -- a far worse outcome than being a release behind.
+    Those need the digest updating by hand from the vendor's checksum file.
 
     Args:
         dockerfile_path: Path to the Dockerfile
@@ -294,20 +312,47 @@ def update_dockerfile(dockerfile_path: Path, tools: list[ToolInfo]) -> int:
     Returns:
         Number of tools updated
     """
-    content = dockerfile_path.read_text()
+    manifest_path = Path(tool_manifest.__file__).with_name("tools.toml")
+    manifest = manifest_path.read_text()
+    dockerfile = dockerfile_path.read_text()
     updated_count = 0
+    skipped: list[ToolInfo] = []
 
     for tool in tools:
-        if tool.is_outdated:
-            old_pattern = f"{tool.env_var}={tool.current_version}"
-            new_pattern = f"{tool.env_var}={tool.latest_version}"
-            if old_pattern in content:
-                content = content.replace(old_pattern, new_pattern)
-                print(f"  Updated {tool.name}: {tool.current_version} -> {tool.latest_version}")
-                updated_count += 1
+        if not tool.is_outdated:
+            continue
+        if tool.stage == STAGE_RUNTIME:
+            skipped.append(tool)
+            continue
+
+        old_pin = f'version = "{tool.current_version}"'
+        new_pin = f'version = "{tool.latest_version}"'
+        # Scope the replacement to this tool's own table.
+        head = f"[tool.{tool.name}]"
+        if head in manifest and old_pin in manifest[manifest.index(head) :]:
+            start = manifest.index(head)
+            manifest = manifest[:start] + manifest[start:].replace(old_pin, new_pin, 1)
+        else:
+            print(f"  Could not find pin for {tool.name} in tools.toml")
+            continue
+
+        if tool.env_var:
+            dockerfile = dockerfile.replace(
+                f"{tool.env_var}={tool.current_version}", f"{tool.env_var}={tool.latest_version}"
+            )
+        print(f"  Updated {tool.name}: {tool.current_version} -> {tool.latest_version}")
+        updated_count += 1
 
     if updated_count > 0:
-        dockerfile_path.write_text(content)
+        manifest_path.write_text(manifest)
+        dockerfile_path.write_text(dockerfile)
+
+    for tool in skipped:
+        print(
+            f"  SKIPPED {tool.name}: {tool.current_version} -> {tool.latest_version} "
+            f"(runtime tool -- update the sha256 for both architectures in tools.toml too, "
+            f"or every fetch will fail its checksum)"
+        )
 
     return updated_count
 
@@ -388,7 +433,7 @@ def main() -> int:
     if args.update and has_outdated:
         print()
         print("Updating Dockerfile...")
-        updated = update_dockerfile(dockerfile_path, tools)
+        updated = update_pins(dockerfile_path, tools)
         if updated > 0:
             print(f"\nUpdated {updated} tool(s) in Dockerfile.")
 
