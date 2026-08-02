@@ -1,0 +1,10 @@
+[package]
+name = "sbomify-tools"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Not a library: this exists so cargo-cyclonedx is pinned in a native manifest
+# that Dependabot understands, instead of a bespoke version file.
+[dependencies]
+cargo-cyclonedx = "=0.5.9"

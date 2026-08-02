@@ -28,6 +28,35 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 
 
+def test_versions_come_from_native_lockfiles_on_master():
+    """Tool versions must not be restated in tools.toml.
+
+    A second copy is a second thing to bump, and Dependabot cannot see a
+    bespoke file -- which is the whole reason these live in tools/go.mod and
+    tools/Cargo.lock. The image build freezes them in (see
+    scripts/freeze_tool_versions.py), so this only holds on a source tree.
+    """
+    manifest = (Path(__file__).resolve().parent.parent / "sbomify_action" / "tools.toml").read_text()
+    if "frozen from the lockfile" in manifest:
+        pytest.skip("manifest is frozen; this is a built artifact, not a source tree")
+
+    for name in ("syft", "cargo-cyclonedx", "cosign", "crane"):
+        assert f"[tool.{name}]" in manifest
+    # The four lockfile-owned tools must declare where their version lives.
+    assert manifest.count("version_from") == 4
+
+
+def test_lockfiles_are_the_ones_dependabot_watches():
+    """The manifest must point at files a Dependabot ecosystem covers."""
+    root = Path(__file__).resolve().parent.parent
+    for rel in ("tools/go.mod", "tools/go.sum", "tools/Cargo.toml", "tools/Cargo.lock"):
+        assert (root / rel).exists(), f"{rel} is missing"
+
+    config = (root / ".github" / "dependabot.yml").read_text()
+    for ecosystem in ("gomod", "cargo"):
+        assert f'package-ecosystem: "{ecosystem}"' in config, f"{ecosystem} is not configured"
+
+
 def test_manifest_loads_and_validates():
     tools = load_tools()
     assert tools, "manifest defines no tools"
