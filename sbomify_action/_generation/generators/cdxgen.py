@@ -31,6 +31,7 @@ from ..utils import (
     ensure_go_installed,
     ensure_java_maven_installed,
     get_lock_file_ecosystem,
+    has_required_manifest,
     run_command,
 )
 
@@ -122,6 +123,12 @@ class CdxgenFsGenerator:
 
         # Check if it's a supported lock file for cdxgen
         if input.lock_file_name not in CDXGEN_LOCK_FILES:
+            return False
+
+        # Some lock files need their project manifest beside them. Without
+        # pubspec.yaml, cdxgen has no root component to hang the graph off and
+        # dies with "Cannot read properties of undefined (reading 'bom-ref')".
+        if not has_required_manifest(input.lock_file):
             return False
 
         # Only supports CycloneDX format (cdxgen doesn't output SPDX)

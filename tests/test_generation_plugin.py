@@ -366,7 +366,10 @@ class TestCdxgenFsGenerator(unittest.TestCase):
 
     def test_supports_various_lock_files(self):
         """Test support for various lock files."""
-        lock_files = ["requirements.txt", "Cargo.lock", "package.json", "pom.xml", "go.mod"]
+        # Cargo.lock and pubspec.lock are excluded: they are claimed only when
+        # their manifest sits beside them, which a synthetic path cannot
+        # provide. TestLockFilesNeedingTheirManifest covers that pair.
+        lock_files = ["requirements.txt", "package.json", "pom.xml", "go.mod"]
         for lock_file in lock_files:
             input = GenerationInput(lock_file=f"/path/{lock_file}", output_format="cyclonedx")
             self.assertTrue(self.generator.supports(input), f"Should support {lock_file}")
@@ -890,19 +893,42 @@ class TestSyftImageGenerator(unittest.TestCase):
         self.assertFalse(self.generator.supports(input))
 
 
-class TestDartRouting(unittest.TestCase):
-    """Dart must go straight to syft.
+class TestLockFilesNeedingTheirManifest(unittest.TestCase):
+    """A lock file without its manifest must be declined, not claimed.
 
-    cdxgen crashes on pubspec.lock with "TypeError: Cannot read properties of
-    undefined (reading 'bom-ref')" and always has. The chain used to hide it
-    by falling back; now cdxgen simply does not claim the input.
+    cdxgen handles Dart perfectly well *given pubspec.yaml* -- 233 components,
+    the same as syft. Without it there is no root component and it dies with
+    "Cannot read properties of undefined (reading \'bom-ref\')". Same shape as
+    Cargo.lock without Cargo.toml. Declining is a routing decision; claiming
+    and failing is a defect, and under strict mode it aborts the run.
     """
 
-    def test_cdxgen_does_not_claim_pubspec_lock(self):
-        from sbomify_action._generation.utils import CDXGEN_LOCK_FILES, SYFT_LOCK_FILES
+    def test_dart_is_still_cdxgen_territory(self):
+        from sbomify_action._generation.utils import CDXGEN_LOCK_FILES
 
-        self.assertNotIn("pubspec.lock", CDXGEN_LOCK_FILES)
-        self.assertIn("pubspec.lock", SYFT_LOCK_FILES)
+        self.assertIn("pubspec.lock", CDXGEN_LOCK_FILES)
+
+    def test_declines_a_lock_file_with_no_manifest(self):
+        import tempfile
+        from pathlib import Path as _Path
+
+        from sbomify_action._generation.utils import has_required_manifest
+
+        for lock, manifest in (("Cargo.lock", "Cargo.toml"), ("pubspec.lock", "pubspec.yaml")):
+            bare = _Path(tempfile.mkdtemp())
+            (bare / lock).write_text("")
+            self.assertFalse(has_required_manifest(str(bare / lock)), lock)
+
+            paired = _Path(tempfile.mkdtemp())
+            (paired / lock).write_text("")
+            (paired / manifest).write_text("")
+            self.assertTrue(has_required_manifest(str(paired / lock)), lock)
+
+    def test_lock_files_with_no_manifest_requirement_are_unaffected(self):
+        from sbomify_action._generation.utils import has_required_manifest
+
+        self.assertTrue(has_required_manifest("/nowhere/go.sum"))
+        self.assertTrue(has_required_manifest(None))
 
 
 class TestRegistryGenerateWithFallback(unittest.TestCase):

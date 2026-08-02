@@ -25,7 +25,7 @@ from ..protocol import (
     GenerationInput,
 )
 from ..result import GenerationResult
-from ..utils import run_command
+from ..utils import has_required_manifest, run_command
 
 # Check tool availability once at module load (mirrors cyclonedx_py / syft).
 # Without this guard, supports() would claim a Cargo.lock and then fail at
@@ -96,13 +96,8 @@ class CycloneDXCargoGenerator:
             return False
 
         # ...and only alongside a Cargo.toml. cargo-cyclonedx drives
-        # `cargo metadata`, which needs the manifest, not just the lock:
-        #   error: manifest path `.../Cargo.toml` does not exist
-        # Claiming the input and then failing is a defect from the
-        # orchestrator's point of view, and in strict mode aborts the run.
-        # Declining here lets a generic generator take a lone Cargo.lock,
-        # which is a routing decision rather than a failure.
-        if input.lock_file and not (Path(input.lock_file).parent / "Cargo.toml").exists():
+        # `cargo metadata`, which needs the manifest, not just the lock.
+        if not has_required_manifest(input.lock_file):
             return False
 
         # Check version if specified

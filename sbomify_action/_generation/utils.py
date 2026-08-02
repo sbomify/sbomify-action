@@ -3,6 +3,7 @@
 import re
 import subprocess
 import threading
+from pathlib import Path
 from typing import Optional
 
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
@@ -114,12 +115,7 @@ CDXGEN_LOCK_FILES = (
     + GO_LOCK_FILES
     + RUST_LOCK_FILES
     + RUBY_LOCK_FILES
-    # DART_LOCK_FILES is deliberately absent: cdxgen crashes on pubspec.lock
-    # with "TypeError: Cannot read properties of undefined (reading
-    # 'bom-ref')". It has always crashed; the orchestrator used to fall back
-    # to syft and nobody saw it. Syft reads the same file and returns 233
-    # components, so route there directly instead of claiming an input we
-    # cannot handle.
+    + DART_LOCK_FILES
     + CPP_LOCK_FILES
     + PHP_LOCK_FILES
     + DOTNET_LOCK_FILES
@@ -480,6 +476,38 @@ def get_lock_file_ecosystem(lock_file_name: str) -> Optional[str]:
     elif lock_file_name in TERRAFORM_LOCK_FILES:
         return "terraform"
     return None
+
+
+# Lock files whose generator also needs the project manifest beside them.
+#
+# A lock file records resolved versions; the manifest names the project. Tools
+# that build a root component from the manifest fail without it, and the
+# failure is obscure:
+#
+#   Cargo.lock  without Cargo.toml    cargo metadata: manifest path ... does not exist
+#   pubspec.lock without pubspec.yaml TypeError: Cannot read properties of
+#                                     undefined (reading 'bom-ref')
+#
+# Both were being absorbed by the fallback chain, so the generator looked
+# merely unlucky rather than mis-declared. Declining an input we cannot handle
+# is a routing decision; claiming it and failing is a defect.
+#
+# Only pairs verified to matter are listed. Adding one on suspicion would
+# silently narrow a generator's coverage.
+LOCK_FILE_MANIFESTS = {
+    "Cargo.lock": "Cargo.toml",
+    "pubspec.lock": "pubspec.yaml",
+}
+
+
+def has_required_manifest(lock_file: str | None) -> bool:
+    """Whether a lock file has the project manifest its generator needs."""
+    if not lock_file:
+        return True
+    required = LOCK_FILE_MANIFESTS.get(Path(lock_file).name)
+    if not required:
+        return True
+    return (Path(lock_file).parent / required).exists()
 
 
 def is_supported_lock_file(lock_file_name: str) -> bool:
