@@ -271,13 +271,14 @@ def ensure_runtime(name: str) -> Path:
         if cached := _resolved.get(name):
             return cached
 
-        # An image that still bakes the tool in, or a developer machine with
-        # it on PATH, should not pay for a download.
-        if existing := shutil.which(spec.name):
-            logger.debug(f"{spec.name} already on PATH at {existing}; skipping runtime fetch")
-            resolved = Path(existing).parent
-            _resolved[name] = resolved
-            return resolved
+        # Deliberately no "already on PATH, skip the download" shortcut.
+        #
+        # Each release hard-codes the versions it was built against, and the
+        # SBOM it publishes names those versions. Silently preferring whatever
+        # happens to be on PATH would mean running one binary and reporting
+        # another -- the SBOM would be lying, which is the one defect this
+        # project cannot ship. The pinned artifact is always what runs; the
+        # on-disk cache keeps that free after the first fetch.
 
         arch = current_arch()
         if arch not in spec.assets:
