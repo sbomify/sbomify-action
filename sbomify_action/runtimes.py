@@ -60,7 +60,8 @@ class Asset:
     """A single downloadable artifact and the digest it must have."""
 
     url: str
-    sha256: str
+    algorithm: str
+    digest: str
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ class RuntimeSpec:
     kind: str = "raw"
     member: str | None = None
     bin_subdir: str = ""
+    strip_container: bool = False
     env: dict[str, str] = field(default_factory=dict)
 
 
@@ -98,7 +100,10 @@ def _load_runtimes() -> dict[str, RuntimeSpec]:
             version=tool.version,
             kind=tool.kind,
             member=tool.member,
-            assets={arch: Asset(url=a.url, sha256=a.sha256) for arch, a in tool.assets.items()},
+            strip_container=tool.strip_container,
+            bin_subdir=tool.bin_subdir,
+            env=tool.env,
+            assets={arch: Asset(url=a.url, algorithm=a.algorithm, digest=a.digest) for arch, a in tool.assets.items()},
         )
     return specs
 
@@ -156,7 +161,7 @@ def _download_verified(asset: Asset, dest: Path) -> None:
     held in memory, and the file is only moved into place after the digest
     matches -- a mismatched download can never be observed at ``dest``.
     """
-    digest = hashlib.sha256()
+    digest = hashlib.new(asset.algorithm)
     scratch = dest.with_suffix(dest.suffix + ".part")
     try:
         with requests.get(asset.url, stream=True, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT)) as response:
@@ -171,10 +176,11 @@ def _download_verified(asset: Asset, dest: Path) -> None:
         raise SBOMGenerationError(f"Failed to download {asset.url}: {exc}") from exc
 
     actual = digest.hexdigest()
-    if actual != asset.sha256:
+    if actual != asset.digest:
         scratch.unlink(missing_ok=True)
         raise SBOMGenerationError(
-            f"Checksum mismatch for {asset.url}: expected {asset.sha256}, got {actual}. Refusing to use the download."
+            f"Checksum mismatch for {asset.url}: expected {asset.algorithm}:{asset.digest}, "
+            f"got {actual}. Refusing to use the download."
         )
     scratch.replace(dest)
 
@@ -221,12 +227,38 @@ def _materialize(spec: RuntimeSpec, arch: str, prefix: Path) -> None:
     staging = Path(tempfile.mkdtemp(prefix=f".{spec.name}-", dir=prefix.parent))
     try:
         bin_dir = staging / spec.bin_subdir if spec.bin_subdir else staging
-        bin_dir.mkdir(parents=True, exist_ok=True)
+        if not spec.strip_container:
+            # Deliberately not pre-created for strip_container: the archive
+            # brings its own bin/, and shutil.move onto an existing directory
+            # moves *into* it, producing bin/bin.
+            bin_dir.mkdir(parents=True, exist_ok=True)
 
         if spec.kind == "raw":
             target = bin_dir / spec.name
             _download_verified(asset, target)
             target.chmod(0o755)
+        elif spec.strip_container:
+            # jdk-21.0.12+8/, apache-maven-3.9.9/, go/ -- each wraps everything
+            # in one versioned directory. Lifting its contents gives a prefix
+            # whose layout does not change when the version does, so bin_subdir
+            # means the same thing for every tool.
+            archive = staging / f"{spec.name}-archive"
+            unpacked = staging / ".unpack"
+            unpacked.mkdir()
+            _download_verified(asset, archive)
+            _extract(archive, spec, unpacked)
+            archive.unlink(missing_ok=True)
+            roots = [entry for entry in unpacked.iterdir() if entry.is_dir()]
+            if len(roots) != 1:
+                raise SBOMGenerationError(
+                    f"{spec.name}: expected one top-level directory in the archive, found {len(roots)}"
+                )
+            for item in roots[0].iterdir():
+                shutil.move(str(item), staging / item.name)
+            shutil.rmtree(unpacked, ignore_errors=True)
+            for binary in bin_dir.iterdir() if bin_dir.is_dir() else ():
+                if binary.is_file():
+                    binary.chmod(0o755)
         else:
             archive = staging / f"{spec.name}-archive"
             _download_verified(asset, archive)
@@ -235,7 +267,7 @@ def _materialize(spec: RuntimeSpec, arch: str, prefix: Path) -> None:
             if spec.member:
                 (bin_dir / spec.member).chmod(0o755)
 
-        (staging / _READY).write_text(f"{spec.name} {spec.version} {asset.sha256}\n")
+        (staging / _READY).write_text(f"{spec.name} {spec.version} {asset.algorithm}:{asset.digest}\n")
         # Atomic when it wins; another process getting there first is fine,
         # since both prefixes were built from the same pinned digest.
         try:

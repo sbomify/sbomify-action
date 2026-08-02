@@ -14,7 +14,7 @@ has to be recorded somewhere that both can agree on.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
@@ -46,6 +46,26 @@ def _version_from_cargo_lock(path: Path, package: str) -> str:
     raise ManifestError(f"{package} not found in {path}")
 
 
+def _version_from_pom(path: Path, artifact: str) -> str:
+    """Read a dependency's pinned version out of a pom.xml.
+
+    defusedxml because this parses a file from the repo, and the safe parser
+    costs nothing.
+    """
+    from defusedxml import ElementTree
+
+    ns = {"m": "http://maven.apache.org/POM/4.0.0"}
+    root = ElementTree.parse(path).getroot()
+    if root is None:
+        raise ManifestError(f"{path} has no root element")
+    for dep in root.findall(".//m:dependency", ns):
+        found = dep.find("m:artifactId", ns)
+        version = dep.find("m:version", ns)
+        if found is not None and found.text == artifact and version is not None and version.text:
+            return version.text
+    raise ManifestError(f"{artifact} not found in {path}")
+
+
 def _resolve_version(name: str, body: dict[str, object]) -> str:
     """Take the version from the ecosystem's own lockfile where one owns it.
 
@@ -70,7 +90,9 @@ def _resolve_version(name: str, body: dict[str, object]) -> str:
         return _version_from_go_mod(path, source["module"])
     if "package" in source:
         return _version_from_cargo_lock(path, source["package"])
-    raise ManifestError(f"{name}: version_from needs a module (go.mod) or package (Cargo.lock)")
+    if "artifact" in source:
+        return _version_from_pom(path, str(source["artifact"]))
+    raise ManifestError(f"{name}: version_from needs a module (go.mod), package (Cargo.lock) or artifact (pom.xml)")
 
 
 #: Tools baked into the published container image.
@@ -83,12 +105,24 @@ STAGE_BUILD = "build"
 _STAGES = (STAGE_IMAGE, STAGE_RUNTIME, STAGE_BUILD)
 
 
+#: Digest algorithms we accept, in the order we prefer them. Vendors differ:
+#: Adoptium and go.dev publish sha256, Apache publishes only sha512. Taking
+#: whichever the vendor actually signs beats re-hashing a download ourselves
+#: and asking everyone to trust our arithmetic.
+DIGEST_ALGORITHMS = ("sha256", "sha512")
+
+
 @dataclass(frozen=True)
 class ToolAsset:
     """A downloadable artifact and the digest it must have."""
 
     url: str
-    sha256: str
+    algorithm: str
+    digest: str
+
+    @property
+    def sha256(self) -> str | None:
+        return self.digest if self.algorithm == "sha256" else None
 
 
 @dataclass(frozen=True)
@@ -103,6 +137,13 @@ class Tool:
     dockerfile_arg: str | None = None
     kind: str = "raw"
     member: str | None = None
+    #: Archives that wrap everything in a single versioned top-level directory
+    #: (jdk-21.0.12+8/, apache-maven-3.9.9/, go/). Stripping it gives a stable
+    #: prefix whose bin/ can go on PATH without the caller knowing the version.
+    strip_container: bool = False
+    bin_subdir: str = ""
+    #: Environment the tool needs, with "{prefix}" substituted at fetch time.
+    env: dict[str, str] = field(default_factory=dict)
     assets: dict[str, ToolAsset] | None = None
 
     @property
@@ -151,7 +192,14 @@ def load_tools() -> dict[str, Tool]:
 
         assets = None
         if raw_assets := body.get("assets"):
-            assets = {arch: ToolAsset(url=a["url"], sha256=a["sha256"]) for arch, a in raw_assets.items()}
+            assets = {}
+            for arch, a in raw_assets.items():
+                found = [alg for alg in DIGEST_ALGORITHMS if alg in a]
+                if len(found) != 1:
+                    raise ManifestError(
+                        f"{name}/{arch}: give exactly one of {', '.join(DIGEST_ALGORITHMS)}, got {found or 'none'}"
+                    )
+                assets[arch] = ToolAsset(url=a["url"], algorithm=found[0], digest=a[found[0]])
 
         if stage == STAGE_RUNTIME:
             # A runtime tool with no assets cannot be fetched, and the failure
@@ -161,9 +209,12 @@ def load_tools() -> dict[str, Tool]:
             missing = {"amd64", "arm64"} - set(assets)
             if missing:
                 raise ManifestError(f"{name}: no asset for {', '.join(sorted(missing))}")
+            expected_length = {"sha256": 64, "sha512": 128}
             for arch, asset in assets.items():
-                if len(asset.sha256) != 64:
-                    raise ManifestError(f"{name}/{arch}: sha256 must be 64 hex characters")
+                if len(asset.digest) != expected_length[asset.algorithm]:
+                    raise ManifestError(
+                        f"{name}/{arch}: {asset.algorithm} must be {expected_length[asset.algorithm]} hex characters"
+                    )
                 if not asset.url.startswith("https://"):
                     raise ManifestError(f"{name}/{arch}: url must be https")
 
@@ -176,6 +227,9 @@ def load_tools() -> dict[str, Tool]:
             dockerfile_arg=body.get("dockerfile_arg"),
             kind=body.get("kind", "raw"),
             member=body.get("member"),
+            strip_container=bool(body.get("strip_container", False)),
+            env=dict(body.get("env") or {}),
+            bin_subdir=str(body.get("bin_subdir", "bin") if body.get("strip_container") else ""),
             assets=assets,
         )
 

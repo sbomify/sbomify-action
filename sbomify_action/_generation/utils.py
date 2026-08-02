@@ -1,13 +1,13 @@
 """Shared utilities for SBOM generation."""
 
 import re
-import shutil
 import subprocess
 import threading
 from typing import Optional
 
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.runtimes import ensure_runtime
 
 # Track whether Java/Maven has been installed on-demand
 _java_maven_installed = False
@@ -483,143 +483,24 @@ def is_supported_lock_file(lock_file_name: str) -> bool:
 
 
 def ensure_java_maven_installed() -> None:
+    """Make a JDK and Maven available for Java/Scala dependency resolution.
+
+    Previously this ran `apt-get install maven default-jdk-headless` during
+    the run: whatever the Debian mirror happened to serve that day, requiring
+    root, and recorded in no SBOM. Both are now pinned artifacts verified
+    against the vendor's published digest and unpacked into an unprivileged
+    prefix, so a release resolves Java projects with exactly the toolchain it
+    was built against.
     """
-    Install Maven + JDK on-demand if not already present.
-
-    This function is called lazily when processing Java/Scala projects
-    to avoid bloating the Docker image with Java dependencies that are
-    only needed for a subset of ecosystems.
-
-    The installation state is cached to avoid repeated checks.
-    Thread-safe: uses a lock to prevent concurrent installation attempts.
-
-    Raises:
-        SBOMGenerationError: If installation fails
-    """
-    global _java_maven_installed
-
-    # Fast path: skip if already confirmed installed (no lock needed)
-    if _java_maven_installed:
-        return
-
-    # Use lock to prevent race conditions if multiple threads try to install
-    with _java_maven_lock:
-        # Double-check after acquiring lock (another thread may have installed)
-        if _java_maven_installed:
-            return
-
-        # Check if Maven is already available
-        if shutil.which("mvn"):
-            logger.debug("Maven already installed, skipping on-demand installation")
-            _java_maven_installed = True
-            return
-
-        logger.info("Java/Maven not found - installing for Java dependency resolution...")
-
-        try:
-            # Update package lists
-            subprocess.run(
-                ["apt-get", "update"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-
-            # Install Maven and JDK
-            subprocess.run(
-                [
-                    "apt-get",
-                    "install",
-                    "-y",
-                    "--no-install-recommends",
-                    "maven",
-                    "default-jdk-headless",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 minutes for package installation
-            )
-
-            _java_maven_installed = True
-            logger.info("Java/Maven installed successfully")
-
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr if e.stderr else str(e)
-            logger.error(f"Failed to install Java/Maven: {error_msg}")
-            raise SBOMGenerationError(f"Failed to install Java/Maven for dependency resolution: {error_msg}")
-        except subprocess.TimeoutExpired:
-            logger.error("Java/Maven installation timed out")
-            raise SBOMGenerationError("Java/Maven installation timed out")
+    ensure_runtime("java")
+    ensure_runtime("maven")
 
 
 def ensure_go_installed() -> None:
+    """Make the Go toolchain available for Go dependency resolution.
+
+    Was `apt-get install golang`, with the same problems: unpinned, root-only
+    and absent from every SBOM. Now a pinned tarball from go.dev, checked
+    against their published SHA256.
     """
-    Install Go on-demand if not already present.
-
-    This function is called lazily when processing Go projects
-    to avoid bloating the Docker image with Go dependencies that are
-    only needed for a subset of ecosystems.
-
-    The installation state is cached to avoid repeated checks.
-    Thread-safe: uses a lock to prevent concurrent installation attempts.
-
-    Raises:
-        SBOMGenerationError: If installation fails
-    """
-    global _go_installed
-
-    # Fast path: skip if already confirmed installed (no lock needed)
-    if _go_installed:
-        return
-
-    # Use lock to prevent race conditions if multiple threads try to install
-    with _go_lock:
-        # Double-check after acquiring lock (another thread may have installed)
-        if _go_installed:
-            return
-
-        # Check if Go is already available
-        if shutil.which("go"):
-            logger.debug("Go already installed, skipping on-demand installation")
-            _go_installed = True
-            return
-
-        logger.info("Go not found - installing for Go dependency resolution...")
-
-        try:
-            # Update package lists
-            subprocess.run(
-                ["apt-get", "update"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-
-            # Install Go
-            subprocess.run(
-                [
-                    "apt-get",
-                    "install",
-                    "-y",
-                    "--no-install-recommends",
-                    "golang",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 minutes for package installation
-            )
-
-            _go_installed = True
-            logger.info("Go installed successfully")
-
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr if e.stderr else str(e)
-            logger.error(f"Failed to install Go: {error_msg}")
-            raise SBOMGenerationError(f"Failed to install Go for dependency resolution: {error_msg}")
-        except subprocess.TimeoutExpired:
-            logger.error("Go installation timed out")
-            raise SBOMGenerationError("Go installation timed out")
+    ensure_runtime("go")

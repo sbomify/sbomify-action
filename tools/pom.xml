@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Pins the Maven distribution the action fetches when it resolves a Java or
+  Scala project's dependencies.
+
+  This is not a Java project and nothing here is compiled. The pom exists so
+  the version lives in the ecosystem's own manifest, where Dependabot's
+  `maven` updater maintains it, rather than in a bespoke file nothing watches:
+  the same reasoning as tools/go.mod and tools/Cargo.toml.
+
+  The JDK itself is deliberately absent: JDKs are not published to Maven
+  Central (net.adoptium and org.openjdk have no artifacts there), so there is
+  no native manifest that can express one. It stays a pinned artifact in
+  sbomify_action/tools.toml, fetched from Adoptium against their published
+  SHA256.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.sbomify</groupId>
+  <artifactId>sbomify-action-tools</artifactId>
+  <version>0.0.0</version>
+  <packaging>pom</packaging>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.maven</groupId>
+      <artifactId>apache-maven</artifactId>
+      <version>3.9.9</version>
+      <type>tar.gz</type>
+      <classifier>bin</classifier>
+    </dependency>
+  </dependencies>
+</project>

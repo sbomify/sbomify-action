@@ -43,13 +43,6 @@ purl = "pkg:cargo/cargo-cyclonedx@{version}"
 github_repo = "CycloneDX/cyclonedx-rust-cargo"
 dockerfile_arg = "CARGO_CYCLONEDX_VERSION"
 
-[tool.bun]
-version = "1.3.10"
-stage = "image"
-purl = "pkg:github/oven-sh/bun@bun-v{version}"
-github_repo = "oven-sh/bun"
-dockerfile_arg = "BUN_VERSION"
-
 [tool.uv]
 version = "0.10.8"
 stage = "build"
@@ -96,3 +89,92 @@ sha256 = "1a57bc98207fa1c0d04bf760699099e26f8383499bfd55b99c1b919a928a7230"
 [tool.crane.assets.arm64]
 url = "https://github.com/google/go-containerregistry/releases/download/v0.21.7/go-containerregistry_Linux_arm64.tar.gz"
 sha256 = "b6ee979d9411dfb05ce35ab9e156fe5de7def11a230764a7856ffa2eb971fa88"
+
+# ---------------------------------------------------------------------------
+# Ecosystem tooling, all fetched on demand.
+#
+# These used to be acquired two different bad ways: cdxgen was baked into the
+# image as 619MB of bun + node_modules that every user pulled whether or not
+# they had a JavaScript project, while the JDK, Maven and Go were `apt-get
+# install`ed *during a run* -- unpinned, absent from every SBOM, and requiring
+# the container to run as root.
+#
+# Now each is a pinned artifact fetched only by runs that need it. Nothing
+# here is in the image, so nothing here appears in the image's SBOM.
+# ---------------------------------------------------------------------------
+
+[tool.cdxgen]
+version = "12.8.2"
+stage = "runtime"
+purl = "pkg:npm/%40cyclonedx/cdxgen@{version}"
+github_repo = "CycloneDX/cdxgen"
+kind = "raw"
+
+# The "slim" build, 35.6MB against 619MB for bun + node_modules. Verified to
+# produce identical component counts on java, javascript, ruby and elixir.
+[tool.cdxgen.assets.amd64]
+url = "https://github.com/CycloneDX/cdxgen/releases/download/v12.8.2/cdxgen-linux-amd64-slim"
+sha256 = "4b49a3cc09e4f5f8815058edf0a6d2feecc843f3eecf7649b75c86e21383b381"
+
+[tool.cdxgen.assets.arm64]
+url = "https://github.com/CycloneDX/cdxgen/releases/download/v12.8.2/cdxgen-linux-arm64-slim"
+sha256 = "d9bac95eaceef2a0eddf16b6a22e0ef1549ad827d488f44cb65be759f42aecd2"
+
+# Full JDK rather than the 52MB JRE: Maven resolution would be happy with a
+# JRE, but Gradle needs javac. Only Java and Scala projects pay for it.
+[tool.java]
+version = "21.0.12+8"
+stage = "runtime"
+purl = "pkg:generic/temurin@{version}?distro=eclipse-temurin"
+github_repo = "adoptium/temurin21-binaries"
+kind = "tar.gz"
+strip_container = true
+# Maven and Gradle look for JAVA_HOME rather than trusting PATH.
+env = { JAVA_HOME = "{prefix}" }
+
+[tool.java.assets.amd64]
+url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12_8.tar.gz"
+sha256 = "e4446ff06a276155697597cc0f1b15da004ff083f4964a35271ecee567177370"
+
+[tool.java.assets.arm64]
+url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.12_8.tar.gz"
+sha256 = "eba38e871b02d407897bfe017ea35352dfc1420ef6d2112425b0c67325ca509d"
+
+# Apache publishes only sha512 for Maven, so that is what we pin against.
+# The tarball is architecture-independent; both entries are the same file.
+[tool.maven]
+version_from = { file = "tools/pom.xml", artifact = "apache-maven" }
+stage = "runtime"
+purl = "pkg:maven/org.apache.maven/apache-maven@{version}"
+github_repo = "apache/maven"
+kind = "tar.gz"
+strip_container = true
+# Maven's local repository defaults to $HOME/.m2. Running non-root the home
+# directory is usually "/", so Maven dies with "Could not create local
+# repository at /.m2/repository". Keep it inside the runtime prefix, which is
+# writable by construction. MAVEN_ARGS is read by Maven 3.9+.
+env = { MAVEN_ARGS = "-Dmaven.repo.local={prefix}/repository" }
+
+[tool.maven.assets.amd64]
+url = "https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz"
+sha512 = "a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b"
+
+[tool.maven.assets.arm64]
+url = "https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz"
+sha512 = "a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b"
+
+[tool.go]
+version = "1.24.13"
+stage = "runtime"
+purl = "pkg:generic/go@{version}"
+github_repo = "golang/go"
+kind = "tar.gz"
+strip_container = true
+
+[tool.go.assets.amd64]
+url = "https://go.dev/dl/go1.24.13.linux-amd64.tar.gz"
+sha256 = "1fc94b57134d51669c72173ad5d49fd62afb0f1db9bf3f798fd98ee423f8d730"
+
+[tool.go.assets.arm64]
+url = "https://go.dev/dl/go1.24.13.linux-arm64.tar.gz"
+sha256 = "74d97be1cc3a474129590c67ebf748a96e72d9f3a2b6fef3ed3275de591d49b3"

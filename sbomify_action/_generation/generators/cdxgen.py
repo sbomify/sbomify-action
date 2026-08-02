@@ -15,6 +15,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.runtimes import RUNTIMES, ensure_runtime
 from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
@@ -33,8 +34,16 @@ from ..utils import (
     run_command,
 )
 
-# Check tool availability once at module load
+# cdxgen is no longer baked into the image, so a PATH probe at import time
+# would answer "missing" and this generator would decline every input it is
+# the best tool for. What matters now is whether it can be *made* available:
+# it is a pinned runtime, so on a supported architecture it always can. The
+# fetch itself happens in generate(), where a failure can be reported
+# properly instead of silently removing the generator from the chain.
+_CDXGEN_PATH: str | None
 _CDXGEN_AVAILABLE, _CDXGEN_PATH = check_tool_available("cdxgen")
+if not _CDXGEN_AVAILABLE:
+    _CDXGEN_AVAILABLE = "cdxgen" in RUNTIMES
 
 # Mapping from ecosystem names to cdxgen --type values
 # See: https://cyclonedx.github.io/cdxgen/#/PROJECT_TYPES
@@ -143,6 +152,12 @@ class CdxgenFsGenerator:
         assert lock_file_name is not None  # guaranteed by supports()
         ecosystem = get_lock_file_ecosystem(lock_file_name)
         cdxgen_type = CDXGEN_TYPE_MAP.get(ecosystem) if ecosystem else None
+
+        # cdxgen is fetched rather than baked in: the bun runtime plus
+        # node_modules was 619MB, which every user pulled whether or not they
+        # had a project it could scan. The standalone binary is 35.6MB and
+        # produces identical output.
+        ensure_runtime("cdxgen")
 
         # Install Java/Maven on-demand for Java/Scala ecosystems
         if ecosystem in ("java", "scala"):
@@ -288,6 +303,8 @@ class CdxgenImageGenerator:
         """Generate an SBOM using cdxgen command for Docker images."""
         assert input.docker_image is not None  # guaranteed by supports()
         version = input.spec_version or CDXGEN_CYCLONEDX_DEFAULT
+
+        ensure_runtime("cdxgen")
 
         cmd = [
             "cdxgen",
