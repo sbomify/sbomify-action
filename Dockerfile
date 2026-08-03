@@ -40,21 +40,21 @@ FROM rust:1-slim AS rust-builder
 ARG TARGETARCH
 ARG CARGO_CYCLONEDX_VERSION
 
+# Upstream publishes a prebuilt binary for both architectures, so download
+# and verify it rather than compiling. The arm64 path used to run
+# `cargo install cargo-cyclonedx`, which built it from source on every cache
+# miss even though cargo-cyclonedx-aarch64-unknown-linux-gnu.tar.xz has been
+# published all along.
 RUN apt-get update && apt-get install -y curl xz-utils && \
-    if [ "${TARGETARCH}" = "amd64" ]; then \
-        curl -sL \
-            -o cargo-cyclonedx-x86_64-unknown-linux-gnu.tar.xz \
-            "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-${CARGO_CYCLONEDX_VERSION}/cargo-cyclonedx-x86_64-unknown-linux-gnu.tar.xz" && \
-        curl -sL \
-            -o cargo-cyclonedx-x86_64-unknown-linux-gnu.tar.xz.sha256 \
-            "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-${CARGO_CYCLONEDX_VERSION}/cargo-cyclonedx-x86_64-unknown-linux-gnu.tar.xz.sha256" && \
-        sha256sum -c cargo-cyclonedx-x86_64-unknown-linux-gnu.tar.xz.sha256 && \
-        tar xvf cargo-cyclonedx-x86_64-unknown-linux-gnu.tar.xz && \
-        mv cargo-cyclonedx-x86_64-unknown-linux-gnu/cargo-cyclonedx /usr/local/cargo/bin/ && \
-        chmod +x /usr/local/cargo/bin/cargo-cyclonedx; \
-    else \
-        cargo install cargo-cyclonedx@${CARGO_CYCLONEDX_VERSION}; \
-    fi
+    CC_TRIPLE=$([ "${TARGETARCH}" = "amd64" ] && echo "x86_64" || echo "aarch64")-unknown-linux-gnu && \
+    BASE="https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-${CARGO_CYCLONEDX_VERSION}" && \
+    curl -fsSL -o "cargo-cyclonedx-${CC_TRIPLE}.tar.xz" "${BASE}/cargo-cyclonedx-${CC_TRIPLE}.tar.xz" && \
+    curl -fsSL -o "cargo-cyclonedx-${CC_TRIPLE}.tar.xz.sha256" "${BASE}/cargo-cyclonedx-${CC_TRIPLE}.tar.xz.sha256" && \
+    sha256sum -c "cargo-cyclonedx-${CC_TRIPLE}.tar.xz.sha256" && \
+    tar xf "cargo-cyclonedx-${CC_TRIPLE}.tar.xz" && \
+    mv "cargo-cyclonedx-${CC_TRIPLE}/cargo-cyclonedx" /usr/local/cargo/bin/ && \
+    chmod +x /usr/local/cargo/bin/cargo-cyclonedx && \
+    rm -rf /tmp/cargo-cyclonedx-*
 
 # UV binary stage
 FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:88234bc9e09c2b2f6d176a3daf411419eb0370d450a08129257410de9cfafd2a AS uv-fetcher
