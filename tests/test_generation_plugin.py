@@ -236,10 +236,14 @@ class TestGeneratorRegistry(unittest.TestCase):
         generators = self.registry.get_generators_for(input)
 
         # cyclonedx-py doesn't support Docker images
+        # syft leads for container images -- it returns roughly 10x the
+        # components cdxgen does across the 27 image pairs in tests/test-data,
+        # and cdxgen returns none at all for distroless. cdxgen-image sits
+        # behind at 40 as a last resort.
         self.assertEqual(len(generators), 3)
-        self.assertEqual(generators[0].name, "cdxgen-image")  # Priority 20
-        self.assertEqual(generators[1].name, "trivy-image")  # Priority 30
-        self.assertEqual(generators[2].name, "syft-image")  # Priority 35
+        self.assertEqual(generators[0].name, "trivy-image")  # Priority 30
+        self.assertEqual(generators[1].name, "syft-image")  # Priority 35
+        self.assertEqual(generators[2].name, "cdxgen-image")  # Priority 40
 
 
 @patch("sbomify_action._generation.generators.cyclonedx_py._CYCLONEDX_PY_AVAILABLE", True)
@@ -645,7 +649,8 @@ class TestCdxgenImageGenerator(unittest.TestCase):
     def test_name_and_priority(self):
         """Test generator name and priority."""
         self.assertEqual(self.generator.name, "cdxgen-image")
-        self.assertEqual(self.generator.priority, 20)
+        # 40, not 20: syft is the better tool for container images.
+        self.assertEqual(self.generator.priority, 40)
 
     def test_supports_docker_images(self):
         """Test support for Docker images."""

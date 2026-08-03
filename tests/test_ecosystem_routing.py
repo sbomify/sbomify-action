@@ -117,3 +117,38 @@ def test_no_supported_lock_file_is_unserved():
     claimed = set(CDXGEN_LOCK_FILES) | set(SYFT_LOCK_FILES) | set(CYCLONEDX_PY_LOCK_FILES) | {"Cargo.lock"}
     unserved = sorted(set(ALL_LOCK_FILES) - claimed)
     assert unserved == [], f"discoverable but no generator claims them: {unserved}"
+
+
+def test_container_images_go_to_syft_not_cdxgen(monkeypatch):
+    """For container images syft is the better tool, unlike lock files.
+
+    Measured over the 27 image pairs in tests/test-data:
+
+        total components   cdxgen 7389   syft 77795   (10.5x)
+        per-image wins     syft 27       cdxgen 0
+        distroless/static  cdxgen 0      syft 951
+
+    cdxgen still leads for lock files, where it is genuinely better. Getting
+    this backwards produced container SBOMs an order of magnitude thinner
+    than they should have been, and nothing caught it because a short SBOM
+    still looks like a successful one.
+    """
+    for module, flag in (("cdxgen", "_CDXGEN_AVAILABLE"), ("syft", "_SYFT_AVAILABLE")):
+        monkeypatch.setattr(f"sbomify_action._generation.generators.{module}.{flag}", True)
+
+    chain = [
+        g.name
+        for g in create_default_registry().get_generators_for(
+            GenerationInput(docker_image="alpine:3.20", output_format="cyclonedx")
+        )
+    ]
+
+    assert chain, "nothing claims container images"
+    assert chain[0] == "syft-image", f"syft must lead for container images, got {chain}"
+
+
+def test_cdxgen_still_leads_for_lock_files(monkeypatch):
+    """The container demotion must not leak into filesystem scanning."""
+    from sbomify_action._generation.generators import CdxgenFsGenerator, SyftFsGenerator
+
+    assert CdxgenFsGenerator().priority < SyftFsGenerator().priority

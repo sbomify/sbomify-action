@@ -267,8 +267,20 @@ class CdxgenImageGenerator:
 
     @property
     def priority(self) -> int:
-        # Comprehensive multi-ecosystem, higher priority than Trivy/Syft
-        return 20
+        # Below syft (35), unlike the filesystem generator at 20.
+        #
+        # cdxgen is the better tool for lock files, but not for container
+        # images. Measured across the 27 image pairs in tests/test-data:
+        #
+        #   total components   cdxgen 7389   syft 77795   (10.5x)
+        #   per-image wins     syft 27       cdxgen 0
+        #   gcr.io/distroless/static-debian12: cdxgen returns 0, syft 951
+        #
+        # Syft wins every image. Leaving cdxgen ahead meant every container
+        # SBOM we produced was an order of magnitude thinner than it needed
+        # to be, and nothing surfaced it: a short SBOM still looks like
+        # success.
+        return 40
 
     @property
     def supported_formats(self) -> list[FormatVersion]:
