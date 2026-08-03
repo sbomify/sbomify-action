@@ -42,7 +42,7 @@ MATRIX = [
     ("rust", "Cargo.lock", "cyclonedx-cargo", 1),
     ("javascript", "package-lock.json", "cdxgen-fs", 20),
     ("java", "pom.xml", "cdxgen-fs", 5),
-    ("go", "go.mod", "syft-fs", 50),
+    ("go", "go.mod", "cyclonedx-gomod", 3),
     ("ruby", "Gemfile.lock", "cdxgen-fs", 100),
     ("dart", "pubspec.lock", "cdxgen-fs", 100),
     ("elixir", "mix.lock", "cdxgen-fs", 20),

@@ -8,6 +8,7 @@ from .generators import (
     CdxgenFsGenerator,
     CdxgenImageGenerator,
     CycloneDXCargoGenerator,
+    CycloneDXGomodGenerator,
     CycloneDXPyGenerator,
     SyftFsGenerator,
     SyftImageGenerator,
@@ -29,6 +30,9 @@ def create_default_registry() -> GeneratorRegistry:
       - Output: CycloneDX 1.0-1.7
     - CycloneDXCargoGenerator: Native Rust/Cargo CycloneDX generator
       - Input: Rust lock files only (Cargo.lock)
+      - Output: CycloneDX 1.4-1.6
+    - CycloneDXGomodGenerator: Native Go CycloneDX generator
+      - Input: go.mod, with Go source beside it
       - Output: CycloneDX 1.4-1.6
 
     Priority 20 - Comprehensive Multi-Ecosystem (cdxgen):
@@ -70,6 +74,7 @@ def create_default_registry() -> GeneratorRegistry:
     # Priority 10: Native generators
     registry.register(CycloneDXPyGenerator())
     registry.register(CycloneDXCargoGenerator())
+    registry.register(CycloneDXGomodGenerator())
 
     # Priority 20: cdxgen generators (comprehensive multi-ecosystem)
     registry.register(CdxgenFsGenerator())

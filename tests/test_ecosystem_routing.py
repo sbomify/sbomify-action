@@ -37,7 +37,7 @@ INTENDED = [
     ("rust", "Cargo.lock", "cyclonedx-cargo"),
     ("javascript", "package-lock.json", "cdxgen-fs"),
     ("java", "pom.xml", "cdxgen-fs"),
-    ("go", "go.mod", "syft-fs"),
+    ("go", "go.mod", "cyclonedx-gomod"),
     ("ruby", "Gemfile.lock", "cdxgen-fs"),
     ("dart", "pubspec.lock", "cdxgen-fs"),
     ("elixir", "mix.lock", "cdxgen-fs"),
@@ -57,6 +57,9 @@ def test_intended_generator_is_first_in_the_chain(project, lock_file, expected, 
         ("syft", "_SYFT_AVAILABLE"),
     ):
         monkeypatch.setattr(f"sbomify_action._generation.generators.{module}.{flag}", True)
+    # cyclonedx-gomod is fetched rather than probed, and gates on being in
+    # our own image.
+    monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
 
     lock = PROJECTS / project / lock_file
     assert lock.exists(), f"fixture missing: {lock}"
@@ -152,3 +155,28 @@ def test_cdxgen_still_leads_for_lock_files(monkeypatch):
     from sbomify_action._generation.generators import CdxgenFsGenerator, SyftFsGenerator
 
     assert CdxgenFsGenerator().priority < SyftFsGenerator().priority
+
+
+def test_a_bare_go_module_falls_to_syft(monkeypatch, tmp_path):
+    """No Go source means cyclonedx-gomod must decline rather than panic.
+
+    Given only go.mod and go.sum it dies with "index out of range [0] with
+    length 0". Pointing the action at bare module files is legitimate, so
+    syft keeps that case.
+    """
+    monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
+    monkeypatch.setattr("sbomify_action._generation.generators.syft._SYFT_AVAILABLE", True)
+    monkeypatch.setattr("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", False)
+
+    (tmp_path / "go.mod").write_text("module example.com/x\n")
+    (tmp_path / "go.sum").write_text("")
+
+    chain = [
+        g.name
+        for g in create_default_registry().get_generators_for(
+            GenerationInput(lock_file=str(tmp_path / "go.mod"), output_format="cyclonedx")
+        )
+    ]
+
+    assert "cyclonedx-gomod" not in chain, "must not claim a module with no source"
+    assert chain[0] == "syft-fs"

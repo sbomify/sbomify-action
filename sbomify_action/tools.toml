@@ -170,6 +170,10 @@ purl = "pkg:generic/go@{version}"
 github_repo = "golang/go"
 kind = "tar.gz"
 strip_container = true
+# Go writes its module and build caches under $HOME, which is "/" and
+# unwritable when running non-root: cyclonedx-gomod then dies with "failed to
+# download modules". Keep both inside the runtime prefix.
+env = { GOMODCACHE = "{prefix}/.gomodcache", GOCACHE = "{prefix}/.gocache", GOPATH = "{prefix}/.gopath" }
 
 [tool.go.assets.amd64]
 url = "https://go.dev/dl/go1.24.13.linux-amd64.tar.gz"
@@ -215,3 +219,37 @@ sha256 = "8f70bcaccea5ba4db187c3fd4d64e24592b4e16af513497201f5909d61691dbe"
 [[tool.rust.assets.arm64]]
 url = "https://static.rust-lang.org/dist/rustc-1.97.1-aarch64-unknown-linux-gnu.tar.xz"
 sha256 = "b344b81f0cd4c2246c7da8b197fe7a339d7dd02bb15cb69b2524115d9c75224c"
+
+# The native Go generator, in the same tier as cyclonedx-py and
+# cyclonedx-cargo. Go had no native generator: its chain was cdxgen (broken,
+# see CDXGEN_LOCK_FILES) falling through to syft, so syft won by default
+# rather than on merit.
+#
+# On a realistic module, measured:
+#
+#   cyclonedx-gomod   4 components, all 4 hashed  (the build closure)
+#   syft             10 components,   1 hashed    (+ test-only deps of deps,
+#                                                  go.mod itself, main module)
+#
+# Syft over-reports by reading go.sum, which lists every module ever needed
+# including test dependencies that are never compiled in. That cannot be
+# corrected downstream; the licences gomod omits can be, by enrichment.
+#
+# It needs actual Go source, not just the lock files -- given only go.mod and
+# go.sum it panics with "index out of range [0] with length 0" -- so the
+# generator declines that case and syft keeps it.
+[tool.cyclonedx-gomod]
+version = "1.10.0"
+stage = "runtime"
+purl = "pkg:golang/github.com/CycloneDX/cyclonedx-gomod@v{version}"
+github_repo = "CycloneDX/cyclonedx-gomod"
+kind = "tar.gz"
+member = "cyclonedx-gomod"
+
+[tool.cyclonedx-gomod.assets.amd64]
+url = "https://github.com/CycloneDX/cyclonedx-gomod/releases/download/v1.10.0/cyclonedx-gomod_1.10.0_linux_amd64.tar.gz"
+sha256 = "5cce8ae99a5181be6a610ea5ed9ca9d596937cc04dc1a8f6f6b5e462d8c9900e"
+
+[tool.cyclonedx-gomod.assets.arm64]
+url = "https://github.com/CycloneDX/cyclonedx-gomod/releases/download/v1.10.0/cyclonedx-gomod_1.10.0_linux_arm64.tar.gz"
+sha256 = "b2bebbe569c39b6bd62b7a142269a8870795020ef608483c942e4b7f51f4de6b"
