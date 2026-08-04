@@ -1,328 +1,83 @@
-ThisBuild / tlBaseVersion := "2.12"
+import Dependencies._
 
-val scalaCheckVersion = "1.18.0"
+// shadow sbt-scalajs' crossProject and CrossType until Scala.js 1.0.0 is released
+import sbtcrossproject.crossProject
 
-val disciplineVersion = "1.7.0"
+def v: String = "4.1.1-SNAPSHOT"
 
-val disciplineMunitVersion = "2.0.0"
+ThisBuild / version := v
+ThisBuild / scalaVersion := scala213
+ThisBuild / crossScalaVersions := Seq(scala211, scala212, scala213, scala3)
+ThisBuild / scalafmtOnCompile := true
 
-val munitVersion = "1.0.0"
-
-val PrimaryJava = JavaSpec.temurin("8")
-val LTSJava = JavaSpec.temurin("17")
-val GraalVM = JavaSpec.graalvm("17")
-
-ThisBuild / githubWorkflowJavaVersions := Seq(PrimaryJava, LTSJava, GraalVM)
-
-val Scala212 = "2.12.19"
-val Scala213 = "2.13.14"
-val Scala3 = "3.3.3"
-
-ThisBuild / crossScalaVersions := Seq(Scala212, Scala213, Scala3)
-ThisBuild / scalaVersion := Scala213
-
-ThisBuild / tlFatalWarnings := false
-
-ThisBuild / githubWorkflowAddedJobs ++= Seq(
-  WorkflowJob(
-    "scalafix",
-    "Scalafix",
-    githubWorkflowJobSetup.value.toList ::: List(
-      WorkflowStep.Run(List("cd scalafix", "sbt test"), name = Some("Scalafix tests"))
-    ),
-    javas = List(PrimaryJava),
-    scalas = Nil
-  )
-)
-
-lazy val macroSettings = Seq(
-  libraryDependencies ++= {
-    if (tlIsScala3.value)
-      Nil
-    else
-      Seq("org.scala-lang" % "scala-reflect" % scalaVersion.value % Provided)
-  }
-)
-
-lazy val cats1BincompatSettings = Seq(
-  tlMimaPreviousVersions ++= {
-    if (scalaVersion.value.startsWith("2.12")) Set("1.0.1", "1.1.0", "1.2.0", "1.3.1", "1.4.0", "1.5.0", "1.6.1")
-    else Set.empty
-  }
-)
-
-ThisBuild / tlVersionIntroduced := Map("3" -> "2.6.1")
-
-lazy val commonJvmSettings = Seq(
-  Test / fork := true,
-  Test / javaOptions := Seq("-Xmx3G"),
-  doctestGenTests := { if (tlIsScala3.value) Nil else doctestGenTests.value }
-)
-
-lazy val commonJsSettings = Seq(
-  doctestGenTests := Seq.empty,
-  tlVersionIntroduced ++= List("2.12", "2.13").map(_ -> "2.1.0").toMap
-)
-
-Global / concurrentRestrictions += Tags.limit(NativeTags.Link, 1)
-
-// Cats 2.12.0 switches to Scala Native 0.5.
-// Therefore `tlVersionIntroduced` should be reset to 2.12.0 for all scala versions in all native cross-projects.
-val commonNativeTlVersionIntroduced = List("2.12", "2.13", "3").map(_ -> "2.12.0").toMap
-
-lazy val commonNativeSettings = Seq[Setting[?]](
-  doctestGenTests := Seq.empty,
-  tlVersionIntroduced := commonNativeTlVersionIntroduced
-)
-
-lazy val disciplineDependencies = Seq(
-  libraryDependencies ++= Seq(
-    "org.typelevel" %%% "discipline-core" % disciplineVersion
-  )
-)
-
-lazy val testingDependencies = Seq(
-  libraryDependencies ++= Seq(
-    "org.scalameta" %%% "munit" % munitVersion % Test,
-    "org.typelevel" %%% "discipline-munit" % disciplineMunitVersion % Test
-  )
-)
-
-lazy val root = tlCrossRootProject
-  .aggregate(
-    kernel,
-    kernelLaws,
-    algebra,
-    algebraLaws,
-    core,
-    laws,
-    free,
-    testkit,
-    tests,
-    alleycatsCore,
-    alleycatsLaws,
-    unidocs,
-    bench,
-    binCompatTest
-  )
-
-lazy val kernel = crossProject(JSPlatform, JVMPlatform, NativePlatform)
-  .crossType(CrossType.Pure)
-  .in(file("kernel"))
-  .settings(moduleName := "cats-kernel", name := "Cats kernel")
-  .settings(testingDependencies)
-  .settings(Compile / sourceGenerators += (Compile / sourceManaged).map(KernelBoiler.gen).taskValue)
-  .jsSettings(commonJsSettings)
-  .jvmSettings(commonJvmSettings, cats1BincompatSettings)
-  .nativeSettings(commonNativeSettings)
-
-lazy val kernelLaws = crossProject(JSPlatform, JVMPlatform, NativePlatform)
-  .in(file("kernel-laws"))
-  .dependsOn(kernel)
-  .settings(moduleName := "cats-kernel-laws", name := "Cats kernel laws")
-  .settings(disciplineDependencies)
-  .settings(testingDependencies)
-  .jsSettings(commonJsSettings)
-  .jvmSettings(commonJvmSettings)
-  .nativeSettings(commonNativeSettings)
-
-lazy val algebraSettings = Seq[Setting[?]](
-  tlMimaPreviousVersions += "2.2.3",
-  tlVersionIntroduced := List("2.12", "2.13", "3").map(_ -> "2.7.0").toMap
-)
-
-lazy val algebraNativeSettings = Seq[Setting[?]](
-  // Reset to auto-populate from `tlVersionIntroduced` below.
-  tlMimaPreviousVersions := Set.empty,
-  // Should be reset to the common setting value, because `algebraSettings` re-defines it.
-  tlVersionIntroduced := commonNativeTlVersionIntroduced
-)
-
-lazy val algebra = crossProject(JSPlatform, JVMPlatform, NativePlatform)
-  .crossType(CrossType.Pure)
-  .in(file("algebra-core"))
-  .dependsOn(kernel)
-  .settings(moduleName := "algebra", name := "Cats algebra", scalacOptions -= "-Xsource:3")
-  .settings(Compile / sourceGenerators += (Compile / sourceManaged).map(AlgebraBoilerplate.gen).taskValue)
-  .jsSettings(commonJsSettings)
-  .jvmSettings(commonJvmSettings)
-  .nativeSettings(commonNativeSettings)
+lazy val root = (project in file("."))
+  .aggregate(scoptJS, scoptJVM, scoptNative)
   .settings(
-    algebraSettings,
-    libraryDependencies += "org.scalacheck" %%% "scalacheck" % scalaCheckVersion % Test,
-    testingDependencies
-  )
-  .nativeSettings(algebraNativeSettings)
-
-lazy val algebraLaws = crossProject(JSPlatform, JVMPlatform, NativePlatform)
-  .in(file("algebra-laws"))
-  .dependsOn(kernelLaws, algebra)
-  .settings(moduleName := "algebra-laws", name := "Cats algebra laws", scalacOptions -= "-Xsource:3")
-  .settings(disciplineDependencies)
-  .settings(testingDependencies)
-  .jsSettings(commonJsSettings)
-  .jvmSettings(commonJvmSettings)
-  .nativeSettings(commonNativeSettings)
-  .settings(algebraSettings)
-  .nativeSettings(algebraNativeSettings)
-
-lazy val core = crossProject(JSPlatform, JVMPlatform, NativePlatform)
-  .crossType(CrossType.Pure)
-  .dependsOn(kernel)
-  .settings(moduleName := "cats-core", name := "Cats core")
-  .settings(macroSettings)
-  .settings(Compile / sourceGenerators += (Compile / sourceManaged).map(Boilerplate.gen).taskValue)
-  .settings(
-    libraryDependencies += "org.scalacheck" %%% "scalacheck" % scalaCheckVersion % Test
-  )
-  .settings(testingDependencies)
-  .jsSettings(commonJsSettings)
-  .jvmSettings(commonJvmSettings, cats1BincompatSettings)
-  .nativeSettings(commonNativeSettings)
-
-lazy val laws = crossProject(JSPlatform, JVMPlatform, NativePlatform)
-  .crossType(CrossType.Pure)
-  .dependsOn(kernel, core, kernelLaws)
-  .settings(moduleName := "cats-laws", name := "Cats laws")
-  .settings(disciplineDependencies)
-  .settings(testingDependencies)
-  .jsSettings(commonJsSettings)
-  .jvmSettings(commonJvmSettings)
-  .nativeSettings(commonNativeSettings)
-
-lazy val free = crossProject(JSPlatform, JVMPlatform, NativePlatform)
-  .crossType(CrossType.Pure)
-  .dependsOn(core, tests % "test-internal -> test")
-  .settings(moduleName := "cats-free", name := "Cats Free")
-  .jsSettings(commonJsSettings)
-  .jvmSettings(commonJvmSettings, cats1BincompatSettings)
-  .nativeSettings(commonNativeSettings)
-
-lazy val tests = crossProject(JSPlatform, JVMPlatform, NativePlatform)
-  .dependsOn(testkit % Test)
-  .enablePlugins(NoPublishPlugin)
-  .settings(moduleName := "cats-tests")
-  .settings(testingDependencies)
-  .jsSettings(commonJsSettings)
-  .jvmSettings(commonJvmSettings)
-  .nativeSettings(commonNativeSettings)
-
-lazy val testkit = crossProject(JSPlatform, JVMPlatform, NativePlatform)
-  .crossType(CrossType.Pure)
-  .dependsOn(core, laws)
-  .enablePlugins(BuildInfoPlugin)
-  .settings(buildInfoKeys := Seq[BuildInfoKey](scalaVersion), buildInfoPackage := "cats.tests")
-  .settings(moduleName := "cats-testkit")
-  .settings(disciplineDependencies)
-  .jsSettings(commonJsSettings)
-  .jvmSettings(commonJvmSettings)
-  .nativeSettings(commonNativeSettings)
-
-lazy val alleycatsCore = crossProject(JSPlatform, JVMPlatform, NativePlatform)
-  .crossType(CrossType.Pure)
-  .in(file("alleycats-core"))
-  .dependsOn(core)
-  .settings(moduleName := "alleycats-core", name := "Alleycats core")
-  .jsSettings(commonJsSettings)
-  .jvmSettings(commonJvmSettings)
-  .nativeSettings(commonNativeSettings)
-
-lazy val alleycatsLaws = crossProject(JSPlatform, JVMPlatform, NativePlatform)
-  .in(file("alleycats-laws"))
-  .dependsOn(alleycatsCore, laws, tests % "test-internal -> test")
-  .settings(moduleName := "alleycats-laws", name := "Alleycats laws")
-  .settings(disciplineDependencies)
-  .settings(testingDependencies)
-  .jsSettings(commonJsSettings)
-  .jvmSettings(commonJvmSettings)
-  .nativeSettings(commonNativeSettings)
-
-lazy val unidocs = project
-  .enablePlugins(TypelevelUnidocPlugin)
-  .settings(
-    name := "cats-docs",
-    ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(kernel.jvm,
-                                                             kernelLaws.jvm,
-                                                             core.jvm,
-                                                             laws.jvm,
-                                                             free.jvm,
-                                                             algebra.jvm,
-                                                             algebraLaws.jvm,
-                                                             alleycatsCore.jvm,
-                                                             alleycatsLaws.jvm,
-                                                             testkit.jvm
-    ),
-    ScalaUnidoc / unidoc / scalacOptions ++= Seq("-groups", "-diagrams")
-  )
-
-// bench is currently JVM-only
-
-lazy val bench = project
-  .dependsOn(core.jvm, free.jvm, laws.jvm)
-  .settings(moduleName := "cats-bench")
-  .settings(commonJvmSettings)
-  .settings(
-    evictionErrorLevel := Level.Warn
-  )
-  .enablePlugins(NoPublishPlugin, JmhPlugin)
-
-lazy val binCompatTest = project
-  .enablePlugins(NoPublishPlugin)
-  .settings(
-    useCoursier := false, // workaround so we can use an old version in compile
-    libraryDependencies += {
-      val oldV = if (tlIsScala3.value) "2.6.1" else "2.0.0"
-      "org.typelevel" %%% "cats-core" % oldV % Provided
-    }
-  )
-  .settings(testingDependencies)
-  .dependsOn(core.jvm % Test)
-
-lazy val docs = project
-  .in(file("site"))
-  .enablePlugins(TypelevelSitePlugin)
-  .settings(
-    tlFatalWarnings := false,
-    mdocVariables += ("API_LINK_BASE" -> s"https://www.javadoc.io/doc/org.typelevel/cats-docs_2.13/${mdocVariables
-        .value("VERSION")}/"),
-    laikaConfig := {
-      import laika.config._
-
-      laikaConfig.value.withRawContent
-        .withConfigValue("version", mdocVariables.value("VERSION"))
-        .withConfigValue(
-          LinkConfig.empty
-            .addApiLinks(
-              ApiLinks(s"https://www.javadoc.io/doc/org.typelevel/cats-docs_2.13/${mdocVariables.value("VERSION")}/"),
-              ApiLinks(s"https://www.scala-lang.org/api/$Scala213/").withPackagePrefix("scala")
-            )
-        )
+    name := "scopt root",
+    publish / skip := true,
+    crossScalaVersions := Nil,
+    commands += Command.command("release") { state =>
+      "clean" ::
+        "+publishSigned" ::
+        state
     },
-    libraryDependencies ++= Seq(
-      "org.typelevel" %%% "discipline-munit" % disciplineMunitVersion
-    )
   )
-  .dependsOn(core.jvm, free.jvm, laws.jvm)
 
-ThisBuild / licenses := List(License.MIT)
-ThisBuild / startYear := Some(2015)
-ThisBuild / developers ++= List(
-  tlGitHubDev("ceedubs", "Cody Allen"),
-  tlGitHubDev("rossabaker", "Ross Baker"),
-  tlGitHubDev("armanbilge", "Arman Bilge"),
-  tlGitHubDev("johnynek", "P. Oscar Boykin"),
-  tlGitHubDev("travisbrown", "Travis Brown"),
-  tlGitHubDev("adelbertc", "Adelbert Chang"),
-  tlGitHubDev("danicheg", "Daniel Esik"),
-  tlGitHubDev("peterneyens", "Peter Neyens"),
-  tlGitHubDev("tpolecat", "Rob Norris"),
-  tlGitHubDev("non", "Erik Osheim"),
-  tlGitHubDev("LukaJCB", "LukaJCB"),
-  tlGitHubDev("mpilquist", "Michael Pilquist"),
-  tlGitHubDev("milessabin", "Miles Sabin"),
-  tlGitHubDev("djspiewak", "Daniel Spiewak"),
-  tlGitHubDev("fthomas", "Frank Thomas"),
-  tlGitHubDev("satorg", "Sergey Torgashov"),
-  tlGitHubDev("julien-truffaut", "Julien Truffaut"),
-  tlGitHubDev("kailuowang", "Kailuo Wang")
-)
+lazy val scopt = (crossProject(JSPlatform, JVMPlatform, NativePlatform) in file("."))
+  .settings(
+    name := "scopt",
+    // site
+    // to preview, preview-site
+    // to push, ghpages-push-site
+    SiteScaladoc / siteSubdirName := s"$v/api",
+    git.remoteRepo := "git@github.com:scopt/scopt.git",
+    scalacOptions ++= Seq("-language:existentials", "-deprecation"),
+    scalacOptions ++= {
+      CrossVersion.partialVersion(scalaVersion.value) match {
+        case Some((3, _)) =>
+          Seq("-source:3.0-migration")
+        case Some((2, v)) if v <= 12 =>
+          Seq("-Xfuture")
+        case _ =>
+          Nil
+      }
+    },
+    libraryDependencies += "com.eed3si9n.verify" %%% "verify" % verifyVersion % Test,
+    testFrameworks += new TestFramework("verify.runner.Framework"),
+    // libraryDependencies += "org.scalameta" %% "munit" % "0.7.20" % Test,
+    // testFrameworks += new TestFramework("munit.Framework"),
+    // scaladoc fix
+    Compile / unmanagedClasspath += Attributed.blank(new java.io.File("doesnotexist"))
+  )
+  .platformsSettings(JVMPlatform, JSPlatform)(
+    Seq(Compile, Test).map { x =>
+      (x / unmanagedSourceDirectories) += {
+        baseDirectory.value.getParentFile / s"jvm_js/src/${Defaults.nameForSrc(x.name)}/scala/"
+      }
+    },
+  )
+  .jsSettings(
+    scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.CommonJSModule)),
+    scalacOptions += {
+      val a = (LocalRootProject / baseDirectory).value.toURI.toString
+      val g = "https://raw.githubusercontent.com/scopt/scopt/" + sys.process
+        .Process("git rev-parse HEAD")
+        .lineStream_!
+        .head
+      val key = CrossVersion.partialVersion(scalaVersion.value) match {
+        case Some((3, _)) =>
+          "-scalajs-mapSourceURI"
+        case _ =>
+          "-P:scalajs:mapSourceURI"
+      }
+      s"${key}:$a->$g/"
+    },
+  )
+
+lazy val scoptJS = scopt.js
+
+lazy val scoptJVM = scopt.jvm
+  .enablePlugins(SiteScaladocPlugin)
+  .enablePlugins(GhpagesPlugin)
+
+lazy val scoptNative = scopt.native

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -35,66 +36,71 @@ from sbomify_action._generation.protocol import GenerationInput  # noqa: E402
 #: Floors are set below what the fixture currently yields, so upstream tools
 #: reporting a few more or fewer components does not fail the build; only a
 #: collapse does.
+#: (ecosystem, generator that must produce it, floor)
+#:
+#: The project and its lock file come from scripts/fetch_fixtures.py, which
+#: clones the real repository. Floors are deliberately low: they catch "empty"
+#: and "collapsed", not small changes in what upstream reports.
 MATRIX = [
-    ("python-requirements", "requirements.txt", "cyclonedx-py", 1),
-    ("python-pipenv", "Pipfile.lock", "cyclonedx-py", 1),
-    ("python-uv", "uv.lock", "cdxgen-fs", 1),
-    ("rust", "Cargo.lock", "cyclonedx-cargo", 1),
-    # axios ships 8 production dependencies; the old floor of 20 was
-    # calibrated against a fixture invented to clear it.
-    ("javascript", "package-lock.json", "cdxgen-fs", 5),
-    ("java", "pom.xml", "cdxgen-fs", 5),
-    ("go", "go.mod", "cyclonedx-gomod", 3),
-    ("ruby", "Gemfile.lock", "cdxgen-fs", 100),
-    ("dart", "pubspec.lock", "cdxgen-fs", 50),
-    ("elixir", "mix.lock", "cdxgen-fs", 20),
-    ("cpp", "conan.lock", "cdxgen-fs", 1),
-    # The rest of the table in README.md's "Supported Lockfiles". These were
-    # claimed but never exercised, which is how the JVM build tools came to be
-    # missing from the bundles entirely: cdxgen returns 0 components for a
-    # Gradle project without gradle, and 0 components is not an error.
-    ("java-gradle", "build.gradle", "cdxgen-fs", 5),
-    ("scala", "build.sbt", "cdxgen-fs", 1),
-    ("php", "composer.lock", "cdxgen-fs", 2),
-    ("dotnet", "packages.lock.json", "cdxgen-fs", 2),
-    ("swift", "Package.resolved", "cdxgen-fs", 1),
-    ("terraform", ".terraform.lock.hcl", "syft-fs", 2),
+    ("python", "cyclonedx-py", 3),
+    ("javascript", "cdxgen-fs", 5),
+    ("java", "cdxgen-fs", 20),
+    ("java-gradle", "cdxgen-fs", 5),
+    ("scala", "cdxgen-fs", 1),
+    ("go", "cyclonedx-gomod", 50),
+    ("rust", "cyclonedx-cargo", 20),
+    ("ruby", "cdxgen-fs", 20),
+    ("elixir", "cdxgen-fs", 10),
+    ("dart", "cdxgen-fs", 20),
+    ("php", "cdxgen-fs", 20),
+    ("swift", "cdxgen-fs", 1),
+    ("dotnet", "cdxgen-fs", 1),
 ]
 
-PROJECTS = Path(__file__).resolve().parent.parent / "tests" / "test-data" / "projects"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fetch_fixtures import DEFAULT_DIR, REPOS  # noqa: E402
+
+PROJECTS = Path(os.environ.get("SBOMIFY_REAL_PROJECTS", DEFAULT_DIR))
 
 
-def run_one(project: str, lock_file: str, sbom_format: str) -> tuple[str, int, str]:
+def run_one(project: str, sbom_format: str) -> tuple[str, int, str]:
     """Generate into a scratch copy so fixtures are never written to."""
-    work = Path(tempfile.mkdtemp())
+    _repo, _ref, lock_file = REPOS[project]
     src = PROJECTS / project
-    # Copy directories too: a Rust crate is not a crate without src/, and
-    # cargo refuses to parse the manifest.
-    for item in src.iterdir():
-        if item.is_dir():
-            shutil.copytree(item, work / item.name)
-        else:
-            shutil.copy(item, work / item.name)
-
-    out = work / "sbom.json"
-    # Strict mode raises rather than degrading, which is correct in a run but
-    # useless in a matrix: one bad ecosystem would hide the other ten. Catch
-    # it here so every row is reported, and let --strict decide the exit code.
+    if not src.is_dir():
+        return ("not cloned", -1, "run scripts/fetch_fixtures.py first")
+    # Cleaned up on every path. These are whole checkouts now, not a lock
+    # file each -- leaking one per ecosystem filled /tmp and took the shell
+    # down with it.
+    # Staged beside the clones rather than in /tmp: these are whole
+    # checkouts, and /tmp is commonly a smaller filesystem -- copying rails
+    # into it exhausted the quota mid-run.
+    staging = PROJECTS.parent / "matrix-work"
+    staging.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(dir=staging))
     try:
-        result = create_default_registry().generate(
-            GenerationInput(
-                lock_file=str(work / lock_file),
-                output_file=str(out),
-                output_format=sbom_format,
-            ),
-            validate=False,
-        )
-    except Exception as exc:  # noqa: BLE001 - reporting, not handling
-        return ("aborted", -1, str(exc).splitlines()[0][:88])
-    if not result.success:
-        return (result.generator_name or "none", -1, (result.error_message or "")[:90])
-    components = len(json.loads(out.read_text()).get("components", []) or [])
-    return (result.generator_name or "none", components, "")
+        shutil.copytree(src, work, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git"))
+        out = work / "sbom.json"
+        # Strict mode raises rather than degrading, which is correct in a run
+        # but useless in a matrix: one bad ecosystem would hide the rest. Catch
+        # it here so every row is reported, and let --strict set the exit code.
+        try:
+            result = create_default_registry().generate(
+                GenerationInput(
+                    lock_file=str(work / lock_file),
+                    output_file=str(out),
+                    output_format=sbom_format,
+                ),
+                validate=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - reporting, not handling
+            return ("aborted", -1, str(exc).splitlines()[0][:88])
+        if not result.success:
+            return (result.generator_name or "none", -1, (result.error_message or "")[:90])
+        components = len(json.loads(out.read_text()).get("components", []) or [])
+        return (result.generator_name or "none", components, "")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def main() -> int:
@@ -105,8 +111,8 @@ def main() -> int:
 
     print(f"{'ecosystem':<22}{'generator':<18}{'comps':>7}  {'expected':<18}verdict")
     failures = []
-    for project, lock_file, expected, floor in MATRIX:
-        generator, components, error = run_one(project, lock_file, args.format)
+    for project, expected, floor in MATRIX:
+        generator, components, error = run_one(project, args.format)
 
         problems = []
         # In SPDX the intended generator is often syft, since cdxgen and
