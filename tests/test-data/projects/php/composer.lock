@@ -1,0 +1,16 @@
+{
+  "_readme": ["This is a fixture lock file."],
+  "content-hash": "0f2b1d6c9a4e7f3b8c5d2a1e6f9b4c7d",
+  "packages": [
+    {"name": "monolog/monolog", "version": "3.7.0", "type": "library",
+     "source": {"type": "git", "url": "https://github.com/Seldaek/monolog.git", "reference": "e2392369686d420ca32df3803de28b5d6f76867d"},
+     "dist": {"type": "zip", "url": "https://api.github.com/repos/Seldaek/monolog/zipball/e2392369686d420ca32df3803de28b5d6f76867d", "reference": "e2392369686d420ca32df3803de28b5d6f76867d"},
+     "require": {"php": ">=8.1", "psr/log": "^2.0 || ^3.0"}, "license": ["MIT"]},
+    {"name": "psr/log", "version": "3.0.0", "type": "library",
+     "source": {"type": "git", "url": "https://github.com/php-fig/log.git", "reference": "fe5ea303b0887d5caefd3d431c3e61ad47037001"},
+     "dist": {"type": "zip", "url": "https://api.github.com/repos/php-fig/log/zipball/fe5ea303b0887d5caefd3d431c3e61ad47037001", "reference": "fe5ea303b0887d5caefd3d431c3e61ad47037001"},
+     "require": {"php": ">=8.0.0"}, "license": ["MIT"]}
+  ],
+  "packages-dev": [], "minimum-stability": "stable", "prefer-stable": true,
+  "platform": {"php": ">=8.1"}, "platform-dev": [], "plugin-api-version": "2.6.0"
+}

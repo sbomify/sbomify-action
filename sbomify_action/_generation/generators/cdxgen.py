@@ -15,7 +15,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import RUNTIMES, ensure_runtime, fetching_is_enabled
+from sbomify_action.runtimes import can_provide, ensure_runtime
 from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
@@ -28,6 +28,7 @@ from ..result import GenerationResult
 from ..utils import (
     CDXGEN_LOCK_FILES,
     DEFAULT_TIMEOUT,
+    ensure_dotnet_installed,
     ensure_go_installed,
     ensure_java_maven_installed,
     get_lock_file_ecosystem,
@@ -44,7 +45,7 @@ from ..utils import (
 _CDXGEN_PATH: str | None
 _CDXGEN_AVAILABLE, _CDXGEN_PATH = check_tool_available("cdxgen")
 if not _CDXGEN_AVAILABLE:
-    _CDXGEN_AVAILABLE = "cdxgen" in RUNTIMES and fetching_is_enabled()
+    _CDXGEN_AVAILABLE = can_provide("cdxgen")
 
 # Mapping from ecosystem names to cdxgen --type values
 # See: https://cyclonedx.github.io/cdxgen/#/PROJECT_TYPES
@@ -173,6 +174,11 @@ class CdxgenFsGenerator:
         # Install Go on-demand for Go ecosystem
         if ecosystem == "go":
             ensure_go_installed()
+
+        # The .NET SDK, for the same reason: cdxgen invokes `dotnet` to read
+        # packages.lock.json and fails without it.
+        if ecosystem == "dotnet":
+            ensure_dotnet_installed()
 
         cmd = [
             "cdxgen",

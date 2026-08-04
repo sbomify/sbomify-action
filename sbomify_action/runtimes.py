@@ -152,6 +152,18 @@ def fetching_is_enabled() -> bool:
     return Path("/.dockerenv").exists()
 
 
+def can_provide(tool: str) -> bool:
+    """Whether we could obtain this tool if asked.
+
+    A generator uses this to decide whether to claim an input. It has to know
+    about bundles as well as the vendor-pinned set: once the tools moved to
+    sbomify/sbom-tools, RUNTIMES held only cosign, so every generator that
+    asked `name in RUNTIMES` reported itself unavailable and the whole chain
+    quietly fell through to syft.
+    """
+    return (bundle_for(tool) is not None or tool in RUNTIMES) and fetching_is_enabled()
+
+
 def current_arch() -> str:
     """Map the host machine to the arch keys used in RUNTIMES."""
     machine = platform.machine().lower()
@@ -270,14 +282,22 @@ class _Progress:
 #: workflow -- or from a fork, or a branch that is not master -- fails.
 _ATTESTATION_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 _ATTESTATION_IDENTITY = (
-    r"^https://github\.com/sbomify/sbomify-action/\.github/workflows/build-tools\.yml@refs/(heads/master|tags/.+)$"
+    r"^https://github\.com/sbomify/sbom-tools/\.github/workflows/build\.yml@refs/(heads/master|tags/.+)$"
 )
-#: cosign v3 validates --type against the predicate type whenever
-#: --new-bundle-format is active, which is the default in v3.
+#: cosign v3 validates --type against the predicate type.
 #: actions/attest-build-provenance emits https://slsa.dev/provenance/v1,
-#: which cosign aliases to "slsaprovenance1".
+#: which cosign aliases to "slsaprovenance1". The --new-bundle-format flag
+#: that used to accompany this is deprecated in v3 -- it is the only format
+#: now -- and passing it just prints a deprecation warning on every fetch.
 _ATTESTATION_PREDICATE_TYPE = "slsaprovenance1"
 _ATTESTATION_TIMEOUT = 60
+#: cosign refuses a blob larger than 128MiB by default and fails with
+#: "size of layer (…) exceeded the limit". Our bundles are legitimately
+#: bigger than that -- the jvm bundle carries a JDK, Maven, Gradle and sbt --
+#: so the default rejects genuine artifacts. Raised rather than removed: the
+#: limit exists to stop an attacker feeding a verifier something enormous,
+#: and 1GiB is comfortably above the largest bundle we publish.
+_ATTESTATION_MAX_BLOB = str(1024 * 1024 * 1024)
 
 
 def _verify_attestation(artifact: Path, bundle_url: str, label: str) -> None:
@@ -313,7 +333,6 @@ def _verify_attestation(artifact: Path, bundle_url: str, label: str) -> None:
             "verify-blob-attestation",
             "--bundle",
             str(bundle),
-            "--new-bundle-format",
             "--type",
             _ATTESTATION_PREDICATE_TYPE,
             "--certificate-identity-regexp",
@@ -323,7 +342,10 @@ def _verify_attestation(artifact: Path, bundle_url: str, label: str) -> None:
             str(artifact),
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=_ATTESTATION_TIMEOUT)  # noqa: S603
+            environment = {**os.environ, "COSIGN_MAX_ATTACHMENT_SIZE": _ATTESTATION_MAX_BLOB}
+            result = subprocess.run(  # noqa: S603
+                cmd, capture_output=True, text=True, timeout=_ATTESTATION_TIMEOUT, env=environment
+            )
         except subprocess.TimeoutExpired as exc:
             raise SBOMGenerationError(f"Attestation verification timed out for {label}") from exc
         except OSError as exc:
@@ -335,7 +357,7 @@ def _verify_attestation(artifact: Path, bundle_url: str, label: str) -> None:
             f"Attestation verification failed for {label}: cosign exited {result.returncode}: {detail}. "
             "Refusing to use a binary that does not prove it came from our build."
         )
-    logger.info(f"  ✓ attestation verified: built by build-tools.yml ({label})")
+    logger.info(f"  ✓ attestation verified: built by sbomify/sbom-tools ({label})")
 
 
 def _download_verified(asset: Asset, dest: Path) -> None:

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0": {
+      "Newtonsoft.Json": {"type": "Direct", "requested": "[13.0.3, )", "resolved": "13.0.3",
+        "contentHash": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ=="},
+      "Serilog": {"type": "Direct", "requested": "[4.0.1, )", "resolved": "4.0.1",
+        "contentHash": "Ymg9GsKQamoZ0YH+xPeg/xHVQ0f9C5sqTFDvNSjJEcbSY5j5Zh8VfjHIWiTsIVGnQBIY6Yc+ZTHFtGP7NMLTrQ=="}
+    }
+  }
+}

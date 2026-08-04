@@ -1,0 +1,5 @@
+{
+  "name": "sbomify/fixture-php",
+  "description": "Fixture: a small PHP project with real Composer dependencies.",
+  "require": { "monolog/monolog": "3.7.0", "psr/log": "3.0.0" }
+}

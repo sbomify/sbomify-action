@@ -16,7 +16,7 @@ from pathlib import Path
 from sbomify_action import format_display_name
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import RUNTIMES, ensure_runtime, fetching_is_enabled
+from sbomify_action.runtimes import can_provide, ensure_runtime
 from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
@@ -38,7 +38,7 @@ from ..utils import DEFAULT_TIMEOUT, SYFT_LOCK_FILES, run_command
 _SYFT_PATH: str | None
 _SYFT_AVAILABLE, _SYFT_PATH = check_tool_available("syft")
 if not _SYFT_AVAILABLE:
-    _SYFT_AVAILABLE = "syft" in RUNTIMES and fetching_is_enabled()
+    _SYFT_AVAILABLE = can_provide("syft")
 
 
 class SyftFsGenerator:

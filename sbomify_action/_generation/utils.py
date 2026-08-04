@@ -541,6 +541,17 @@ def ensure_java_maven_installed() -> None:
     ensure_runtime("maven")
 
 
+def ensure_dotnet_installed() -> None:
+    """Make the .NET SDK available for packages.lock.json resolution.
+
+    cdxgen shells out to `dotnet` here. Without it the run does not degrade,
+    it fails outright -- measured: cdxgen exits 1 and produces no document at
+    all for a NuGet lock file. This was claimed in README.md's supported list
+    long before anything fetched an SDK.
+    """
+    ensure_runtime("dotnet")
+
+
 def ensure_go_installed() -> None:
     """Make the Go toolchain available for Go dependency resolution.
 

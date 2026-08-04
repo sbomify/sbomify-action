@@ -47,6 +47,16 @@ MATRIX = [
     ("dart", "pubspec.lock", "cdxgen-fs", 100),
     ("elixir", "mix.lock", "cdxgen-fs", 20),
     ("cpp", "conan.lock", "cdxgen-fs", 1),
+    # The rest of the table in README.md's "Supported Lockfiles". These were
+    # claimed but never exercised, which is how the JVM build tools came to be
+    # missing from the bundles entirely: cdxgen returns 0 components for a
+    # Gradle project without gradle, and 0 components is not an error.
+    ("java-gradle", "build.gradle", "cdxgen-fs", 5),
+    ("scala", "build.sbt", "cdxgen-fs", 1),
+    ("php", "composer.lock", "cdxgen-fs", 2),
+    ("dotnet", "packages.lock.json", "cdxgen-fs", 2),
+    ("swift", "Package.resolved", "cdxgen-fs", 1),
+    ("terraform", ".terraform.lock.hcl", "syft-fs", 2),
 ]
 
 PROJECTS = Path(__file__).resolve().parent.parent / "tests" / "test-data" / "projects"

@@ -402,13 +402,18 @@ class TestAttestationVerification:
         # The identity is the point of the check: without pinning the workflow
         # and issuer, any Sigstore-signed artifact at all would pass.
         assert "--certificate-identity-regexp" in seen["cmd"]
-        assert "build-tools" in seen["cmd"][seen["cmd"].index("--certificate-identity-regexp") + 1]
+        identity = seen["cmd"][seen["cmd"].index("--certificate-identity-regexp") + 1]
+        # The tools moved repositories; verifying against the old identity
+        # would reject every bundle we now publish.
+        assert "sbom-tools" in identity and "build" in identity
         assert seen["cmd"][seen["cmd"].index("--certificate-oidc-issuer") + 1] == (
             "https://token.actions.githubusercontent.com"
         )
-        # cosign v3 rejects the bundle without both of these.
-        assert "--new-bundle-format" in seen["cmd"]
         assert seen["cmd"][seen["cmd"].index("--type") + 1] == "slsaprovenance1"
+        # --new-bundle-format is deprecated in cosign v3 -- it is the only
+        # format now -- and passing it printed a deprecation warning on every
+        # single fetch.
+        assert "--new-bundle-format" not in seen["cmd"]
 
     def test_upstream_downloads_are_digest_pinned_only(self, monkeypatch):
         """No bundle declared means no cosign call, not a silent pass."""

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import RUNTIMES, ensure_runtime, fetching_is_enabled
+from sbomify_action.runtimes import can_provide, ensure_runtime
 from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
@@ -37,7 +37,7 @@ from ..utils import has_required_manifest, run_command
 # useless without the Rust toolchain, which generate() also fetches.
 _CARGO_CYCLONEDX_AVAILABLE, _CARGO_CYCLONEDX_PATH = check_tool_available("cargo-cyclonedx")
 if not _CARGO_CYCLONEDX_AVAILABLE:
-    _CARGO_CYCLONEDX_AVAILABLE = "cargo-cyclonedx" in RUNTIMES and fetching_is_enabled()
+    _CARGO_CYCLONEDX_AVAILABLE = can_provide("cargo-cyclonedx")
 
 
 class CycloneDXCargoGenerator:
