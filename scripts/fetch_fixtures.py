@@ -58,7 +58,11 @@ REPOS: dict[str, tuple[str, str, str]] = {
     "dart": ("flutter/gallery", "main", "pubspec.lock"),
     "php": ("symfony/demo", "main", "composer.lock"),
     "swift": ("ChimeHQ/Neon", "main", "Package.resolved"),
-    "dotnet": ("HangfireIO/Hangfire", "v1.8.15", ".nuget/packages.lock.json"),
+        # A project's own lock file, not the repository-level one in .nuget/.
+    # Hangfire has one per project, which is the normal .NET layout; pointing
+    # at .nuget/ describes that directory and nothing else -- 4 components
+    # against 306 for the project itself.
+    "dotnet": ("HangfireIO/Hangfire", "v1.8.15", "samples/NetCoreSample/packages.lock.json"),
     # From sbomify/library, which tracks these same projects. Keycloak is the
     # scale test: a large multi-module Maven reactor, not a sample app.
     "keycloak": ("keycloak/keycloak", "26.4.7", "quarkus/runtime/pom.xml"),
