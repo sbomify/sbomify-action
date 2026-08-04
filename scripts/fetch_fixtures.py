@@ -50,7 +50,7 @@ REPOS: dict[str, tuple[str, str, str]] = {
     "javascript": ("axios/axios", "v1.7.7", "package-lock.json"),
     "java": ("spring-projects/spring-petclinic", "main", "pom.xml"),
     "java-gradle": ("square/okhttp", "parent-5.0.0-alpha.14", "build.gradle.kts"),
-    "scala": ("scopt/scopt", "v4.1.0", "build.sbt"),
+    "scala": ("typelevel/cats", "v2.12.0", "build.sbt"),
     "go": ("gohugoio/hugo", "v0.136.5", "go.mod"),
     "rust": ("sharkdp/fd", "v10.2.0", "Cargo.lock"),
     "ruby": ("rails/rails", "v7.2.2", "Gemfile.lock"),

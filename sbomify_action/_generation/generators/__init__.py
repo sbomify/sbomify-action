@@ -4,6 +4,8 @@ This module contains all generator plugins:
 - CycloneDXPyGenerator: Native Python CycloneDX generator (priority 10)
 - CycloneDXCargoGenerator: Native Rust/Cargo CycloneDX generator (priority 10)
 - CycloneDXGomodGenerator: Native Go CycloneDX generator (priority 10)
+- CycloneDXMavenGenerator / CycloneDXGradleGenerator / CycloneDXSbtGenerator:
+  Native JVM CycloneDX generators (priority 10)
 - CdxgenFsGenerator: cdxgen filesystem scanner (priority 20)
 - CdxgenImageGenerator: cdxgen Docker image scanner (priority 20)
 - TrivyFsGenerator: Trivy filesystem scanner (priority 30)
@@ -15,6 +17,11 @@ This module contains all generator plugins:
 from .cdxgen import CdxgenFsGenerator, CdxgenImageGenerator
 from .cyclonedx_cargo import CycloneDXCargoGenerator
 from .cyclonedx_gomod import CycloneDXGomodGenerator
+from .cyclonedx_jvm import (
+    CycloneDXGradleGenerator,
+    CycloneDXMavenGenerator,
+    CycloneDXSbtGenerator,
+)
 from .cyclonedx_py import CycloneDXPyGenerator
 from .syft import SyftFsGenerator, SyftImageGenerator
 from .trivy import TrivyFsGenerator, TrivyImageGenerator
@@ -23,6 +30,9 @@ __all__ = [
     "CycloneDXPyGenerator",
     "CycloneDXCargoGenerator",
     "CycloneDXGomodGenerator",
+    "CycloneDXGradleGenerator",
+    "CycloneDXMavenGenerator",
+    "CycloneDXSbtGenerator",
     "CdxgenFsGenerator",
     "CdxgenImageGenerator",
     "TrivyFsGenerator",
