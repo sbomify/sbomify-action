@@ -107,7 +107,7 @@ jobs:
             is_action: false
             component_name: sbomify Action - Go Stack
             staging_id: RTJwLK2FfnCf
-            prod_id: PLACEHOLDER_GO_TOOLS_PROD
+            prod_id: Z3h0vxP1WMTs
             lockfile: tools/go.mod
             sbom_format: cyclonedx
             output_file: sbomify-action-go-tools.cdx.json
@@ -116,7 +116,7 @@ jobs:
             is_action: false
             component_name: sbomify Action - Go Stack
             staging_id: RTJwLK2FfnCf
-            prod_id: PLACEHOLDER_GO_TOOLS_PROD
+            prod_id: Z3h0vxP1WMTs
             lockfile: tools/go.mod
             sbom_format: spdx
             output_file: sbomify-action-go-tools.spdx.json
@@ -125,7 +125,7 @@ jobs:
             is_action: false
             component_name: sbomify Action - Rust Stack
             staging_id: Cc1VJdfrm72W
-            prod_id: PLACEHOLDER_RUST_TOOLS_PROD
+            prod_id: lTIkL5r8HjYt
             lockfile: tools/Cargo.lock
             sbom_format: cyclonedx
             output_file: sbomify-action-rust-tools.cdx.json
@@ -134,7 +134,7 @@ jobs:
             is_action: false
             component_name: sbomify Action - Rust Stack
             staging_id: Cc1VJdfrm72W
-            prod_id: PLACEHOLDER_RUST_TOOLS_PROD
+            prod_id: lTIkL5r8HjYt
             lockfile: tools/Cargo.lock
             sbom_format: spdx
             output_file: sbomify-action-rust-tools.spdx.json
@@ -210,12 +210,7 @@ jobs:
           ADDITIONAL_PACKAGES_FILE: ${{ matrix.kind == 'container' && 'container_additional_packages.txt' || '' }}
           PRODUCT_RELEASE: '["${{ steps.cfg.outputs.product_release_id }}:${{ steps.cfg.outputs.version }}"]'
           SBOM_FORMAT: ${{ matrix.sbom_format }}
-          # Generate and validate, but do not publish, while the component id
-          # for *this environment* is still a placeholder. Keyed off the same
-          # expression as COMPONENT_ID above: the Go and Rust stacks exist on
-          # staging but not yet in production, so staging publishes and
-          # production does not.
-          UPLOAD: ${{ startsWith(steps.cfg.outputs.is_prod == 'true' && matrix.prod_id || matrix.staging_id, 'PLACEHOLDER') && 'false' || 'true' }}
+          UPLOAD: 'true'
           AUGMENT: 'true'
           ENRICH: 'true'
           OUTPUT_FILE: ${{ matrix.output_file }}
