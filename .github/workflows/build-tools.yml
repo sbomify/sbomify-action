@@ -212,3 +212,80 @@ jobs:
           gh release upload "${{ github.event.release.tag_name }}" \
             "dist/${{ matrix.tool }}-${{ matrix.slug }}" \
             "dist/${{ matrix.tool }}-${{ matrix.slug }}.sigstore.json" --clobber
+
+  # cargo-cyclonedx is a crates.io crate pinned in tools/Cargo.lock, so it is
+  # ours to build like the Go tools. It was only ever downloaded prebuilt
+  # because this workflow started out Go-only.
+  build-rust:
+    name: cargo-cyclonedx (${{ matrix.slug }})
+    needs: [prepare-rolling]
+    if: always() && (github.event_name == 'release' || needs.prepare-rolling.result == 'success')
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { slug: linux-amd64, runner: ubuntu-latest }
+          - { slug: linux-arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # Both runners are native, so there is no cross-compilation to set up:
+      # each builds for the architecture it is already running.
+      - name: Cache the cargo registry and build
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tools/target
+          key: cargo-${{ matrix.slug }}-${{ hashFiles('tools/Cargo.lock') }}
+          restore-keys: cargo-${{ matrix.slug }}-
+
+      - name: Build
+        working-directory: tools
+        run: |
+          mkdir -p ../dist
+          # --locked: build exactly what Cargo.lock pins, and fail rather
+          # than silently resolving something newer.
+          cargo install cargo-cyclonedx --locked --root ./out
+          cp out/bin/cargo-cyclonedx "../dist/cargo-cyclonedx-${{ matrix.slug }}"
+
+      - name: Smoke test
+        run: |
+          BIN="dist/cargo-cyclonedx-${{ matrix.slug }}"
+          test -x "$BIN"
+          "$BIN" --version
+          sha256sum "$BIN" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v2.2.3
+        with:
+          subject-path: dist/cargo-cyclonedx-${{ matrix.slug }}
+
+      - name: Stage the attestation bundle
+        run: cp "${{ steps.attest.outputs.bundle-path }}" "dist/cargo-cyclonedx-${{ matrix.slug }}.sigstore.json"
+
+      - name: Publish to the rolling pre-release
+        if: github.event_name != 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: tools-rolling
+        run: |
+          gh release upload "$TAG" \
+            "dist/cargo-cyclonedx-${{ matrix.slug }}" \
+            "dist/cargo-cyclonedx-${{ matrix.slug }}.sigstore.json" --clobber
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "dist/cargo-cyclonedx-${{ matrix.slug }}" \
+            "dist/cargo-cyclonedx-${{ matrix.slug }}.sigstore.json" --clobber
