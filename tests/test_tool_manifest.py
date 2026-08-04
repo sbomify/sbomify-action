@@ -179,11 +179,20 @@ def test_every_runtime_tool_can_actually_be_fetched():
         assert set(tool.assets) == {"amd64", "arm64"}, f"{name} is missing an architecture"
         for arch, arch_assets in tool.assets.items():
             for asset in arch_assets:
+                if tool.built:
+                    assert asset.attestation, f"{name}/{arch} is ours but has no attestation to verify it"
+                    continue
                 expected = {"sha256": 64, "sha512": 128}[asset.algorithm]
                 assert re.fullmatch(rf"[0-9a-f]{{{expected}}}", asset.digest), (
                     f"{name}/{arch} {asset.algorithm} digest is malformed"
                 )
             assert asset.url.startswith("https://"), f"{name}/{arch} must be fetched over https"
+            if tool.built:
+                # Our own URLs carry the release, not the version --
+                # .../tools-rolling/syft-linux-amd64 -- because the release is
+                # what says which build these bytes came from. The check below
+                # is about vendor URLs drifting from the pinned version.
+                continue
             # Vendors spell the same version differently in a URL: Adoptium
             # uses both 21.0.12%2B8 and 21.0.12_8 for 21.0.12+8. Accept any
             # encoding of the separator, but insist the version is in there --

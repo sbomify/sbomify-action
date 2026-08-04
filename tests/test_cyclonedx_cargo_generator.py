@@ -138,6 +138,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
                 f"Should not support version {version}",
             )
 
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
     def test_generate_success(self, mock_run):
         """Test successful generation against a real directory.
@@ -166,6 +167,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
         self.assertEqual(result.spec_version, CARGO_CYCLONEDX_DEFAULT)
         self.assertEqual(result.generator_name, "cyclonedx-cargo")
 
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
     def test_generate_failure(self, mock_run):
         """Test generation failure."""
@@ -318,6 +320,7 @@ class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):
 
         return _run
 
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
     def test_command_shape(self, mock_run):
         mock_run.side_effect = self._fake_run()
@@ -340,6 +343,7 @@ class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):
         self.assertNotIn("--output-file", cmd)
         self.assertTrue(result.success)
 
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
     def test_runs_in_project_directory(self, mock_run):
         mock_run.side_effect = self._fake_run()
@@ -351,6 +355,7 @@ class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):
         )
         self.assertEqual(mock_run.call_args[1]["cwd"], str(self.project.resolve()))
 
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
     def test_output_is_moved_to_requested_path(self, mock_run):
         """The tool writes into the project; the caller asked for somewhere else."""
@@ -366,6 +371,7 @@ class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):
         self.assertTrue(self.output.exists(), "output should exist at the requested path")
         self.assertIn("CycloneDX", self.output.read_text())
 
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
     def test_scratch_file_is_not_left_in_the_repo(self, mock_run):
         """Generating must not litter the user's working tree."""
@@ -379,6 +385,7 @@ class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):
         leftovers = [p.name for p in self.project.iterdir() if p.name != "Cargo.lock"]
         self.assertEqual(leftovers, [])
 
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
     def test_workspace_defers_to_another_generator(self, mock_run):
         """A cargo workspace yields one SBOM per member crate, not one document.
@@ -410,6 +417,7 @@ class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):
         # And nothing is left scattered through the member crates.
         self.assertEqual(list(self.project.rglob(".sbomify-cargo-cyclonedx.json")), [])
 
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
     def test_scratch_file_cleaned_up_when_the_tool_fails(self, mock_run):
         def _boom(cmd, name, timeout=None, cwd=None):

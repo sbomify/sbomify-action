@@ -1,5 +1,7 @@
 """Pytest configuration and shared fixtures for all tests."""
 
+from pathlib import Path
+
 import pytest
 
 
@@ -35,3 +37,25 @@ def disable_sentry_for_tests(monkeypatch):
     this by setting TELEMETRY=true in their own fixtures or patches.
     """
     monkeypatch.setenv("TELEMETRY", "false")
+
+
+@pytest.fixture(autouse=True)
+def _no_runtime_fetching(monkeypatch, request):
+    """Stop the suite from downloading tool runtimes over the network.
+
+    Generators call ``ensure_runtime`` before shelling out, so a test that
+    stubs only the subprocess still reaches for an 83MB syft. That went
+    unnoticed because a developer machine accumulates a runtime cache and
+    quietly serves it -- the tests looked hermetic while depending on state
+    no clean runner has.
+
+    tests/test_runtimes.py exercises the fetcher itself and binds
+    ``ensure_runtime`` at import, so it is unaffected by this and needs no
+    exemption.
+    """
+    for module in ("cyclonedx_cargo", "cyclonedx_gomod", "cdxgen", "syft"):
+        monkeypatch.setattr(
+            f"sbomify_action._generation.generators.{module}.ensure_runtime",
+            lambda name: Path("/nonexistent-runtime-bin"),
+            raising=False,
+        )

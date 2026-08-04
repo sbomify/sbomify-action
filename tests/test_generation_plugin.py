@@ -1455,6 +1455,7 @@ class TestSyftImageGeneratorDockerNotFound(unittest.TestCase):
         """Set up test fixtures."""
         self.generator = SyftImageGenerator()
 
+    @patch("sbomify_action._generation.generators.syft.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.syft.run_command")
     def test_returns_clear_error_for_image_not_found(self, mock_run):
         """Test that clear error is returned when image is not found."""

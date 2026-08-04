@@ -344,7 +344,10 @@ def _download_verified(asset: Asset, dest: Path) -> None:
     held in memory, and the file is only moved into place after the digest
     matches -- a mismatched download can never be observed at ``dest``.
     """
-    digest = hashlib.new(asset.algorithm)
+    # Our own builds carry no local digest: the Sigstore bundle holds a signed
+    # one, so hashing against a number transcribed into tools.toml would be a
+    # weaker check, not a second one.
+    digest = hashlib.new(asset.algorithm) if asset.digest else None
     scratch = dest.with_suffix(dest.suffix + ".part")
     name = asset.url.rsplit("/", 1)[-1]
     # Chunked responses legitimately omit Content-Length; fall back to an
@@ -359,7 +362,8 @@ def _download_verified(asset: Asset, dest: Path) -> None:
             with scratch.open("wb") as handle:
                 for chunk in response.iter_content(chunk_size=_CHUNK):
                     if chunk:
-                        digest.update(chunk)
+                        if digest is not None:
+                            digest.update(chunk)
                         handle.write(chunk)
                         progress.advance(len(chunk))
     except requests.RequestException as exc:
@@ -369,15 +373,21 @@ def _download_verified(asset: Asset, dest: Path) -> None:
         if progress is not None:
             progress.close()
 
-    logger.info(f"  verifying {asset.algorithm} of {name}")
-    actual = digest.hexdigest()
-    if actual != asset.digest:
+    if digest is not None:
+        logger.info(f"  verifying {asset.algorithm} of {name}")
+        actual = digest.hexdigest()
+        if actual != asset.digest:
+            scratch.unlink(missing_ok=True)
+            raise SBOMGenerationError(
+                f"Checksum mismatch for {asset.url}: expected {asset.algorithm}:{asset.digest}, "
+                f"got {actual}. Refusing to use the download."
+            )
+        logger.info(f"  ✓ {asset.algorithm} matches the pin ({actual[:16]}…)")
+    elif not asset.attestation:
         scratch.unlink(missing_ok=True)
         raise SBOMGenerationError(
-            f"Checksum mismatch for {asset.url}: expected {asset.algorithm}:{asset.digest}, "
-            f"got {actual}. Refusing to use the download."
+            f"{name} has neither a pinned digest nor an attestation; refusing an unverified download."
         )
-    logger.info(f"  ✓ {asset.algorithm} matches the pin ({actual[:16]}…)")
     if asset.attestation:
         try:
             _verify_attestation(scratch, asset.attestation, name)

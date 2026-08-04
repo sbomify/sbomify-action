@@ -22,6 +22,41 @@ from pathlib import Path
 import tomllib
 
 _MANIFEST = Path(__file__).with_name("tools.toml")
+
+#: Where our own tool builds are published. Master replaces the assets on this
+#: rolling pre-release on every push; the image build stamps a release tag in
+#: its place, so a cut release fetches the binaries it was built against.
+TOOLS_RELEASE = "tools-rolling"
+_TOOLS_RELEASE_BASE = "https://github.com/sbomify/sbomify-action/releases/download"
+_ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
+
+
+def _built_assets(name: str, release: str) -> dict[str, list[ToolAsset]]:
+    """Derive where to fetch a tool we compile ourselves.
+
+    build-tools.yml emits one bare binary per architecture under a fixed name,
+    so the URL follows from the tool and the release and there is nothing to
+    restate. Repeating our own URLs and digests here is exactly the
+    duplication this manifest exists to remove.
+
+    Carrying no digest is not a weakening. The Sigstore bundle holds the
+    subject digest inside the signed statement, so verifying the bundle
+    against the file checks a digest that was *signed*, rather than one typed
+    into this file and trusted because it is written down.
+    """
+    return {
+        arch: [
+            ToolAsset(
+                url=f"{_TOOLS_RELEASE_BASE}/{release}/{name}-{slug}",
+                algorithm="none",
+                digest="",
+                attestation=f"{_TOOLS_RELEASE_BASE}/{release}/{name}-{slug}.sigstore.json",
+            )
+        ]
+        for arch, slug in _ARCH_SLUGS.items()
+    }
+
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -235,6 +270,8 @@ class Tool:
     #: Rust ships cargo and rustc as separate tarballs that unpack into one
     #: prefix, so an arch can carry more than one artifact.
     rust_dist: bool = False
+    #: Compiled by us from a lockfile rather than downloaded from a vendor.
+    built: bool = False
     assets: dict[str, list[ToolAsset]] | None = None
 
     @property
@@ -275,6 +312,7 @@ def load_tools() -> dict[str, Tool]:
     except tomllib.TOMLDecodeError as exc:
         raise ManifestError(f"Tool manifest is not valid TOML: {exc}") from exc
 
+    raw_root = raw
     tools: dict[str, Tool] = {}
     for name, body in (raw.get("tool") or {}).items():
         stage = body.get("stage")
@@ -305,6 +343,12 @@ def load_tools() -> dict[str, Tool]:
                     )
                 assets[arch] = built
 
+        is_built = bool(body.get("built", False))
+        if is_built:
+            if assets:
+                raise ManifestError(f"{name}: a tool we build must not also pin a vendor download")
+            assets = _built_assets(name, str(raw_root.get("tools_release") or TOOLS_RELEASE))
+
         if stage == STAGE_RUNTIME:
             # A runtime tool with no assets cannot be fetched, and the failure
             # would only surface on the first machine that needed it.
@@ -316,6 +360,11 @@ def load_tools() -> dict[str, Tool]:
             expected_length = {"sha256": 64, "sha512": 128}
             for arch, arch_assets in assets.items():
                 for asset in arch_assets:
+                    if is_built:
+                        # Anchored by the attestation's signed digest instead.
+                        if not asset.attestation:
+                            raise ManifestError(f"{name}/{arch}: a tool we build must have an attestation")
+                        continue
                     if len(asset.digest) != expected_length[asset.algorithm]:
                         raise ManifestError(
                             f"{name}/{arch}: {asset.algorithm} must be "
@@ -335,6 +384,7 @@ def load_tools() -> dict[str, Tool]:
             member=body.get("member"),
             strip_container=bool(body.get("strip_container", False)),
             rust_dist=bool(body.get("rust_dist", False)),
+            built=is_built,
             env=dict(body.get("env") or {}),
             # An explicit bin_subdir always wins, including an empty one:
             # cargo-cyclonedx wraps a bare binary in a versioned directory, so

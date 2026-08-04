@@ -36,16 +36,12 @@ version_from = { file = "tools/go.mod", module = "github.com/anchore/syft" }
 stage = "runtime"
 purl = "pkg:golang/github.com/anchore/syft@v{version}"
 github_repo = "anchore/syft"
-kind = "tar.gz"
-member = "syft"
-
-[tool.syft.assets.amd64]
-url = "https://github.com/anchore/syft/releases/download/v1.50.0/syft_1.50.0_linux_amd64.tar.gz"
-sha256 = "bf7b29ff57f06da30918266a0e1c2885a8f99784798d1bdb1628886aa015d788"
-
-[tool.syft.assets.arm64]
-url = "https://github.com/anchore/syft/releases/download/v1.50.0/syft_1.50.0_linux_arm64.tar.gz"
-sha256 = "887c57cbcc2d0e8c5c110a4571a3fc7150058b24d74f993ee4663516e5c8ce86"
+# Built by us from the lockfile above -- see .github/workflows/build-tools.yml.
+# No url and no digest here on purpose. The download location follows from
+# the release and the tool name, so restating it would be the duplication
+# this manifest exists to remove; and the Sigstore bundle carries a SIGNED
+# subject digest, which is a better anchor than one transcribed by hand.
+built = true
 
 [tool.cargo-cyclonedx]
 # A cargo *subcommand*: it shells out to `cargo metadata` and `rustc`, neither
@@ -55,19 +51,14 @@ version_from = { file = "tools/Cargo.lock", package = "cargo-cyclonedx" }
 stage = "runtime"
 purl = "pkg:cargo/cargo-cyclonedx@{version}"
 github_repo = "CycloneDX/cyclonedx-rust-cargo"
-kind = "tar.xz"
-strip_container = true
 # The tarball wraps the binary in cargo-cyclonedx-<triple>/, so once that is
 # stripped the binary is at the prefix root rather than under bin/.
-bin_subdir = ""
-
-[tool.cargo-cyclonedx.assets.amd64]
-url = "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.9/cargo-cyclonedx-x86_64-unknown-linux-gnu.tar.xz"
-sha256 = "fb8dbee9f182173e062a64a387b21a0badc6fab8b2abf9294973f012972bf6d8"
-
-[tool.cargo-cyclonedx.assets.arm64]
-url = "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.9/cargo-cyclonedx-aarch64-unknown-linux-gnu.tar.xz"
-sha256 = "7bf131ca5389b07a4f10c182bcf8a5ad339d64408b6f0d8f6834a0bd6120a06a"
+# Built by us from the lockfile above -- see .github/workflows/build-tools.yml.
+# No url and no digest here on purpose. The download location follows from
+# the release and the tool name, so restating it would be the duplication
+# this manifest exists to remove; and the Sigstore bundle carries a SIGNED
+# subject digest, which is a better anchor than one transcribed by hand.
+built = true
 
 [tool.uv]
 # uv is on PyPI, so our own uv.lock pins it like any other dependency.
@@ -106,17 +97,6 @@ version_from = { file = "tools/go.mod", module = "github.com/google/go-container
 stage = "runtime"
 purl = "pkg:golang/github.com/google/go-containerregistry@v{version}"
 github_repo = "google/go-containerregistry"
-kind = "tar.gz"
-member = "crane"
-
-[tool.crane.assets.amd64]
-url = "https://github.com/google/go-containerregistry/releases/download/v0.21.8/go-containerregistry_Linux_x86_64.tar.gz"
-sha256 = "59b59f68ee37aba51f5523d69ec779ee925d9be4e279f9220eca357267f2ee67"
-
-[tool.crane.assets.arm64]
-url = "https://github.com/google/go-containerregistry/releases/download/v0.21.8/go-containerregistry_Linux_arm64.tar.gz"
-sha256 = "9a528bee5f3443a9b20a25b46040ed518384b07c470ad444028fdb2dcebd4056"
-
 # ---------------------------------------------------------------------------
 # Ecosystem tooling, all fetched on demand.
 #
@@ -129,6 +109,12 @@ sha256 = "9a528bee5f3443a9b20a25b46040ed518384b07c470ad444028fdb2dcebd4056"
 # Now each is a pinned artifact fetched only by runs that need it. Nothing
 # here is in the image, so nothing here appears in the image's SBOM.
 # ---------------------------------------------------------------------------
+# Built by us from the lockfile above -- see .github/workflows/build-tools.yml.
+# No url and no digest here on purpose. The download location follows from
+# the release and the tool name, so restating it would be the duplication
+# this manifest exists to remove; and the Sigstore bundle carries a SIGNED
+# subject digest, which is a better anchor than one transcribed by hand.
+built = true
 
 [tool.cdxgen]
 # The published npm release, read from bun.lock. It was previously a
@@ -280,13 +266,10 @@ version_from = { file = "tools/go.mod", module = "github.com/CycloneDX/cyclonedx
 stage = "runtime"
 purl = "pkg:golang/github.com/CycloneDX/cyclonedx-gomod@v{version}"
 github_repo = "CycloneDX/cyclonedx-gomod"
-kind = "tar.gz"
-member = "cyclonedx-gomod"
+# Built by us from the lockfile above -- see .github/workflows/build-tools.yml.
+# No url and no digest here on purpose. The download location follows from
+# the release and the tool name, so restating it would be the duplication
+# this manifest exists to remove; and the Sigstore bundle carries a SIGNED
+# subject digest, which is a better anchor than one transcribed by hand.
+built = true
 
-[tool.cyclonedx-gomod.assets.amd64]
-url = "https://github.com/CycloneDX/cyclonedx-gomod/releases/download/v1.10.0/cyclonedx-gomod_1.10.0_linux_amd64.tar.gz"
-sha256 = "5cce8ae99a5181be6a610ea5ed9ca9d596937cc04dc1a8f6f6b5e462d8c9900e"
-
-[tool.cyclonedx-gomod.assets.arm64]
-url = "https://github.com/CycloneDX/cyclonedx-gomod/releases/download/v1.10.0/cyclonedx-gomod_1.10.0_linux_arm64.tar.gz"
-sha256 = "b2bebbe569c39b6bd62b7a142269a8870795020ef608483c942e4b7f51f4de6b"

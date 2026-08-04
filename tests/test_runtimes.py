@@ -241,9 +241,14 @@ def test_every_pinned_runtime_covers_both_architectures():
         for arch, arch_assets in spec.assets.items():
             assert arch_assets, f"{name}/{arch} has no assets"
             for asset in arch_assets:
+                assert asset.url.startswith("https://"), f"{name}/{arch} must be fetched over https"
+                if asset.attestation:
+                    # Ours: anchored by the signed digest inside the bundle,
+                    # so there is no locally transcribed one to check.
+                    assert asset.attestation.startswith("https://"), f"{name}/{arch} attestation must be https"
+                    continue
                 expected = {"sha256": 64, "sha512": 128}[asset.algorithm]
                 assert len(asset.digest) == expected, f"{name}/{arch} digest length is wrong"
-                assert asset.url.startswith("https://"), f"{name}/{arch} must be fetched over https"
 
 
 def test_current_arch_is_supported():
