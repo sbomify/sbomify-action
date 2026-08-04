@@ -138,25 +138,22 @@ def parse_dockerfile(dockerfile_path: Path) -> dict[str, str]:
 DEFAULT_TIMEOUT = 30
 
 
-def get_latest_github_release(repo: str, timeout: int = DEFAULT_TIMEOUT) -> tuple[Optional[str], Optional[str]]:
-    """Fetch the latest release version from GitHub API using curl.
+#: Suffixes that mark a pre-release. GitHub's releases/latest is meant to skip
+#: these, but it only honours the release's own prerelease flag, and Apache
+#: does not set it: maven was reported as 3.10.0-rc-1, which --update would
+#: happily have pinned.
+_PRERELEASE = re.compile(r"[-_.](rc|alpha|beta|pre|preview|dev|snapshot|m)\d*", re.IGNORECASE)
 
-    Args:
-        repo: GitHub repository in "owner/repo" format
-        timeout: Request timeout in seconds
 
-    Returns:
-        Tuple of (version, error_message). Version is None if error occurred.
-    """
-    url = f"https://api.github.com/repos/{repo}/releases/latest"
-
+def _curl_json(url: str, timeout: int) -> tuple[Optional[object], Optional[str]]:
+    """GET a JSON document, returning (parsed, error)."""
     try:
         result = subprocess.run(
             [
                 "curl",
                 "-s",
                 "-f",
-                "-L",  # Follow redirects
+                "-L",
                 "--max-time",
                 str(timeout),
                 "-H",
@@ -167,33 +164,89 @@ def get_latest_github_release(repo: str, timeout: int = DEFAULT_TIMEOUT) -> tupl
             ],
             capture_output=True,
             text=True,
-            timeout=timeout + 5,  # Give curl a bit more time than its own timeout
+            timeout=timeout + 5,
         )
-
         if result.returncode != 0:
-            # curl -f returns 22 for HTTP errors
-            if result.returncode == 22:
-                return None, "HTTP error (404 or other)"
-            return None, f"curl failed with code {result.returncode}"
-
-        data = json.loads(result.stdout)
-        tag = data.get("tag_name", "")
-        # Release tags carry project-specific prefixes: "v1.50.0" (syft),
-        # "cargo-cyclonedx-0.5.9", "bun-v1.3.14". Strip everything up to the
-        # first digit so the comparison is against a bare version -- otherwise
-        # a tool is reported permanently outdated because the prefix never
-        # matches the pinned value.
-        match = re.search(r"\d.*$", tag)
-        version = match.group(0) if match else tag
-        return version, None
+            # curl -f exits 22 on an HTTP error status.
+            return (
+                None,
+                "HTTP error (404 or other)" if result.returncode == 22 else f"curl failed ({result.returncode})",
+            )
+        return json.loads(result.stdout), None
     except subprocess.TimeoutExpired:
         return None, "Request timed out"
     except json.JSONDecodeError:
         return None, "Invalid JSON response"
     except FileNotFoundError:
         return None, "curl not found - please install curl"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return None, f"Error: {e}"
+
+
+def _strip_tag_prefix(tag: str) -> str:
+    """Reduce a release tag to a bare version.
+
+    Tags carry project-specific prefixes -- "v1.50.0" (syft),
+    "cargo-cyclonedx-0.5.9", "bun-v1.3.14". Without stripping them a tool
+    reads as permanently outdated, because the prefix never matches the pin.
+    """
+    match = re.search(r"\d.*$", tag)
+    return match.group(0) if match else tag
+
+
+def get_latest_go_release(timeout: int = DEFAULT_TIMEOUT) -> tuple[Optional[str], Optional[str]]:
+    """Latest stable Go, from go.dev rather than GitHub.
+
+    golang/go carries tags but publishes no GitHub releases, so releases/latest
+    404s and Go showed up as a permanent ERROR in the audit -- meaning nothing
+    was watching the toolchain we build with. go.dev/dl is the vendor's own
+    release index, and already the source of the digests in tools.toml.
+    """
+    data, error = _curl_json("https://go.dev/dl/?mode=json", timeout)
+    if error:
+        return None, error
+    if not isinstance(data, list):
+        return None, "Unexpected response from go.dev"
+    for release in data:
+        if release.get("stable") and (version := str(release.get("version", ""))).startswith("go"):
+            return version.removeprefix("go"), None
+    return None, "No stable release listed"
+
+
+def get_latest_github_release(repo: str, timeout: int = DEFAULT_TIMEOUT) -> tuple[Optional[str], Optional[str]]:
+    """Fetch the latest release version from GitHub API using curl.
+
+    Args:
+        repo: GitHub repository in "owner/repo" format
+        timeout: Request timeout in seconds
+
+    Returns:
+        Tuple of (version, error_message). Version is None if error occurred.
+    """
+    data, error = _curl_json(f"https://api.github.com/repos/{repo}/releases/latest", timeout)
+    if error:
+        return None, error
+    if not isinstance(data, dict):
+        return None, "Unexpected response from GitHub"
+
+    version = _strip_tag_prefix(str(data.get("tag_name", "")))
+    if not _PRERELEASE.search(version):
+        return version, None
+
+    # The repo published a pre-release without flagging it as one. Walk the
+    # release list and take the newest that is genuinely stable.
+    listing, error = _curl_json(f"https://api.github.com/repos/{repo}/releases?per_page=30", timeout)
+    if error:
+        return None, error
+    if not isinstance(listing, list):
+        return None, "Unexpected response from GitHub"
+    for release in listing:
+        if release.get("draft") or release.get("prerelease"):
+            continue
+        candidate = _strip_tag_prefix(str(release.get("tag_name", "")))
+        if candidate and not _PRERELEASE.search(candidate):
+            return candidate, None
+    return None, f"only pre-releases found (newest: {version})"
 
 
 def check_all_tools(dockerfile_path: Path, timeout: int = DEFAULT_TIMEOUT) -> list[ToolInfo]:
@@ -218,8 +271,11 @@ def check_all_tools(dockerfile_path: Path, timeout: int = DEFAULT_TIMEOUT) -> li
             current_version=tool.current_version,
         )
 
-        # Get latest version from GitHub
-        latest, error = get_latest_github_release(tool.github_repo, timeout=timeout)
+        # Go is the exception: it has no GitHub releases to read.
+        if tool.name == "go":
+            latest, error = get_latest_go_release(timeout=timeout)
+        else:
+            latest, error = get_latest_github_release(tool.github_repo, timeout=timeout)
         if error:
             tool_info.error = error
         else:

@@ -1,7 +1,7 @@
 ARG UV_VERSION=0.12.1
 
 # Define tool versions
-ARG SYFT_VERSION=1.46.0
+ARG SYFT_VERSION=1.50.0
 ARG CARGO_CYCLONEDX_VERSION=0.5.9
 
 FROM python:3.14-slim-trixie AS fetcher

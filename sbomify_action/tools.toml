@@ -68,12 +68,12 @@ github_repo = "sigstore/cosign"
 kind = "raw"
 
 [tool.cosign.assets.amd64]
-url = "https://github.com/sigstore/cosign/releases/download/v3.1.1/cosign-linux-amd64"
-sha256 = "ae1ecd212663f3693ad9edf8b1a183900c9a52d3155ba6e354237f9a0f6463fc"
+url = "https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64"
+sha256 = "f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf"
 
 [tool.cosign.assets.arm64]
-url = "https://github.com/sigstore/cosign/releases/download/v3.1.1/cosign-linux-arm64"
-sha256 = "2ec865872e331c32fd12b08dae15332d3f92c0aa029219589684a4903ca85d11"
+url = "https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-arm64"
+sha256 = "90e7ae0b5dfd60f20816b52c012addf7fc055ebcc7bea4ce81c428ca8518c302"
 
 [tool.crane]
 version_from = { file = "tools/go.mod", module = "github.com/google/go-containerregistry" }
@@ -84,12 +84,12 @@ kind = "tar.gz"
 member = "crane"
 
 [tool.crane.assets.amd64]
-url = "https://github.com/google/go-containerregistry/releases/download/v0.21.7/go-containerregistry_Linux_x86_64.tar.gz"
-sha256 = "1a57bc98207fa1c0d04bf760699099e26f8383499bfd55b99c1b919a928a7230"
+url = "https://github.com/google/go-containerregistry/releases/download/v0.21.8/go-containerregistry_Linux_x86_64.tar.gz"
+sha256 = "59b59f68ee37aba51f5523d69ec779ee925d9be4e279f9220eca357267f2ee67"
 
 [tool.crane.assets.arm64]
-url = "https://github.com/google/go-containerregistry/releases/download/v0.21.7/go-containerregistry_Linux_arm64.tar.gz"
-sha256 = "b6ee979d9411dfb05ce35ab9e156fe5de7def11a230764a7856ffa2eb971fa88"
+url = "https://github.com/google/go-containerregistry/releases/download/v0.21.8/go-containerregistry_Linux_arm64.tar.gz"
+sha256 = "9a528bee5f3443a9b20a25b46040ed518384b07c470ad444028fdb2dcebd4056"
 
 # ---------------------------------------------------------------------------
 # Ecosystem tooling, all fetched on demand.
@@ -164,12 +164,12 @@ strip_container = true
 env = { MAVEN_ARGS = "-Dmaven.repo.local={prefix}/repository" }
 
 [tool.maven.assets.amd64]
-url = "https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz"
-sha512 = "a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b"
+url = "https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz"
+sha512 = "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6"
 
 [tool.maven.assets.arm64]
-url = "https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz"
-sha512 = "a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b"
+url = "https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz"
+sha512 = "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6"
 
 [tool.go]
 # The toolchain directive in tools/go.mod. syft alone requires go 1.26.3,
