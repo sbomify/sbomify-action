@@ -201,6 +201,12 @@ class ToolAsset:
     url: str
     algorithm: str
     digest: str
+    #: Sigstore bundle proving this artifact was built by our own workflow.
+    #: Only our builds have one; upstream vendor downloads do not. Carries no
+    #: digest of its own on purpose -- its integrity is established by the
+    #: signature and certificate chain, and pinning it would break the
+    #: rolling pre-release, whose bundle changes on every build.
+    attestation: str | None = None
 
     @property
     def sha256(self) -> str | None:
@@ -289,7 +295,14 @@ def load_tools() -> dict[str, Tool]:
                         raise ManifestError(
                             f"{name}/{arch}: give exactly one of {', '.join(DIGEST_ALGORITHMS)}, got {found or 'none'}"
                         )
-                    built.append(ToolAsset(url=a["url"], algorithm=found[0], digest=a[found[0]]))
+                    built.append(
+                        ToolAsset(
+                            url=a["url"],
+                            algorithm=found[0],
+                            digest=a[found[0]],
+                            attestation=a.get("attestation"),
+                        )
+                    )
                 assets[arch] = built
 
         if stage == STAGE_RUNTIME:

@@ -156,9 +156,21 @@ jobs:
           sha256sum "$BIN" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Attest build provenance
+        id: attest
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v2.2.3
         with:
           subject-path: dist/${{ matrix.tool }}-${{ matrix.slug }}
+
+      # Publish the Sigstore bundle next to the binary it describes.
+      #
+      # GitHub keeps a copy behind its attestations API, but that is not a
+      # usable fetch path here: the bundle now comes back through a redirect
+      # to blob storage wrapped in an undocumented binary framing, and
+      # depending on an unversioned internal format to verify a supply chain
+      # is not a trade worth making. A release asset is plain, stable and
+      # public, and cosign reads it directly.
+      - name: Stage the attestation bundle
+        run: cp "${{ steps.attest.outputs.bundle-path }}" "dist/${{ matrix.tool }}-${{ matrix.slug }}.sigstore.json"
 
       # Kept for debugging a specific run. It is NOT the distribution channel:
       # see the header for why an artifact cannot serve that purpose.
@@ -167,7 +179,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: tool-${{ matrix.tool }}-${{ matrix.slug }}
-          path: dist/${{ matrix.tool }}-${{ matrix.slug }}
+          path: |
+            dist/${{ matrix.tool }}-${{ matrix.slug }}
+            dist/${{ matrix.tool }}-${{ matrix.slug }}.sigstore.json
           retention-days: 90
           if-no-files-found: error
 
@@ -184,7 +198,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: tools-rolling
         run: |
-          gh release upload "$TAG" "dist/${{ matrix.tool }}-${{ matrix.slug }}" --clobber
+          gh release upload "$TAG" \
+            "dist/${{ matrix.tool }}-${{ matrix.slug }}" \
+            "dist/${{ matrix.tool }}-${{ matrix.slug }}.sigstore.json" --clobber
 
       # Cut release: immutable, publicly fetchable for as long as the release
       # exists, which is what a released image needs.
@@ -194,4 +210,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ github.event.release.tag_name }}" \
-            "dist/${{ matrix.tool }}-${{ matrix.slug }}" --clobber
+            "dist/${{ matrix.tool }}-${{ matrix.slug }}" \
+            "dist/${{ matrix.tool }}-${{ matrix.slug }}.sigstore.json" --clobber

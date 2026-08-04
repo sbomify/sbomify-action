@@ -34,6 +34,10 @@ class _FakeResponse:
         self._payload = payload
         self.headers = {"Content-Length": str(len(payload))}
 
+    @property
+    def content(self) -> bytes:
+        return self._payload
+
     def __enter__(self):
         return self
 
@@ -329,3 +333,92 @@ def test_a_prefix_matching_the_digest_is_reused(monkeypatch):
     ensure_runtime("faketool")
 
     assert calls["n"] == 1, "a matching prefix should not be refetched"
+
+
+class TestAttestationVerification:
+    """Our own builds must prove they came from our workflow.
+
+    The digest pin proves the bytes match what we recorded. It cannot prove
+    where they came from: anyone able to edit tools.toml can change a URL and
+    its digest in the same commit. The Sigstore certificate is the part they
+    cannot forge, so a bundle that does not verify must stop the fetch.
+    """
+
+    @staticmethod
+    def _attested_spec(payload: bytes) -> RuntimeSpec:
+        spec = _raw_spec(payload, name="ourtool")
+        return RuntimeSpec(
+            name=spec.name,
+            version=spec.version,
+            kind=spec.kind,
+            assets={
+                arch: [
+                    Asset(url=a.url, algorithm=a.algorithm, digest=a.digest, attestation="https://example.invalid/b")
+                ]
+                for arch, assets in spec.assets.items()
+                for a in assets
+            },
+        )
+
+    def test_a_failing_attestation_refuses_the_binary(self, monkeypatch):
+        payload = b"bytes-that-hash-correctly"
+        _register(monkeypatch, self._attested_spec(payload))
+        _serve(monkeypatch, payload)
+        monkeypatch.setattr(runtimes.shutil, "which", lambda n: "/usr/bin/cosign" if n == "cosign" else None)
+        monkeypatch.setattr(
+            runtimes.subprocess,
+            "run",
+            lambda *a, **k: runtimes.subprocess.CompletedProcess(a[0], 1, "", "no matching signatures"),
+        )
+
+        with pytest.raises(SBOMGenerationError, match="Attestation verification failed"):
+            ensure_runtime("ourtool")
+
+        # The digest matched, so only the attestation stopped this. Nothing
+        # may be left where a later run would treat it as verified.
+        assert not list(Path(cache_root()).rglob("ourtool")), "rejected binary was left on disk"
+
+    def test_a_passing_attestation_lets_the_fetch_through(self, monkeypatch):
+        payload = b"bytes-that-hash-correctly"
+        _register(monkeypatch, self._attested_spec(payload))
+        _serve(monkeypatch, payload)
+        monkeypatch.setattr(runtimes.shutil, "which", lambda n: "/usr/bin/cosign" if n == "cosign" else None)
+        seen = {}
+
+        def fake_run(cmd, *a, **k):
+            seen["cmd"] = cmd
+            return runtimes.subprocess.CompletedProcess(cmd, 0, "Verified OK", "")
+
+        monkeypatch.setattr(runtimes.subprocess, "run", fake_run)
+
+        bin_dir = ensure_runtime("ourtool")
+
+        assert (bin_dir / "ourtool").read_bytes() == payload
+        # The identity is the point of the check: without pinning the workflow
+        # and issuer, any Sigstore-signed artifact at all would pass.
+        assert "--certificate-identity-regexp" in seen["cmd"]
+        assert "build-tools" in seen["cmd"][seen["cmd"].index("--certificate-identity-regexp") + 1]
+        assert seen["cmd"][seen["cmd"].index("--certificate-oidc-issuer") + 1] == (
+            "https://token.actions.githubusercontent.com"
+        )
+        # cosign v3 rejects the bundle without both of these.
+        assert "--new-bundle-format" in seen["cmd"]
+        assert seen["cmd"][seen["cmd"].index("--type") + 1] == "slsaprovenance1"
+
+    def test_upstream_downloads_are_digest_pinned_only(self, monkeypatch):
+        """No bundle declared means no cosign call, not a silent pass."""
+        payload = b"vendor-bytes"
+        _register(monkeypatch, _raw_spec(payload))
+        _serve(monkeypatch, payload)
+        monkeypatch.setattr(
+            runtimes.subprocess,
+            "run",
+            lambda *a, **k: pytest.fail("cosign was invoked for an artifact with no attestation"),
+        )
+
+        assert (ensure_runtime("faketool") / "faketool").read_bytes() == payload
+
+    def test_cosign_itself_carries_no_attestation(self):
+        """The bootstrap: verifying cosign would require cosign."""
+        for asset in runtimes.RUNTIMES["cosign"].assets["amd64"]:
+            assert asset.attestation is None, "cosign cannot verify its own download on a cold cache"

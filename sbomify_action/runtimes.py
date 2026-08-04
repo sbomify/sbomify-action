@@ -14,13 +14,23 @@ are required. This is the same model as a Python virtualenv, not a chroot --
 ``chroot(2)`` needs ``CAP_SYS_CHROOT``, which a non-root process does not
 have.
 
-The hash is the whole trust anchor. We deliberately do not verify
-signatures: a pinned digest proves "these are the exact bytes we tested
-against", which is a stronger claim than "the vendor signed something", and
-it needs no verifier in the base image -- verifying cosign's signature would
-otherwise require shipping cosign. The trade-off is that runtimes cannot be
-updated without a release, which is a feature for a tool whose output is a
-provenance document.
+Every artifact is pinned by digest, which proves "these are the exact bytes
+we tested against". For upstream vendor downloads that is the whole trust
+anchor: signature verification there would only establish that the vendor
+signed something, which the digest already covers more tightly.
+
+Our own builds get a second check. A digest is only ever as trustworthy as
+the file it is written in, so anyone who can edit tools.toml can change a
+URL and its digest together. They cannot mint a Sigstore certificate naming
+our workflow, so binaries published by build-tools.yml also carry an
+attestation bundle, verified here with cosign before use.
+
+cosign is the exception: verifying it would require cosign, which is not
+available on a cold cache, so it stays digest-pinned only. That is the
+bootstrap, and it is deliberate.
+
+Runtimes cannot be updated without a release either way, which is a feature
+for a tool whose output is a provenance document.
 """
 
 from __future__ import annotations
@@ -29,6 +39,7 @@ import hashlib
 import os
 import platform
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -64,6 +75,7 @@ class Asset:
     url: str
     algorithm: str
     digest: str
+    attestation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -108,7 +120,10 @@ def _load_runtimes() -> dict[str, RuntimeSpec]:
             bin_subdir=tool.bin_subdir,
             env=tool.env,
             assets={
-                arch: [Asset(url=a.url, algorithm=a.algorithm, digest=a.digest) for a in arch_assets]
+                arch: [
+                    Asset(url=a.url, algorithm=a.algorithm, digest=a.digest, attestation=a.attestation)
+                    for a in arch_assets
+                ]
                 for arch, arch_assets in tool.assets.items()
             },
         )
@@ -249,6 +264,79 @@ class _Progress:
             self._bar.stop()
 
 
+#: Who must have signed our own tool builds. The certificate binds the
+#: artifact to a workflow file and a ref, so a binary built by any other
+#: workflow -- or from a fork, or a branch that is not master -- fails.
+_ATTESTATION_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+_ATTESTATION_IDENTITY = (
+    r"^https://github\.com/sbomify/sbomify-action/\.github/workflows/build-tools\.yml@refs/(heads/master|tags/.+)$"
+)
+#: cosign v3 validates --type against the predicate type whenever
+#: --new-bundle-format is active, which is the default in v3.
+#: actions/attest-build-provenance emits https://slsa.dev/provenance/v1,
+#: which cosign aliases to "slsaprovenance1".
+_ATTESTATION_PREDICATE_TYPE = "slsaprovenance1"
+_ATTESTATION_TIMEOUT = 60
+
+
+def _verify_attestation(artifact: Path, bundle_url: str, label: str) -> None:
+    """Check that ``artifact`` was built by our own workflow.
+
+    The digest pin already proves the bytes are the ones we recorded. This
+    proves something the digest cannot: that those bytes came out of
+    build-tools.yml, from this repository, on master or a tag. A digest is
+    only ever as trustworthy as the file it is written in, so an attacker who
+    can edit tools.toml can change the URL and the digest together. They
+    cannot produce a Sigstore certificate naming our workflow.
+
+    Only our own builds carry a bundle; upstream vendor downloads have none
+    and are digest-pinned alone.
+    """
+    logger.info(f"  fetching attestation for {label}")
+    try:
+        response = requests.get(bundle_url, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT))
+        response.raise_for_status()
+        bundle_bytes = response.content
+    except requests.RequestException as exc:
+        raise SBOMGenerationError(f"Failed to download the attestation bundle for {label}: {exc}") from exc
+
+    # cosign verifies cosign, which cannot work on a cold cache, so cosign
+    # itself is digest-pinned only. Every other tool is verified with it.
+    cosign = shutil.which("cosign") or str(ensure_runtime("cosign") / "cosign")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bundle = Path(tmp) / "bundle.sigstore.json"
+        bundle.write_bytes(bundle_bytes)
+        cmd = [
+            cosign,
+            "verify-blob-attestation",
+            "--bundle",
+            str(bundle),
+            "--new-bundle-format",
+            "--type",
+            _ATTESTATION_PREDICATE_TYPE,
+            "--certificate-identity-regexp",
+            _ATTESTATION_IDENTITY,
+            "--certificate-oidc-issuer",
+            _ATTESTATION_OIDC_ISSUER,
+            str(artifact),
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=_ATTESTATION_TIMEOUT)  # noqa: S603
+        except subprocess.TimeoutExpired as exc:
+            raise SBOMGenerationError(f"Attestation verification timed out for {label}") from exc
+        except OSError as exc:
+            raise SBOMGenerationError(f"Could not run cosign to verify {label}: {exc}") from exc
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "no output"
+        raise SBOMGenerationError(
+            f"Attestation verification failed for {label}: cosign exited {result.returncode}: {detail}. "
+            "Refusing to use a binary that does not prove it came from our build."
+        )
+    logger.info(f"  ✓ attestation verified: built by build-tools.yml ({label})")
+
+
 def _download_verified(asset: Asset, dest: Path) -> None:
     """Stream an asset to dest, failing unless it hashes to the pinned digest.
 
@@ -290,6 +378,14 @@ def _download_verified(asset: Asset, dest: Path) -> None:
             f"got {actual}. Refusing to use the download."
         )
     logger.info(f"  ✓ {asset.algorithm} matches the pin ({actual[:16]}…)")
+    if asset.attestation:
+        try:
+            _verify_attestation(scratch, asset.attestation, name)
+        except Exception:
+            # Never leave an unverified artifact where a later run could
+            # mistake it for a good one.
+            scratch.unlink(missing_ok=True)
+            raise
     scratch.replace(dest)
 
 
