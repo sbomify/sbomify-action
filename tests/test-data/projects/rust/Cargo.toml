@@ -1,11 +1,94 @@
 [package]
-name = "sbomify-fixture"
-version = "0.1.0"
-edition = "2021"
-publish = false
+authors = ["David Peter <mail@david-peter.de>"]
+build = "build.rs"
+categories = ["command-line-utilities"]
+description = "fd is a simple, fast and user-friendly alternative to find."
+exclude = ["/benchmarks/*"]
+homepage = "https://github.com/sharkdp/fd"
+keywords = [
+    "search",
+    "find",
+    "file",
+    "filesystem",
+    "tool",
+]
+license = "MIT OR Apache-2.0"
+name = "fd-find"
+readme = "README.md"
+repository = "https://github.com/sharkdp/fd"
+version = "10.2.0"
+edition= "2021"
+rust-version = "1.77.2"
 
-# A couple of small, stable crates: enough to exercise a real dependency
-# graph without the fixture becoming a maintenance burden.
+[badges.appveyor]
+repository = "sharkdp/fd"
+
+[badges.travis-ci]
+repository = "sharkdp/fd"
+
+[[bin]]
+name = "fd"
+path = "src/main.rs"
+
+[build-dependencies]
+version_check = "0.9"
+
 [dependencies]
-itoa = "1"
-ryu = "1"
+aho-corasick = "1.1"
+nu-ansi-term = "0.50"
+argmax = "0.3.1"
+ignore = "0.4.22"
+regex = "1.10.5"
+regex-syntax = "0.8"
+ctrlc = "3.2"
+humantime = "2.1"
+globset = "0.4"
+anyhow = "1.0"
+etcetera = "0.8"
+normpath = "1.1.1"
+crossbeam-channel = "0.5.13"
+clap_complete = {version = "4.5.8", optional = true}
+faccess = "0.2.4"
+
+[dependencies.clap]
+version = "4.5.13"
+features = ["suggestions", "color", "wrap_help", "cargo", "derive"]
+
+[dependencies.chrono]
+version = "0.4.38"
+default-features = false
+features = ["std", "clock"]
+
+[dependencies.lscolors]
+version = "0.19"
+default-features = false
+features = ["nu-ansi-term"]
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29.0", default-features = false, features = ["signal", "user", "hostname"] }
+
+[target.'cfg(all(unix, not(target_os = "redox")))'.dependencies]
+libc = "0.2"
+
+# FIXME: Re-enable jemalloc on macOS
+# jemalloc is currently disabled on macOS due to a bug in jemalloc in combination with macOS
+# Catalina. See https://github.com/sharkdp/fd/issues/498 for details.
+[target.'cfg(all(not(windows), not(target_os = "android"), not(target_os = "macos"), not(target_os = "freebsd"), not(target_os = "openbsd"), not(all(target_env = "musl", target_pointer_width = "32")), not(target_arch = "riscv64")))'.dependencies]
+jemallocator = {version = "0.5.4", optional = true}
+
+[dev-dependencies]
+diff = "0.1"
+tempfile = "3.10"
+filetime = "0.2"
+test-case = "3.3"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+
+[features]
+use-jemalloc = ["jemallocator"]
+completions = ["clap_complete"]
+base = ["use-jemalloc"]
+default = ["use-jemalloc", "completions"]

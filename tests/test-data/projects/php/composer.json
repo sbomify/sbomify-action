@@ -1,5 +1,119 @@
 {
-  "name": "sbomify/fixture-php",
-  "description": "Fixture: a small PHP project with real Composer dependencies.",
-  "require": { "monolog/monolog": "3.7.0", "psr/log": "3.0.0" }
+    "name": "symfony/symfony-demo",
+    "license": "MIT",
+    "type": "project",
+    "description": "Symfony Demo Application",
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "require": {
+        "php": ">=8.4",
+        "ext-ctype": "*",
+        "ext-iconv": "*",
+        "ext-pdo_sqlite": "*",
+        "doctrine/dbal": "^4.0",
+        "doctrine/doctrine-bundle": "^3.0",
+        "doctrine/orm": "^3.5",
+        "league/commonmark": "^2.1",
+        "symfony/apache-pack": "^1.0",
+        "symfony/asset": "^8",
+        "symfony/asset-mapper": "^8",
+        "symfony/console": "^8",
+        "symfony/dotenv": "^8",
+        "symfony/expression-language": "^8",
+        "symfony/flex": "^2",
+        "symfony/form": "^8",
+        "symfony/framework-bundle": "^8",
+        "symfony/html-sanitizer": "^8",
+        "symfony/http-client": "^8",
+        "symfony/intl": "^8",
+        "symfony/mailer": "^8",
+        "symfony/monolog-bundle": "^4",
+        "symfony/polyfill-intl-messageformatter": "^1.12",
+        "symfony/runtime": "^8",
+        "symfony/security-bundle": "^8",
+        "symfony/stimulus-bundle": "^2.12",
+        "symfony/string": "^8",
+        "symfony/translation": "^8",
+        "symfony/twig-bundle": "^8",
+        "symfony/ux-icons": "^2.20",
+        "symfony/ux-live-component": "^2.6",
+        "symfony/validator": "^8",
+        "symfony/yaml": "^8",
+        "symfonycasts/sass-bundle": "^0.9.0",
+        "twbs/bootstrap": "^5",
+        "twig/extra-bundle": "^3.3",
+        "twig/intl-extra": "^3.3",
+        "twig/markdown-extra": "^3.3"
+    },
+    "require-dev": {
+        "dama/doctrine-test-bundle": "^8.0.2",
+        "doctrine/doctrine-fixtures-bundle": "^4.1",
+        "friendsofphp/php-cs-fixer": "^3.92",
+        "phpstan/phpstan": "^2.0",
+        "phpstan/phpstan-doctrine": "^2.0",
+        "phpstan/phpstan-symfony": "^2.0",
+        "phpunit/phpunit": "^11.5.50",
+        "symfony/browser-kit": "^8",
+        "symfony/css-selector": "^8",
+        "symfony/debug-bundle": "^8",
+        "symfony/maker-bundle": "^1.36",
+        "symfony/stopwatch": "^8",
+        "symfony/web-profiler-bundle": "^8"
+    },
+    "replace": {
+        "symfony/polyfill-ctype": "*",
+        "symfony/polyfill-iconv": "*",
+        "symfony/polyfill-php72": "*",
+        "symfony/polyfill-php73": "*",
+        "symfony/polyfill-php74": "*",
+        "symfony/polyfill-php80": "*",
+        "symfony/polyfill-php81": "*",
+        "symfony/polyfill-php82": "*",
+        "symfony/polyfill-php83": "*",
+        "symfony/polyfill-php84": "*"
+    },
+    "config": {
+        "allow-plugins": {
+            "symfony/flex": true,
+            "symfony/runtime": true
+        },
+        "platform": {
+            "php": "8.4.1"
+        },
+        "preferred-install": {
+            "*": "dist"
+        },
+        "sort-packages": true
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "App\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "auto-scripts": {
+            "-r \"@rename('.env.local.demo', '.env.local');\"": "php-script",
+            "cache:clear": "symfony-cmd",
+            "assets:install %PUBLIC_DIR%": "symfony-cmd",
+            "importmap:install": "symfony-cmd",
+            "sass:build": "symfony-cmd"
+        },
+        "post-install-cmd": [
+            "@auto-scripts"
+        ],
+        "post-update-cmd": [
+            "@auto-scripts"
+        ]
+    },
+    "extra": {
+        "symfony": {
+            "allow-contrib": true,
+            "require": "8.1.*"
+        }
+    }
 }

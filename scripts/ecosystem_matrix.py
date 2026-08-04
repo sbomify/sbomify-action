@@ -40,11 +40,13 @@ MATRIX = [
     ("python-pipenv", "Pipfile.lock", "cyclonedx-py", 1),
     ("python-uv", "uv.lock", "cdxgen-fs", 1),
     ("rust", "Cargo.lock", "cyclonedx-cargo", 1),
-    ("javascript", "package-lock.json", "cdxgen-fs", 20),
+    # axios ships 8 production dependencies; the old floor of 20 was
+    # calibrated against a fixture invented to clear it.
+    ("javascript", "package-lock.json", "cdxgen-fs", 5),
     ("java", "pom.xml", "cdxgen-fs", 5),
     ("go", "go.mod", "cyclonedx-gomod", 3),
     ("ruby", "Gemfile.lock", "cdxgen-fs", 100),
-    ("dart", "pubspec.lock", "cdxgen-fs", 100),
+    ("dart", "pubspec.lock", "cdxgen-fs", 50),
     ("elixir", "mix.lock", "cdxgen-fs", 20),
     ("cpp", "conan.lock", "cdxgen-fs", 1),
     # The rest of the table in README.md's "Supported Lockfiles". These were

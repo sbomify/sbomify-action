@@ -1,22 +1,29 @@
-// A small application for the ecosystem matrix: real dependencies with a
-// transitive closure of their own, and actual source, which is what a real
-// Go repository looks like.
+// Copyright 2024 The Hugo Authors. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
-	"fmt"
+	"log"
+	"os"
 
-	"github.com/google/uuid"
-	"github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v3"
+	"github.com/gohugoio/hugo/commands"
 )
 
-type config struct {
-	Name string `yaml:"name"`
-}
-
 func main() {
-	var c config
-	_ = yaml.Unmarshal([]byte("name: sbomify"), &c)
-	logrus.WithField("id", uuid.New().String()).Info(fmt.Sprintf("hello %s", c.Name))
+	log.SetFlags(0)
+	err := commands.Execute(os.Args[1:])
+	if err != nil {
+		log.Fatalf("Error: %s", err)
+	}
 }

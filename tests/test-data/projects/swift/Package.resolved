@@ -1,11 +1,33 @@
 {
+  "originHash" : "3fe726102ee165e4dd45fdc915f4761288d6269c07e2f530771fd96e6f6e7146",
   "pins" : [
-    {"identity" : "swift-collections", "kind" : "remoteSourceControl",
-     "location" : "https://github.com/apple/swift-collections.git",
-     "state" : {"revision" : "671108c96644956dddcd89dd59c203dcdb36cec7", "version" : "1.1.4"}},
-    {"identity" : "swift-log", "kind" : "remoteSourceControl",
-     "location" : "https://github.com/apple/swift-log.git",
-     "state" : {"revision" : "9cb486020ebf03bfa5b5df985387a14a98744537", "version" : "1.6.1"}}
+    {
+      "identity" : "rearrange",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ChimeHQ/Rearrange",
+      "state" : {
+        "revision" : "f1d74e1642956f0300756ad8d1d64e9034857bc3",
+        "version" : "2.0.0"
+      }
+    },
+    {
+      "identity" : "swifttreesitter",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ChimeHQ/SwiftTreeSitter",
+      "state" : {
+        "branch" : "main",
+        "revision" : "39236f7952042976ebfd472db6441ca7ab05efbd"
+      }
+    },
+    {
+      "identity" : "tree-sitter",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tree-sitter/tree-sitter",
+      "state" : {
+        "revision" : "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406",
+        "version" : "0.25.10"
+      }
+    }
   ],
-  "version" : 2
+  "version" : 3
 }
