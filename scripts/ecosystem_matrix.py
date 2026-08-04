@@ -44,9 +44,9 @@ from sbomify_action._generation.protocol import GenerationInput  # noqa: E402
 MATRIX = [
     ("python", "cyclonedx-py", 3),
     ("javascript", "cdxgen-fs", 5),
-    ("java", "cdxgen-fs", 20),
-    ("java-gradle", "cdxgen-fs", 5),
-    ("scala", "cdxgen-fs", 1),
+    ("java", "cyclonedx-maven", 20),
+    ("java-gradle", "cyclonedx-gradle", 5),
+    ("scala", "cyclonedx-sbt", 1),
     ("go", "cyclonedx-gomod", 50),
     ("rust", "cyclonedx-cargo", 20),
     ("ruby", "cdxgen-fs", 20),
@@ -97,7 +97,11 @@ def run_one(project: str, sbom_format: str) -> tuple[str, int, str]:
             return ("aborted", -1, str(exc).splitlines()[0][:88])
         if not result.success:
             return (result.generator_name or "none", -1, (result.error_message or "")[:90])
-        components = len(json.loads(out.read_text()).get("components", []) or [])
+        document = json.loads(out.read_text())
+        # SPDX names them packages, CycloneDX components. Counting only the
+        # latter made every SPDX row read zero and the whole format look
+        # broken when it was not.
+        components = len(document.get("components") or document.get("packages") or [])
         return (result.generator_name or "none", components, "")
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -105,32 +109,39 @@ def run_one(project: str, sbom_format: str) -> tuple[str, int, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--format", default="cyclonedx", choices=["cyclonedx", "spdx"])
+    parser.add_argument("--format", default="both", choices=["cyclonedx", "spdx", "both"])
     parser.add_argument("--strict", action="store_true", help="fail on a wrong generator or a low count")
     args = parser.parse_args()
 
-    print(f"{'ecosystem':<22}{'generator':<18}{'comps':>7}  {'expected':<18}verdict")
+    print(f"{'ecosystem':<22}{'format':<11}{'generator':<18}{'entries':>8}  verdict")
+    print("-" * 70)
+    formats = ["cyclonedx", "spdx"] if args.format == "both" else [args.format]
     failures = []
+    total = 0
     for project, expected, floor in MATRIX:
-        generator, components, error = run_one(project, args.format)
+        for fmt in formats:
+            total += 1
+            generator, components, error = run_one(project, fmt)
 
-        problems = []
-        # In SPDX the intended generator is often syft, since cdxgen and
-        # cyclonedx-py emit CycloneDX only; only police identity for CycloneDX.
-        if args.format == "cyclonedx" and generator != expected:
-            problems.append(f"generator is {generator}")
-        if components < floor:
-            problems.append(f"{components} < {floor}")
-        if error:
-            problems.append(error)
+            problems = []
+            # Generator identity is only policed for CycloneDX. For SPDX the
+            # right answer varies: the ecosystems with a native resolver
+            # convert their own output, and the rest fall to syft.
+            if fmt == "cyclonedx" and generator != expected:
+                problems.append(f"generator is {generator}")
+            if components < floor:
+                problems.append(f"{components} < {floor}")
+            if error:
+                problems.append(error[:60])
 
-        verdict = "ok" if not problems else "FAIL: " + "; ".join(problems)
-        if problems:
-            failures.append(project)
-        shown = "-" if components < 0 else str(components)
-        print(f"{project:<22}{generator:<18}{shown:>7}  {expected:<18}{verdict}")
+            verdict = "ok" if not problems else "FAIL: " + "; ".join(problems)
+            if problems:
+                failures.append(f"{project}/{fmt}")
+            shown = "-" if components < 0 else str(components)
+            print(f"{project:<22}{fmt:<11}{generator:<18}{shown:>8}  {verdict}")
 
-    print(f"\n{len(MATRIX) - len(failures)}/{len(MATRIX)} ok")
+    print("-" * 70)
+    print(f"{total - len(failures)}/{total} ok")
     if failures and args.strict:
         print(f"failed: {', '.join(failures)}", file=sys.stderr)
         return 1

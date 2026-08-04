@@ -68,7 +68,11 @@ CDXGEN_TYPE_MAP = {
 # Ecosystems that use parent/child project structures (e.g., Maven parent POMs, Gradle multi-project)
 # For these, we allow recursion so cdxgen can follow module references
 # The -t flag will still restrict scanning to only that ecosystem
-RECURSE_ECOSYSTEMS = {"java", "scala"}
+# .NET belongs here too: project files sit at depth and the lock file often
+# is not at the root -- Hangfire keeps its in .nuget/ -- so scanning only the
+# top directory returns an empty document and exit code 0. Measured on the
+# real repository, recursion takes it from 4 components to 306.
+RECURSE_ECOSYSTEMS = {"java", "scala", "dotnet"}
 
 
 class CdxgenFsGenerator:
