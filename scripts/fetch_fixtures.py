@@ -49,7 +49,7 @@ REPOS: dict[str, tuple[str, str, str]] = {
     "python": ("python-poetry/poetry", "1.8.4", "poetry.lock"),
     "javascript": ("axios/axios", "v1.7.7", "package-lock.json"),
     "java": ("spring-projects/spring-petclinic", "main", "pom.xml"),
-    "java-gradle": ("ReactiveX/RxJava", "v3.1.9", "build.gradle"),
+    "java-gradle": ("square/okhttp", "parent-5.0.0-alpha.14", "build.gradle.kts"),
     "scala": ("scopt/scopt", "v4.1.0", "build.sbt"),
     "go": ("gohugoio/hugo", "v0.136.5", "go.mod"),
     "rust": ("sharkdp/fd", "v10.2.0", "Cargo.lock"),
@@ -59,6 +59,12 @@ REPOS: dict[str, tuple[str, str, str]] = {
     "php": ("symfony/demo", "main", "composer.lock"),
     "swift": ("ChimeHQ/Neon", "main", "Package.resolved"),
     "dotnet": ("HangfireIO/Hangfire", "v1.8.15", ".nuget/packages.lock.json"),
+    # From sbomify/library, which tracks these same projects. Keycloak is the
+    # scale test: a large multi-module Maven reactor, not a sample app.
+    "keycloak": ("keycloak/keycloak", "26.4.7", "quarkus/runtime/pom.xml"),
+    # pnpm, which none of the other JavaScript fixtures exercise.
+    "keycloak-js": ("keycloak/keycloak", "26.4.7", "js/pnpm-lock.yaml"),
+    "go-osv": ("google/osv-scanner", "v2.3.1", "go.mod"),
 }
 
 
