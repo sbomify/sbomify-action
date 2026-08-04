@@ -142,10 +142,27 @@ def test_runtime_tools_are_absent_from_the_image_sbom():
     """
     image = set(image_package_urls())
     runtime = set(runtime_package_urls())
-    assert image and runtime
+    assert runtime, "nothing is fetched at run time, which cannot be right"
     assert image.isdisjoint(runtime)
     for tool in tools_for_stage(STAGE_RUNTIME).values():
         assert tool.package_url not in image
+
+
+def test_the_image_bakes_in_no_external_tools():
+    """Only what is Python-native ships; everything else is fetched.
+
+    syft (83MB) and cargo-cyclonedx (6.9MB) were the last two baked in, and
+    neither was ecosystem-agnostic. cargo-cyclonedx was the clearer case: it
+    is a cargo *subcommand*, and cargo is fetched on demand, so the image
+    carried a binary that could not run without a 92MB download it did not
+    have. Both are runtime-stage now, which is what keeps the image at one
+    Python runtime plus our package.
+    """
+    baked = sorted(tools_for_stage(STAGE_IMAGE))
+    assert baked == [], (
+        f"these are baked into the image: {baked}. Anything not useful to every "
+        "ecosystem belongs at runtime stage, fetched by the users who need it."
+    )
 
 
 def test_build_only_tools_are_not_claimed_as_shipped():

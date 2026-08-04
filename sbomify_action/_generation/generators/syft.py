@@ -16,6 +16,7 @@ from pathlib import Path
 from sbomify_action import format_display_name
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.runtimes import RUNTIMES, ensure_runtime, fetching_is_enabled
 from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
@@ -29,8 +30,15 @@ from ..protocol import (
 from ..result import GenerationResult
 from ..utils import DEFAULT_TIMEOUT, SYFT_LOCK_FILES, run_command
 
-# Check tool availability once at module load
+# Whatever is already on PATH wins, so a pip install keeps using the syft
+# the user installed. Failing that, syft is available if we can fetch it,
+# which is only true inside our own image. The fetch itself happens in
+# generate(), where a failure can be reported rather than silently
+# dropping the generator from the chain.
+_SYFT_PATH: str | None
 _SYFT_AVAILABLE, _SYFT_PATH = check_tool_available("syft")
+if not _SYFT_AVAILABLE:
+    _SYFT_AVAILABLE = "syft" in RUNTIMES and fetching_is_enabled()
 
 
 class SyftFsGenerator:
@@ -111,6 +119,7 @@ class SyftFsGenerator:
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using Syft scan command."""
         assert input.lock_file is not None  # guaranteed by supports()
+        ensure_runtime("syft")
         # Determine format string and version
         if input.output_format == "cyclonedx":
             version = input.spec_version or SYFT_CYCLONEDX_DEFAULT
@@ -243,6 +252,7 @@ class SyftImageGenerator:
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using Syft scan command."""
         assert input.docker_image is not None  # guaranteed by supports()
+        ensure_runtime("syft")
         # Determine format string and version
         if input.output_format == "cyclonedx":
             version = input.spec_version or SYFT_CYCLONEDX_DEFAULT

@@ -30,18 +30,44 @@
 #   assets          runtime only: per-arch url + sha256
 
 [tool.syft]
+# Fetched, not baked in. syft is 83MB and serves specific ecosystems plus
+# container images; the core image is Python-native only.
 version_from = { file = "tools/go.mod", module = "github.com/anchore/syft" }
-stage = "image"
+stage = "runtime"
 purl = "pkg:golang/github.com/anchore/syft@v{version}"
 github_repo = "anchore/syft"
-dockerfile_arg = "SYFT_VERSION"
+kind = "tar.gz"
+member = "syft"
+
+[tool.syft.assets.amd64]
+url = "https://github.com/anchore/syft/releases/download/v1.50.0/syft_1.50.0_linux_amd64.tar.gz"
+sha256 = "bf7b29ff57f06da30918266a0e1c2885a8f99784798d1bdb1628886aa015d788"
+
+[tool.syft.assets.arm64]
+url = "https://github.com/anchore/syft/releases/download/v1.50.0/syft_1.50.0_linux_arm64.tar.gz"
+sha256 = "887c57cbcc2d0e8c5c110a4571a3fc7150058b24d74f993ee4663516e5c8ce86"
 
 [tool.cargo-cyclonedx]
+# A cargo *subcommand*: it shells out to `cargo metadata` and `rustc`, neither
+# of which is in the image. Baking it in shipped 6.9MB that could not run
+# without the 92MB Rust toolchain that is already fetched on demand.
 version_from = { file = "tools/Cargo.lock", package = "cargo-cyclonedx" }
-stage = "image"
+stage = "runtime"
 purl = "pkg:cargo/cargo-cyclonedx@{version}"
 github_repo = "CycloneDX/cyclonedx-rust-cargo"
-dockerfile_arg = "CARGO_CYCLONEDX_VERSION"
+kind = "tar.xz"
+strip_container = true
+# The tarball wraps the binary in cargo-cyclonedx-<triple>/, so once that is
+# stripped the binary is at the prefix root rather than under bin/.
+bin_subdir = ""
+
+[tool.cargo-cyclonedx.assets.amd64]
+url = "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.9/cargo-cyclonedx-x86_64-unknown-linux-gnu.tar.xz"
+sha256 = "fb8dbee9f182173e062a64a387b21a0badc6fab8b2abf9294973f012972bf6d8"
+
+[tool.cargo-cyclonedx.assets.arm64]
+url = "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.9/cargo-cyclonedx-aarch64-unknown-linux-gnu.tar.xz"
+sha256 = "7bf131ca5389b07a4f10c182bcf8a5ad339d64408b6f0d8f6834a0bd6120a06a"
 
 [tool.uv]
 # uv is on PyPI, so our own uv.lock pins it like any other dependency.

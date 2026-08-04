@@ -323,11 +323,15 @@ def load_tools() -> dict[str, Tool]:
             strip_container=bool(body.get("strip_container", False)),
             rust_dist=bool(body.get("rust_dist", False)),
             env=dict(body.get("env") or {}),
-            # An explicit bin_subdir always wins. Layouts that nest the
-            # payload under a wrapper directory default to "bin"; a bare
-            # binary stays at the prefix root.
+            # An explicit bin_subdir always wins, including an empty one:
+            # cargo-cyclonedx wraps a bare binary in a versioned directory, so
+            # once that is stripped the payload sits at the prefix root. Testing
+            # truthiness here instead of presence silently rewrote "" to "bin"
+            # and put the tool on a path that does not exist.
             bin_subdir=str(
-                body.get("bin_subdir") or ("bin" if body.get("strip_container") or body.get("rust_dist") else "")
+                body["bin_subdir"]
+                if "bin_subdir" in body
+                else ("bin" if body.get("strip_container") or body.get("rust_dist") else "")
             ),
             assets=assets,
         )

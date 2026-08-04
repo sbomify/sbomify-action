@@ -15,7 +15,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import ensure_runtime
+from sbomify_action.runtimes import RUNTIMES, ensure_runtime, fetching_is_enabled
 from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
@@ -32,7 +32,12 @@ from ..utils import has_required_manifest, run_command
 # generate() time when cargo-cyclonedx isn't installed (eg pip installs that
 # don't bundle it) — a spurious ERROR + wasted attempt before the orchestrator
 # falls through to a generic generator.
+# PATH first, so a pip install keeps the user's own binary; otherwise it is
+# available only where we can fetch it. It is a cargo subcommand, so it is
+# useless without the Rust toolchain, which generate() also fetches.
 _CARGO_CYCLONEDX_AVAILABLE, _CARGO_CYCLONEDX_PATH = check_tool_available("cargo-cyclonedx")
+if not _CARGO_CYCLONEDX_AVAILABLE:
+    _CARGO_CYCLONEDX_AVAILABLE = "cargo-cyclonedx" in RUNTIMES and fetching_is_enabled()
 
 
 class CycloneDXCargoGenerator:
@@ -172,6 +177,7 @@ class CycloneDXCargoGenerator:
         # unconditionally rather than "only if cargo is missing", because
         # preferring whatever cargo is on PATH would run one toolchain while
         # the SBOM names the pinned one.
+        ensure_runtime("cargo-cyclonedx")
         ensure_runtime("rust")
 
         logger.info(f"Running cargo-cyclonedx for {input.lock_file_name} (CycloneDX {spec_version})")

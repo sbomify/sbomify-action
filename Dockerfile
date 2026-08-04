@@ -1,60 +1,13 @@
 ARG UV_VERSION=0.12.1
 
-# Define tool versions
-ARG SYFT_VERSION=1.50.0
-ARG CARGO_CYCLONEDX_VERSION=0.5.9
 
-FROM python:3.14-slim-trixie AS fetcher
-
-# Use Docker's automatic platform detection
-ARG TARGETARCH
-
-# Re-declare global ARGs needed in this stage
-ARG SYFT_VERSION
-
-WORKDIR /tmp
-
-
-RUN apt-get update && \
-    apt-get install -y curl unzip
-
-# NOTE: Trivy installation removed - temporarily disabled due to security vulnerabilities
-
-# Install Syft (uses linux_amd64 / linux_arm64 naming)
-RUN curl -sL \
-        -o syft_${SYFT_VERSION}_linux_${TARGETARCH}.tar.gz \
-        "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${TARGETARCH}.tar.gz" && \
-    curl -sL \
-        -o syft_checksum.txt \
-        "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt" && \
-    sha256sum --ignore-missing -c syft_checksum.txt && \
-    tar xvfz syft_${SYFT_VERSION}_linux_${TARGETARCH}.tar.gz && \
-    chmod +x /tmp/syft && \
-    mv syft /usr/local/bin && \
-    rm -rf /tmp/*
-
-# cargo-cyclonedx builder stage
-# Downloads pre-built binary for amd64, compiles from source for arm64
+# Rust toolchain stage
+#
+# Not for cargo-cyclonedx any more -- that is fetched at run time like every
+# other ecosystem tool. This exists solely because pipdeptree is a meson/cargo
+# package from 4.0.0 on and publishes no linux aarch64 wheels, so on arm64 uv
+# builds it from the sdist and needs rustc.
 FROM rust:1-slim AS rust-builder
-
-ARG TARGETARCH
-ARG CARGO_CYCLONEDX_VERSION
-
-# Upstream publishes a prebuilt binary for both architectures, so download
-# and verify it rather than compiling. The arm64 path used to run
-# `cargo install cargo-cyclonedx`, which built it from source on every cache
-# miss even though cargo-cyclonedx-aarch64-unknown-linux-gnu.tar.xz has been
-# published all along.
-RUN apt-get update && apt-get install -y curl xz-utils && \
-    CC_TRIPLE=$([ "${TARGETARCH}" = "amd64" ] && echo "x86_64" || echo "aarch64")-unknown-linux-gnu && \
-    BASE="https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-${CARGO_CYCLONEDX_VERSION}" && \
-    curl -fsSL -o "cargo-cyclonedx-${CC_TRIPLE}.tar.xz" "${BASE}/cargo-cyclonedx-${CC_TRIPLE}.tar.xz" && \
-    curl -fsSL -o "cargo-cyclonedx-${CC_TRIPLE}.tar.xz.sha256" "${BASE}/cargo-cyclonedx-${CC_TRIPLE}.tar.xz.sha256" && \
-    sha256sum -c "cargo-cyclonedx-${CC_TRIPLE}.tar.xz.sha256" && \
-    tar xf "cargo-cyclonedx-${CC_TRIPLE}.tar.xz" && \
-    mv "cargo-cyclonedx-${CC_TRIPLE}/cargo-cyclonedx" /usr/local/cargo/bin/ && \
-    chmod +x /usr/local/cargo/bin/cargo-cyclonedx && \
-    rm -rf /tmp/cargo-cyclonedx-*
 
 # UV binary stage
 FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:cf4eedcaa81655197f625739489effcbe71b61ceb1506f332c3facae5deceded AS uv-fetcher
@@ -72,8 +25,6 @@ RUN apt-get update && \
 # aarch64 wheels, so on arm64 uv builds it from the sdist and needs a Rust
 # toolchain. Reuse the pinned one from rust-builder rather than pulling a
 # second (and differently versioned) toolchain from apt.
-# Only bin/ is copied: on arm64 rust-builder runs `cargo install`, so
-# CARGO_HOME also holds registry/git crate caches that are useless here.
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo
 ENV PATH="/usr/local/cargo/bin:$PATH"
@@ -151,10 +102,6 @@ RUN apt-get update && \
 # Note: Java/Maven is installed on-demand at runtime when processing Java/Scala projects
 # This reduces the base image size by ~330MB for non-Java workloads
 
-# Copy tools from fetcher
-COPY --from=fetcher /usr/local/bin/syft /usr/local/bin/
-# cargo-cyclonedx: pre-built for amd64, compiled for arm64
-COPY --from=rust-builder /usr/local/cargo/bin/cargo-cyclonedx /usr/local/bin/
 COPY --from=builder /opt/venv /opt/venv
 
 ENV PATH="/opt/venv/bin:$PATH"
