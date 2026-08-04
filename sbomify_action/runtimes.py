@@ -241,6 +241,21 @@ def _reject_traversal(name: str) -> None:
         raise SBOMGenerationError(f"Refusing to extract unsafe archive entry: {name!r}")
 
 
+def _digest_line(spec: RuntimeSpec, arch: str) -> str:
+    """The marker contents a correctly-populated prefix must carry."""
+    digests = " ".join(f"{a.algorithm}:{a.digest}" for a in spec.assets[arch])
+    return f"{spec.name} {spec.version} {digests}"
+
+
+def _prefix_matches(prefix: Path, expected: str) -> bool:
+    """Whether an existing prefix was built from the digests we now expect."""
+    marker = prefix / _READY
+    try:
+        return marker.read_text().strip() == expected
+    except OSError:
+        return False
+
+
 def _materialize(spec: RuntimeSpec, arch: str, prefix: Path) -> None:
     """Populate prefix with the runtime, atomically."""
     assets = spec.assets[arch]
@@ -317,8 +332,7 @@ def _materialize(spec: RuntimeSpec, arch: str, prefix: Path) -> None:
             if spec.member:
                 (bin_dir / spec.member).chmod(0o755)
 
-        digests = " ".join(f"{a.algorithm}:{a.digest}" for a in assets)
-        (staging / _READY).write_text(f"{spec.name} {spec.version} {digests}\n")
+        (staging / _READY).write_text(_digest_line(spec, arch) + "\n")
         # Atomic when it wins; another process getting there first is fine,
         # since both prefixes were built from the same pinned digest.
         try:
@@ -370,10 +384,19 @@ def ensure_runtime(name: str) -> Path:
         prefix = cache_root() / f"{spec.name}-{spec.version}-{arch}"
         bin_dir = prefix / spec.bin_subdir if spec.bin_subdir else prefix
 
-        if not (prefix / _READY).exists():
+        expected = _digest_line(spec, arch)
+        if not _prefix_matches(prefix, expected):
+            # Either absent, or present from a different pin. The cache may be
+            # shared and long-lived (SBOMIFY_TOOL_CACHE), so a prefix left by an
+            # earlier digest must not be trusted just because it looks complete:
+            # correcting a wrong pin without bumping the version would otherwise
+            # keep serving the old bytes forever.
+            if prefix.exists():
+                logger.info(f"{spec.name} {spec.version} ({arch}) cached under a different digest; refetching")
+                shutil.rmtree(prefix, ignore_errors=True)
             logger.info(f"Fetching {spec.name} {spec.version} ({arch}) into {prefix}")
             _materialize(spec, arch, prefix)
-            logger.info(f"{spec.name} {spec.version} ready (sha256 verified)")
+            logger.info(f"{spec.name} {spec.version} ready ({expected.split()[-1].split(':')[0]} verified)")
 
         _prepend_path(bin_dir)
         for key, value in spec.env.items():

@@ -284,3 +284,47 @@ def test_fetching_can_be_opted_into_anywhere(monkeypatch):
     monkeypatch.delenv("SBOMIFY_IN_CONTAINER", raising=False)
     monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
     assert runtimes.fetching_is_enabled() is True
+
+
+def test_a_prefix_from_a_different_digest_is_refetched(monkeypatch):
+    """A cached prefix must match the digest we now expect, not merely exist.
+
+    The digest is the whole trust anchor, and it was checked on download but
+    not on reuse. Since SBOMIFY_TOOL_CACHE is meant to be shared and
+    long-lived, correcting a wrong pin without bumping the version would
+    otherwise keep serving the old bytes forever.
+    """
+    payload = b"the-bytes-we-now-expect"
+    spec = _raw_spec(payload)
+    _register(monkeypatch, spec)
+    _serve(monkeypatch, payload)
+
+    prefix = cache_root() / f"{spec.name}-{spec.version}-{runtimes.current_arch()}"
+    prefix.mkdir(parents=True)
+    (prefix / spec.name).write_bytes(b"bytes from an older pin")
+    (prefix / runtimes._READY).write_text(f"{spec.name} {spec.version} sha256:{'0' * 64}\n")
+
+    bin_dir = ensure_runtime("faketool")
+
+    assert (bin_dir / "faketool").read_bytes() == payload, "stale prefix was reused"
+
+
+def test_a_prefix_matching_the_digest_is_reused(monkeypatch):
+    """The check must not defeat caching for an unchanged pin."""
+    payload = b"stable-bytes"
+    spec = _raw_spec(payload)
+    _register(monkeypatch, spec)
+
+    calls = {"n": 0}
+
+    def counting_get(*a, **k):
+        calls["n"] += 1
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr(runtimes.requests, "get", counting_get)
+
+    ensure_runtime("faketool")
+    reset_runtime_cache()
+    ensure_runtime("faketool")
+
+    assert calls["n"] == 1, "a matching prefix should not be refetched"
