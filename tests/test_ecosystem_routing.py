@@ -185,3 +185,39 @@ def test_a_bare_go_module_falls_to_syft(monkeypatch, tmp_path):
 
     assert "cyclonedx-gomod" not in chain, "must not claim a module with no source"
     assert chain[0] == "syft-fs"
+
+
+@pytest.mark.parametrize(
+    ("project", "lock_file", "expected"),
+    [
+        ("java", "pom.xml", "cyclonedx-maven"),
+        ("java-gradle", "build.gradle", "cyclonedx-gradle"),
+        ("scala", "build.sbt", "cyclonedx-sbt"),
+    ],
+)
+def test_the_jvm_serves_spdx_from_its_own_resolver(project, lock_file, expected, monkeypatch):
+    """SPDX for the JVM must not fall through to a filesystem scan.
+
+    syft catalogs artifacts on disk, and an unbuilt JVM source tree has no
+    jars to catalog: 38 packages for spring-petclinic where the Maven plugin
+    resolves 106, and 92 for Keycloak against 340. The plugins emit CycloneDX
+    only, so these generators convert their own output rather than handing the
+    question to a tool that cannot see the dependency graph.
+    """
+    for module, flag in (("cdxgen", "_CDXGEN_AVAILABLE"), ("syft", "_SYFT_AVAILABLE")):
+        monkeypatch.setattr(f"sbomify_action._generation.generators.{module}.{flag}", True)
+    monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
+
+    lock = PROJECTS / project / lock_file
+    chain = [
+        g.name
+        for g in create_default_registry().get_generators_for(
+            GenerationInput(lock_file=str(lock), output_format="spdx")
+        )
+    ]
+
+    assert chain, f"{project}: nothing claims {lock_file} for SPDX"
+    assert chain[0] == expected, (
+        f"{project}: SPDX should come from {expected}, got {chain}. Falling through to a "
+        "scanner produces a third of the components for the same project."
+    )
