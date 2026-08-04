@@ -45,11 +45,13 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
 
     def test_supported_formats(self):
         """Test supported formats."""
-        formats = self.generator.supported_formats
-        self.assertEqual(len(formats), 1)
-        self.assertEqual(formats[0].format, "cyclonedx")
-        self.assertEqual(formats[0].versions, CARGO_CYCLONEDX_VERSIONS)
-        self.assertEqual(formats[0].default_version, CARGO_CYCLONEDX_DEFAULT)
+        formats = {f.format: f for f in self.generator.supported_formats}
+        self.assertEqual(set(formats), {"cyclonedx", "spdx"})
+        self.assertEqual(formats["cyclonedx"].versions, CARGO_CYCLONEDX_VERSIONS)
+        self.assertEqual(formats["cyclonedx"].default_version, CARGO_CYCLONEDX_DEFAULT)
+        # SPDX comes from converting the CycloneDX above, so only the one
+        # version the converter emits is offered.
+        self.assertEqual(formats["spdx"].default_version, "SPDX-2.3")
 
     def test_supports_cargo_lock(self):
         """Test support for Cargo.lock files."""
@@ -62,10 +64,17 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
             gen_input = GenerationInput(lock_file=f"/path/{lock_file}", output_format="cyclonedx")
             self.assertFalse(self.generator.supports(gen_input), f"Should not support {lock_file}")
 
-    def test_does_not_support_spdx(self):
-        """Test that SPDX format is not supported."""
+    def test_serves_spdx_by_converting_its_own_output(self):
+        """SPDX must not fall through to a filesystem scan.
+
+        cargo-cyclonedx emits CycloneDX only, so SPDX is converted from it.
+        Handing the question to syft instead describes different software:
+        it reports 122 packages for fd against cargo's 65, and the extras are
+        GitHub Actions read out of .github/workflows plus crates for other
+        target platforms -- neither in this build's closure.
+        """
         gen_input = GenerationInput(lock_file=CARGO_LOCK, output_format="spdx")
-        self.assertFalse(self.generator.supports(gen_input))
+        self.assertTrue(self.generator.supports(gen_input))
 
     def test_does_not_support_docker_images(self):
         """Test that Docker images are not supported."""

@@ -37,7 +37,7 @@ from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled
 
 from ..protocol import FormatVersion, GenerationInput
 from ..result import GenerationResult
-from ..utils import run_command
+from ..utils import convert_to_spdx, run_command
 
 #: All three plugins emit these; 1.6 is what the plugins default to.
 JVM_CYCLONEDX_VERSIONS = ("1.4", "1.5", "1.6")
@@ -74,31 +74,6 @@ GRADLE_INIT_SCRIPT = f"""initscript {{
 }}
 allprojects {{ apply plugin: org.cyclonedx.gradle.CyclonedxPlugin }}
 """
-
-
-def _convert_to_spdx(cyclonedx: Path, output: Path, cwd: Path) -> None:
-    """Turn the plugin's CycloneDX document into SPDX, losing nothing.
-
-    cyclonedx-cli ships in the jvm bundle for exactly this. Measured on
-    spring-petclinic: 106 components in, 106 packages out as SPDX-2.3, with
-    every purl preserved.
-    """
-    ensure_runtime("cyclonedx-cli")
-    run_command(
-        [
-            "cyclonedx-cli",
-            "convert",
-            "--input-file",
-            str(cyclonedx),
-            "--output-file",
-            str(output),
-            "--output-format",
-            "spdxjson",
-        ],
-        "cyclonedx-cli",
-        timeout=600,
-        cwd=str(cwd),
-    )
 
 
 def _wrapper_or(project_dir: Path, wrapper: str, fallback: str) -> str:
@@ -202,7 +177,7 @@ class _JvmGenerator:
             if wants_spdx:
                 if not produced.exists():
                     raise SBOMGenerationError(f"{self.name} produced no CycloneDX document to convert")
-                _convert_to_spdx(produced, output, project_dir)
+                convert_to_spdx(produced, output, project_dir)
                 produced.unlink(missing_ok=True)
         except SBOMGenerationError as exc:
             return GenerationResult.failure_result(

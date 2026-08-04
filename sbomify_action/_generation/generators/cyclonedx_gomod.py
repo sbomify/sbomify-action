@@ -19,11 +19,19 @@ from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled
 
 from ..protocol import FormatVersion, GenerationInput
 from ..result import GenerationResult
-from ..utils import run_command
+from ..utils import convert_to_spdx, run_command
 
 #: Versions cyclonedx-gomod can emit via --spec-version.
 GOMOD_CYCLONEDX_VERSIONS = ("1.4", "1.5", "1.6")
 GOMOD_CYCLONEDX_DEFAULT = "1.6"
+
+#: SPDX is converted from the CycloneDX above rather than scanned for. syft
+#: reports more packages for hugo -- 185 against 157 -- but the extras are
+#: actions/checkout and actions/setup-go, read out of .github/workflows and
+#: not part of the shipped software. The resolver knows the build closure; a
+#: scanner is guessing at it from files on disk.
+GOMOD_SPDX_VERSIONS = ("SPDX-2.3",)
+GOMOD_SPDX_DEFAULT = "SPDX-2.3"
 
 
 def _has_go_source(lock_file: str | None) -> bool:
@@ -74,7 +82,12 @@ class CycloneDXGomodGenerator:
                 format="cyclonedx",
                 versions=GOMOD_CYCLONEDX_VERSIONS,
                 default_version=GOMOD_CYCLONEDX_DEFAULT,
-            )
+            ),
+            FormatVersion(
+                format="spdx",
+                versions=GOMOD_SPDX_VERSIONS,
+                default_version=GOMOD_SPDX_DEFAULT,
+            ),
         ]
 
     def supports(self, input: GenerationInput) -> bool:
@@ -85,7 +98,7 @@ class CycloneDXGomodGenerator:
             # change the SBOM they get.
             return False
 
-        if not input.is_lock_file or input.output_format != "cyclonedx":
+        if not input.is_lock_file or input.output_format not in ("cyclonedx", "spdx"):
             return False
 
         if input.lock_file_name != "go.mod":
@@ -94,18 +107,24 @@ class CycloneDXGomodGenerator:
         if not _has_go_source(input.lock_file):
             return False
 
-        if input.spec_version and input.spec_version not in GOMOD_CYCLONEDX_VERSIONS:
+        allowed = GOMOD_SPDX_VERSIONS if input.output_format == "spdx" else GOMOD_CYCLONEDX_VERSIONS
+        if input.spec_version and input.spec_version not in allowed:
             return False
 
         return True
 
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate a CycloneDX SBOM using cyclonedx-gomod."""
-        spec_version = input.spec_version or GOMOD_CYCLONEDX_DEFAULT
+        wants_spdx = input.output_format == "spdx"
+        default = GOMOD_SPDX_DEFAULT if wants_spdx else GOMOD_CYCLONEDX_DEFAULT
+        spec_version = input.spec_version or default
         assert input.lock_file is not None  # guaranteed by supports()
 
         project_dir = Path(input.lock_file).parent.resolve()
-        output_file_abs = str(Path(input.output_file).resolve())
+        output = Path(input.output_file).resolve()
+        # gomod writes CycloneDX; SPDX is converted from it.
+        produced = output.with_suffix(".cyclonedx.json") if wants_spdx else output
+        output_file_abs = str(produced)
 
         try:
             ensure_runtime("cyclonedx-gomod")
@@ -123,25 +142,30 @@ class CycloneDXGomodGenerator:
             ]
             logger.info(f"Running cyclonedx-gomod for {input.lock_file_name} (CycloneDX {spec_version})")
             run_command(cmd, "cyclonedx-gomod", timeout=600, cwd=str(project_dir))
+            if wants_spdx:
+                if not produced.exists():
+                    raise SBOMGenerationError("cyclonedx-gomod produced no document to convert")
+                convert_to_spdx(produced, output, project_dir)
+                produced.unlink(missing_ok=True)
         except SBOMGenerationError as e:
             return GenerationResult.failure_result(
                 error_message=str(e),
-                sbom_format="cyclonedx",
+                sbom_format=input.output_format,
                 spec_version=spec_version,
                 generator_name=self.name,
             )
 
-        if not Path(output_file_abs).exists():
+        if not output.exists():
             return GenerationResult.failure_result(
                 error_message="cyclonedx-gomod completed but wrote no output file",
-                sbom_format="cyclonedx",
+                sbom_format=input.output_format,
                 spec_version=spec_version,
                 generator_name=self.name,
             )
 
         return GenerationResult.success_result(
-            output_file=output_file_abs,
-            sbom_format="cyclonedx",
+            output_file=str(output),
+            sbom_format=input.output_format,
             spec_version=spec_version,
             generator_name=self.name,
         )

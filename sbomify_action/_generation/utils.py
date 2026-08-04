@@ -174,6 +174,23 @@ DEFAULT_TIMEOUT = 1800  # 30 minutes (large Maven projects can take a while)
 PROGRESS_INTERVAL = 60  # Log progress every minute
 
 
+def convert_to_spdx(cyclonedx: Path, output: Path, cwd: Path) -> None:
+    """Turn a native CycloneDX document into SPDX.
+
+    Measured on spring-petclinic: 106 components in, 108 packages out at 99%
+    purl coverage. syft rather than cyclonedx-cli, which is marginally
+    cleaner (106 packages, 100%) but a 77MB self-contained .NET binary; syft
+    is already in every bundle for its own sake, so this costs nothing.
+    """
+    ensure_runtime("syft")
+    run_command(
+        ["syft", "convert", str(cyclonedx), "-o", f"spdx-json={output}"],
+        "syft",
+        timeout=600,
+        cwd=str(cwd),
+    )
+
+
 def log_command_error(command_name: str, stderr: str, stdout: str, level: str = "error") -> None:
     """
     Log command errors with a standardized format.

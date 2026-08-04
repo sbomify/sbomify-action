@@ -34,7 +34,7 @@ provides = ["cargo-cyclonedx", "cargo", "rustc", "rust"]
 purl = "pkg:github/sbomify/sbom-tools@{release}#rust"
 
 [bundle.jvm]
-provides = ["java", "maven", "gradle", "sbt", "cyclonedx-cli"]
+provides = ["java", "maven", "gradle", "sbt"]
 purl = "pkg:github/sbomify/sbom-tools@{release}#jvm"
 
 [bundle.dotnet]
