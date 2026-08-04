@@ -239,7 +239,7 @@ sha256 = "b344b81f0cd4c2246c7da8b197fe7a339d7dd02bb15cb69b2524115d9c75224c"
 # go.sum it panics with "index out of range [0] with length 0" -- so the
 # generator declines that case and syft keeps it.
 [tool.cyclonedx-gomod]
-version = "1.10.0"
+version_from = { file = "tools/go.mod", module = "github.com/CycloneDX/cyclonedx-gomod" }
 stage = "runtime"
 purl = "pkg:golang/github.com/CycloneDX/cyclonedx-gomod@v{version}"
 github_repo = "CycloneDX/cyclonedx-gomod"

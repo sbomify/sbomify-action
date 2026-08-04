@@ -40,11 +40,12 @@ def test_versions_come_from_native_lockfiles_on_master():
     if "frozen from the lockfile" in manifest:
         pytest.skip("manifest is frozen; this is a built artifact, not a source tree")
 
-    for name in ("syft", "cargo-cyclonedx", "cosign", "crane", "maven"):
+    for name in ("syft", "cargo-cyclonedx", "cosign", "crane", "maven", "cyclonedx-gomod"):
         assert f"[tool.{name}]" in manifest
     # Every tool with a native manifest must declare where its version lives:
-    # syft, cosign, crane (go.mod), cargo-cyclonedx (Cargo.lock), maven (pom.xml).
-    assert manifest.count("version_from") == 5
+    # syft, cosign, crane, cyclonedx-gomod (go.mod), cargo-cyclonedx
+    # (Cargo.lock), maven (pom.xml).
+    assert manifest.count("version_from") == 6
 
 
 def test_lockfiles_are_the_ones_dependabot_watches():

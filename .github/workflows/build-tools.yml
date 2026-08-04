@@ -1,0 +1,144 @@
+---
+# Compile the external tools we ship, from the lockfiles that pin them, and
+# publish them as our own attested artifacts.
+#
+# Previously we declared these tools in tools/go.mod and tools/Cargo.toml and
+# then downloaded somebody else's prebuilt binary anyway -- the lockfiles only
+# tracked versions. Building them here closes that gap: the binary the action
+# fetches is the one produced from the dependency graph we publish an SBOM
+# for, with build provenance attached.
+#
+# Where the artifacts land follows the release model:
+#
+#   push to master   workflow artifacts, consumed by that same run's image
+#   published tag    release assets, immutable for the life of the release
+#
+# Only tools that can be built from a lockfile are here. The JDK, Maven, the
+# Go and Rust toolchains and cdxgen are upstream distributions, not things we
+# compile, and stay pinned by digest in sbomify_action/tools.toml.
+name: Build Tools
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "tools/**"
+      - ".github/workflows/build-tools.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.tool }} (${{ matrix.slug }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      # write, not read: the release path uploads the built binary as a
+      # release asset, which read cannot do.
+      contents: write
+      id-token: write # OIDC identity for keyless attestation
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { slug: linux-amd64, runner: ubuntu-latest, goarch: amd64 }
+          - { slug: linux-arm64, runner: ubuntu-24.04-arm, goarch: arm64 }
+        tool:
+          - syft
+          - cosign
+          - crane
+          - cyclonedx-gomod
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # setup-go caches both the module cache and the build cache, keyed on
+      # the lockfile. Every tool in the matrix shares one go.sum, so a warm
+      # cache from any of them speeds up the rest: unless a dependency is
+      # bumped this is a cache hit and the compile is close to free. The
+      # workflow itself only triggers on tools/** for the same reason.
+      - name: Set up Go
+        uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
+        with:
+          go-version-file: tools/go.mod
+          cache: true
+          cache-dependency-path: tools/go.sum
+
+      - name: Resolve the pinned module path and version
+        id: pin
+        working-directory: tools
+        run: |
+          case "${{ matrix.tool }}" in
+            syft)            MOD=github.com/anchore/syft;                     PKG=$MOD/cmd/syft ;;
+            cosign)          MOD=github.com/sigstore/cosign/v3;               PKG=$MOD/cmd/cosign ;;
+            crane)           MOD=github.com/google/go-containerregistry;      PKG=$MOD/cmd/crane ;;
+            cyclonedx-gomod) MOD=github.com/CycloneDX/cyclonedx-gomod;        PKG=$MOD/cmd/cyclonedx-gomod ;;
+            *) echo "unknown tool ${{ matrix.tool }}" >&2; exit 1 ;;
+          esac
+          VERSION=$(go list -m -f '{{ .Version }}' "$MOD")
+          {
+            echo "pkg=$PKG"
+            echo "version=${VERSION#v}"
+            echo "tag=$VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        working-directory: tools
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p ../dist
+          # syft leaves its version as "[not provided]" unless stamped, and the
+          # SBOMs it produces record the generating tool's version -- an
+          # unstamped build understates its own provenance. The others read it
+          # from the module build info.
+          LDFLAGS="-s -w"
+          if [ "${{ matrix.tool }}" = "syft" ]; then
+            LDFLAGS="$LDFLAGS -X main.version=${{ steps.pin.outputs.version }}"
+            LDFLAGS="$LDFLAGS -X main.gitDescription=${{ steps.pin.outputs.tag }}"
+          fi
+          # -trimpath keeps runner paths out of the binary, so the build does
+          # not depend on where it happened.
+          go build -trimpath -ldflags="$LDFLAGS" \
+            -o "../dist/${{ matrix.tool }}-${{ matrix.slug }}" "${{ steps.pin.outputs.pkg }}"
+
+      - name: Smoke test
+        run: |
+          BIN="dist/${{ matrix.tool }}-${{ matrix.slug }}"
+          test -x "$BIN"
+          # Native arch only: an arm64 binary will not run on an amd64 runner.
+          if [ "${{ matrix.goarch }}" = "$(dpkg --print-architecture)" ]; then
+            "$BIN" version || "$BIN" --version
+          fi
+          sha256sum "$BIN" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v2.2.3
+        with:
+          subject-path: dist/${{ matrix.tool }}-${{ matrix.slug }}
+
+      # Rolling master: the artifact belongs to this run, and the image built
+      # from the same commit consumes it.
+      - name: Upload build artifact
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tool-${{ matrix.tool }}-${{ matrix.slug }}
+          path: dist/${{ matrix.tool }}-${{ matrix.slug }}
+          retention-days: 90
+          if-no-files-found: error
+
+      # Cut release: immutable, publicly fetchable for as long as the release
+      # exists, which is what a released image needs.
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "dist/${{ matrix.tool }}-${{ matrix.slug }}" --clobber
