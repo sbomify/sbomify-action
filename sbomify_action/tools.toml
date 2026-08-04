@@ -44,7 +44,8 @@ github_repo = "CycloneDX/cyclonedx-rust-cargo"
 dockerfile_arg = "CARGO_CYCLONEDX_VERSION"
 
 [tool.uv]
-version = "0.10.8"
+# uv is on PyPI, so our own uv.lock pins it like any other dependency.
+version_from = { file = "uv.lock", package = "uv" }
 stage = "build"
 purl = "pkg:pypi/uv@{version}"
 github_repo = "astral-sh/uv"
@@ -104,7 +105,10 @@ sha256 = "b6ee979d9411dfb05ce35ab9e156fe5de7def11a230764a7856ffa2eb971fa88"
 # ---------------------------------------------------------------------------
 
 [tool.cdxgen]
-version = "12.8.2"
+# The published npm release, read from bun.lock. It was previously a
+# literal here while package.json tracked a git branch, so the two
+# disagreed about what we ship.
+version_from = { file = "bun.lock", package = "@cyclonedx/cdxgen" }
 stage = "runtime"
 purl = "pkg:npm/%40cyclonedx/cdxgen@{version}"
 github_repo = "CycloneDX/cdxgen"
@@ -123,6 +127,10 @@ sha256 = "d9bac95eaceef2a0eddf16b6a22e0ef1549ad827d488f44cb65be759f42aecd2"
 # Full JDK rather than the 52MB JRE: Maven resolution would be happy with a
 # JRE, but Gradle needs javac. Only Java and Scala projects pay for it.
 [tool.java]
+# The only literal version left. Temurin is not published to Maven
+# Central (0 hits) or any other package registry a lockfile can reach,
+# so there is no native manifest to defer to and bin/check_tool_versions.py
+# is what tells us a release is available.
 version = "21.0.12+8"
 stage = "runtime"
 purl = "pkg:generic/temurin@{version}?distro=eclipse-temurin"
@@ -164,7 +172,10 @@ url = "https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven
 sha512 = "a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b"
 
 [tool.go]
-version = "1.24.13"
+# The toolchain directive in tools/go.mod. syft alone requires go 1.26.3,
+# so the 1.24.13 pinned here previously was older than our own module
+# graph would build with.
+version_from = { file = "tools/go.mod" }
 stage = "runtime"
 purl = "pkg:generic/go@{version}"
 github_repo = "golang/go"
@@ -176,12 +187,12 @@ strip_container = true
 env = { GOMODCACHE = "{prefix}/.gomodcache", GOCACHE = "{prefix}/.gocache", GOPATH = "{prefix}/.gopath" }
 
 [tool.go.assets.amd64]
-url = "https://go.dev/dl/go1.24.13.linux-amd64.tar.gz"
-sha256 = "1fc94b57134d51669c72173ad5d49fd62afb0f1db9bf3f798fd98ee423f8d730"
+url = "https://go.dev/dl/go1.26.5.linux-amd64.tar.gz"
+sha256 = "5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053"
 
 [tool.go.assets.arm64]
-url = "https://go.dev/dl/go1.24.13.linux-arm64.tar.gz"
-sha256 = "74d97be1cc3a474129590c67ebf748a96e72d9f3a2b6fef3ed3275de591d49b3"
+url = "https://go.dev/dl/go1.26.5.linux-arm64.tar.gz"
+sha256 = "fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49"
 
 # cargo-cyclonedx is a cargo subcommand: it shells out to `cargo metadata` for
 # the dependency graph and to `rustc` for the host target triple, and fails
@@ -193,7 +204,7 @@ sha256 = "74d97be1cc3a474129590c67ebf748a96e72d9f3a2b6fef3ed3275de591d49b3"
 # a further 181MB -- verified by removing lib/rustlib from a full toolchain,
 # which changes nothing, while removing the rest of lib/ breaks it.
 [tool.rust]
-version = "1.97.1"
+version_from = { file = "tools/rust-toolchain.toml" }
 stage = "runtime"
 purl = "pkg:generic/rust@{version}"
 github_repo = "rust-lang/rust"

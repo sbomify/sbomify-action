@@ -2,6 +2,8 @@ module github.com/sbomify/sbomify-action/tools
 
 go 1.26.3
 
+toolchain go1.26.5
+
 tool (
 	github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod
 	github.com/anchore/syft/cmd/syft

@@ -11,8 +11,9 @@ import re
 from pathlib import Path
 
 import pytest
+import tomllib
 
-from sbomify_action import runtimes
+from sbomify_action import runtimes, tool_manifest
 from sbomify_action.tool_manifest import (
     STAGE_BUILD,
     STAGE_IMAGE,
@@ -40,22 +41,39 @@ def test_versions_come_from_native_lockfiles_on_master():
     if "frozen from the lockfile" in manifest:
         pytest.skip("manifest is frozen; this is a built artifact, not a source tree")
 
-    for name in ("syft", "cargo-cyclonedx", "cosign", "crane", "maven", "cyclonedx-gomod"):
-        assert f"[tool.{name}]" in manifest
-    # Every tool with a native manifest must declare where its version lives:
-    # syft, cosign, crane, cyclonedx-gomod (go.mod), cargo-cyclonedx
-    # (Cargo.lock), maven (pom.xml).
-    assert manifest.count("version_from") == 6
+    body = tomllib.loads(manifest)["tool"]
+    restated = sorted(name for name, entry in body.items() if "version" in entry)
+
+    # The JDK is the sole exception, and only because there is nowhere to put
+    # it: Temurin is not published to Maven Central or any other registry a
+    # lockfile reaches. Asserting the exception list rather than a count means
+    # adding a tool with a literal version fails here, instead of quietly
+    # nudging a magic number.
+    assert restated == ["java"], (
+        f"these restate a version instead of reading a native lockfile: {restated}. "
+        "A second copy is a second thing to bump, and Dependabot cannot see it."
+    )
 
 
 def test_lockfiles_are_the_ones_dependabot_watches():
     """The manifest must point at files a Dependabot ecosystem covers."""
     root = Path(__file__).resolve().parent.parent
-    for rel in ("tools/go.mod", "tools/go.sum", "tools/Cargo.toml", "tools/Cargo.lock", "tools/pom.xml"):
+    for rel in (
+        "tools/go.mod",
+        "tools/go.sum",
+        "tools/Cargo.toml",
+        "tools/Cargo.lock",
+        "tools/pom.xml",
+        "tools/rust-toolchain.toml",
+        "bun.lock",
+        "uv.lock",
+    ):
         assert (root / rel).exists(), f"{rel} is missing"
 
     config = (root / ".github" / "dependabot.yml").read_text()
-    for ecosystem in ("gomod", "cargo", "maven"):
+    # rust-toolchain.toml has no Dependabot ecosystem -- it pins the compiler,
+    # not a crate -- so bin/check_tool_versions.py covers it instead.
+    for ecosystem in ("gomod", "cargo", "maven", "bun", "uv"):
         assert f'package-ecosystem: "{ecosystem}"' in config, f"{ecosystem} is not configured"
 
 
@@ -175,3 +193,63 @@ def test_monitorable_tools_declare_an_upstream():
 def test_unknown_stage_is_rejected():
     with pytest.raises(ManifestError):
         tools_for_stage("nonsense")
+
+
+class TestNativeLockfileReaders:
+    """Each reader must pin an exact version, and refuse anything that moves.
+
+    cdxgen is why this class exists. package.json tracked
+    ``github:cyclonedx/cdxgen#cc0c694`` -- a branch, resolved to whatever it
+    pointed at that day -- while tools.toml advertised
+    ``pkg:npm/%40cyclonedx/cdxgen@12.8.2``. Both looked pinned. Neither
+    described what shipped.
+    """
+
+    def test_bun_lock_yields_the_published_version(self, tmp_path):
+        lock = tmp_path / "bun.lock"
+        lock.write_text('{ "packages": { "@cyclonedx/cdxgen": ["@cyclonedx/cdxgen@12.8.2", "", {}, "sha512-x"], } }')
+        assert tool_manifest._version_from_bun_lock(lock, "@cyclonedx/cdxgen") == "12.8.2"
+
+    def test_bun_lock_refuses_a_git_specifier(self, tmp_path):
+        """The exact defect: a branch reference where a release should be."""
+        lock = tmp_path / "bun.lock"
+        lock.write_text(
+            '{ "packages": { "@cyclonedx/cdxgen": ["@cyclonedx/cdxgen@github:cyclonedx/cdxgen#cc0c694", ""], } }'
+        )
+        with pytest.raises(tool_manifest.ManifestError, match="not a released version"):
+            tool_manifest._version_from_bun_lock(lock, "@cyclonedx/cdxgen")
+
+    def test_go_toolchain_directive_wins_over_the_go_minimum(self, tmp_path):
+        """``go`` is the oldest toolchain that works, not the one we build with.
+
+        Reading it would have pinned us to 1.26.3 while 1.26.5 was current.
+        """
+        mod = tmp_path / "go.mod"
+        mod.write_text("module x\n\ngo 1.26.3\n\ntoolchain go1.26.5\n")
+        assert tool_manifest._version_from_go_toolchain(mod) == "1.26.5"
+
+    def test_go_falls_back_to_the_go_directive(self, tmp_path):
+        mod = tmp_path / "go.mod"
+        mod.write_text("module x\n\ngo 1.26.3\n")
+        assert tool_manifest._version_from_go_toolchain(mod) == "1.26.3"
+
+    def test_rust_toolchain_refuses_a_channel_alias(self, tmp_path):
+        """ "stable" is a different compiler every six weeks."""
+        toolchain = tmp_path / "rust-toolchain.toml"
+        toolchain.write_text('[toolchain]\nchannel = "stable"\n')
+        with pytest.raises(tool_manifest.ManifestError, match="exact version"):
+            tool_manifest._version_from_rust_toolchain(toolchain)
+
+    def test_rust_toolchain_accepts_an_exact_version(self, tmp_path):
+        toolchain = tmp_path / "rust-toolchain.toml"
+        toolchain.write_text('[toolchain]\nchannel = "1.97.1"\n')
+        assert tool_manifest._version_from_rust_toolchain(toolchain) == "1.97.1"
+
+    def test_uv_lock_and_cargo_lock_share_a_reader(self, tmp_path):
+        lock = tmp_path / "uv.lock"
+        lock.write_text('[[package]]\nname = "uv"\nversion = "0.12.1"\n')
+        assert tool_manifest._version_from_toml_lock(lock, "uv") == "0.12.1"
+
+    def test_an_unknown_lockfile_is_rejected(self):
+        with pytest.raises(tool_manifest.ManifestError, match="no reader for"):
+            tool_manifest._resolve_version("x", {"version_from": {"file": "README.md"}})

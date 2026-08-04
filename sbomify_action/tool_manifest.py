@@ -14,6 +14,7 @@ has to be recorded somewhere that both can agree on.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -37,13 +38,69 @@ def _version_from_go_mod(path: Path, module: str) -> str:
     return match.group(1).lstrip("v")
 
 
-def _version_from_cargo_lock(path: Path, package: str) -> str:
-    """Read a crate's pinned version out of Cargo.lock."""
+def _version_from_go_toolchain(path: Path) -> str:
+    """Read the Go toolchain version out of go.mod.
+
+    The ``toolchain`` directive, not ``go``: the latter is the *minimum* the
+    module graph builds with, so following it would pin us to the oldest Go
+    that works rather than the one we build with. Go's own resolution order is
+    followed -- ``toolchain`` when present, ``go`` otherwise.
+    """
+    text = path.read_text()
+    for pattern in (r"^toolchain\s+go(\S+)", r"^go\s+(\S+)"):
+        if match := re.search(pattern, text, re.M):
+            return match.group(1)
+    raise ManifestError(f"{path} has neither a toolchain nor a go directive")
+
+
+def _version_from_toml_lock(path: Path, package: str) -> str:
+    """Read a package's pinned version out of Cargo.lock or uv.lock.
+
+    Both are TOML with the same ``[[package]] name/version`` shape.
+    """
     data = tomllib.loads(path.read_text())
     for entry in data.get("package", []):
         if entry.get("name") == package:
             return str(entry["version"])
     raise ManifestError(f"{package} not found in {path}")
+
+
+def _version_from_rust_toolchain(path: Path) -> str:
+    """Read the toolchain version out of rust-toolchain.toml."""
+    channel = str((tomllib.loads(path.read_text()).get("toolchain") or {}).get("channel", ""))
+    if not channel:
+        raise ManifestError(f"{path} has no [toolchain] channel")
+    if not re.fullmatch(r"\d+\.\d+(\.\d+)?", channel):
+        # "stable" resolves to a different toolchain over time, so the image
+        # would stop matching the version its own SBOM claims.
+        raise ManifestError(f"{path}: channel must be an exact version, got {channel!r}")
+    return channel
+
+
+def _version_from_bun_lock(path: Path, package: str) -> str:
+    """Read a package's pinned version out of bun.lock.
+
+    Matched rather than parsed: bun.lock is JSONC, which tomllib and json both
+    reject. Entries look like
+
+        "@cyclonedx/cdxgen": ["@cyclonedx/cdxgen@12.8.2", "", {...}, "sha512-..."],
+
+    A specifier that is not a released version is refused. cdxgen was tracked
+    as ``github:cyclonedx/cdxgen#cc0c694`` -- a moving branch -- while the
+    manifest advertised ``pkg:npm/%40cyclonedx/cdxgen@12.8.2``, so the PURL
+    named a release nobody was running.
+    """
+    pattern = re.compile(rf'"{re.escape(package)}":\s*\[\s*"{re.escape(package)}@([^"]+)"')
+    match = pattern.search(path.read_text())
+    if not match:
+        raise ManifestError(f"{package} not found in {path}")
+    version = match.group(1)
+    if not re.fullmatch(r"\d[\w.+-]*", version):
+        raise ManifestError(
+            f"{package} in {path} resolves to {version!r}, which is not a released version. "
+            "Pin a published release, or the PURL will name something we do not ship."
+        )
+    return version
 
 
 def _version_from_pom(path: Path, artifact: str) -> str:
@@ -72,13 +129,32 @@ def _version_from_pom(path: Path, artifact: str) -> str:
     raise ManifestError(f"{artifact} not found in {path}")
 
 
+#: How to read a version out of each lockfile we understand, keyed by file
+#: name. Dispatching on the file rather than on which key the entry happens to
+#: carry keeps this unambiguous now that "package" means something in three
+#: different formats.
+_LOCKFILE_READERS: dict[str, Callable[[Path, dict[str, object]], str]] = {
+    # A go.mod entry naming a module pins that tool; naming none pins the
+    # toolchain itself.
+    "go.mod": lambda p, s: (
+        _version_from_go_mod(p, str(s["module"])) if "module" in s else _version_from_go_toolchain(p)
+    ),
+    "Cargo.lock": lambda p, s: _version_from_toml_lock(p, str(s["package"])),
+    "uv.lock": lambda p, s: _version_from_toml_lock(p, str(s["package"])),
+    "bun.lock": lambda p, s: _version_from_bun_lock(p, str(s["package"])),
+    "pom.xml": lambda p, s: _version_from_pom(p, str(s["artifact"])),
+    "rust-toolchain.toml": lambda p, _s: _version_from_rust_toolchain(p),
+}
+
+
 def _resolve_version(name: str, body: dict[str, object]) -> str:
     """Take the version from the ecosystem's own lockfile where one owns it.
 
     Restating versions in this file would put them out of Dependabot's reach
     and create a second place to bump -- which is exactly the drift this
     manifest exists to stop. Only tools with no native manifest carry a
-    literal `version` here.
+    literal `version` here, and the JDK is the last of them: Temurin is not
+    published to Maven Central or anywhere else a lockfile can reach.
     """
     if "version" in body:
         return str(body["version"])
@@ -92,13 +168,13 @@ def _resolve_version(name: str, body: dict[str, object]) -> str:
     if not path.exists():
         raise ManifestError(f"{name}: {source['file']} not found (looked in {path})")
 
-    if "module" in source:
-        return _version_from_go_mod(path, source["module"])
-    if "package" in source:
-        return _version_from_cargo_lock(path, source["package"])
-    if "artifact" in source:
-        return _version_from_pom(path, str(source["artifact"]))
-    raise ManifestError(f"{name}: version_from needs a module (go.mod), package (Cargo.lock) or artifact (pom.xml)")
+    reader = _LOCKFILE_READERS.get(path.name)
+    if reader is None:
+        raise ManifestError(f"{name}: no reader for {path.name}; known: {', '.join(sorted(_LOCKFILE_READERS))}")
+    try:
+        return reader(path, source)
+    except KeyError as exc:
+        raise ManifestError(f"{name}: version_from for {path.name} is missing {exc}") from exc
 
 
 #: Tools baked into the published container image.

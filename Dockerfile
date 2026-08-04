@@ -1,4 +1,4 @@
-ARG UV_VERSION=0.10.8
+ARG UV_VERSION=0.12.1
 
 # Define tool versions
 ARG SYFT_VERSION=1.46.0
@@ -57,7 +57,7 @@ RUN apt-get update && apt-get install -y curl xz-utils && \
     rm -rf /tmp/cargo-cyclonedx-*
 
 # UV binary stage
-FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:88234bc9e09c2b2f6d176a3daf411419eb0370d450a08129257410de9cfafd2a AS uv-fetcher
+FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:cf4eedcaa81655197f625739489effcbe71b61ceb1506f332c3facae5deceded AS uv-fetcher
 
 # Python builder stage
 FROM python:3.14-slim-trixie AS builder
