@@ -44,12 +44,16 @@ def test_versions_come_from_native_lockfiles_on_master():
     body = tomllib.loads(manifest)["tool"]
     restated = sorted(name for name, entry in body.items() if "version" in entry)
 
-    # The JDK is the sole exception, and only because there is nowhere to put
-    # it: Temurin is not published to Maven Central or any other registry a
-    # lockfile reaches. Asserting the exception list rather than a count means
-    # adding a tool with a literal version fails here, instead of quietly
-    # nudging a magic number.
-    assert restated == ["java"], (
+    # cosign is the sole exception, and only because it is the one tool still
+    # fetched from its vendor: it verifies every bundle's attestation, and
+    # trust in a verifier cannot be bootstrapped from an artifact only that
+    # verifier can check. Every other tool is pinned in sbomify/sbom-tools
+    # now, so there is no lockfile left here to read its version from.
+    # bin/check_tool_versions.py watches it instead.
+    #
+    # Asserting the exception list rather than a count means adding a tool
+    # with a literal version fails here, instead of quietly nudging a number.
+    assert restated == ["cosign"], (
         f"these restate a version instead of reading a native lockfile: {restated}. "
         "A second copy is a second thing to bump, and Dependabot cannot see it."
     )
@@ -58,23 +62,19 @@ def test_versions_come_from_native_lockfiles_on_master():
 def test_lockfiles_are_the_ones_dependabot_watches():
     """The manifest must point at files a Dependabot ecosystem covers."""
     root = Path(__file__).resolve().parent.parent
-    for rel in (
-        "tools/go.mod",
-        "tools/go.sum",
-        "tools/Cargo.toml",
-        "tools/Cargo.lock",
-        "tools/pom.xml",
-        "tools/rust-toolchain.toml",
-        "bun.lock",
-        "uv.lock",
-    ):
-        assert (root / rel).exists(), f"{rel} is missing"
+    assert (root / "uv.lock").exists(), "uv.lock is missing"
 
     config = (root / ".github" / "dependabot.yml").read_text()
-    # rust-toolchain.toml has no Dependabot ecosystem -- it pins the compiler,
-    # not a crate -- so bin/check_tool_versions.py covers it instead.
-    for ecosystem in ("gomod", "cargo", "maven", "bun", "uv"):
+    for ecosystem in ("uv", "bun", "docker", "github-actions"):
         assert f'package-ecosystem: "{ecosystem}"' in config, f"{ecosystem} is not configured"
+
+    # gomod, cargo and maven moved to sbomify/sbom-tools with the tools they
+    # pinned, and are configured there. Watching them here would open PRs
+    # against lockfiles this repository no longer has.
+    for ecosystem in ("gomod", "cargo", "maven"):
+        assert f'package-ecosystem: "{ecosystem}"' not in config, (
+            f"{ecosystem} is still watched here, but its lockfile moved to sbom-tools"
+        )
 
 
 def test_manifest_loads_and_validates():

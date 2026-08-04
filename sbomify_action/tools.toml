@@ -1,84 +1,70 @@
-# Single source of truth for every external tool this project depends on.
+# What this action fetches at run time.
 #
-# Versions, download locations and digests used to live in four places at
-# once -- Dockerfile ARGs, runtimes.py, scripts/generate_additional_packages.sh
-# and bin/check_tool_versions.py -- and they drifted. Moving cosign and crane
-# to on-demand fetching dropped them out of version monitoring entirely, and
-# both went stale unnoticed. A stale pin is worse than a stale apt package,
-# because the digest guarantees we keep installing the old bytes forever.
+# The tools themselves are built, bundled and attested in
+# https://github.com/sbomify/sbom-tools. This file only records which bundle
+# serves which tool, because that has to be known before anything is
+# downloaded. Everything else about a bundle -- where its executables live,
+# what environment it needs -- is described by the bundle.toml inside it, so
+# a bundle can change shape without changing this file.
 #
-# `stage` is the load-bearing field:
-#
-#   image    baked into the container at build time. Present in every pull,
-#            whether or not it is used.
-#   runtime  fetched on first use into an unprivileged prefix and verified
-#            against the digest below. Only downloaded by runs that need it.
-#   build    used to build the image and not shipped in it.
-#
-# That split is exactly the boundary between the build SBOM and the runtime
-# SBOM: the image manifest cannot describe a tool that is fetched later, and
-# the runtime manifest must not claim tools the run never touched.
-#
-# Fields:
-#   version         pinned version, without a leading "v"
-#   stage           image | runtime | build (see above)
-#   purl            package URL for the SBOM; "{version}" is substituted
-#   github_repo     owner/name, used by bin/check_tool_versions.py
-#   dockerfile_arg  the ARG that must carry this version (image/build only)
-#   kind            runtime only: raw | tar.gz | tar.xz | zip
-#   member          runtime only: the single archive entry to keep
-#   assets          runtime only: per-arch url + sha256
+# A bundle carries no digest here on purpose. It is verified by its Sigstore
+# attestation, which contains the subject digest inside the signed statement:
+# a digest that was signed, rather than one transcribed into this file and
+# trusted because it is written down. That is also what makes the rolling
+# release usable at all, since its bytes change on every push to master.
 
-[tool.syft]
-# Fetched, not baked in. syft is 83MB and serves specific ecosystems plus
-# container images; the core image is Python-native only.
-version_from = { file = "tools/go.mod", module = "github.com/anchore/syft" }
-stage = "runtime"
-purl = "pkg:golang/github.com/anchore/syft@v{version}"
-github_repo = "anchore/syft"
-# Built by us from the lockfile above -- see .github/workflows/build-tools.yml.
-# No url and no digest here on purpose. The download location follows from
-# the release and the tool name, so restating it would be the duplication
-# this manifest exists to remove; and the Sigstore bundle carries a SIGNED
-# subject digest, which is a better anchor than one transcribed by hand.
-built = true
-
-[tool.cargo-cyclonedx]
-# A cargo *subcommand*: it shells out to `cargo metadata` and `rustc`, neither
-# of which is in the image. Baking it in shipped 6.9MB that could not run
-# without the 92MB Rust toolchain that is already fetched on demand.
-version_from = { file = "tools/Cargo.lock", package = "cargo-cyclonedx" }
-stage = "runtime"
-purl = "pkg:cargo/cargo-cyclonedx@{version}"
-github_repo = "CycloneDX/cyclonedx-rust-cargo"
-# The tarball wraps the binary in cargo-cyclonedx-<triple>/, so once that is
-# stripped the binary is at the prefix root rather than under bin/.
-# Built by us from the lockfile above -- see .github/workflows/build-tools.yml.
-# No url and no digest here on purpose. The download location follows from
-# the release and the tool name, so restating it would be the duplication
-# this manifest exists to remove; and the Sigstore bundle carries a SIGNED
-# subject digest, which is a better anchor than one transcribed by hand.
-built = true
-
-[tool.uv]
-# uv is on PyPI, so our own uv.lock pins it like any other dependency.
-version_from = { file = "uv.lock", package = "uv" }
-stage = "build"
-purl = "pkg:pypi/uv@{version}"
-github_repo = "astral-sh/uv"
-dockerfile_arg = "UV_VERSION"
+# Which sbom-tools release to fetch from. "tools-rolling" tracks master;
+# scripts/freeze_tool_versions.py stamps a release tag in its place when the
+# image is built, so a cut release keeps fetching the bundles it was tested
+# against for as long as it exists.
+tools_release = "tools-rolling"
 
 # ---------------------------------------------------------------------------
-# Runtime tools. Fetched on demand; see sbomify_action/runtimes.py.
-#
-# Digests come from the vendor's published checksum file and must be updated
-# together with the version -- bin/check_tool_versions.py will tell you when a
-# release is available, but it deliberately will not rewrite a digest for you.
+# Bundles. `provides` is the lookup that decides what to download when a
+# generator asks for a tool; it is not a description of the contents, which
+# the bundle states for itself.
+# ---------------------------------------------------------------------------
+
+[bundle.go]
+provides = ["cyclonedx-gomod", "go"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#go"
+
+[bundle.rust]
+provides = ["cargo-cyclonedx", "cargo", "rustc", "rust"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#rust"
+
+[bundle.jvm]
+provides = ["java", "maven", "gradle", "sbt"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#jvm"
+
+[bundle.dotnet]
+provides = ["dotnet"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#dotnet"
+
+[bundle.cdxgen]
+provides = ["cdxgen"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#cdxgen"
+
+[bundle.syft]
+provides = ["syft"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#syft"
+
+[bundle.sigstore]
+provides = ["crane"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#sigstore"
+
+# ---------------------------------------------------------------------------
+# The one tool still fetched from its vendor, and the only one pinned by
+# digest here.
 # ---------------------------------------------------------------------------
 
 [tool.cosign]
 # Version comes from tools/go.mod -- do not restate it here.
-version_from = { file = "tools/go.mod", module = "github.com/sigstore/cosign/v3" }
+# A literal, because there is no longer a lockfile here to read it from:
+# cosign is pinned in sbomify/sbom-tools like every other tool, and this
+# copy exists only so the bootstrap fetch has a digest to check.
+# bin/check_tool_versions.py watches it for updates.
+version = "3.1.2"
 stage = "runtime"
 purl = "pkg:golang/github.com/sigstore/cosign@v{version}"
 github_repo = "sigstore/cosign"
@@ -92,184 +78,11 @@ sha256 = "f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf"
 url = "https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-arm64"
 sha256 = "90e7ae0b5dfd60f20816b52c012addf7fc055ebcc7bea4ce81c428ca8518c302"
 
-[tool.crane]
-version_from = { file = "tools/go.mod", module = "github.com/google/go-containerregistry" }
-stage = "runtime"
-purl = "pkg:golang/github.com/google/go-containerregistry@v{version}"
-github_repo = "google/go-containerregistry"
-# ---------------------------------------------------------------------------
-# Ecosystem tooling, all fetched on demand.
-#
-# These used to be acquired two different bad ways: cdxgen was baked into the
-# image as 619MB of bun + node_modules that every user pulled whether or not
-# they had a JavaScript project, while the JDK, Maven and Go were `apt-get
-# install`ed *during a run* -- unpinned, absent from every SBOM, and requiring
-# the container to run as root.
-#
-# Now each is a pinned artifact fetched only by runs that need it. Nothing
-# here is in the image, so nothing here appears in the image's SBOM.
-# ---------------------------------------------------------------------------
-# Built by us from the lockfile above -- see .github/workflows/build-tools.yml.
-# No url and no digest here on purpose. The download location follows from
-# the release and the tool name, so restating it would be the duplication
-# this manifest exists to remove; and the Sigstore bundle carries a SIGNED
-# subject digest, which is a better anchor than one transcribed by hand.
-built = true
-
-[tool.cdxgen]
-# The published npm release, read from bun.lock. It was previously a
-# literal here while package.json tracked a git branch, so the two
-# disagreed about what we ship.
-version_from = { file = "bun.lock", package = "@cyclonedx/cdxgen" }
-stage = "runtime"
-purl = "pkg:npm/%40cyclonedx/cdxgen@{version}"
-github_repo = "CycloneDX/cdxgen"
-kind = "raw"
-
-# The "slim" build, 35.6MB against 619MB for bun + node_modules. Verified to
-# produce identical component counts on java, javascript, ruby and elixir.
-[tool.cdxgen.assets.amd64]
-url = "https://github.com/CycloneDX/cdxgen/releases/download/v12.8.2/cdxgen-linux-amd64-slim"
-sha256 = "4b49a3cc09e4f5f8815058edf0a6d2feecc843f3eecf7649b75c86e21383b381"
-
-[tool.cdxgen.assets.arm64]
-url = "https://github.com/CycloneDX/cdxgen/releases/download/v12.8.2/cdxgen-linux-arm64-slim"
-sha256 = "d9bac95eaceef2a0eddf16b6a22e0ef1549ad827d488f44cb65be759f42aecd2"
-
-# Full JDK rather than the 52MB JRE: Maven resolution would be happy with a
-# JRE, but Gradle needs javac. Only Java and Scala projects pay for it.
-[tool.java]
-# The only literal version left. Temurin is not published to Maven
-# Central (0 hits) or any other package registry a lockfile can reach,
-# so there is no native manifest to defer to and bin/check_tool_versions.py
-# is what tells us a release is available.
-version = "21.0.12+8"
-stage = "runtime"
-purl = "pkg:generic/temurin@{version}?distro=eclipse-temurin"
-github_repo = "adoptium/temurin21-binaries"
-kind = "tar.gz"
-strip_container = true
-# Maven and Gradle look for JAVA_HOME rather than trusting PATH.
-env = { JAVA_HOME = "{prefix}" }
-
-[tool.java.assets.amd64]
-url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12_8.tar.gz"
-sha256 = "e4446ff06a276155697597cc0f1b15da004ff083f4964a35271ecee567177370"
-
-[tool.java.assets.arm64]
-url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.12_8.tar.gz"
-sha256 = "eba38e871b02d407897bfe017ea35352dfc1420ef6d2112425b0c67325ca509d"
-
-# Apache publishes only sha512 for Maven, so that is what we pin against.
-# The tarball is architecture-independent; both entries are the same file.
-[tool.maven]
-version_from = { file = "tools/pom.xml", artifact = "apache-maven" }
-stage = "runtime"
-purl = "pkg:maven/org.apache.maven/apache-maven@{version}"
-github_repo = "apache/maven"
-kind = "tar.gz"
-strip_container = true
-# Maven's local repository defaults to $HOME/.m2. Running non-root the home
-# directory is usually "/", so Maven dies with "Could not create local
-# repository at /.m2/repository". Keep it inside the runtime prefix, which is
-# writable by construction. MAVEN_ARGS is read by Maven 3.9+.
-env = { MAVEN_ARGS = "-Dmaven.repo.local={prefix}/repository" }
-
-[tool.maven.assets.amd64]
-url = "https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz"
-sha512 = "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6"
-
-[tool.maven.assets.arm64]
-url = "https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz"
-sha512 = "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6"
-
-[tool.go]
-# The toolchain directive in tools/go.mod. syft alone requires go 1.26.3,
-# so the 1.24.13 pinned here previously was older than our own module
-# graph would build with.
-version_from = { file = "tools/go.mod" }
-stage = "runtime"
-purl = "pkg:generic/go@{version}"
-github_repo = "golang/go"
-kind = "tar.gz"
-strip_container = true
-# Go writes its module and build caches under $HOME, which is "/" and
-# unwritable when running non-root: cyclonedx-gomod then dies with "failed to
-# download modules". Keep both inside the runtime prefix.
-env = { GOMODCACHE = "{prefix}/.gomodcache", GOCACHE = "{prefix}/.gocache", GOPATH = "{prefix}/.gopath" }
-
-[tool.go.assets.amd64]
-url = "https://go.dev/dl/go1.26.5.linux-amd64.tar.gz"
-sha256 = "5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053"
-
-[tool.go.assets.arm64]
-url = "https://go.dev/dl/go1.26.5.linux-arm64.tar.gz"
-sha256 = "fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49"
-
-# cargo-cyclonedx is a cargo subcommand: it shells out to `cargo metadata` for
-# the dependency graph and to `rustc` for the host target triple, and fails
-# without either. Baking a rustup toolchain in to satisfy a 7MB subcommand
-# costs ~630MB, more than the whole rest of the image.
-#
-# These two standalone dist tarballs are 92MB together. rust-std is
-# deliberately absent: cargo-cyclonedx compiles nothing, and dropping it saves
-# a further 181MB -- verified by removing lib/rustlib from a full toolchain,
-# which changes nothing, while removing the rest of lib/ breaks it.
-[tool.rust]
-version_from = { file = "tools/rust-toolchain.toml" }
-stage = "runtime"
-purl = "pkg:generic/rust@{version}"
-github_repo = "rust-lang/rust"
-kind = "tar.xz"
-rust_dist = true
-bin_subdir = "bin"
-# cargo writes its registry index to CARGO_HOME, which defaults to $HOME/.cargo
-# and is unwritable when HOME is "/".
-env = { CARGO_HOME = "{prefix}/.cargo" }
-
-[[tool.rust.assets.amd64]]
-url = "https://static.rust-lang.org/dist/cargo-1.97.1-x86_64-unknown-linux-gnu.tar.xz"
-sha256 = "e1be5f5ff7f7f80ca506fb65770b759edbdc6d303781ed71c5de8ec8a8394779"
-
-[[tool.rust.assets.amd64]]
-url = "https://static.rust-lang.org/dist/rustc-1.97.1-x86_64-unknown-linux-gnu.tar.xz"
-sha256 = "9819d0a32d56bd339585319c80260e332779f5541fd66838ab7e016d6c814819"
-
-[[tool.rust.assets.arm64]]
-url = "https://static.rust-lang.org/dist/cargo-1.97.1-aarch64-unknown-linux-gnu.tar.xz"
-sha256 = "8f70bcaccea5ba4db187c3fd4d64e24592b4e16af513497201f5909d61691dbe"
-
-[[tool.rust.assets.arm64]]
-url = "https://static.rust-lang.org/dist/rustc-1.97.1-aarch64-unknown-linux-gnu.tar.xz"
-sha256 = "b344b81f0cd4c2246c7da8b197fe7a339d7dd02bb15cb69b2524115d9c75224c"
-
-# The native Go generator, in the same tier as cyclonedx-py and
-# cyclonedx-cargo. Go had no native generator: its chain was cdxgen (broken,
-# see CDXGEN_LOCK_FILES) falling through to syft, so syft won by default
-# rather than on merit.
-#
-# On a realistic module, measured:
-#
-#   cyclonedx-gomod   4 components, all 4 hashed  (the build closure)
-#   syft             10 components,   1 hashed    (+ test-only deps of deps,
-#                                                  go.mod itself, main module)
-#
-# Syft over-reports by reading go.sum, which lists every module ever needed
-# including test dependencies that are never compiled in. That cannot be
-# corrected downstream; the licences gomod omits can be, by enrichment.
-#
-# It needs actual Go source, not just the lock files -- given only go.mod and
-# go.sum it panics with "index out of range [0] with length 0" -- so the
-# generator declines that case and syft keeps it.
-[tool.cyclonedx-gomod]
-version_from = { file = "tools/go.mod", module = "github.com/CycloneDX/cyclonedx-gomod" }
-stage = "runtime"
-purl = "pkg:golang/github.com/CycloneDX/cyclonedx-gomod@v{version}"
-github_repo = "CycloneDX/cyclonedx-gomod"
-# Built by us from the lockfile above -- see .github/workflows/build-tools.yml.
-# No url and no digest here on purpose. The download location follows from
-# the release and the tool name, so restating it would be the duplication
-# this manifest exists to remove; and the Sigstore bundle carries a SIGNED
-# subject digest, which is a better anchor than one transcribed by hand.
-built = true
-
+[tool.uv]
+# Builds the image; not shipped inside it. Pinned in our own uv.lock like any
+# other Python dependency.
+version_from = { file = "uv.lock", package = "uv" }
+stage = "build"
+purl = "pkg:pypi/uv@{version}"
+github_repo = "astral-sh/uv"
+dockerfile_arg = "UV_VERSION"

@@ -112,13 +112,19 @@ CDXGEN_LOCK_FILES = (
     PYTHON_LOCK_FILES
     + JAVASCRIPT_LOCK_FILES
     + JAVA_LOCK_FILES  # Best tool for Java/Gradle lock files
-    # GO_LOCK_FILES is deliberately absent. cdxgen hits an internal purl error
-    # on go.mod ("Invalid purl: name is a required field"): with
-    # --fail-on-error it exits 1, and without it emits a document with 0
-    # components. Syft reads the same go.mod/go.sum and returns 190. It has
-    # never worked here -- the chain fell back to syft and the failure was
-    # invisible. Routing to the tool that actually produces the better SBOM
-    # is the whole point, so Go goes to syft directly.
+    # Go belongs here. It was removed on the strength of a measurement that
+    # does not reproduce: cdxgen was said to hit "Invalid purl: name is a
+    # required field" and emit 0 components on go.mod. Re-measured, it returns
+    # 4 components on the go fixture and 4 on a bare go.mod as well. The
+    # original reading was taken without a Go toolchain on PATH -- cdxgen
+    # shells out to `go` -- and the go bundle now supplies one, so the
+    # condition that produced it no longer exists.
+    #
+    # cyclonedx-gomod still leads at priority 10 and remains the right tool
+    # for Go. Keeping cdxgen at 20 restores the middle rung of the ladder, so
+    # a project where the native generator declines degrades to cdxgen rather
+    # than falling all the way to syft.
+    + GO_LOCK_FILES
     + RUST_LOCK_FILES
     + RUBY_LOCK_FILES
     + DART_LOCK_FILES

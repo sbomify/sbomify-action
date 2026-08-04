@@ -1,9 +1,0 @@
-# The Rust toolchain the action fetches so cargo-cyclonedx has a cargo and a
-# rustc to shell out to. rustup reads this file natively, so the pin lives in
-# Rust's own format rather than being restated in tools.toml.
-#
-# An exact version, never "stable": the released image must fetch the same
-# toolchain its SBOM names, and a channel alias would drift out from under it.
-[toolchain]
-channel = "1.97.1"
-components = ["cargo", "rustc"]

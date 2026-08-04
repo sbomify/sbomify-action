@@ -1,15 +1,12 @@
 {
   "name": "sbomify-action",
   "module": "index.ts",
-  "type": "module",
-  "private": true,
   "devDependencies": {
     "@types/bun": "latest"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
-  "dependencies": {
-    "@cyclonedx/cdxgen": "12.8.2"
-  }
+  "private": true,
+  "type": "module"
 }

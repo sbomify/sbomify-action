@@ -50,10 +50,11 @@ from pathlib import Path
 from typing import Any
 
 import requests
+import tomllib
 
 from .exceptions import SBOMGenerationError
 from .logging_config import logger
-from .tool_manifest import STAGE_RUNTIME, tools_for_stage
+from .tool_manifest import STAGE_RUNTIME, Bundle, bundle_for, tools_for_stage
 
 # Download tuning. Runtimes range from ~12MB (crane) to ~190MB (a full JDK),
 # so the read timeout is generous while the connect timeout stays short.
@@ -540,6 +541,94 @@ def _materialize(spec: RuntimeSpec, arch: str, prefix: Path) -> None:
         raise
 
 
+_bundle_locks: dict[str, threading.Lock] = {}
+_bundle_lock_guard = threading.Lock()
+_bundles_ready: dict[str, Path] = {}
+
+
+def _bundle_lock(name: str) -> threading.Lock:
+    with _bundle_lock_guard:
+        return _bundle_locks.setdefault(name, threading.Lock())
+
+
+def _apply_bundle_manifest(prefix: Path) -> Path:
+    """Read the bundle's own description and make it usable.
+
+    The bundle states where its executables are and what environment it
+    needs, so support for a new ecosystem lands in sbom-tools without any
+    change here. bin_dirs is a list because one is not enough: a JDK keeps
+    java in jdk/bin and Maven keeps mvn in maven/bin, and a bundle that
+    advertised only its top-level bin would hide both.
+    """
+    manifest = prefix / "bundle.toml"
+    if not manifest.exists():
+        raise SBOMGenerationError(f"{prefix.name} has no bundle.toml; it is not a bundle we can use")
+    body = tomllib.loads(manifest.read_text()).get("bundle") or {}
+    bin_dirs = [str(d) for d in (body.get("bin_dirs") or ["bin"])]
+
+    for key, value in (tomllib.loads(manifest.read_text()).get("env") or {}).items():
+        os.environ[str(key)] = str(value).replace("{prefix}", str(prefix))
+
+    first: Path | None = None
+    for relative in bin_dirs:
+        directory = prefix / relative
+        if not directory.is_dir():
+            continue
+        _prepend_path(directory)
+        first = first or directory
+    if first is None:
+        raise SBOMGenerationError(f"{prefix.name}: none of its bin_dirs exist ({bin_dirs})")
+    return first
+
+
+def ensure_bundle(bundle: Bundle) -> Path:
+    """Fetch, verify and unpack an ecosystem bundle; return its main bin dir."""
+    if cached := _bundles_ready.get(bundle.name):
+        return cached
+
+    with _bundle_lock(bundle.name):
+        if cached := _bundles_ready.get(bundle.name):
+            return cached
+
+        arch = current_arch()
+        prefix = cache_root() / f"bundle-{bundle.name}-{bundle.release}-{arch}"
+        marker = prefix / _READY
+        if not marker.exists():
+            if prefix.exists():
+                shutil.rmtree(prefix, ignore_errors=True)
+            logger.info(f"Fetching the {bundle.name} bundle ({bundle.release}, {arch})")
+            staging = prefix.with_name(prefix.name + ".staging")
+            shutil.rmtree(staging, ignore_errors=True)
+            staging.mkdir(parents=True)
+            try:
+                archive = staging / "bundle.tar.gz"
+                _download_verified(
+                    Asset(
+                        url=bundle.archive_url(arch),
+                        algorithm="none",
+                        digest="",
+                        attestation=bundle.attestation_url(arch),
+                    ),
+                    archive,
+                )
+                unpacked = staging / "prefix"
+                unpacked.mkdir()
+                with tarfile.open(archive) as tar:
+                    for member in tar.getmembers():
+                        _reject_traversal(member.name)
+                    tar.extractall(unpacked)  # noqa: S202 - every member checked above
+                archive.unlink()
+                (unpacked / _READY).write_text(f"{bundle.name} {bundle.release} {arch}\n")
+                unpacked.rename(prefix)
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
+            logger.info(f"  ✓ {bundle.name} bundle ready")
+
+        bin_dir = _apply_bundle_manifest(prefix)
+        _bundles_ready[bundle.name] = bin_dir
+        return bin_dir
+
+
 def ensure_runtime(name: str) -> Path:
     """Make a pinned runtime available and return the directory holding it.
 
@@ -551,6 +640,13 @@ def ensure_runtime(name: str) -> Path:
         SBOMGenerationError: if the runtime is unknown, unavailable for this
             architecture, cannot be downloaded, or fails its checksum.
     """
+    # Most tools now arrive inside an ecosystem bundle from sbomify/sbom-tools.
+    # cosign is the exception and stays vendor-pinned below: it is what
+    # verifies every bundle's attestation, and trust in a verifier cannot be
+    # bootstrapped from an artifact only that verifier can check.
+    if bundle := bundle_for(name):
+        return ensure_bundle(bundle)
+
     if name not in RUNTIMES:
         raise SBOMGenerationError(f"Unknown tool runtime {name!r}")
 

@@ -23,6 +23,11 @@ import tomllib
 
 _MANIFEST = Path(__file__).with_name("tools.toml")
 
+#: Where the bundles come from. Only the release moves; the file names inside
+#: it follow from the bundle and the architecture.
+_BUNDLE_BASE = "https://github.com/sbomify/sbom-tools/releases/download"
+_ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
+
 #: Where our own tool builds are published. Master replaces the assets on this
 #: rolling pre-release on every push; the image build stamps a release tag in
 #: its place, so a cut release fetches the binaries it was built against.
@@ -293,6 +298,35 @@ class Tool:
         return self.stage == STAGE_IMAGE
 
 
+@dataclass(frozen=True)
+class Bundle:
+    """One relocatable ecosystem bundle published by sbomify/sbom-tools.
+
+    Carries no digest. A bundle is verified by its Sigstore attestation,
+    whose signed statement contains the subject digest -- signed, rather than
+    transcribed into tools.toml and trusted because it is written down. That
+    is also what makes the rolling release usable, since its bytes change on
+    every push to master.
+    """
+
+    name: str
+    release: str
+    #: Tool names this bundle can satisfy. Only used to decide what to
+    #: download; the bundle describes its own contents once unpacked.
+    provides: tuple[str, ...]
+    purl: str
+
+    def archive_url(self, arch: str) -> str:
+        return f"{_BUNDLE_BASE}/{self.release}/{self.name}-{_ARCH_SLUGS[arch]}.tar.gz"
+
+    def attestation_url(self, arch: str) -> str:
+        return self.archive_url(arch) + ".sigstore.json"
+
+    @property
+    def package_url(self) -> str:
+        return self.purl.format(release=self.release)
+
+
 class ManifestError(ValueError):
     """The manifest is missing or internally inconsistent."""
 
@@ -402,6 +436,43 @@ def load_tools() -> dict[str, Tool]:
     if not tools:
         raise ManifestError("Tool manifest defines no tools")
     return tools
+
+
+@lru_cache(maxsize=1)
+def load_bundles() -> dict[str, Bundle]:
+    """Parse the bundle section of tools.toml."""
+    raw = tomllib.loads(_MANIFEST.read_text())
+    release = str(raw.get("tools_release") or "tools-rolling")
+    bundles: dict[str, Bundle] = {}
+    for name, body in (raw.get("bundle") or {}).items():
+        provides = tuple(body.get("provides") or ())
+        if not provides:
+            raise ManifestError(f"bundle {name}: provides nothing, so nothing would ever fetch it")
+        bundles[name] = Bundle(name=name, release=release, provides=provides, purl=body["purl"])
+
+    seen: dict[str, str] = {}
+    for bundle in bundles.values():
+        for tool in bundle.provides:
+            if tool in seen:
+                raise ManifestError(f"{tool} is provided by both {seen[tool]} and {bundle.name}")
+            seen[tool] = bundle.name
+    return bundles
+
+
+@lru_cache(maxsize=1)
+def _provider_index() -> dict[str, str]:
+    return {tool: b.name for b in load_bundles().values() for tool in b.provides}
+
+
+def bundle_for(tool: str) -> Bundle | None:
+    """Which bundle serves this tool, if any."""
+    name = _provider_index().get(tool)
+    return load_bundles()[name] if name else None
+
+
+def bundle_package_urls() -> list[str]:
+    """PURLs for the bundles this release may fetch."""
+    return sorted(b.package_url for b in load_bundles().values())
 
 
 def tools_for_stage(*stages: str) -> dict[str, Tool]:
