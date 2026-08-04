@@ -32,6 +32,7 @@ def _isolate(tmp_path, monkeypatch):
 class _FakeResponse:
     def __init__(self, payload: bytes):
         self._payload = payload
+        self.headers = {"Content-Length": str(len(payload))}
 
     def __enter__(self):
         return self

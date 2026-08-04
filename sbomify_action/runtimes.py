@@ -29,12 +29,14 @@ import hashlib
 import os
 import platform
 import shutil
+import sys
 import tarfile
 import tempfile
 import threading
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -174,6 +176,79 @@ def cache_root() -> Path:
     raise SBOMGenerationError("No writable directory for tool runtimes. Set SBOMIFY_TOOL_CACHE to a writable path.")
 
 
+def _human(size: float) -> str:
+    """Bytes as a short human-readable string."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"  # pragma: no cover - unreachable, GB exits above
+
+
+def _interactive() -> bool:
+    """Whether to animate. A CI log is not a terminal even when it looks like one."""
+    return sys.stderr.isatty() and not os.environ.get("CI")
+
+
+class _Progress:
+    """Report download progress on a terminal and in CI alike.
+
+    These artifacts are large -- 83MB for syft, 92MB for the Rust toolchain,
+    190MB for the JDK -- so a silent pause of tens of seconds reads as a hang.
+
+    An animated bar redraws in place, which is right in a terminal and useless
+    in a CI log, where the escape codes pile up into thousands of unreadable
+    lines. Non-interactive runs therefore get one line per completed step.
+    """
+
+    #: Percentage between progress lines when not on a terminal.
+    STEP = 25
+
+    def __init__(self, label: str, total: int) -> None:
+        self._label = label
+        self._total = total
+        self._done = 0
+        self._next = self.STEP
+        self._bar: Any | None = None
+        self._task: Any | None = None
+        if _interactive() and total:
+            from rich.progress import (
+                BarColumn,
+                DownloadColumn,
+                Progress,
+                TextColumn,
+                TimeRemainingColumn,
+                TransferSpeedColumn,
+            )
+
+            self._bar = Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                DownloadColumn(),
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
+                transient=True,
+            )
+            self._bar.start()
+            self._task = self._bar.add_task(label, total=total)
+        else:
+            logger.info(f"  downloading {label} ({_human(total) if total else 'size unknown'})")
+
+    def advance(self, count: int) -> None:
+        self._done += count
+        if self._bar is not None:
+            self._bar.update(self._task, advance=count)
+        elif self._total:
+            percent = self._done * 100 // self._total
+            while percent >= self._next and self._next <= 100:
+                logger.info(f"  {self._label}: {self._next}% ({_human(self._done)} of {_human(self._total)})")
+                self._next += self.STEP
+
+    def close(self) -> None:
+        if self._bar is not None:
+            self._bar.stop()
+
+
 def _download_verified(asset: Asset, dest: Path) -> None:
     """Stream an asset to dest, failing unless it hashes to the pinned digest.
 
@@ -183,18 +258,30 @@ def _download_verified(asset: Asset, dest: Path) -> None:
     """
     digest = hashlib.new(asset.algorithm)
     scratch = dest.with_suffix(dest.suffix + ".part")
+    name = asset.url.rsplit("/", 1)[-1]
+    # Chunked responses legitimately omit Content-Length; fall back to an
+    # indeterminate bar rather than reporting a bogus total.
+    total = int(getattr(asset, "size", 0) or 0)
+    progress = None
     try:
         with requests.get(asset.url, stream=True, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT)) as response:
             response.raise_for_status()
+            total = int(getattr(response, "headers", {}).get("Content-Length") or total or 0)
+            progress = _Progress(name, total)
             with scratch.open("wb") as handle:
                 for chunk in response.iter_content(chunk_size=_CHUNK):
                     if chunk:
                         digest.update(chunk)
                         handle.write(chunk)
+                        progress.advance(len(chunk))
     except requests.RequestException as exc:
         scratch.unlink(missing_ok=True)
         raise SBOMGenerationError(f"Failed to download {asset.url}: {exc}") from exc
+    finally:
+        if progress is not None:
+            progress.close()
 
+    logger.info(f"  verifying {asset.algorithm} of {name}")
     actual = digest.hexdigest()
     if actual != asset.digest:
         scratch.unlink(missing_ok=True)
@@ -202,6 +289,7 @@ def _download_verified(asset: Asset, dest: Path) -> None:
             f"Checksum mismatch for {asset.url}: expected {asset.algorithm}:{asset.digest}, "
             f"got {actual}. Refusing to use the download."
         )
+    logger.info(f"  ✓ {asset.algorithm} matches the pin ({actual[:16]}…)")
     scratch.replace(dest)
 
 
