@@ -93,20 +93,22 @@ class SyftFsGenerator:
         if not _SYFT_AVAILABLE:
             return False
 
-        # Only supports lock files. Bound to a local so the directory check
-        # below narrows: is_lock_file tells mypy nothing about lock_file.
+        # A directory is syft's own subject and needs no lock file to be
+        # named. It is a different claim from a lock file -- what is on disk
+        # rather than what an ecosystem resolved -- so it arrives as its own
+        # input rather than as a lock_file that happens to be a directory.
+        if input.is_source_dir:
+            return input.output_format in ("cyclonedx", "spdx") and not (
+                input.spec_version
+                and input.spec_version
+                not in (SYFT_SPDX_VERSIONS if input.output_format == "spdx" else SYFT_CYCLONEDX_VERSIONS)
+            )
+
         subject = input.lock_file
         if not input.is_lock_file or subject is None:
             return False
 
-        # A directory is syft's native subject, not a special case: it walks
-        # the tree and catalogues whatever it recognises. Without this the
-        # action could describe a lock file, an SBOM or a container image, but
-        # not a directory -- so it could not describe an unpacked release
-        # bundle, a vendored tree, or any build output that is not one of the
-        # three. Scanning our own bundles meant reaching past the action to
-        # raw syft, which is a gap worth closing rather than working around.
-        if not Path(subject).is_dir() and input.lock_file_name not in SYFT_LOCK_FILES:
+        if input.lock_file_name not in SYFT_LOCK_FILES:
             return False
 
         # Check format
@@ -126,7 +128,7 @@ class SyftFsGenerator:
 
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using Syft scan command."""
-        assert input.lock_file is not None  # guaranteed by supports()
+        assert input.lock_file is not None or input.source_dir is not None  # guaranteed by supports()
         ensure_runtime("syft")
         # Determine format string and version
         if input.output_format == "cyclonedx":
@@ -143,7 +145,7 @@ class SyftFsGenerator:
         # from the string, and a directory name that happens to look like an
         # image reference is read as one -- which is how bun.lock ended up
         # being handed to a container registry.
-        subject = f"dir:{input.lock_file}" if Path(input.lock_file).is_dir() else input.lock_file
+        subject = f"dir:{input.source_dir}" if input.is_source_dir else str(input.lock_file)
         cmd = [
             "syft",
             "scan",

@@ -91,6 +91,7 @@ def _get_orchestrator() -> GeneratorOrchestrator:
 
 def generate_sbom(
     lock_file: Optional[str] = None,
+    source_dir: Optional[str] = None,
     docker_image: Optional[str] = None,
     output_file: str = "sbom.json",
     output_format: SBOMFormat = "cyclonedx",
@@ -103,7 +104,8 @@ def generate_sbom(
     format and version selection with automatic generator selection.
 
     Args:
-        lock_file: Path to lock file (mutually exclusive with docker_image)
+        lock_file: Path to lock file (mutually exclusive with the others)
+        source_dir: Directory to scan (mutually exclusive with the others)
         docker_image: Docker image name (mutually exclusive with lock_file)
         output_file: Path to save the generated SBOM
         output_format: Desired SBOM format ("cyclonedx" or "spdx")
@@ -133,6 +135,7 @@ def generate_sbom(
     """
     input_params = GenerationInput(
         lock_file=lock_file,
+        source_dir=source_dir,
         docker_image=docker_image,
         output_file=output_file,
         output_format=output_format,

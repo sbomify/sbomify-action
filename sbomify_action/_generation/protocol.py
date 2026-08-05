@@ -95,25 +95,41 @@ class GenerationInput:
     Input parameters for SBOM generation.
 
     Attributes:
-        lock_file: Path to lock file (mutually exclusive with docker_image)
-        docker_image: Docker image name/tag (mutually exclusive with lock_file)
+        lock_file: Path to lock file (mutually exclusive with the others)
+        source_dir: Directory to scan (mutually exclusive with the others)
+        docker_image: Docker image name/tag (mutually exclusive with the others)
         output_file: Path to save the generated SBOM
         output_format: Desired SBOM format ("cyclonedx" or "spdx")
         spec_version: Specific spec version (None = use generator default)
     """
 
     lock_file: Optional[str] = None
+    #: A directory to walk, as distinct from a lock file to read. The two are
+    #: different claims about a project, not two spellings of one: a lock file
+    #: is the dependency graph its ecosystem resolved, and a directory is
+    #: whatever happens to be on disk. Overloading lock_file to mean both hid
+    #: that distinction and produced errors like "Specified input file
+    #: 'unpacked' not found", which is true only of the name it was given.
+    source_dir: Optional[str] = None
     docker_image: Optional[str] = None
     output_file: str = "sbom.json"
     output_format: SBOMFormat = "cyclonedx"
     spec_version: Optional[str] = None
 
     def __post_init__(self) -> None:
-        """Validate input parameters."""
-        if self.lock_file and self.docker_image:
-            raise ValueError("Cannot specify both lock_file and docker_image")
-        if not self.lock_file and not self.docker_image:
-            raise ValueError("Must specify either lock_file or docker_image")
+        """Validate input parameters.
+
+        Three kinds, one at a time. They are not interchangeable spellings of
+        "what to describe": a lock file is the graph an ecosystem resolved, a
+        directory is what is on disk, and an image is a built artifact. The
+        SBOM means something different in each case.
+        """
+        subjects = [self.lock_file, self.source_dir, self.docker_image]
+        given = [s for s in subjects if s]
+        if len(given) > 1:
+            raise ValueError("Specify only one of lock_file, source_dir or docker_image")
+        if not given:
+            raise ValueError("Must specify one of lock_file, source_dir or docker_image")
 
     @property
     def lock_file_name(self) -> Optional[str]:
@@ -131,6 +147,11 @@ class GenerationInput:
     def is_lock_file(self) -> bool:
         """Check if input is a lock file."""
         return self.lock_file is not None
+
+    @property
+    def is_source_dir(self) -> bool:
+        """Check if input is a directory to scan."""
+        return self.source_dir is not None
 
 
 class Generator(Protocol):

@@ -312,8 +312,9 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 
 | Variable                   | Required | Description                                                                      |
 | -------------------------- | -------- | -------------------------------------------------------------------------------- |
-| `LOCK_FILE`                | †        | Path to a lockfile **or a directory** to scan, or `none` for additional-packages-only mode |
+| `LOCK_FILE`                | †        | Path to lockfile, or `none` for additional-packages-only mode                    |
 | `SBOM_FILE`                | †        | Path to existing SBOM file, or `none` for additional-packages-only mode          |
+| `SOURCE_DIR`               | †        | Directory to scan with Syft — reports what is on disk, not what a lockfile pins   |
 | `DOCKER_IMAGE`             | †        | Docker image name                                                                |
 | `OUTPUT_FILE`              | No       | Write final SBOM to this path                                                    |
 | `SBOM_FORMAT`              | No       | Output format: `cyclonedx` (default) or `spdx`                                   |
@@ -338,7 +339,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `WORKING_DIR`              | No       | Working directory (relative to cwd or `$GITHUB_WORKSPACE` in GHA; monorepo)      |
 | `SYFT_CACHE_DIR`           | No       | Directory for Syft cache                                                         |
 
-† **One** of `LOCK_FILE`, `SBOM_FILE`, or `DOCKER_IMAGE` is required (pick one)
+† **One** of `LOCK_FILE`, `SBOM_FILE`, `SOURCE_DIR`, or `DOCKER_IMAGE` is required (pick one)
 ‡ Required when uploading to sbomify or using sbomify features (`AUGMENT`, `PRODUCT_RELEASE`). `TOKEN` may be omitted in GitHub Actions when the workflow grants `permissions: id-token: write` — see [Trusted Publishing](#with-sbomify-trusted-publishing--no-token).
 
 <details>
@@ -426,11 +427,16 @@ When uploading to Dependency Track (`UPLOAD_DESTINATIONS=dependency-track`), con
 | C++        | `conan.lock`                                                                   |
 | Terraform  | `.terraform.lock.hcl`                                                          |
 
-Pointing `LOCK_FILE` at a **directory** scans the whole tree with Syft instead
-of reading a single manifest. That covers what no lock file describes: an
-unpacked release archive, a vendored dependency tree, or any build output. It
-is how sbomify describes its own tool bundles, which carry a JDK, Maven,
-Gradle and a Go toolchain that no manifest in the repository mentions.
+`SOURCE_DIR` scans a whole tree with Syft rather than reading a manifest. It is
+a separate input because it is a different claim: a lock file is the dependency
+graph its ecosystem resolved, and a directory is whatever is on disk. The second
+is weaker — it finds what it recognises — and the SBOM should not pretend
+otherwise.
+
+Use it for what no lock file describes: an unpacked release archive, a vendored
+dependency tree, any build output. It is how sbomify describes its own tool
+bundles, which carry a JDK, Maven, Gradle and a Go toolchain that no manifest in
+the repository mentions.
 
 ## Yocto/OpenEmbedded
 

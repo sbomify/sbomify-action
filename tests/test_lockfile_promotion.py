@@ -132,6 +132,23 @@ class TestDirectoriesCanBeScanned:
         target = tmp_path / "unpacked"
         target.mkdir()
         assert SyftFsGenerator().supports(
+            GenerationInput(source_dir=str(target), output_file="o.json", output_format="cyclonedx")
+        )
+
+    def test_a_directory_is_not_a_lock_file(self, tmp_path, monkeypatch):
+        """The two are different claims, so they are different inputs.
+
+        A lock file is the graph an ecosystem resolved; a directory is what
+        happens to be on disk. Passing a directory as LOCK_FILE used to work
+        and reported "Specified input file ... not found" when it did not,
+        which is true only of the name it was given.
+        """
+        from sbomify_action._generation.generators import syft as syft_module
+
+        monkeypatch.setattr(syft_module, "_SYFT_AVAILABLE", True)
+        target = tmp_path / "unpacked"
+        target.mkdir()
+        assert not syft_module.SyftFsGenerator().supports(
             GenerationInput(lock_file=str(target), output_file="o.json", output_format="cyclonedx")
         )
 
@@ -167,7 +184,7 @@ class TestDirectoriesCanBeScanned:
         target.mkdir()
         try:
             syft_module.SyftFsGenerator().generate(
-                GenerationInput(lock_file=str(target), output_file=str(tmp_path / "o.json"))
+                GenerationInput(source_dir=str(target), output_file=str(tmp_path / "o.json"))
             )
         except Exception:
             pass
