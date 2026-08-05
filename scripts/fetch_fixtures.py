@@ -69,6 +69,9 @@ REPOS: dict[str, tuple[str, str, str]] = {
     # pnpm, which none of the other JavaScript fixtures exercise.
     "keycloak-js": ("keycloak/keycloak", "26.4.7", "js/pnpm-lock.yaml"),
     "go-osv": ("google/osv-scanner", "v2.3.1", "go.mod"),
+    # syft describing syft. Also the tree that found a harness bug: it ships
+    # dangling symlinks and a symlink loop as file-resolver fixtures.
+    "go-syft": ("anchore/syft", "v1.39.0", "go.mod"),
 }
 
 

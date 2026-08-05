@@ -26,6 +26,15 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Before importing anything from sbomify_action. Without it every native
+# generator declines -- outside our image they refuse to fetch a toolchain the
+# user did not install -- and the matrix quietly measures the syft fallback
+# instead, reporting keycloak as "no generator found" and syft-fs for Go.
+# Neither is a product bug. It has to be set before the import and not in
+# main(): cdxgen's availability is decided once, at module import, so setting
+# it later left cdxgen unavailable and keycloak-js fell through to syft.
+os.environ.setdefault("SBOMIFY_FETCH_RUNTIMES", "1")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sbomify_action._generation.generator import create_default_registry  # noqa: E402
@@ -55,6 +64,14 @@ MATRIX = [
     ("php", "cdxgen-fs", 20),
     ("swift", "cdxgen-fs", 1),
     ("dotnet", "cdxgen-fs", 1),
+    # From sbomify/library, which generates SBOMs for these same projects in
+    # production. They are here because they are bigger and stranger than the
+    # per-ecosystem fixtures above: keycloak is a large multi-module reactor,
+    # keycloak-js is the only pnpm tree, and syft ships hostile symlinks.
+    ("keycloak", "cyclonedx-maven", 200),
+    ("keycloak-js", "cdxgen-fs", 5),
+    ("go-osv", "cyclonedx-gomod", 20),
+    ("go-syft", "cyclonedx-gomod", 100),
 ]
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -79,7 +96,16 @@ def run_one(project: str, sbom_format: str) -> tuple[str, int, str]:
     staging.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(dir=staging))
     try:
-        shutil.copytree(src, work, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git"))
+        # symlinks as symlinks: syft ships dangling links and a symlink loop
+        # as test fixtures, and following them raises before any generator runs.
+        shutil.copytree(
+            src,
+            work,
+            dirs_exist_ok=True,
+            symlinks=True,
+            ignore_dangling_symlinks=True,
+            ignore=shutil.ignore_patterns(".git"),
+        )
         out = work / "sbom.json"
         # Strict mode raises rather than degrading, which is correct in a run
         # but useless in a matrix: one bad ecosystem would hide the rest. Catch
@@ -111,6 +137,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--format", default="both", choices=["cyclonedx", "spdx", "both"])
     parser.add_argument("--strict", action="store_true", help="fail on a wrong generator or a low count")
+    parser.add_argument("--only", action="append", help="run only these ecosystems (repeatable)")
     args = parser.parse_args()
 
     print(f"{'ecosystem':<22}{'format':<11}{'generator':<18}{'entries':>8}  verdict")
@@ -119,6 +146,8 @@ def main() -> int:
     failures = []
     total = 0
     for project, expected, floor in MATRIX:
+        if args.only and project not in args.only:
+            continue
         for fmt in formats:
             total += 1
             generator, components, error = run_one(project, fmt)
