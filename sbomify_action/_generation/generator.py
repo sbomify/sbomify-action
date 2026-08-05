@@ -32,13 +32,18 @@ def create_default_registry() -> GeneratorRegistry:
     - CycloneDXPyGenerator: Native Python CycloneDX generator
       - Input: Python lock files only (requirements.txt, poetry.lock, Pipfile.lock, pyproject.toml)
       - Output: CycloneDX 1.0-1.7
-    - CycloneDXCargoGenerator: Native Rust/Cargo CycloneDX generator
+    - CycloneDXCargoGenerator: Native Rust/Cargo generator
       - Input: Rust lock files only (Cargo.lock)
-      - Output: CycloneDX 1.4-1.6
-    - CycloneDXGomodGenerator: Native Go CycloneDX generator
-    - CycloneDXMavenGenerator/Gradle/Sbt: Native JVM CycloneDX generators
+      - Output: CycloneDX 1.3-1.5, SPDX 2.3 by conversion
+    - CycloneDXGomodGenerator: Native Go generator
       - Input: go.mod, with Go source beside it
-      - Output: CycloneDX 1.4-1.6
+      - Output: CycloneDX 1.4-1.6, SPDX 2.3 by conversion
+    - CycloneDXMavenGenerator/Gradle/Sbt: Native JVM generators
+      - Input: pom.xml, build.gradle(.kts), build.sbt
+      - Output: CycloneDX 1.4-1.6, SPDX 2.3 by conversion
+    - GradleLockfileGenerator: Reads gradle.lockfile without running Gradle
+      - Input: gradle.lockfile
+      - Output: CycloneDX 1.2-1.7, SPDX 2.2-2.3
 
     Priority 20 - Comprehensive Multi-Ecosystem (cdxgen):
     - CdxgenFsGenerator: Filesystem/lock file scanning

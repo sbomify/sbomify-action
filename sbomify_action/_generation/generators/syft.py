@@ -32,9 +32,10 @@ from ..utils import DEFAULT_TIMEOUT, SYFT_LOCK_FILES, run_command
 
 # Whatever is already on PATH wins, so a pip install keeps using the syft
 # the user installed. Failing that, syft is available if we can fetch it,
-# which is only true inside our own image. The fetch itself happens in
-# generate(), where a failure can be reported rather than silently
-# dropping the generator from the chain.
+# which is now the default everywhere rather than only inside our own image --
+# see runtimes.fetching_is_enabled, and SBOMIFY_FETCH_RUNTIMES=0 to opt out.
+# The fetch itself happens in generate(), where a failure can be reported
+# rather than silently dropping the generator from the chain.
 _SYFT_PATH: str | None
 _SYFT_AVAILABLE, _SYFT_PATH = check_tool_available("syft")
 if not _SYFT_AVAILABLE:

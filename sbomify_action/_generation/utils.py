@@ -181,9 +181,13 @@ def convert_to_spdx(cyclonedx: Path, output: Path, cwd: Path) -> None:
     """Turn a native CycloneDX document into SPDX.
 
     Measured on spring-petclinic: 106 components in, 108 packages out at 99%
-    purl coverage. syft rather than cyclonedx-cli, which is marginally
-    cleaner (106 packages, 100%) but a 77MB self-contained .NET binary; syft
-    is already in every bundle for its own sake, so this costs nothing.
+    purl coverage. syft rather than cyclonedx-cli, which is marginally cleaner
+    (106 packages, 100%) but a 77MB self-contained .NET binary.
+
+    syft is not free here. Nothing is baked into the image, so a caller whose
+    ecosystem did not already need syft pays one bundle fetch the first time a
+    conversion happens; it is cached afterwards. Most callers have it already,
+    because the bundles that carry a native generator carry syft too.
     """
     ensure_runtime("syft")
     run_command(
