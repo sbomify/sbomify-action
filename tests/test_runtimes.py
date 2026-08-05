@@ -273,21 +273,40 @@ def test_partial_download_is_not_left_in_the_cache(monkeypatch):
     assert not list(Path(cache_root()).rglob("faketool")), "partial download left behind"
 
 
-def test_fetching_is_disabled_outside_our_image(monkeypatch):
-    """A pip install must keep whatever toolchain the user has.
+def test_fetching_is_on_by_default_and_opt_out(monkeypatch):
+    """Fetching what an ecosystem needs is the design, not an extra.
 
-    Fetching a tool the user did not install would change which generator
-    the chain selects, and so change the SBOM they get, without them asking.
-    That is how the alpine license-db check broke: cdxgen became "available"
-    on a bare runner, displaced syft, and enrichment silently degraded.
+    This was once opt-in outside our own image, because fetching a tool
+    changes which generator wins and so changes the SBOM. The reasoning was
+    backwards: declining to fetch does not leave the user without an opinion,
+    it silently hands them the fallback. A Rust project resolved by syft
+    rather than cargo-cyclonedx is a worse SBOM, and nothing says so.
+
+    The gate was really compensating for a routing defect -- cdxgen becoming
+    available on a bare runner, displacing syft for container images and
+    degrading enrichment. That is fixed directly now: syft-image outranks
+    cdxgen-image, so the incident cannot recur through this door.
     """
     monkeypatch.delenv("SBOMIFY_IN_CONTAINER", raising=False)
     monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
-    monkeypatch.setattr(runtimes, "Path", lambda _: type("P", (), {"exists": lambda s: False})())
-    assert runtimes.fetching_is_enabled() is False
-
-    monkeypatch.setenv("SBOMIFY_IN_CONTAINER", "1")
     assert runtimes.fetching_is_enabled() is True
+
+    for value in ("0", "false", "no", "FALSE"):
+        monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", value)
+        assert runtimes.fetching_is_enabled() is False, f"{value} should opt out"
+
+    monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
+    assert runtimes.fetching_is_enabled() is True
+
+
+def test_the_container_image_routing_that_gate_protected_is_fixed(monkeypatch):
+    """Syft must outrank cdxgen for container images, or the old bug returns."""
+    from sbomify_action._generation import create_default_registry
+
+    registry = create_default_registry()
+    generators = getattr(registry, "_generators", None) or registry.generators
+    priority = {g.name: g.priority for g in generators}
+    assert priority["syft-image"] < priority["cdxgen-image"]
 
 
 def test_fetching_can_be_opted_into_anywhere(monkeypatch):

@@ -140,16 +140,24 @@ _resolved: dict[str, Path] = {}
 def fetching_is_enabled() -> bool:
     """Whether we may fetch a tool that is not already present.
 
-    True inside our own image, where the toolchain is ours to decide. False
-    for pip installs: downloading a tool there would change which generator
-    the chain selects, and so change the SBOM the user gets, without them
-    asking for it. Set SBOMIFY_FETCH_RUNTIMES=1 to opt in anywhere.
+    On by default, everywhere. Fetching what an ecosystem needs is the whole
+    design: the image stopped baking in every tool it might want, and the
+    tools come from pinned, digest-verified, attested bundles at the moment
+    they are needed.
+
+    It used to be opt-in outside our own image, on the reasoning that
+    downloading a tool changes which generator wins and so changes the SBOM.
+    That has it backwards. Declining to fetch does not leave the user without
+    an opinion -- it silently hands them the fallback, which is the worse
+    SBOM. A Rust project resolved by syft instead of cargo-cyclonedx is not a
+    neutral outcome, and the user is not told. Requiring a flag to get the
+    good answer means most people never get it.
+
+    Set SBOMIFY_FETCH_RUNTIMES=0 to opt out, for an air-gapped build or where
+    only preinstalled tools may run.
     """
-    if os.environ.get("SBOMIFY_FETCH_RUNTIMES", "").lower() in ("1", "true", "yes"):
-        return True
-    if os.environ.get("SBOMIFY_IN_CONTAINER", "").lower() in ("1", "true", "yes"):
-        return True
-    return Path("/.dockerenv").exists()
+    opt_out = os.environ.get("SBOMIFY_FETCH_RUNTIMES", "").lower()
+    return opt_out not in ("0", "false", "no")
 
 
 def can_provide(tool: str) -> bool:

@@ -67,7 +67,7 @@ JVM_SPDX_DEFAULT = "SPDX-2.3"
 #: Resolved when a generator runs rather than at import, because that is when
 #: the bundle exists.
 def maven_plugin_coordinate() -> str:
-    return f"org.cyclonedx:cyclonedx-maven-plugin:{bundle_plugin_version('mvn', 'cyclonedx-maven')}"
+    return f"org.cyclonedx:cyclonedx-maven-plugin:{bundle_plugin_version('maven', 'cyclonedx-maven')}"
 
 
 def gradle_plugin_coordinate() -> str:

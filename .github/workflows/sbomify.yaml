@@ -156,11 +156,6 @@ jobs:
           TOKEN: placeholder
           COMPONENT_ID: placeholder
           DOCKER_IMAGE: alpine:3.20
-          # syft is no longer installed onto the runner by hand; the action
-          # fetches the signed bundle it was built against. Outside our image
-          # that fetch is opt-in, because installing a toolchain the user did
-          # not ask for would change which generator wins.
-          SBOMIFY_FETCH_RUNTIMES: "1"
           SBOM_FORMAT: cyclonedx
           OUTPUT_FILE: alpine-enriched.cdx.json
           ENRICH: "true"
@@ -180,11 +175,6 @@ jobs:
           TOKEN: placeholder
           COMPONENT_ID: placeholder
           DOCKER_IMAGE: alpine:3.20
-          # syft is no longer installed onto the runner by hand; the action
-          # fetches the signed bundle it was built against. Outside our image
-          # that fetch is opt-in, because installing a toolchain the user did
-          # not ask for would change which generator wins.
-          SBOMIFY_FETCH_RUNTIMES: "1"
           SBOM_FORMAT: spdx
           OUTPUT_FILE: alpine-enriched.spdx.json
           ENRICH: "true"
@@ -449,11 +439,6 @@ jobs:
           TOKEN: placeholder
           COMPONENT_ID: placeholder
           DOCKER_IMAGE: debian:12-slim
-          # syft is no longer installed onto the runner by hand; the action
-          # fetches the signed bundle it was built against. Outside our image
-          # that fetch is opt-in, because installing a toolchain the user did
-          # not ask for would change which generator wins.
-          SBOMIFY_FETCH_RUNTIMES: "1"
           SBOM_FORMAT: cyclonedx
           OUTPUT_FILE: debian-enriched.cdx.json
           ENRICH: "true"

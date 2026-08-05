@@ -26,15 +26,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Before importing anything from sbomify_action. Without it every native
-# generator declines -- outside our image they refuse to fetch a toolchain the
-# user did not install -- and the matrix quietly measures the syft fallback
-# instead, reporting keycloak as "no generator found" and syft-fs for Go.
-# Neither is a product bug. It has to be set before the import and not in
-# main(): cdxgen's availability is decided once, at module import, so setting
-# it later left cdxgen unavailable and keycloak-js fell through to syft.
-os.environ.setdefault("SBOMIFY_FETCH_RUNTIMES", "1")
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sbomify_action._generation.generator import create_default_registry  # noqa: E402
