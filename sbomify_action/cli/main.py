@@ -1804,6 +1804,28 @@ def run_pipeline(config: Config) -> None:
     sbom_id = None  # Store SBOM ID for potential release tagging (from sbomify)
     if config.upload:
         _log_step_header(5, f"Uploading {artifact_label}")
+        # Re-mint again, here rather than only before the processors. The
+        # earlier refresh is taken before enrichment runs, and enrichment is
+        # the slow part: a 289MB bundle's SBOM spent over fifteen minutes
+        # being enriched and then failed to upload with 401 Unauthorized,
+        # having started from a fresh token. The token is needed *here*, so
+        # this is where it should be young.
+        if config.token_is_oidc_minted:
+            from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
+            from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
+
+            if is_github_oidc_available():
+                try:
+                    config.token = obtain_sbomify_token_via_oidc(
+                        component_id=config.component_id,
+                        api_base_url=config.api_base_url,
+                        audience=config.oidc_audience,
+                    )
+                except (OIDCBindingMissingError, OIDCExchangeError) as exc:
+                    logger.warning(
+                        f"Could not refresh OIDC-minted token before upload: {exc}. "
+                        "Continuing with the existing token, which may have expired."
+                    )
         try:
             # Upload to each configured destination
             logger.info(f"Upload destinations: {config.upload_destinations}")
