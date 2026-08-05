@@ -52,6 +52,7 @@ JVM_CYCLONEDX_DEFAULT = "1.6"
 JVM_SPDX_VERSIONS = ("SPDX-2.3",)
 JVM_SPDX_DEFAULT = "SPDX-2.3"
 
+
 #: Read from the JVM bundle, which is where these are pinned.
 #:
 #: They were pinned here too, in tools/pom.xml and tools/build.gradle, until
@@ -75,6 +76,7 @@ def gradle_plugin_coordinate() -> str:
 
 def sbt_plugin_version() -> str:
     return bundle_plugin_version("sbt", "sbt-sbom")
+
 
 #: Applied through --init-script so the project's build files are never edited.
 #:

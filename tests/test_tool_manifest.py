@@ -8,7 +8,6 @@ failure modes fail loudly instead of silently.
 """
 
 import re
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -323,5 +322,3 @@ class TestJvmPluginsComeFromTheBundle:
         monkeypatch.setattr(runtimes, "ensure_runtime", lambda _tool: prefix / "bin")
         with pytest.raises(SBOMGenerationError, match="declares no version"):
             runtimes.bundle_plugin_version("mvn", "cyclonedx-maven")
-
-
