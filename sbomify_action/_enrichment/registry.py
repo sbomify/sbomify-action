@@ -7,6 +7,7 @@ from packageurl import PackageURL
 
 from sbomify_action.logging_config import logger
 
+from . import cache
 from .metadata import NormalizedMetadata
 from .protocol import DataSource
 
@@ -96,7 +97,22 @@ class SourceRegistry:
                 break
 
             try:
-                metadata = source.fetch(purl, session)
+                # Persistent cache sits here rather than in each source: this is
+                # the one place every source is called, and it keys on the same
+                # (source, coordinate) pair they all cache on in memory.
+                #
+                # Only a completed fetch is stored. A source that raises -- a
+                # timeout, a connection error -- falls through to the except
+                # below and is never persisted, so a throttled or unreachable
+                # upstream cannot be remembered as "this package has no data".
+                cache_key = purl.to_string()
+                hit, metadata = cache.get(source.name, cache_key)
+                if hit:
+                    logger.debug(f"Cache hit ({source.name}) for {purl.name}")
+                else:
+                    metadata = source.fetch(purl, session)
+                    cache.set(source.name, cache_key, metadata)
+
                 if metadata and metadata.has_data():
                     logger.debug(f"Fetched metadata from {source.name} for {purl.name}")
                     if result is None:

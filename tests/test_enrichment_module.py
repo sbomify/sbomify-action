@@ -2811,8 +2811,14 @@ class TestClearlyDefinedSource:
 
         metadata = source.fetch(purl, mock_session)
 
-        # Should return metadata or None based on implementation
-        assert metadata is None or isinstance(metadata, NormalizedMetadata)
+        # Asserting the fields, not just the type. This fixture already carried
+        # the correct attribution shape, but the previous assertion
+        # ("is None or isinstance(...)") held whether or not anything was
+        # extracted, which is how the supplier bug survived it.
+        assert metadata is not None
+        assert metadata.licenses == ["BSD-3-Clause"]
+        assert metadata.supplier == "Django Software Foundation"
+        assert metadata.homepage == "https://www.djangoproject.com/"
 
     def test_fetch_not_found(self, mock_session):
         """Test handling of 404 response."""
@@ -2828,6 +2834,136 @@ class TestClearlyDefinedSource:
         metadata = source.fetch(purl, mock_session)
 
         assert metadata is None
+
+
+class TestClearlyDefinedExtraction:
+    """Field extraction against the shapes api.clearlydefined.io actually returns.
+
+    Payloads below are trimmed from live responses for requests 2.32.3,
+    lodash 4.17.21, commons-lang3 3.12.0 and serde 1.0.197.
+    """
+
+    def _fetch(self, mock_session, purl_str, payload):
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = payload
+        mock_session.get.return_value = response
+        return ClearlyDefinedSource().fetch(PackageURL.from_string(purl_str), mock_session)
+
+    def test_supplier_comes_from_the_core_facet(self, mock_session):
+        """The live API puts attribution under licensed.facets.core, and leaves
+        licensed.attribution unset. Reading the latter yielded supplier=None on
+        every package."""
+        metadata = self._fetch(
+            mock_session,
+            "pkg:pypi/requests@2.32.3",
+            {
+                "licensed": {
+                    "declared": "Apache-2.0",
+                    "attribution": None,
+                    "facets": {"core": {"attribution": {"parties": ["Copyright Kenneth Reitz"]}}},
+                },
+                "described": {"sourceLocation": {"url": "https://pypi.org/project/requests/2.32.3/"}},
+            },
+        )
+        assert metadata is not None
+        assert metadata.supplier == "Copyright Kenneth Reitz"
+        assert metadata.field_sources["supplier"] == "clearlydefined.io"
+
+    def test_undated_copyright_line_is_preferred(self, mock_session):
+        """Scanners return every spelling they find; the undated one is canonical."""
+        metadata = self._fetch(
+            mock_session,
+            "pkg:pypi/requests@2.32.3",
+            {
+                "licensed": {
+                    "declared": "Apache-2.0",
+                    "facets": {
+                        "core": {
+                            "attribution": {
+                                "parties": [
+                                    "copyright (c) 2012 by Kenneth Reitz",
+                                    "Copyright Kenneth Reitz",
+                                    "Copyright 2019 Kenneth Reitz",
+                                ]
+                            }
+                        }
+                    },
+                },
+                "described": {},
+            },
+        )
+        assert metadata.supplier == "Copyright Kenneth Reitz"
+
+    def test_empty_parties_leaves_supplier_unset(self, mock_session):
+        """serde 1.0.197 really does have no attribution parties upstream."""
+        metadata = self._fetch(
+            mock_session,
+            "pkg:cargo/serde@1.0.197",
+            {
+                "licensed": {"declared": "MIT OR Apache-2.0", "facets": {"core": {"attribution": {"parties": []}}}},
+                "described": {"projectWebsite": "https://serde.rs"},
+            },
+        )
+        assert metadata.supplier is None
+        assert metadata.homepage == "https://serde.rs"
+
+    def test_maven_sources_jar_is_not_treated_as_a_repository(self, mock_session):
+        """sourceLocation.url for Maven is a sources-jar download, not a repo."""
+        metadata = self._fetch(
+            mock_session,
+            "pkg:maven/org.apache.commons/commons-lang3@3.12.0",
+            {
+                "licensed": {
+                    "declared": "Apache-2.0",
+                    "facets": {
+                        "core": {"attribution": {"parties": ["Copyright 2001-2021 The Apache Software Foundation"]}}
+                    },
+                },
+                "described": {
+                    "sourceLocation": {
+                        "url": (
+                            "https://search.maven.org/remotecontent?filepath="
+                            "org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0-sources.jar"
+                        )
+                    }
+                },
+            },
+        )
+        assert metadata.repository_url is None
+        assert "repository_url" not in metadata.field_sources
+
+    def test_real_vcs_url_is_kept(self, mock_session):
+        metadata = self._fetch(
+            mock_session,
+            "pkg:npm/lodash@4.17.21",
+            {
+                "licensed": {
+                    "declared": "MIT",
+                    "facets": {"core": {"attribution": {"parties": ["Copyright OpenJS Foundation"]}}},
+                },
+                "described": {
+                    "projectWebsite": "https://lodash.com/",
+                    "sourceLocation": {"url": "https://github.com/lodash/lodash/tree/f299b52"},
+                },
+            },
+        )
+        assert metadata.repository_url is not None
+        assert "github.com/lodash/lodash" in metadata.repository_url
+
+    def test_pypi_project_page_is_not_a_repository(self, mock_session):
+        metadata = self._fetch(
+            mock_session,
+            "pkg:pypi/requests@2.32.3",
+            {
+                "licensed": {"declared": "Apache-2.0"},
+                "described": {"sourceLocation": {"url": "https://pypi.org/project/requests/2.32.3/"}},
+            },
+        )
+        assert metadata is None or metadata.repository_url is None
 
 
 # =============================================================================

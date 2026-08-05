@@ -1,6 +1,7 @@
 """ClearlyDefined data source for package metadata (license and attribution)."""
 
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -40,6 +41,37 @@ _cache: Dict[str, Optional[NormalizedMetadata]] = {}
 def clear_cache() -> None:
     """Clear the ClearlyDefined metadata cache."""
     _cache.clear()
+
+
+# Hosts whose URLs are actual repositories. ``sourceLocation.url`` is otherwise
+# a download or registry link (Maven returns a sources jar, PyPI a project
+# page), which is not a repository_url however plausible it looks.
+_VCS_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org", "sr.ht", "git.sr.ht")
+
+
+def _is_vcs_url(url: str) -> bool:
+    """True when ``url`` points at a source repository rather than an artifact."""
+    lowered = url.lower()
+    if lowered.endswith((".jar", ".zip", ".tar.gz", ".tgz", ".whl", ".gem", ".crate")):
+        return False
+    return any(host in lowered for host in _VCS_HOSTS)
+
+
+def _cleanest_party(parties: List[str]) -> Optional[str]:
+    """Pick the most useful attribution party to use as the supplier.
+
+    ClearlyDefined returns every copyright line its scanners found, so the list
+    is usually several spellings of one holder -- for requests 2.32.3 it is
+    "Copyright Kenneth Reitz" alongside three dated "copyright (c) 2012 by
+    Kenneth Reitz" variants. Prefer an entry without a year, which is the
+    canonical form, and fall back to the first entry so behaviour is stable
+    when every line carries a date.
+    """
+    cleaned = [p.strip() for p in parties if p and p.strip()]
+    if not cleaned:
+        return None
+    undated = [p for p in cleaned if not re.search(r"\b(19|20)\d{2}\b", p)]
+    return (undated or cleaned)[0]
 
 
 class ClearlyDefinedSource:
@@ -153,27 +185,38 @@ class ClearlyDefinedSource:
         if declared_license and declared_license != "NOASSERTION":
             licenses, license_texts = normalize_license_list([declared_license])
 
-        # Extract description from described section
         described = data.get("described", {})
-        description = None
-
-        # Try to get description from source info
-        source_info = described.get("sourceLocation", {})
+        source_info = described.get("sourceLocation") or {}
 
         # Extract URLs
         homepage = described.get("projectWebsite")
         repository_url = None
 
-        if source_info:
-            repo_url = source_info.get("url")
-            if repo_url:
-                repository_url = normalize_vcs_url(repo_url)
+        # ``sourceLocation.url`` is whatever the harvester resolved the source
+        # to, which is not always a repository: Maven yields a sources-jar
+        # download (search.maven.org/remotecontent?filepath=...jar) and PyPI a
+        # project page. Only take it when it looks like a VCS location, so the
+        # field is either a real repository or left for another source to fill.
+        repo_url = source_info.get("url")
+        if repo_url and _is_vcs_url(repo_url):
+            repository_url = normalize_vcs_url(repo_url)
 
-        # Extract supplier from attribution
+        # Extract supplier from the curated attribution parties.
+        #
+        # These live under ``licensed.facets.core.attribution.parties``. The
+        # top-level ``licensed.attribution`` this used to read is absent from
+        # every response the API actually returns, so supplier was always None
+        # and ClearlyDefined's curated copyright data -- the one thing it
+        # provides that the other sources do not -- was fetched and discarded.
         supplier = None
-        attribution_parties = licensed.get("attribution", {}).get("parties", [])
+        attribution_parties = (
+            licensed.get("facets", {}).get("core", {}).get("attribution", {}).get("parties")
+            # Kept as a fallback in case the shape ever changes back.
+            or licensed.get("attribution", {}).get("parties")
+            or []
+        )
         if attribution_parties:
-            supplier = attribution_parties[0]
+            supplier = _cleanest_party(attribution_parties)
 
         # Build field_sources for attribution
         field_sources = {}
@@ -187,7 +230,11 @@ class ClearlyDefinedSource:
             field_sources["repository_url"] = self.name
 
         metadata = NormalizedMetadata(
-            description=description,
+            # No description: ClearlyDefined definitions carry no such field.
+            # ``described`` holds releaseDate, urls, hashes, files, tools,
+            # sourceLocation and scores -- nothing summarising the package.
+            # This is why this source can never satisfy the registry's
+            # description-and-licenses-and-supplier early exit on its own.
             licenses=licenses,
             license_texts=license_texts,
             supplier=supplier,

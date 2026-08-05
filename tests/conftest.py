@@ -59,3 +59,25 @@ def _no_runtime_fetching(monkeypatch, request):
             lambda name: Path("/nonexistent-runtime-bin"),
             raising=False,
         )
+
+
+@pytest.fixture(autouse=True)
+def _no_persistent_enrichment_cache(monkeypatch):
+    """Keep the on-disk enrichment cache out of the suite.
+
+    Same hazard as ``_no_runtime_fetching`` above: the cache lives in the
+    developer's real ``~/.cache/sbomify`` and is shared by every run, so
+    without this a test that mocks an HTTP response is silently served a
+    previous run's answer instead -- and the suite passes on a machine that
+    has accumulated state while failing on a clean one. It also writes to the
+    developer's home directory as a side effect of running the tests.
+
+    Disabled rather than redirected so a test that wants the cache has to ask
+    for it. tests/test_enrichment_cache.py re-enables it against a tmp_path.
+    """
+    from sbomify_action._enrichment import cache
+
+    monkeypatch.setenv("SBOMIFY_ENRICHMENT_CACHE", "off")
+    cache.close()
+    yield
+    cache.close()
