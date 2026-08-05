@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Freeze lockfile-derived tool versions into the shipped manifest.
 
-On master the versions live in the manifests that own them -- uv.lock for uv,
-tools/pom.xml and tools/build.gradle for the JVM build plugins -- so
-Dependabot maintains them and there is no bespoke version file to keep in
+On master the versions live in the manifests that own them -- uv.lock for uv --
+so Dependabot maintains them and there is no bespoke version file to keep in
 step.
 
 Those manifests are not part of the Python package, so an installed copy
@@ -27,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sbomify_action.tool_manifest import load_tools, plugin_version  # noqa: E402
+from sbomify_action.tool_manifest import load_tools  # noqa: E402
 
 MANIFEST = Path(__file__).resolve().parent.parent / "sbomify_action" / "tools.toml"
 
@@ -49,20 +48,14 @@ def freeze(manifest_path: Path, *, check: bool = False) -> int:
 
     out: list[str] = []
     current: str | None = None
-    kind: str | None = None
     for line in text.splitlines():
-        # [plugin.*] as well as [tool.*]: the JVM plugin versions live in
-        # tools/pom.xml and tools/build.gradle, which are no more part of the
-        # package than the Go and Cargo lockfiles are. Freezing only [tool.*]
-        # shipped a wheel that raised ManifestError on import.
-        #
         # The name is matched without dots so nested tables such as
         # [tool.cosign.assets.amd64] do not register as a tool of their own --
         # they have no version to freeze, and resolving them eagerly failed.
-        if header := re.match(r"^\[(tool|plugin)\.([^.\]]+)\]", line):
-            kind, current = header.group(1), header.group(2)
+        if header := re.match(r"^\[tool\.([^.\]]+)\]", line):
+            current = header.group(1)
         if _VERSION_FROM.match(line) and current:
-            resolved = plugin_version(current) if kind == "plugin" else versions[current]
+            resolved = versions[current]
             out.append(f'version = "{resolved}"  # frozen from the lockfile at build time')
             print(f"  froze {current} -> {resolved}")
             continue

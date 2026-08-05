@@ -33,8 +33,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled
-from sbomify_action.tool_manifest import plugin_version
+from sbomify_action.runtimes import bundle_plugin_version, ensure_runtime, fetching_is_enabled
 
 from ..protocol import FormatVersion, GenerationInput
 from ..result import GenerationResult
@@ -53,21 +52,29 @@ JVM_CYCLONEDX_DEFAULT = "1.6"
 JVM_SPDX_VERSIONS = ("SPDX-2.3",)
 JVM_SPDX_DEFAULT = "SPDX-2.3"
 
-#: Read from tools/pom.xml and tools/build.gradle rather than written here.
-#: These are pinned, not floating -- an SBOM should not change because a
-#: plugin released overnight -- but a literal in Python is a pin no bot can
-#: see, so the versions live in manifests Dependabot maintains.
+#: Read from the JVM bundle, which is where these are pinned.
 #:
-#: Two manifests because the plugins live in two places: Maven Central
-#: carries the Maven plugin and sbt-sbom, while the Gradle plugin is
-#: published to the Gradle Plugin Portal and Central does not have 3.3.0 at
-#: all.
-_MAVEN_PLUGIN_VERSION = plugin_version("cyclonedx-maven")
-_GRADLE_PLUGIN_VERSION = plugin_version("cyclonedx-gradle")
-SBT_SBOM_PLUGIN = plugin_version("sbt-sbom")
+#: They were pinned here too, in tools/pom.xml and tools/build.gradle, until
+#: sbom-tools took ownership of the JVM toolchain. Keeping a copy meant two
+#: repositories describing the same plugin, both watched by Dependabot and
+#: free to disagree -- and they did, within hours: sbom-tools said 2.9.3 while
+#: this repository still said 2.9.1, so the generator applied one version and
+#: the bundle advertised another.
+#:
+#: Nothing installs these; Maven, Gradle and sbt fetch them themselves. We
+#: only have to name a version, and the bundle we already fetched states it.
+#: Resolved when a generator runs rather than at import, because that is when
+#: the bundle exists.
+def maven_plugin_coordinate() -> str:
+    return f"org.cyclonedx:cyclonedx-maven-plugin:{bundle_plugin_version('mvn', 'cyclonedx-maven')}"
 
-CYCLONEDX_MAVEN_PLUGIN = f"org.cyclonedx:cyclonedx-maven-plugin:{_MAVEN_PLUGIN_VERSION}"
-CYCLONEDX_GRADLE_PLUGIN = f"org.cyclonedx:cyclonedx-gradle-plugin:{_GRADLE_PLUGIN_VERSION}"
+
+def gradle_plugin_coordinate() -> str:
+    return f"org.cyclonedx:cyclonedx-gradle-plugin:{bundle_plugin_version('gradle', 'cyclonedx-gradle')}"
+
+
+def sbt_plugin_version() -> str:
+    return bundle_plugin_version("sbt", "sbt-sbom")
 
 #: Applied through --init-script so the project's build files are never edited.
 #:
@@ -76,12 +83,21 @@ CYCLONEDX_GRADLE_PLUGIN = f"org.cyclonedx:cyclonedx-gradle-plugin:{_GRADLE_PLUGI
 #: which reads like a classpath fault and is not one. And the plugin is
 #: published to the Gradle Plugin Portal, not Maven Central: Central's search
 #: index still answers 1.4.0 and does not carry 3.3.0 at all.
-GRADLE_INIT_SCRIPT = f"""initscript {{
+def gradle_init_script() -> str:
+    """Applied through --init-script so the project's build files are never edited.
+
+    Two details that cost real time. The class is CyclonedxPlugin with a
+    lowercase d -- the natural spelling fails with "unknown property 'org'",
+    which reads like a classpath fault and is not one. And the plugin is
+    published to the Gradle Plugin Portal, not Maven Central: Central's search
+    index still answers 1.4.0 and does not carry 3.3.0 at all.
+    """
+    return f"""initscript {{
   repositories {{
     maven {{ url "https://plugins.gradle.org/m2/" }}
     mavenCentral()
   }}
-  dependencies {{ classpath "{CYCLONEDX_GRADLE_PLUGIN}" }}
+  dependencies {{ classpath "{gradle_plugin_coordinate()}" }}
 }}
 allprojects {{ apply plugin: org.cyclonedx.gradle.CyclonedxPlugin }}
 """
@@ -233,7 +249,7 @@ class CycloneDXMavenGenerator(_JvmGenerator):
             # -N: this module only. makeAggregateBom already walks the reactor,
             # and without it Maven would build every module first.
             "-N",
-            f"{CYCLONEDX_MAVEN_PLUGIN}:makeAggregateBom",
+            f"{maven_plugin_coordinate()}:makeAggregateBom",
             "-DoutputFormat=json",
             "-DoutputName=bom",
         ]
@@ -256,7 +272,7 @@ class CycloneDXGradleGenerator(_JvmGenerator):
 
     def _run(self, project_dir: Path, output: Path) -> None:
         init_script = project_dir / ".sbomify-cyclonedx.init.gradle"
-        init_script.write_text(GRADLE_INIT_SCRIPT)
+        init_script.write_text(gradle_init_script())
         gradle = _wrapper_or(project_dir, "gradlew", "gradle")
         try:
             cmd = [gradle, "--no-daemon", "-I", str(init_script), "cyclonedxBom"]
@@ -288,7 +304,7 @@ class CycloneDXSbtGenerator(_JvmGenerator):
         plugin_dir = project_dir / "project"
         plugin_dir.mkdir(exist_ok=True)
         injected = plugin_dir / "sbomify-sbom.sbt"
-        injected.write_text(f'addSbtPlugin("com.github.sbt" % "sbt-sbom" % "{SBT_SBOM_PLUGIN}")\n')
+        injected.write_text(f'addSbtPlugin("com.github.sbt" % "sbt-sbom" % "{sbt_plugin_version()}")\n')
         try:
             logger.info(f"Running the sbt-sbom plugin in {project_dir.name}")
             run_command(["sbt", "-batch", "makeBom"], "cyclonedx-sbt", timeout=2400, cwd=str(project_dir))

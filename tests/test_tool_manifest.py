@@ -69,21 +69,15 @@ def test_lockfiles_are_the_ones_dependabot_watches():
     for ecosystem in ("uv", "bun", "docker", "github-actions"):
         assert f'package-ecosystem: "{ecosystem}"' in config, f"{ecosystem} is not configured"
 
-    # gomod and cargo moved to sbomify/sbom-tools with the tools they pinned,
-    # and are configured there. Watching them here would open PRs against
-    # lockfiles this repository no longer has.
-    for ecosystem in ("gomod", "cargo"):
+    # Everything that pinned a tool moved to sbomify/sbom-tools with the tool,
+    # and is watched there. Watching any of it here would open PRs against
+    # manifests this repository no longer has -- and, while both copies
+    # existed, let the two disagree about which plugin version we apply.
+    for ecosystem in ("gomod", "cargo", "maven", "gradle"):
         assert f'package-ecosystem: "{ecosystem}"' not in config, (
-            f"{ecosystem} is still watched here, but its lockfile moved to sbom-tools"
+            f"{ecosystem} is still watched here, but what it pinned moved to sbom-tools"
         )
-
-    # maven is watched again, for a different thing. It no longer pins the
-    # Maven distribution -- that is a bundle's job now -- but tools/pom.xml
-    # pins the CycloneDX plugins the JVM generators drive, which Maven and sbt
-    # fetch themselves at run time.
-    assert 'package-ecosystem: "maven"' in config
-    assert not (root / "tools" / "Cargo.lock").exists(), "the Rust tool pins belong to sbom-tools now"
-    assert not (root / "tools" / "go.mod").exists(), "the Go tool pins belong to sbom-tools now"
+    assert not (root / "tools").exists(), "tools/ belongs to sbom-tools now"
 
 
 def test_manifest_loads_and_validates():
@@ -290,112 +284,44 @@ class TestNativeLockfileReaders:
             tool_manifest._resolve_version("x", {"version_from": {"file": "README.md"}})
 
 
-class TestPluginVersionsAreWatched:
-    """The JVM plugin versions must stay somewhere Dependabot can see them.
+class TestJvmPluginsComeFromTheBundle:
+    """The JVM plugin versions are pinned in sbomify/sbom-tools, not here.
 
-    These plugins are not tools we install -- Maven, Gradle and sbt fetch them
-    themselves -- so they have no entry in tools.toml and no bundle, and it is
-    easy to leave them as literals in Python. That is a pin nothing watches,
-    which is the drift the rest of this manifest exists to stop.
+    They used to be pinned in both, in this repository's tools/pom.xml and in
+    that one's, each watched by Dependabot and free to disagree. They did:
+    sbom-tools reached 2.9.3 while this repository still said 2.9.1, so the
+    generator applied one version while the bundle advertised another.
     """
 
-    def test_the_generators_read_their_versions_from_manifests(self):
-        from sbomify_action._generation.generators import cyclonedx_jvm
-        from sbomify_action.tool_manifest import plugin_version
-
-        assert cyclonedx_jvm.CYCLONEDX_MAVEN_PLUGIN.endswith(plugin_version("cyclonedx-maven"))
-        assert cyclonedx_jvm.CYCLONEDX_GRADLE_PLUGIN.endswith(plugin_version("cyclonedx-gradle"))
-        assert cyclonedx_jvm.SBT_SBOM_PLUGIN == plugin_version("sbt-sbom")
-
-    def test_every_plugin_version_traces_back_to_a_watched_manifest(self):
-        """The indirection must not become a place to hide a literal.
-
-        Going through tools.toml is what lets the image ship these versions,
-        but it would also let someone write one straight into the manifest,
-        where no bot would ever update it.
-        """
-        raw = tomllib.loads((REPO_ROOT / "sbomify_action" / "tools.toml").read_text())
-        plugins = raw.get("plugin") or {}
-        assert plugins, "no [plugin.*] entries found"
-        for name, body in plugins.items():
-            source = body.get("version_from")
-            assert source, f"{name}: pins a literal instead of reading a watched manifest"
-            assert (REPO_ROOT / source["file"]).is_file(), f"{name}: {source['file']} does not exist"
-
-    def test_the_versions_survive_without_the_repository(self):
-        """The regression that broke the published image.
-
-        tools/pom.xml and tools/build.gradle are not part of the Python
-        package, so reading them directly worked from a checkout and raised
-        ManifestError on import under site-packages. The image build freezes
-        the versions into the shipped manifest; this asserts a frozen manifest
-        needs no manifest files at all.
-        """
-        import shutil
-        import subprocess
-        import sys
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "pkg"
-            shutil.copytree(REPO_ROOT / "sbomify_action", root / "sbomify_action")
-            shutil.copytree(REPO_ROOT / "scripts", root / "scripts")
-            # Every file the manifest resolves a version from, wherever it
-            # lives -- tools/pom.xml and tools/build.gradle for the plugins,
-            # uv.lock and the rest for the [tool.*] entries.
-            raw = tomllib.loads((REPO_ROOT / "sbomify_action" / "tools.toml").read_text())
-            sources = {
-                body["version_from"]["file"]
-                for table in ("tool", "plugin")
-                for body in (raw.get(table) or {}).values()
-                if isinstance(body, dict) and "version_from" in body
-            }
-            for relative in sources:
-                target = root / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy(REPO_ROOT / relative, target)
-            subprocess.run(  # noqa: S603
-                [sys.executable, "scripts/freeze_tool_versions.py"], cwd=root, check=True, capture_output=True
-            )
-            # Only now does it resemble the installed package: sources gone.
-            for relative in sources:
-                (root / relative).unlink()
-            result = subprocess.run(  # noqa: S603
-                [
-                    sys.executable,
-                    "-c",
-                    "from sbomify_action.tool_manifest import plugin_version as p;"
-                    "print(p('cyclonedx-maven'), p('cyclonedx-gradle'), p('sbt-sbom'))",
-                ],
-                cwd=root,
-                capture_output=True,
-                text=True,
-            )
-            assert result.returncode == 0, f"import failed without tools/: {result.stderr}"
-            from sbomify_action.tool_manifest import plugin_version
-
-            assert result.stdout.split() == [
-                plugin_version("cyclonedx-maven"),
-                plugin_version("cyclonedx-gradle"),
-                plugin_version("sbt-sbom"),
-            ]
-
     def test_no_plugin_version_is_written_in_the_source(self):
-        """A literal here would be invisible to Dependabot."""
+        """A literal here would be a pin nothing watches, in the wrong repo."""
         source = (REPO_ROOT / "sbomify_action" / "_generation" / "generators" / "cyclonedx_jvm.py").read_text()
-        # Any bare "<digits>.<digits>.<digits>" in a plugin coordinate.
         offenders = re.findall(r'"org\.cyclonedx:[a-z-]+:\d+\.\d+', source)
         assert offenders == [], f"plugin versions hard-coded in the generator: {offenders}"
 
-    def test_dependabot_watches_both_manifests(self):
-        """Two ecosystems, because the plugins live in two registries.
+    def test_the_manifests_are_gone(self):
+        """Deleting them is what leaves one source of truth."""
+        assert not (REPO_ROOT / "tools").exists(), "tools/ is owned by sbomify/sbom-tools now"
 
-        Maven Central carries the Maven plugin and sbt-sbom. The Gradle plugin
-        is published to the Gradle Plugin Portal and Central does not have the
-        current version at all, so only a Gradle manifest can resolve it.
-        """
-        for manifest in ("tools/pom.xml", "tools/build.gradle"):
-            assert (REPO_ROOT / manifest).exists(), f"{manifest} is missing"
+    def test_the_version_is_read_from_the_bundle(self, monkeypatch, tmp_path):
+        from sbomify_action import runtimes
 
-        config = (REPO_ROOT / ".github" / "dependabot.yml").read_text()
-        for ecosystem in ("maven", "gradle"):
-            assert f'package-ecosystem: "{ecosystem}"' in config, f"{ecosystem} is not configured"
+        prefix = tmp_path / "bundle-jvm"
+        (prefix / "bin").mkdir(parents=True)
+        (prefix / "bundle.toml").write_text('[bundle]\nname = "jvm"\n\n[plugins]\ncyclonedx-maven = "9.9.9"\n')
+        monkeypatch.setattr(runtimes, "ensure_runtime", lambda _tool: prefix / "bin")
+        assert runtimes.bundle_plugin_version("mvn", "cyclonedx-maven") == "9.9.9"
+
+    def test_an_older_bundle_says_so_rather_than_guessing(self, monkeypatch, tmp_path):
+        """A bundle predating [plugins] must not silently fall back to a literal."""
+        from sbomify_action import runtimes
+        from sbomify_action.exceptions import SBOMGenerationError
+
+        prefix = tmp_path / "bundle-jvm"
+        (prefix / "bin").mkdir(parents=True)
+        (prefix / "bundle.toml").write_text('[bundle]\nname = "jvm"\n')
+        monkeypatch.setattr(runtimes, "ensure_runtime", lambda _tool: prefix / "bin")
+        with pytest.raises(SBOMGenerationError, match="declares no version"):
+            runtimes.bundle_plugin_version("mvn", "cyclonedx-maven")
+
+

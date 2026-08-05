@@ -651,6 +651,33 @@ def ensure_bundle(bundle: Bundle) -> Path:
         return bin_dir
 
 
+def bundle_plugin_version(tool: str, plugin: str) -> str:
+    """The version of a build plugin, as declared by the bundle that provides it.
+
+    Maven, Gradle and sbt fetch these themselves at run time, so nothing here
+    installs them -- but the caller has to name a version when it applies one,
+    and that version has to come from somewhere. It comes from the bundle.
+
+    Keeping a second copy of the pin here meant two repositories describing the
+    same plugin, both watched by Dependabot, free to disagree. They did: within
+    hours of the split, sbom-tools said 2.9.3 and this repository still said
+    2.9.1. Reading the version off the bundle we already fetched leaves one
+    source of truth, in the repository that decides what the bundle contains.
+    """
+    prefix = ensure_runtime(tool).parent
+    manifest = prefix / "bundle.toml"
+    if not manifest.exists():
+        raise SBOMGenerationError(f"{prefix.name} has no bundle.toml; it cannot say which {plugin} to apply")
+    plugins = tomllib.loads(manifest.read_text()).get("plugins") or {}
+    version = plugins.get(plugin)
+    if not version:
+        raise SBOMGenerationError(
+            f"{prefix.name} declares no version for {plugin}. "
+            "It predates the [plugins] block; a newer sbom-tools bundle carries it."
+        )
+    return str(version)
+
+
 def ensure_runtime(name: str) -> Path:
     """Make a pinned runtime available and return the directory holding it.
 
