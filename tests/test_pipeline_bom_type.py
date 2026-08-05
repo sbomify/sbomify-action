@@ -176,3 +176,117 @@ def test_pipeline_openvex_rejected_without_vex_bom_type(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         run_pipeline(config)
     assert exc.value.code == 1
+
+
+# A hardware BOM: every component is type=device, which is what makes the
+# document an HBOM rather than a device's software SBOM. Deliberately awkward
+# bytes — CRLF, an odd document version, unsorted keys — so "verbatim" is
+# testable rather than merely asserted.
+AUTHORED_HBOM = (
+    b'{"bomFormat": "CycloneDX",\r\n'
+    b'  "specVersion": "1.6",\n'
+    b'  "version": 4,\n'
+    b'  "metadata": {"component": {"type": "device", "bom-ref": "board", "name": "PCIe-SATA adapter"}},\n'
+    b'  "components": [\n'
+    b'    {"type": "device", "bom-ref": "J1", "name": "PCIE-098-02-F-D-EMS2",\n'
+    b'     "supplier": {"name": "Samtec"}, "version": "2.9.10"},\n'
+    b'    {"type": "device", "bom-ref": "J2", "name": "47155-4001", "supplier": {"name": "Molex"}}]}\n'
+)
+
+
+def _hbom_config(tmp_path, monkeypatch, **overrides):
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "authored.hbom.cdx.json"
+    src.write_bytes(AUTHORED_HBOM)
+    kwargs = dict(
+        sbom_file=str(src),
+        upload=False,
+        bom_type="hbom",
+        output_file="out.hbom.json",
+    )
+    kwargs.update(overrides)
+    return build_config(**kwargs), src
+
+
+def test_pipeline_hbom_verbatim_end_to_end(tmp_path, monkeypatch):
+    """A hardware BOM survives the pipeline byte for byte.
+
+    The action cannot generate an HBOM, so the only thing it can do wrong is
+    change one — and the parts list is the document's whole value. Additional
+    package injection is configured to prove it does not reach a passthrough.
+    """
+    monkeypatch.setenv("ADDITIONAL_PACKAGES", "extra-package==1.0.0")
+    config, _ = _hbom_config(tmp_path, monkeypatch)
+
+    run_pipeline(config)
+
+    assert (tmp_path / "out.hbom.json").read_bytes() == AUTHORED_HBOM
+
+
+def test_pipeline_hbom_forces_augment_and_enrich_off(tmp_path, monkeypatch):
+    """Both rewrite the document, so the verbatim contract requires them off.
+    They are refused quietly at config time rather than failing the run: a user
+    who set them globally should still get their HBOM uploaded."""
+    config, _ = _hbom_config(tmp_path, monkeypatch, augment=True, enrich=True)
+
+    assert config.augment is False
+    assert config.enrich is False
+
+    run_pipeline(config)
+
+    assert (tmp_path / "out.hbom.json").read_bytes() == AUTHORED_HBOM
+
+
+def test_hbom_uploads_with_the_bom_type_query_parameter(tmp_path, monkeypatch):
+    """bom_type reaches the backend as a query parameter; without it the
+    artifact is stored as a plain SBOM and takes the component's SBOM slot."""
+    from sbomify_action.sbomify_api import SbomifyApiClient
+
+    captured: dict[str, object] = {}
+
+    def _capture(method, path, **kwargs):
+        captured.update(method=method, path=path, params=kwargs.get("params"))
+        return None
+
+    api = SbomifyApiClient(base_url="https://example.test", token="t")  # nosec B106 - test stub, not a credential
+    monkeypatch.setattr(api, "_request", _capture)
+
+    api.upload_sbom(component_id="comp123", sbom_payload=b'{"bomFormat": "CycloneDX"}', bom_type="hbom")
+
+    assert captured["params"] == {"bom_type": "hbom"}
+    assert "artifact/cyclonedx/comp123" in str(captured["path"])
+
+
+def test_hbom_with_spdx_content_is_refused(tmp_path, monkeypatch):
+    """SPDX has no device component type and the backend rejects bom_type=hbom
+    for it, so the run has to fail here rather than at upload."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "doc.json"
+    src.write_bytes(b'{"spdxVersion": "SPDX-2.3", "name": "x", "packages": []}')
+    config = build_config(sbom_file=str(src), upload=False, bom_type="hbom", output_file="out.json")
+
+    with pytest.raises(SystemExit) as exc:
+        run_pipeline(config)
+
+    assert exc.value.code == 1
+
+
+def test_hbom_can_be_tagged_into_a_product_release(tmp_path, monkeypatch):
+    """A release slot is keyed on (component, format, bom_type), so an HBOM
+    occupies its own slot rather than the component's SBOM slot. This
+    combination used to be refused at config time, which left a hardware BOM
+    unable to be part of the release it ships in."""
+    config, _ = _hbom_config(
+        tmp_path,
+        monkeypatch,
+        component_id="comp123",
+        product_releases='["myproduct:v1.2.3"]',
+        token="test-token",  # nosec B106 - PRODUCT_RELEASE requires one; never sent, upload is off
+    )
+
+    assert config.product_releases == ["myproduct:v1.2.3"]
+    assert config.bom_type == "hbom"
+
+    run_pipeline(config)
+
+    assert (tmp_path / "out.hbom.json").read_bytes() == AUTHORED_HBOM

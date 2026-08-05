@@ -364,12 +364,14 @@ class Config:
                         f"BOM_TYPE='{self.bom_type}' can only be uploaded to sbomify; remove "
                         f"{', '.join(non_sbomify)} from UPLOAD_DESTINATIONS."
                     )
-            # A release holds one SBOM per component and format; tagging a non-SBOM artifact
-            # would either collide with the component's SBOM or wrongly occupy its slot.
-            if self.product_releases:
-                raise ConfigurationError(
-                    f"BOM_TYPE='{self.bom_type}' cannot be tagged into a product release; remove PRODUCT_RELEASE."
-                )
+            # PRODUCT_RELEASE is allowed for every bom_type. A release slot is keyed on
+            # (component, format, bom_type), so a CBOM, VEX or HBOM occupies its own slot
+            # and cannot displace the component's SBOM; the backend's replace path filters
+            # on bom_type for the same reason, and ReleaseArtifact is unique per
+            # (release, artifact) rather than per component and format. An earlier version
+            # of this check assumed one SBOM per component and format and refused the whole
+            # combination, which left a hardware or crypto BOM unable to be part of the
+            # release it ships in.
             has_real_sbom_file = bool(self.sbom_file and self.sbom_file.lower() != NONE_SENTINEL)
             if self.lock_file or self.docker_image or not has_real_sbom_file:
                 raise ConfigurationError(
