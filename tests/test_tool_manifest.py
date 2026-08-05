@@ -68,13 +68,21 @@ def test_lockfiles_are_the_ones_dependabot_watches():
     for ecosystem in ("uv", "bun", "docker", "github-actions"):
         assert f'package-ecosystem: "{ecosystem}"' in config, f"{ecosystem} is not configured"
 
-    # gomod, cargo and maven moved to sbomify/sbom-tools with the tools they
-    # pinned, and are configured there. Watching them here would open PRs
-    # against lockfiles this repository no longer has.
-    for ecosystem in ("gomod", "cargo", "maven"):
+    # gomod and cargo moved to sbomify/sbom-tools with the tools they pinned,
+    # and are configured there. Watching them here would open PRs against
+    # lockfiles this repository no longer has.
+    for ecosystem in ("gomod", "cargo"):
         assert f'package-ecosystem: "{ecosystem}"' not in config, (
             f"{ecosystem} is still watched here, but its lockfile moved to sbom-tools"
         )
+
+    # maven is watched again, for a different thing. It no longer pins the
+    # Maven distribution -- that is a bundle's job now -- but tools/pom.xml
+    # pins the CycloneDX plugins the JVM generators drive, which Maven and sbt
+    # fetch themselves at run time.
+    assert 'package-ecosystem: "maven"' in config
+    assert not (root / "tools" / "Cargo.lock").exists(), "the Rust tool pins belong to sbom-tools now"
+    assert not (root / "tools" / "go.mod").exists(), "the Go tool pins belong to sbom-tools now"
 
 
 def test_manifest_loads_and_validates():
@@ -279,3 +287,46 @@ class TestNativeLockfileReaders:
     def test_an_unknown_lockfile_is_rejected(self):
         with pytest.raises(tool_manifest.ManifestError, match="no reader for"):
             tool_manifest._resolve_version("x", {"version_from": {"file": "README.md"}})
+
+
+class TestPluginVersionsAreWatched:
+    """The JVM plugin versions must stay somewhere Dependabot can see them.
+
+    These plugins are not tools we install -- Maven, Gradle and sbt fetch them
+    themselves -- so they have no entry in tools.toml and no bundle, and it is
+    easy to leave them as literals in Python. That is a pin nothing watches,
+    which is the drift the rest of this manifest exists to stop.
+    """
+
+    def test_the_generators_read_their_versions_from_manifests(self):
+        from sbomify_action._generation.generators import cyclonedx_jvm
+        from sbomify_action.tool_manifest import plugin_version
+
+        assert cyclonedx_jvm.CYCLONEDX_MAVEN_PLUGIN.endswith(
+            plugin_version("tools/pom.xml", artifact="cyclonedx-maven-plugin")
+        )
+        assert cyclonedx_jvm.CYCLONEDX_GRADLE_PLUGIN.endswith(
+            plugin_version("tools/build.gradle", coordinate="org.cyclonedx:cyclonedx-gradle-plugin")
+        )
+        assert cyclonedx_jvm.SBT_SBOM_PLUGIN == plugin_version("tools/pom.xml", artifact="sbt-sbom_2.12_1.0")
+
+    def test_no_plugin_version_is_written_in_the_source(self):
+        """A literal here would be invisible to Dependabot."""
+        source = (REPO_ROOT / "sbomify_action" / "_generation" / "generators" / "cyclonedx_jvm.py").read_text()
+        # Any bare "<digits>.<digits>.<digits>" in a plugin coordinate.
+        offenders = re.findall(r'"org\.cyclonedx:[a-z-]+:\d+\.\d+', source)
+        assert offenders == [], f"plugin versions hard-coded in the generator: {offenders}"
+
+    def test_dependabot_watches_both_manifests(self):
+        """Two ecosystems, because the plugins live in two registries.
+
+        Maven Central carries the Maven plugin and sbt-sbom. The Gradle plugin
+        is published to the Gradle Plugin Portal and Central does not have the
+        current version at all, so only a Gradle manifest can resolve it.
+        """
+        for manifest in ("tools/pom.xml", "tools/build.gradle"):
+            assert (REPO_ROOT / manifest).exists(), f"{manifest} is missing"
+
+        config = (REPO_ROOT / ".github" / "dependabot.yml").read_text()
+        for ecosystem in ("maven", "gradle"):
+            assert f'package-ecosystem: "{ecosystem}"' in config, f"{ecosystem} is not configured"

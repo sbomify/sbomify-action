@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Pins the CycloneDX plugins this action drives, in a manifest Dependabot's
+  `maven` updater maintains.
+
+  Nothing here is compiled and this is not a Java project. The plugins are
+  fetched by Maven and sbt themselves at run time, so there is no artifact to
+  build; the pom exists so the versions live somewhere a bot can see and
+  raise a PR against, rather than as literals in Python that nothing watches.
+  Same reasoning as tools/Cargo.toml and tools/go.mod before the tools moved
+  to sbomify/sbom-tools.
+
+  The Gradle plugin is deliberately absent: Maven Central carries only stale
+  versions of it (3.3.0 returns 404 there) and it is published to the Gradle
+  Plugin Portal instead, so it is pinned in tools/build.gradle where
+  Dependabot's `gradle` updater can resolve it.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.sbomify</groupId>
+  <artifactId>sbomify-action-jvm-plugins</artifactId>
+  <version>0.0.0</version>
+  <packaging>pom</packaging>
+
+  <dependencies>
+    <!-- Invoked as org.cyclonedx:cyclonedx-maven-plugin:VERSION:makeAggregateBom -->
+    <dependency>
+      <groupId>org.cyclonedx</groupId>
+      <artifactId>cyclonedx-maven-plugin</artifactId>
+      <version>2.9.1</version>
+    </dependency>
+
+    <!--
+      An sbt plugin, published to Central with sbt's cross-version suffix.
+      Dependabot has no sbt updater, but it reads this as an ordinary Maven
+      coordinate, which is enough to keep it current.
+    -->
+    <dependency>
+      <groupId>com.github.sbt</groupId>
+      <artifactId>sbt-sbom_2.12_1.0</artifactId>
+      <version>0.6.0</version>
+    </dependency>
+  </dependencies>
+</project>

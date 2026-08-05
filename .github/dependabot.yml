@@ -39,3 +39,24 @@ updates:
       docker:
         patterns:
           - "*"
+
+  # The CycloneDX plugins the JVM generators drive. Nothing here is built --
+  # Maven, Gradle and sbt fetch the plugins themselves at run time -- so these
+  # manifests exist only so the versions are visible to a bot rather than
+  # being literals in Python that nothing watches.
+  - package-ecosystem: "maven"
+    directory: "/tools"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+
+  # Separate from maven because the Gradle plugin is published to the Gradle
+  # Plugin Portal, not Maven Central, which carries only stale versions of it.
+  - package-ecosystem: "gradle"
+    directory: "/tools"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+

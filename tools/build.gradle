@@ -1,0 +1,22 @@
+// Pins the CycloneDX Gradle plugin, in a manifest Dependabot's `gradle`
+// updater maintains.
+//
+// Nothing here is built. The plugin is fetched by the user's own Gradle at
+// run time, applied through an init script so their build files are never
+// edited. This file exists so the version is visible to a bot rather than
+// being a literal in Python that nothing watches.
+//
+// It is separate from tools/pom.xml because the plugin is published to the
+// Gradle Plugin Portal and not to Maven Central -- Central's index answers
+// 1.4.0 and does not carry 3.3.0 at all -- so only a Gradle manifest can
+// resolve it.
+
+buildscript {
+    repositories {
+        maven { url = "https://plugins.gradle.org/m2/" }
+        mavenCentral()
+    }
+    dependencies {
+        classpath "org.cyclonedx:cyclonedx-gradle-plugin:3.3.0"
+    }
+}

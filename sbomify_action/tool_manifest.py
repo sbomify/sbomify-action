@@ -93,6 +93,20 @@ def _version_from_go_toolchain(path: Path) -> str:
     raise ManifestError(f"{path} has neither a toolchain nor a go directive")
 
 
+def _version_from_gradle(path: Path, coordinate: str) -> str:
+    """Read a pinned classpath coordinate out of a build.gradle.
+
+    Matched rather than parsed: evaluating Groovy to read one version would
+    mean shipping Gradle to do it. The line is a literal by construction --
+    it has to be, or Dependabot could not rewrite it either.
+    """
+    pattern = re.compile(rf"""["']{re.escape(coordinate)}:([^"':]+)["']""")
+    match = pattern.search(path.read_text())
+    if not match:
+        raise ManifestError(f"{coordinate} not found in {path}")
+    return match.group(1)
+
+
 def _version_from_toml_lock(path: Path, package: str) -> str:
     """Read a package's pinned version out of Cargo.lock or uv.lock.
 
@@ -183,8 +197,28 @@ _LOCKFILE_READERS: dict[str, Callable[[Path, dict[str, object]], str]] = {
     "uv.lock": lambda p, s: _version_from_toml_lock(p, str(s["package"])),
     "bun.lock": lambda p, s: _version_from_bun_lock(p, str(s["package"])),
     "pom.xml": lambda p, s: _version_from_pom(p, str(s["artifact"])),
+    "build.gradle": lambda p, s: _version_from_gradle(p, str(s["coordinate"])),
     "rust-toolchain.toml": lambda p, _s: _version_from_rust_toolchain(p),
 }
+
+
+def plugin_version(manifest: str, **selector: str) -> str:
+    """The pinned version of a build-system plugin.
+
+    The JVM plugins are not tools we install: Maven, Gradle and sbt fetch
+    them themselves, so they have no entry in tools.toml and no bundle. They
+    still have to be pinned somewhere a bot can see, which is tools/pom.xml
+    and tools/build.gradle -- restating them as literals in Python would put
+    them out of Dependabot's reach, the same drift this manifest exists to
+    stop.
+    """
+    path = _REPO_ROOT / manifest
+    if not path.exists():
+        raise ManifestError(f"{manifest} not found (looked in {path})")
+    reader = _LOCKFILE_READERS.get(path.name)
+    if reader is None:
+        raise ManifestError(f"no reader for {path.name}")
+    return reader(path, dict(selector))
 
 
 def _resolve_version(name: str, body: dict[str, object]) -> str:

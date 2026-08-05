@@ -34,6 +34,7 @@ from pathlib import Path
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
 from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled
+from sbomify_action.tool_manifest import plugin_version
 
 from ..protocol import FormatVersion, GenerationInput
 from ..result import GenerationResult
@@ -52,11 +53,21 @@ JVM_CYCLONEDX_DEFAULT = "1.6"
 JVM_SPDX_VERSIONS = ("SPDX-2.3",)
 JVM_SPDX_DEFAULT = "SPDX-2.3"
 
-#: Pinned rather than floating: an SBOM should not change because a plugin
-#: released overnight. Bumped deliberately, like everything else we pin.
-CYCLONEDX_MAVEN_PLUGIN = "org.cyclonedx:cyclonedx-maven-plugin:2.9.1"
-CYCLONEDX_GRADLE_PLUGIN = "org.cyclonedx:cyclonedx-gradle-plugin:3.3.0"
-SBT_SBOM_PLUGIN = "0.6.0"
+#: Read from tools/pom.xml and tools/build.gradle rather than written here.
+#: These are pinned, not floating -- an SBOM should not change because a
+#: plugin released overnight -- but a literal in Python is a pin no bot can
+#: see, so the versions live in manifests Dependabot maintains.
+#:
+#: Two manifests because the plugins live in two places: Maven Central
+#: carries the Maven plugin and sbt-sbom, while the Gradle plugin is
+#: published to the Gradle Plugin Portal and Central does not have 3.3.0 at
+#: all.
+_MAVEN_PLUGIN_VERSION = plugin_version("tools/pom.xml", artifact="cyclonedx-maven-plugin")
+_GRADLE_PLUGIN_VERSION = plugin_version("tools/build.gradle", coordinate="org.cyclonedx:cyclonedx-gradle-plugin")
+SBT_SBOM_PLUGIN = plugin_version("tools/pom.xml", artifact="sbt-sbom_2.12_1.0")
+
+CYCLONEDX_MAVEN_PLUGIN = f"org.cyclonedx:cyclonedx-maven-plugin:{_MAVEN_PLUGIN_VERSION}"
+CYCLONEDX_GRADLE_PLUGIN = f"org.cyclonedx:cyclonedx-gradle-plugin:{_GRADLE_PLUGIN_VERSION}"
 
 #: Applied through --init-script so the project's build files are never edited.
 #:
