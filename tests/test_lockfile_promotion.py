@@ -122,19 +122,25 @@ class TestDirectoriesCanBeScanned:
     the action to raw syft. Syft treats a directory as its native subject.
     """
 
-    def test_syft_claims_a_directory(self, tmp_path):
+    def test_syft_claims_a_directory(self, tmp_path, monkeypatch):
+        from sbomify_action._generation.generators import syft as syft_module
         from sbomify_action._generation.generators.syft import SyftFsGenerator
 
+        # Whether syft is installed on the machine running the tests is not
+        # what this asserts. It passed locally and failed in CI purely on that.
+        monkeypatch.setattr(syft_module, "_SYFT_AVAILABLE", True)
         target = tmp_path / "unpacked"
         target.mkdir()
         assert SyftFsGenerator().supports(
             GenerationInput(lock_file=str(target), output_file="o.json", output_format="cyclonedx")
         )
 
-    def test_an_unknown_file_is_still_declined(self, tmp_path):
+    def test_an_unknown_file_is_still_declined(self, tmp_path, monkeypatch):
         """Claiming directories must not turn syft into a generator for anything."""
+        from sbomify_action._generation.generators import syft as syft_module
         from sbomify_action._generation.generators.syft import SyftFsGenerator
 
+        monkeypatch.setattr(syft_module, "_SYFT_AVAILABLE", True)
         stray = tmp_path / "notes.txt"
         stray.write_text("hello")
         assert not SyftFsGenerator().supports(

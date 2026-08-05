@@ -93,8 +93,10 @@ class SyftFsGenerator:
         if not _SYFT_AVAILABLE:
             return False
 
-        # Only supports lock files
-        if not input.is_lock_file:
+        # Only supports lock files. Bound to a local so the directory check
+        # below narrows: is_lock_file tells mypy nothing about lock_file.
+        subject = input.lock_file
+        if not input.is_lock_file or subject is None:
             return False
 
         # A directory is syft's native subject, not a special case: it walks
@@ -104,7 +106,7 @@ class SyftFsGenerator:
         # bundle, a vendored tree, or any build output that is not one of the
         # three. Scanning our own bundles meant reaching past the action to
         # raw syft, which is a gap worth closing rather than working around.
-        if not Path(input.lock_file).is_dir() and input.lock_file_name not in SYFT_LOCK_FILES:
+        if not Path(subject).is_dir() and input.lock_file_name not in SYFT_LOCK_FILES:
             return False
 
         # Check format
