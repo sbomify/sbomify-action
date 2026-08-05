@@ -16,6 +16,7 @@ from pathlib import Path
 from sbomify_action import format_display_name
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.runtimes import can_provide, ensure_runtime
 from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
@@ -29,8 +30,16 @@ from ..protocol import (
 from ..result import GenerationResult
 from ..utils import DEFAULT_TIMEOUT, SYFT_LOCK_FILES, run_command
 
-# Check tool availability once at module load
+# Whatever is already on PATH wins, so a pip install keeps using the syft
+# the user installed. Failing that, syft is available if we can fetch it,
+# which is now the default everywhere rather than only inside our own image --
+# see runtimes.fetching_is_enabled, and SBOMIFY_FETCH_RUNTIMES=0 to opt out.
+# The fetch itself happens in generate(), where a failure can be reported
+# rather than silently dropping the generator from the chain.
+_SYFT_PATH: str | None
 _SYFT_AVAILABLE, _SYFT_PATH = check_tool_available("syft")
+if not _SYFT_AVAILABLE:
+    _SYFT_AVAILABLE = can_provide("syft")
 
 
 class SyftFsGenerator:
@@ -85,11 +94,21 @@ class SyftFsGenerator:
         if not _SYFT_AVAILABLE:
             return False
 
-        # Only supports lock files
-        if not input.is_lock_file:
+        # A directory is syft's own subject and needs no lock file to be
+        # named. It is a different claim from a lock file -- what is on disk
+        # rather than what an ecosystem resolved -- so it arrives as its own
+        # input rather than as a lock_file that happens to be a directory.
+        if input.is_source_dir:
+            return input.output_format in ("cyclonedx", "spdx") and not (
+                input.spec_version
+                and input.spec_version
+                not in (SYFT_SPDX_VERSIONS if input.output_format == "spdx" else SYFT_CYCLONEDX_VERSIONS)
+            )
+
+        subject = input.lock_file
+        if not input.is_lock_file or subject is None:
             return False
 
-        # Check if it's a supported lock file for Syft
         if input.lock_file_name not in SYFT_LOCK_FILES:
             return False
 
@@ -110,7 +129,8 @@ class SyftFsGenerator:
 
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using Syft scan command."""
-        assert input.lock_file is not None  # guaranteed by supports()
+        assert input.lock_file is not None or input.source_dir is not None  # guaranteed by supports()
+        ensure_runtime("syft")
         # Determine format string and version
         if input.output_format == "cyclonedx":
             version = input.spec_version or SYFT_CYCLONEDX_DEFAULT
@@ -122,10 +142,15 @@ class SyftFsGenerator:
         # Syft output format: -o format@version=file
         output_spec = f"{format_str}@{version}={input.output_file}"
 
+        # dir: is explicit rather than inferred. Syft guesses the source type
+        # from the string, and a directory name that happens to look like an
+        # image reference is read as one -- which is how bun.lock ended up
+        # being handed to a container registry.
+        subject = f"dir:{input.source_dir}" if input.is_source_dir else str(input.lock_file)
         cmd = [
             "syft",
             "scan",
-            input.lock_file,
+            subject,
             "-o",
             output_spec,
             "--source-name",
@@ -243,6 +268,7 @@ class SyftImageGenerator:
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using Syft scan command."""
         assert input.docker_image is not None  # guaranteed by supports()
+        ensure_runtime("syft")
         # Determine format string and version
         if input.output_format == "cyclonedx":
             version = input.spec_version or SYFT_CYCLONEDX_DEFAULT

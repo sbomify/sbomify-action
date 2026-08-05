@@ -1,13 +1,14 @@
 """Shared utilities for SBOM generation."""
 
 import re
-import shutil
 import subprocess
 import threading
+from pathlib import Path
 from typing import Optional
 
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.runtimes import ensure_runtime
 
 # Track whether Java/Maven has been installed on-demand
 _java_maven_installed = False
@@ -111,6 +112,18 @@ CDXGEN_LOCK_FILES = (
     PYTHON_LOCK_FILES
     + JAVASCRIPT_LOCK_FILES
     + JAVA_LOCK_FILES  # Best tool for Java/Gradle lock files
+    # Go belongs here. It was removed on the strength of a measurement that
+    # does not reproduce: cdxgen was said to hit "Invalid purl: name is a
+    # required field" and emit 0 components on go.mod. Re-measured, it returns
+    # 4 components on the go fixture and 4 on a bare go.mod as well. The
+    # original reading was taken without a Go toolchain on PATH -- cdxgen
+    # shells out to `go` -- and the go bundle now supplies one, so the
+    # condition that produced it no longer exists.
+    #
+    # cyclonedx-gomod still leads at priority 10 and remains the right tool
+    # for Go. Keeping cdxgen at 20 restores the middle rung of the ladder, so
+    # a project where the native generator declines degrades to cdxgen rather
+    # than falling all the way to syft.
     + GO_LOCK_FILES
     + RUST_LOCK_FILES
     + RUBY_LOCK_FILES
@@ -118,7 +131,10 @@ CDXGEN_LOCK_FILES = (
     + CPP_LOCK_FILES
     + PHP_LOCK_FILES
     + DOTNET_LOCK_FILES
-    + SWIFT_LOCK_FILES
+    # Swift is deliberately absent. cdxgen claims SwiftPM and then fails on a
+    # real project, and in strict mode a generator that claims an input and
+    # fails is fatal -- so claiming it cost the SBOM entirely instead of
+    # degrading to syft, which produces one. Syft still lists Swift.
     + ELIXIR_LOCK_FILES
     + SCALA_LOCK_FILES
 )
@@ -159,6 +175,27 @@ DEFAULT_TIMEOUT = 1800  # 30 minutes (large Maven projects can take a while)
 
 # Progress indicator interval in seconds
 PROGRESS_INTERVAL = 60  # Log progress every minute
+
+
+def convert_to_spdx(cyclonedx: Path, output: Path, cwd: Path) -> None:
+    """Turn a native CycloneDX document into SPDX.
+
+    Measured on spring-petclinic: 106 components in, 108 packages out at 99%
+    purl coverage. syft rather than cyclonedx-cli, which is marginally cleaner
+    (106 packages, 100%) but a 77MB self-contained .NET binary.
+
+    syft is not free here. Nothing is baked into the image, so a caller whose
+    ecosystem did not already need syft pays one bundle fetch the first time a
+    conversion happens; it is cached afterwards. Most callers have it already,
+    because the bundles that carry a native generator carry syft too.
+    """
+    ensure_runtime("syft")
+    run_command(
+        ["syft", "convert", str(cyclonedx), "-o", f"spdx-json={output}"],
+        "syft",
+        timeout=600,
+        cwd=str(cwd),
+    )
 
 
 def log_command_error(command_name: str, stderr: str, stdout: str, level: str = "error") -> None:
@@ -477,149 +514,73 @@ def get_lock_file_ecosystem(lock_file_name: str) -> Optional[str]:
     return None
 
 
+# Lock files whose generator also needs the project manifest beside them.
+#
+# A lock file records resolved versions; the manifest names the project. Tools
+# that build a root component from the manifest fail without it, and the
+# failure is obscure:
+#
+#   Cargo.lock  without Cargo.toml    cargo metadata: manifest path ... does not exist
+#   pubspec.lock without pubspec.yaml TypeError: Cannot read properties of
+#                                     undefined (reading 'bom-ref')
+#
+# Both were being absorbed by the fallback chain, so the generator looked
+# merely unlucky rather than mis-declared. Declining an input we cannot handle
+# is a routing decision; claiming it and failing is a defect.
+#
+# Only pairs verified to matter are listed. Adding one on suspicion would
+# silently narrow a generator's coverage.
+LOCK_FILE_MANIFESTS = {
+    "Cargo.lock": "Cargo.toml",
+    "pubspec.lock": "pubspec.yaml",
+}
+
+
+def has_required_manifest(lock_file: str | None) -> bool:
+    """Whether a lock file has the project manifest its generator needs."""
+    if not lock_file:
+        return True
+    required = LOCK_FILE_MANIFESTS.get(Path(lock_file).name)
+    if not required:
+        return True
+    return (Path(lock_file).parent / required).exists()
+
+
 def is_supported_lock_file(lock_file_name: str) -> bool:
     """Check if a lock file is supported."""
     return lock_file_name in ALL_LOCK_FILES
 
 
 def ensure_java_maven_installed() -> None:
+    """Make a JDK and Maven available for Java/Scala dependency resolution.
+
+    Previously this ran `apt-get install maven default-jdk-headless` during
+    the run: whatever the Debian mirror happened to serve that day, requiring
+    root, and recorded in no SBOM. Both are now pinned artifacts verified
+    against the vendor's published digest and unpacked into an unprivileged
+    prefix, so a release resolves Java projects with exactly the toolchain it
+    was built against.
     """
-    Install Maven + JDK on-demand if not already present.
+    ensure_runtime("java")
+    ensure_runtime("maven")
 
-    This function is called lazily when processing Java/Scala projects
-    to avoid bloating the Docker image with Java dependencies that are
-    only needed for a subset of ecosystems.
 
-    The installation state is cached to avoid repeated checks.
-    Thread-safe: uses a lock to prevent concurrent installation attempts.
+def ensure_dotnet_installed() -> None:
+    """Make the .NET SDK available for packages.lock.json resolution.
 
-    Raises:
-        SBOMGenerationError: If installation fails
+    cdxgen shells out to `dotnet` here. Without it the run does not degrade,
+    it fails outright -- measured: cdxgen exits 1 and produces no document at
+    all for a NuGet lock file. This was claimed in README.md's supported list
+    long before anything fetched an SDK.
     """
-    global _java_maven_installed
-
-    # Fast path: skip if already confirmed installed (no lock needed)
-    if _java_maven_installed:
-        return
-
-    # Use lock to prevent race conditions if multiple threads try to install
-    with _java_maven_lock:
-        # Double-check after acquiring lock (another thread may have installed)
-        if _java_maven_installed:
-            return
-
-        # Check if Maven is already available
-        if shutil.which("mvn"):
-            logger.debug("Maven already installed, skipping on-demand installation")
-            _java_maven_installed = True
-            return
-
-        logger.info("Java/Maven not found - installing for Java dependency resolution...")
-
-        try:
-            # Update package lists
-            subprocess.run(
-                ["apt-get", "update"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-
-            # Install Maven and JDK
-            subprocess.run(
-                [
-                    "apt-get",
-                    "install",
-                    "-y",
-                    "--no-install-recommends",
-                    "maven",
-                    "default-jdk-headless",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 minutes for package installation
-            )
-
-            _java_maven_installed = True
-            logger.info("Java/Maven installed successfully")
-
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr if e.stderr else str(e)
-            logger.error(f"Failed to install Java/Maven: {error_msg}")
-            raise SBOMGenerationError(f"Failed to install Java/Maven for dependency resolution: {error_msg}")
-        except subprocess.TimeoutExpired:
-            logger.error("Java/Maven installation timed out")
-            raise SBOMGenerationError("Java/Maven installation timed out")
+    ensure_runtime("dotnet")
 
 
 def ensure_go_installed() -> None:
+    """Make the Go toolchain available for Go dependency resolution.
+
+    Was `apt-get install golang`, with the same problems: unpinned, root-only
+    and absent from every SBOM. Now a pinned tarball from go.dev, checked
+    against their published SHA256.
     """
-    Install Go on-demand if not already present.
-
-    This function is called lazily when processing Go projects
-    to avoid bloating the Docker image with Go dependencies that are
-    only needed for a subset of ecosystems.
-
-    The installation state is cached to avoid repeated checks.
-    Thread-safe: uses a lock to prevent concurrent installation attempts.
-
-    Raises:
-        SBOMGenerationError: If installation fails
-    """
-    global _go_installed
-
-    # Fast path: skip if already confirmed installed (no lock needed)
-    if _go_installed:
-        return
-
-    # Use lock to prevent race conditions if multiple threads try to install
-    with _go_lock:
-        # Double-check after acquiring lock (another thread may have installed)
-        if _go_installed:
-            return
-
-        # Check if Go is already available
-        if shutil.which("go"):
-            logger.debug("Go already installed, skipping on-demand installation")
-            _go_installed = True
-            return
-
-        logger.info("Go not found - installing for Go dependency resolution...")
-
-        try:
-            # Update package lists
-            subprocess.run(
-                ["apt-get", "update"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-
-            # Install Go
-            subprocess.run(
-                [
-                    "apt-get",
-                    "install",
-                    "-y",
-                    "--no-install-recommends",
-                    "golang",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 minutes for package installation
-            )
-
-            _go_installed = True
-            logger.info("Go installed successfully")
-
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr if e.stderr else str(e)
-            logger.error(f"Failed to install Go: {error_msg}")
-            raise SBOMGenerationError(f"Failed to install Go for dependency resolution: {error_msg}")
-        except subprocess.TimeoutExpired:
-            logger.error("Go installation timed out")
-            raise SBOMGenerationError("Go installation timed out")
+    ensure_runtime("go")

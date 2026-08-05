@@ -1,60 +1,24 @@
 #!/bin/bash
+# Thin wrapper kept so existing callers keep working.
+#
+# The versions themselves now live in sbomify_action/tools.toml -- see
+# scripts/additional_packages.py. This script used to scrape them back out of
+# the Dockerfile with sed, which meant a tool could be removed from the image
+# and still be declared in our own SBOM (or, as happened, break every workflow
+# the moment an ARG disappeared).
+#
+#   sourced   exports <TOOL>_VERSION for each pinned tool
+#   executed  prints the PURLs for tools the image actually contains
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DOCKERFILE="${SCRIPT_DIR}/../Dockerfile"
+PY="${PYTHON:-python3}"
 
-# Expected version format: digits and dots only (e.g., 0.67.2)
-# Note: Using [0-9.]* not [0-9.]+ because basic sed doesn't support +
-# The validation below catches empty matches anyway
-VERSION_REGEX='[0-9.]*'
+eval "$(cd "$SCRIPT_DIR/.." && "$PY" scripts/additional_packages.py --env)"
+for var in $(cd "$SCRIPT_DIR/.." && "$PY" scripts/additional_packages.py --env | cut -d= -f1); do
+  export "${var?}"
+done
 
-# Extract version from a Dockerfile ${NAME}_VERSION= assignment (e.g., ARG or ENV)
-# Usage: extract_version "TOOL_NAME" "/path/to/Dockerfile"
-extract_version() {
-  local name="$1"
-  local dockerfile="$2"
-  sed -n "s/.*${name}_VERSION=\(${VERSION_REGEX}\).*/\1/p" "$dockerfile" | head -1
-}
-
-if [ ! -f "$DOCKERFILE" ]; then
-  echo "ERROR: Dockerfile not found at $DOCKERFILE" >&2
-  exit 1
-fi
-
-SYFT_VERSION=$(extract_version "SYFT" "$DOCKERFILE")
-CARGO_CYCLONEDX_VERSION=$(extract_version "CARGO_CYCLONEDX" "$DOCKERFILE")
-UV_VERSION=$(extract_version "UV" "$DOCKERFILE")
-BUN_VERSION=$(extract_version "BUN" "$DOCKERFILE")
-
-if [ -z "$SYFT_VERSION" ]; then
-  echo "ERROR: Could not extract SYFT_VERSION from Dockerfile" >&2
-  exit 1
-fi
-
-if [ -z "$CARGO_CYCLONEDX_VERSION" ]; then
-  echo "ERROR: Could not extract CARGO_CYCLONEDX_VERSION from Dockerfile" >&2
-  exit 1
-fi
-
-if [ -z "$UV_VERSION" ]; then
-  echo "ERROR: Could not extract UV_VERSION from Dockerfile" >&2
-  exit 1
-fi
-
-if [ -z "$BUN_VERSION" ]; then
-  echo "ERROR: Could not extract BUN_VERSION from Dockerfile" >&2
-  exit 1
-fi
-
-# Export for sourcing
-export SYFT_VERSION
-export CARGO_CYCLONEDX_VERSION
-export UV_VERSION
-export BUN_VERSION
-
-# When executed directly (not sourced), output PURLs
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  echo "pkg:golang/github.com/anchore/syft@v${SYFT_VERSION}"
-  echo "pkg:cargo/cargo-cyclonedx@${CARGO_CYCLONEDX_VERSION}"
+  (cd "$SCRIPT_DIR/.." && "$PY" scripts/additional_packages.py --stage image)
 fi

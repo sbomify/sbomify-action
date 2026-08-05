@@ -15,6 +15,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.runtimes import can_provide, ensure_runtime
 from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
@@ -27,14 +28,24 @@ from ..result import GenerationResult
 from ..utils import (
     CDXGEN_LOCK_FILES,
     DEFAULT_TIMEOUT,
+    ensure_dotnet_installed,
     ensure_go_installed,
     ensure_java_maven_installed,
     get_lock_file_ecosystem,
+    has_required_manifest,
     run_command,
 )
 
-# Check tool availability once at module load
+# cdxgen is no longer baked into the image, so a PATH probe at import time
+# would answer "missing" and this generator would decline every input it is
+# the best tool for. What matters now is whether it can be *made* available:
+# it is a pinned runtime, so on a supported architecture it always can. The
+# fetch itself happens in generate(), where a failure can be reported
+# properly instead of silently removing the generator from the chain.
+_CDXGEN_PATH: str | None
 _CDXGEN_AVAILABLE, _CDXGEN_PATH = check_tool_available("cdxgen")
+if not _CDXGEN_AVAILABLE:
+    _CDXGEN_AVAILABLE = can_provide("cdxgen")
 
 # Mapping from ecosystem names to cdxgen --type values
 # See: https://cyclonedx.github.io/cdxgen/#/PROJECT_TYPES
@@ -57,7 +68,11 @@ CDXGEN_TYPE_MAP = {
 # Ecosystems that use parent/child project structures (e.g., Maven parent POMs, Gradle multi-project)
 # For these, we allow recursion so cdxgen can follow module references
 # The -t flag will still restrict scanning to only that ecosystem
-RECURSE_ECOSYSTEMS = {"java", "scala"}
+# .NET belongs here too: project files sit at depth and the lock file often
+# is not at the root -- Hangfire keeps its in .nuget/ -- so scanning only the
+# top directory returns an empty document and exit code 0. Measured on the
+# real repository, recursion takes it from 4 components to 306.
+RECURSE_ECOSYSTEMS = {"java", "scala", "dotnet"}
 
 
 class CdxgenFsGenerator:
@@ -115,6 +130,12 @@ class CdxgenFsGenerator:
         if input.lock_file_name not in CDXGEN_LOCK_FILES:
             return False
 
+        # Some lock files need their project manifest beside them. Without
+        # pubspec.yaml, cdxgen has no root component to hang the graph off and
+        # dies with "Cannot read properties of undefined (reading 'bom-ref')".
+        if not has_required_manifest(input.lock_file):
+            return False
+
         # Only supports CycloneDX format (cdxgen doesn't output SPDX)
         if input.output_format != "cyclonedx":
             return False
@@ -144,6 +165,12 @@ class CdxgenFsGenerator:
         ecosystem = get_lock_file_ecosystem(lock_file_name)
         cdxgen_type = CDXGEN_TYPE_MAP.get(ecosystem) if ecosystem else None
 
+        # cdxgen is fetched rather than baked in: the bun runtime plus
+        # node_modules was 619MB, which every user pulled whether or not they
+        # had a project it could scan. The standalone binary is 35.6MB and
+        # produces identical output.
+        ensure_runtime("cdxgen")
+
         # Install Java/Maven on-demand for Java/Scala ecosystems
         if ecosystem in ("java", "scala"):
             ensure_java_maven_installed()
@@ -151,6 +178,11 @@ class CdxgenFsGenerator:
         # Install Go on-demand for Go ecosystem
         if ecosystem == "go":
             ensure_go_installed()
+
+        # The .NET SDK, for the same reason: cdxgen invokes `dotnet` to read
+        # packages.lock.json and fails without it.
+        if ecosystem == "dotnet":
+            ensure_dotnet_installed()
 
         cmd = [
             "cdxgen",
@@ -245,8 +277,20 @@ class CdxgenImageGenerator:
 
     @property
     def priority(self) -> int:
-        # Comprehensive multi-ecosystem, higher priority than Trivy/Syft
-        return 20
+        # Below syft (35), unlike the filesystem generator at 20.
+        #
+        # cdxgen is the better tool for lock files, but not for container
+        # images. Measured across the 27 image pairs in tests/test-data:
+        #
+        #   total components   cdxgen 7389   syft 77795   (10.5x)
+        #   per-image wins     syft 27       cdxgen 0
+        #   gcr.io/distroless/static-debian12: cdxgen returns 0, syft 951
+        #
+        # Syft wins every image. Leaving cdxgen ahead meant every container
+        # SBOM we produced was an order of magnitude thinner than it needed
+        # to be, and nothing surfaced it: a short SBOM still looks like
+        # success.
+        return 40
 
     @property
     def supported_formats(self) -> list[FormatVersion]:
@@ -288,6 +332,8 @@ class CdxgenImageGenerator:
         """Generate an SBOM using cdxgen command for Docker images."""
         assert input.docker_image is not None  # guaranteed by supports()
         version = input.spec_version or CDXGEN_CYCLONEDX_DEFAULT
+
+        ensure_runtime("cdxgen")
 
         cmd = [
             "cdxgen",

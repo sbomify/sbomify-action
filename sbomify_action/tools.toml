@@ -1,0 +1,87 @@
+# What this action fetches at run time.
+#
+# The tools themselves are built, bundled and attested in
+# https://github.com/sbomify/sbom-tools. This file only records which bundle
+# serves which tool, because that has to be known before anything is
+# downloaded. Everything else about a bundle -- where its executables live,
+# what environment it needs -- is described by the bundle.toml inside it, so
+# a bundle can change shape without changing this file.
+#
+# A bundle carries no digest here on purpose. It is verified by its Sigstore
+# attestation, which contains the subject digest inside the signed statement:
+# a digest that was signed, rather than one transcribed into this file and
+# trusted because it is written down. That is also what makes the rolling
+# release usable at all, since its bytes change on every push to master.
+
+# Which sbom-tools release to fetch from. "tools-rolling" tracks master;
+# scripts/freeze_tool_versions.py stamps a release tag in its place when the
+# image is built, so a cut release keeps fetching the bundles it was tested
+# against for as long as it exists.
+tools_release = "tools-rolling"
+
+# ---------------------------------------------------------------------------
+# Bundles. `provides` is the lookup that decides what to download when a
+# generator asks for a tool; it is not a description of the contents, which
+# the bundle states for itself.
+# ---------------------------------------------------------------------------
+
+[bundle.go]
+provides = ["cyclonedx-gomod", "go"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#go"
+
+[bundle.rust]
+provides = ["cargo-cyclonedx", "cargo", "rustc", "rust"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#rust"
+
+[bundle.jvm]
+provides = ["java", "maven", "gradle", "sbt"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#jvm"
+
+[bundle.dotnet]
+provides = ["dotnet"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#dotnet"
+
+[bundle.cdxgen]
+provides = ["cdxgen"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#cdxgen"
+
+[bundle.syft]
+provides = ["syft"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#syft"
+
+[bundle.sigstore]
+provides = ["crane"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#sigstore"
+
+# ---------------------------------------------------------------------------
+# The one tool still fetched from its vendor, and the only one pinned by
+# digest here.
+# ---------------------------------------------------------------------------
+
+[tool.cosign]
+# A literal, because there is no longer a lockfile here to read it from:
+# cosign is pinned in sbomify/sbom-tools like every other tool, and this
+# copy exists only so the bootstrap fetch has a digest to check.
+# bin/check_tool_versions.py watches it for updates.
+version = "3.1.2"
+stage = "runtime"
+purl = "pkg:golang/github.com/sigstore/cosign@v{version}"
+github_repo = "sigstore/cosign"
+kind = "raw"
+
+[tool.cosign.assets.amd64]
+url = "https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64"
+sha256 = "f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf"
+
+[tool.cosign.assets.arm64]
+url = "https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-arm64"
+sha256 = "90e7ae0b5dfd60f20816b52c012addf7fc055ebcc7bea4ce81c428ca8518c302"
+
+[tool.uv]
+# Builds the image; not shipped inside it. Pinned in our own uv.lock like any
+# other Python dependency.
+version_from = { file = "uv.lock", package = "uv" }
+stage = "build"
+purl = "pkg:pypi/uv@{version}"
+github_repo = "astral-sh/uv"
+dockerfile_arg = "UV_VERSION"

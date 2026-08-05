@@ -7,13 +7,15 @@ Supported inputs:
 - Cargo.lock
 
 Supported outputs:
-- CycloneDX 1.4-1.6 (via --spec-version)
+- CycloneDX 1.3-1.5 (via --spec-version; the tool does not emit 1.6)
 """
 
+import shutil
 from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.runtimes import can_provide, ensure_runtime
 from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
@@ -23,14 +25,26 @@ from ..protocol import (
     GenerationInput,
 )
 from ..result import GenerationResult
-from ..utils import run_command
+from ..utils import convert_to_spdx, has_required_manifest, run_command
 
 # Check tool availability once at module load (mirrors cyclonedx_py / syft).
 # Without this guard, supports() would claim a Cargo.lock and then fail at
 # generate() time when cargo-cyclonedx isn't installed (eg pip installs that
 # don't bundle it) — a spurious ERROR + wasted attempt before the orchestrator
 # falls through to a generic generator.
+# PATH first, so a pip install keeps the user's own binary; otherwise it is
+# available only where we can fetch it. It is a cargo subcommand, so it is
+# useless without the Rust toolchain, which generate() also fetches.
+#: SPDX is converted from the CycloneDX rather than scanned for. syft reports
+#: more packages for fd -- 122 against 65 -- but the extras are GitHub Actions
+#: read out of .github/workflows and crates for other target platforms,
+#: neither of which is in this build's closure.
+CARGO_SPDX_VERSIONS = ("SPDX-2.3",)
+CARGO_SPDX_DEFAULT = "SPDX-2.3"
+
 _CARGO_CYCLONEDX_AVAILABLE, _CARGO_CYCLONEDX_PATH = check_tool_available("cargo-cyclonedx")
+if not _CARGO_CYCLONEDX_AVAILABLE:
+    _CARGO_CYCLONEDX_AVAILABLE = can_provide("cargo-cyclonedx")
 
 
 class CycloneDXCargoGenerator:
@@ -42,8 +56,8 @@ class CycloneDXCargoGenerator:
     and should be preferred over generic tools.
 
     Verified capabilities (cargo-cyclonedx 0.5.7):
-    - CycloneDX versions: 1.4, 1.5, 1.6
-    - Default version: 1.6
+    - CycloneDX versions: 1.3, 1.4, 1.5
+    - Default version: 1.5
     - Version selection: --spec-version flag
     """
 
@@ -67,7 +81,12 @@ class CycloneDXCargoGenerator:
                 format="cyclonedx",
                 versions=CARGO_CYCLONEDX_VERSIONS,
                 default_version=CARGO_CYCLONEDX_DEFAULT,
-            )
+            ),
+            FormatVersion(
+                format="spdx",
+                versions=CARGO_SPDX_VERSIONS,
+                default_version=CARGO_SPDX_DEFAULT,
+            ),
         ]
 
     def supports(self, input: GenerationInput) -> bool:
@@ -86,26 +105,33 @@ class CycloneDXCargoGenerator:
             return False
 
         # Only supports CycloneDX format
-        if input.output_format != "cyclonedx":
+        if input.output_format not in ("cyclonedx", "spdx"):
             return False
 
         # Only supports Cargo.lock
         if input.lock_file_name != "Cargo.lock":
             return False
 
+        # ...and only alongside a Cargo.toml. cargo-cyclonedx drives
+        # `cargo metadata`, which needs the manifest, not just the lock.
+        if not has_required_manifest(input.lock_file):
+            return False
+
         # Check version if specified
         if input.spec_version:
-            if input.spec_version not in CARGO_CYCLONEDX_VERSIONS:
+            allowed = CARGO_SPDX_VERSIONS if input.output_format == "spdx" else CARGO_CYCLONEDX_VERSIONS
+            if input.spec_version not in allowed:
                 return False
 
         return True
 
     def generate(self, input: GenerationInput) -> GenerationResult:
-        """Generate a CycloneDX SBOM using cargo-cyclonedx."""
-        spec_version = input.spec_version or CARGO_CYCLONEDX_DEFAULT
+        """Generate a CycloneDX SBOM, or SPDX converted from it."""
+        wants_spdx = input.output_format == "spdx"
+        spec_version = input.spec_version or (CARGO_SPDX_DEFAULT if wants_spdx else CARGO_CYCLONEDX_DEFAULT)
 
         # Validate version
-        if spec_version not in CARGO_CYCLONEDX_VERSIONS:
+        if not wants_spdx and spec_version not in CARGO_CYCLONEDX_VERSIONS:
             return GenerationResult.failure_result(
                 error_message=f"Unsupported CycloneDX version: {spec_version}. "
                 f"Supported: {', '.join(CARGO_CYCLONEDX_VERSIONS)}",
@@ -136,34 +162,92 @@ class CycloneDXCargoGenerator:
         # Convert output file to absolute path since we're changing cwd
         output_file_abs = str(Path(input.output_file).resolve())
 
+        # cargo-cyclonedx has no --output-file: it always writes into the project
+        # tree, naming the file after the crate. --override-filename sets the stem
+        # and --format supplies the extension, so we write to a scratch name and
+        # move it to the caller's path afterwards. The dot prefix avoids colliding
+        # with a real "<crate>.json" in the repo.
+        #
+        # For a workspace it writes one file per member crate, in each member's
+        # own directory, and nothing at the root -- so collect recursively rather
+        # than assuming a single file next to Cargo.lock.
+        scratch_stem = ".sbomify-cargo-cyclonedx"
+
+        # The tool only speaks CycloneDX. When SPDX was asked for, spec_version
+        # names an SPDX version, which cargo-cyclonedx rejects outright with
+        # "Unsupported Spec Version 'SPDX-2.3'" -- so generate the CycloneDX at
+        # its own default and let the conversion produce the SPDX version.
+        tool_version = CARGO_CYCLONEDX_DEFAULT if input.output_format == "spdx" else spec_version
+
         cmd = [
             "cargo-cyclonedx",
             "cyclonedx",
             "--spec-version",
-            spec_version,
+            tool_version,
             "--format",
             "json",
-            "--output-file",
-            output_file_abs,
+            "--override-filename",
+            scratch_stem,
         ]
 
-        logger.info(f"Running cargo-cyclonedx for {input.lock_file_name} (CycloneDX {spec_version})")
+        # cargo-cyclonedx is a cargo subcommand: it shells out to `cargo
+        # metadata` for the dependency graph and to `rustc` for the host target
+        # triple, and fails without either. The toolchain is fetched rather
+        # than baked in -- ~630MB to support a 7MB subcommand -- and fetched
+        # unconditionally rather than "only if cargo is missing", because
+        # preferring whatever cargo is on PATH would run one toolchain while
+        # the SBOM names the pinned one.
+        ensure_runtime("cargo-cyclonedx")
+        ensure_runtime("rust")
 
-        # run_command raises SBOMGenerationError on failure (uses check=True)
-        run_command(cmd, "cargo-cyclonedx", timeout=300, cwd=str(project_dir))
+        logger.info(f"Running cargo-cyclonedx for {input.lock_file_name} (CycloneDX {tool_version})")
 
-        # Verify output file was created
-        if not Path(output_file_abs).exists():
-            return GenerationResult.failure_result(
-                error_message="cargo-cyclonedx completed but output file not created",
-                sbom_format="cyclonedx",
-                spec_version=spec_version,
-                generator_name=self.name,
-            )
+        produced: list[Path] = []
+        try:
+            # run_command raises SBOMGenerationError on failure (uses check=True)
+            run_command(cmd, "cargo-cyclonedx", timeout=300, cwd=str(project_dir))
+
+            produced = sorted(project_dir.rglob(f"{scratch_stem}.json"))
+
+            if not produced:
+                return GenerationResult.failure_result(
+                    error_message="cargo-cyclonedx completed but output file not created",
+                    sbom_format="cyclonedx",
+                    spec_version=spec_version,
+                    generator_name=self.name,
+                )
+
+            if len(produced) > 1:
+                # A cargo workspace: one SBOM per member crate, and merging them
+                # is not this generator's job. Decline -- explicitly, so the
+                # orchestrator hands the input on instead of treating a routing
+                # decision as a defect and aborting the run.
+                return GenerationResult.declined_result(
+                    error_message=(
+                        f"cargo-cyclonedx produced {len(produced)} SBOMs "
+                        "(cargo workspace with multiple member crates); "
+                        "falling back to a generator that emits one document"
+                    ),
+                    sbom_format="cyclonedx",
+                    spec_version=spec_version,
+                    generator_name=self.name,
+                )
+
+            Path(output_file_abs).parent.mkdir(parents=True, exist_ok=True)
+            if input.output_format == "spdx":
+                convert_to_spdx(produced[0], Path(output_file_abs), project_dir)
+            else:
+                shutil.move(str(produced[0]), output_file_abs)
+        finally:
+            # Never leave scratch files behind in someone's repo -- including the
+            # per-crate ones a workspace scatters, and including when generation
+            # failed partway through.
+            for leftover in project_dir.rglob(f"{scratch_stem}.json"):
+                leftover.unlink(missing_ok=True)
 
         return GenerationResult.success_result(
             output_file=output_file_abs,
-            sbom_format="cyclonedx",
+            sbom_format=input.output_format,
             spec_version=spec_version,
             generator_name=self.name,
         )

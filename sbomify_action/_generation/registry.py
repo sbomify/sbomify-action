@@ -1,6 +1,9 @@
 """Generator registry for managing SBOM generator plugins."""
 
 import json
+import os
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from sbomify_action import format_display_name
@@ -17,6 +20,93 @@ from sbomify_action.validation import validate_sbom_file
 
 from .protocol import FormatVersion, GenerationInput, Generator
 from .result import GenerationResult
+
+# Set in the Dockerfile. Inside our own image the toolset is fixed and known,
+# so a generator that claims an input and then breaks is our bug, not the
+# user's environment -- and silently substituting a lower-priority tool hides
+# it. That is exactly how cyclonedx-cargo shipped broken: it asked for a spec
+# version it does not support, failed on every Rust project, and syft quietly
+# produced the SBOM instead.
+_CONTAINER_MARKER_ENV = "SBOMIFY_IN_CONTAINER"
+
+# Escape hatch for anyone who wants the old permissive behaviour in-container.
+_ALLOW_FALLBACK_ENV = "SBOMIFY_ALLOW_GENERATOR_FALLBACK"
+
+
+def fallback_is_a_bug() -> bool:
+    """Whether falling back to a lower-priority generator should abort.
+
+    True inside our own container image, where the installed tools are fixed
+    and a failure is a defect we shipped. False for pip installs, where the
+    surrounding environment is unknown and using whatever is present is the
+    helpful thing to do.
+    """
+    if os.environ.get(_ALLOW_FALLBACK_ENV, "").lower() in ("1", "true", "yes"):
+        return False
+    if os.environ.get(_CONTAINER_MARKER_ENV, "").lower() in ("1", "true", "yes"):
+        return True
+    # Belt and braces for images built before the marker existed.
+    return Path("/.dockerenv").exists()
+
+
+#: A manifest and the lock file that supersedes it, when both are present.
+#:
+#: These names are all documented as supported, and they are -- but a manifest
+#: declares ranges while its lock file pins versions, and several tools read
+#: only the latter. Pointed at pyproject.toml, package.json, composer.json or
+#: go.sum, syft emitted a one-package SPDX document: valid, exit code 0, and
+#: empty of everything the caller wanted. Package.swift was worse, producing
+#: nothing at all in CycloneDX while Package.resolved beside it worked.
+#:
+#: So when a caller names the manifest and the lock file is right there, the
+#: lock file is what gets read. It is the same project either way, described
+#: more precisely. Absent the sibling, nothing changes.
+LOCKFILE_FOR_MANIFEST = {
+    "pyproject.toml": ("poetry.lock", "uv.lock", "Pipfile.lock"),
+    "package.json": ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"),
+    "composer.json": ("composer.lock",),
+    "Package.swift": ("Package.resolved",),
+    # go.sum records hashes for the whole module graph but is not itself a
+    # manifest; cyclonedx-gomod wants the go.mod beside it.
+    "go.sum": ("go.mod",),
+}
+
+
+def promote_to_lockfile(input: GenerationInput) -> GenerationInput:
+    """Read the lock file when the caller named a manifest sitting beside one."""
+    if not input.lock_file:
+        return input
+    # os.path rather than Path: tests substitute Path in this module to drive
+    # the fallback paths, and a helper this small should not be entangled with
+    # that. The operations are basename/dirname/isfile either way.
+    name = os.path.basename(input.lock_file)
+    for candidate in LOCKFILE_FOR_MANIFEST.get(name, ()):
+        sibling = os.path.join(os.path.dirname(input.lock_file), candidate)
+        if os.path.isfile(sibling):
+            logger.info(f"Reading {candidate} rather than {name}: it pins what the manifest only constrains")
+            return replace(input, lock_file=sibling)
+    return input
+
+
+class _DowngradeRefused(SBOMGenerationError):
+    """Raised by strict mode to abort rather than silently downgrade.
+
+    A dedicated type so the retry loop can let *this* through while still
+    letting a generator's own SBOMGenerationError take the normal fallback
+    path. Catching the base class here would abort for pip users too, which
+    is exactly the behaviour strict mode is not supposed to change.
+    """
+
+
+def _degraded_message(failed: str, remaining: list[str], error: str) -> str:
+    """Explain a silent quality downgrade that we are refusing to perform."""
+    return (
+        f"Generator '{failed}' claimed this input and then failed: {error}\n"
+        f"Falling back to {', '.join(remaining)} would silently produce a "
+        f"lower-quality SBOM than the one that was asked for, so this is being "
+        f"treated as a bug in the sbomify image rather than papered over.\n"
+        f"Set {_ALLOW_FALLBACK_ENV}=1 to fall back anyway."
+    )
 
 
 class GeneratorRegistry:
@@ -114,6 +204,7 @@ class GeneratorRegistry:
         Raises:
             ValueError: If no generator supports the input
         """
+        input = promote_to_lockfile(input)
         generators = self.get_generators_for(input)
 
         if not generators:
@@ -152,7 +243,8 @@ class GeneratorRegistry:
 
         errors: list[str] = []
         attempted_generators: list[str] = []
-        for generator in generators:
+        strict = fallback_is_a_bug()
+        for index, generator in enumerate(generators):
             logger.info(f"Trying generator: {generator.name}")
             attempted_generators.append(generator.name)
             try:
@@ -165,14 +257,24 @@ class GeneratorRegistry:
                         result = self._validate_result(result)
 
                     return result
+
+                remaining = [g.name for g in generators[index + 1 :]]
+                errors.append(f"{generator.name}: {result.error_message}")
+                if result.declined:
+                    # A routing decision, not a defect: always hand on.
+                    logger.info(f"Generator {generator.name} declined this input: {result.error_message}")
+                elif strict and remaining:
+                    raise _DowngradeRefused(_degraded_message(generator.name, remaining, str(result.error_message)))
                 else:
-                    errors.append(f"{generator.name}: {result.error_message}")
-                    # Log at INFO level to ensure it appears in Sentry breadcrumbs
-                    logger.info(f"Generator {generator.name} failed, will try next: {result.error_message}")
+                    self._warn_degraded(generator.name, remaining, str(result.error_message))
+            except _DowngradeRefused:
+                raise
             except Exception as e:
+                remaining = [g.name for g in generators[index + 1 :]]
                 errors.append(f"{generator.name}: {e}")
-                # Log at INFO level to ensure it appears in Sentry breadcrumbs
-                logger.info(f"Generator {generator.name} raised exception, will try next: {e}")
+                if strict and remaining:
+                    raise _DowngradeRefused(_degraded_message(generator.name, remaining, str(e))) from e
+                self._warn_degraded(generator.name, remaining, str(e))
 
         # All generators failed - check if it's a tool availability issue
         logger.info(f"All {len(attempted_generators)} generator(s) failed: {', '.join(attempted_generators)}")
@@ -201,6 +303,16 @@ class GeneratorRegistry:
             spec_version=spec_version,
             generator_name="none",
         )
+
+    def _warn_degraded(self, failed: str, remaining: list[str], error: str) -> None:
+        """Say plainly what quality is being lost by moving down the chain."""
+        if remaining:
+            logger.warning(
+                f"Generator '{failed}' failed and is being replaced by "
+                f"'{remaining[0]}', which may produce a lower-quality SBOM: {error}"
+            )
+        else:
+            logger.info(f"Generator {failed} failed and no generators remain: {error}")
 
     def _validate_result(self, result: GenerationResult) -> GenerationResult:
         """Validate a generation result and update with validation info."""

@@ -215,6 +215,7 @@ class Config:
     sbom_file: Optional[str] = None
     docker_image: Optional[str] = None
     lock_file: Optional[str] = None
+    source_dir: Optional[str] = None
     output_file: str = "sbom_output.json"
     upload: bool = True
     upload_destinations: list[str] | None = None
@@ -315,11 +316,13 @@ class Config:
                 reason = " or ".join(operations)
                 raise ConfigurationError(f"Component ID is not defined (required when {reason})")
 
-        inputs = [self.sbom_file, self.lock_file, self.docker_image]
+        inputs = [self.sbom_file, self.lock_file, self.source_dir, self.docker_image]
         if sum(bool(x) for x in inputs) > 1:
-            raise ConfigurationError("Please provide only one of: SBOM_FILE, LOCK_FILE, or DOCKER_IMAGE")
+            raise ConfigurationError("Please provide only one of: SBOM_FILE, LOCK_FILE, SOURCE_DIR, or DOCKER_IMAGE")
         if not any(inputs):
-            raise ConfigurationError("Please provide one of: SBOM_FILE, LOCK_FILE, or DOCKER_IMAGE")
+            raise ConfigurationError("Please provide one of: SBOM_FILE, LOCK_FILE, SOURCE_DIR, or DOCKER_IMAGE")
+        if self.source_dir and not Path(self.source_dir).is_dir():
+            raise ConfigurationError(f"SOURCE_DIR '{self.source_dir}' is not a directory")
 
         # Validate additional-packages-only mode
         if self.is_additional_packages_only:
@@ -585,6 +588,7 @@ def build_config(
     sbom_file: Optional[str] = None,
     docker_image: Optional[str] = None,
     lock_file: Optional[str] = None,
+    source_dir: Optional[str] = None,
     output_file: str = "sbom_output.json",
     upload: bool = True,
     upload_destinations: Optional[list[str]] = None,
@@ -718,6 +722,7 @@ def load_config() -> Config:
         sbom_file=os.getenv("SBOM_FILE"),
         docker_image=os.getenv("DOCKER_IMAGE"),
         lock_file=os.getenv("LOCK_FILE"),
+        source_dir=os.getenv("SOURCE_DIR"),
         output_file=os.getenv("OUTPUT_FILE", "sbom_output.json"),
         upload=evaluate_boolean(os.getenv("UPLOAD", "True")),
         upload_destinations=upload_destinations,
@@ -1392,6 +1397,9 @@ def run_pipeline(config: Config) -> None:
     elif config.lock_file:
         FILE = config.lock_file
         FILE_TYPE = "LOCK_FILE"
+    elif config.source_dir:
+        FILE = config.source_dir
+        FILE_TYPE = "SOURCE_DIR"
     elif config.docker_image:
         FILE_TYPE = None
         pass
@@ -1532,6 +1540,20 @@ def run_pipeline(config: Config) -> None:
                 logger.info(f"Generating SBOM from lock file: {FILE}")
                 result = process_lock_file(
                     FILE,
+                    output_file=STEP_1_FILE,
+                    output_format=config.sbom_format,
+                    spec_version=config.spec_version,
+                )
+                if not result.success:
+                    raise SBOMGenerationError(result.error_message or "SBOM generation failed")
+            elif FILE_TYPE == "SOURCE_DIR":
+                # Says what it is: a walk of what is on disk, not a reading of
+                # what an ecosystem resolved. The distinction belongs in the
+                # log as much as in the API -- the resulting SBOM is a weaker
+                # claim, and the operator should be able to see which they got.
+                logger.info(f"Generating SBOM by scanning directory: {FILE}")
+                result = generate_sbom(
+                    source_dir=FILE,
                     output_file=STEP_1_FILE,
                     output_format=config.sbom_format,
                     spec_version=config.spec_version,
@@ -1804,6 +1826,28 @@ def run_pipeline(config: Config) -> None:
     sbom_id = None  # Store SBOM ID for potential release tagging (from sbomify)
     if config.upload:
         _log_step_header(5, f"Uploading {artifact_label}")
+        # Re-mint again, here rather than only before the processors. The
+        # earlier refresh is taken before enrichment runs, and enrichment is
+        # the slow part: a 289MB bundle's SBOM spent over fifteen minutes
+        # being enriched and then failed to upload with 401 Unauthorized,
+        # having started from a fresh token. The token is needed *here*, so
+        # this is where it should be young.
+        if config.token_is_oidc_minted:
+            from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
+            from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
+
+            if is_github_oidc_available():
+                try:
+                    config.token = obtain_sbomify_token_via_oidc(
+                        component_id=config.component_id,
+                        api_base_url=config.api_base_url,
+                        audience=config.oidc_audience,
+                    )
+                except (OIDCBindingMissingError, OIDCExchangeError) as exc:
+                    logger.warning(
+                        f"Could not refresh OIDC-minted token before upload: {exc}. "
+                        "Continuing with the existing token, which may have expired."
+                    )
         try:
             # Upload to each configured destination
             logger.info(f"Upload destinations: {config.upload_destinations}")
@@ -2469,6 +2513,12 @@ def _parse_upload_destinations_callback(
     help="Path to lock file (requirements.txt, Cargo.lock, etc.).",
 )
 @click.option(
+    "--source-dir",
+    envvar="SOURCE_DIR",
+    type=click.Path(exists=False, file_okay=False),
+    help="Directory to scan. Reports what is on disk, where a lock file reports what the ecosystem resolved.",
+)
+@click.option(
     "-o",
     "--output-file",
     envvar="OUTPUT_FILE",
@@ -2610,6 +2660,7 @@ def cli(
     sbom_file: Optional[str],
     docker_image: Optional[str],
     lock_file: Optional[str],
+    source_dir: Optional[str],
     output_file: str,
     upload: bool,
     upload_destinations: Optional[list[str]],

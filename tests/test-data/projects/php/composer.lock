@@ -1,0 +1,472 @@
+{
+  "_readme": [
+    "This file locks the dependencies of your project to a known state",
+    "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
+    "This file is @generated automatically"
+  ],
+  "content-hash": "7da9d2d6ad7c2c87d65f888053a4e4a1",
+  "packages": [
+    {
+      "name": "composer/semver",
+      "version": "3.4.4",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/composer/semver.git",
+        "reference": "198166618906cb2de69b95d7d47e5fa8aa1b2b95"
+      },
+      "dist": {
+        "type": "zip",
+        "url": "https://api.github.com/repos/composer/semver/zipball/198166618906cb2de69b95d7d47e5fa8aa1b2b95",
+        "reference": "198166618906cb2de69b95d7d47e5fa8aa1b2b95",
+        "shasum": ""
+      },
+      "require": {
+        "php": "^5.3.2 || ^7.0 || ^8.0"
+      },
+      "require-dev": {
+        "phpstan/phpstan": "^1.11",
+        "symfony/phpunit-bridge": "^3 || ^7"
+      },
+      "type": "library",
+      "extra": {
+        "branch-alias": {
+          "dev-main": "3.x-dev"
+        }
+      },
+      "autoload": {
+        "psr-4": {
+          "Composer\\Semver\\": "src"
+        }
+      },
+      "notification-url": "https://packagist.org/downloads/",
+      "license": [
+        "MIT"
+      ],
+      "authors": [
+        {
+          "name": "Nils Adermann",
+          "email": "naderman@naderman.de",
+          "homepage": "http://www.naderman.de"
+        },
+        {
+          "name": "Jordi Boggiano",
+          "email": "j.boggiano@seld.be",
+          "homepage": "http://seld.be"
+        },
+        {
+          "name": "Rob Bast",
+          "email": "rob.bast@gmail.com",
+          "homepage": "http://robbast.nl"
+        }
+      ],
+      "description": "Semver library that offers utilities, version constraint parsing and validation.",
+      "keywords": [
+        "semantic",
+        "semver",
+        "validation",
+        "versioning"
+      ],
+      "support": {
+        "irc": "ircs://irc.libera.chat:6697/composer",
+        "issues": "https://github.com/composer/semver/issues",
+        "source": "https://github.com/composer/semver/tree/3.4.4"
+      },
+      "funding": [
+        {
+          "url": "https://packagist.com",
+          "type": "custom"
+        },
+        {
+          "url": "https://github.com/composer",
+          "type": "github"
+        }
+      ],
+      "time": "2025-08-20T19:15:30+00:00"
+    },
+    {
+      "name": "dflydev/dot-access-data",
+      "version": "v3.0.3",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/dflydev/dflydev-dot-access-data.git",
+        "reference": "a23a2bf4f31d3518f3ecb38660c95715dfead60f"
+      },
+      "dist": {
+        "type": "zip",
+        "url": "https://api.github.com/repos/dflydev/dflydev-dot-access-data/zipball/a23a2bf4f31d3518f3ecb38660c95715dfead60f",
+        "reference": "a23a2bf4f31d3518f3ecb38660c95715dfead60f",
+        "shasum": ""
+      },
+      "require": {
+        "php": "^7.1 || ^8.0"
+      },
+      "require-dev": {
+        "phpstan/phpstan": "^0.12.42",
+        "phpunit/phpunit": "^7.5 || ^8.5 || ^9.3",
+        "scrutinizer/ocular": "1.6.0",
+        "squizlabs/php_codesniffer": "^3.5",
+        "vimeo/psalm": "^4.0.0"
+      },
+      "type": "library",
+      "extra": {
+        "branch-alias": {
+          "dev-main": "3.x-dev"
+        }
+      },
+      "autoload": {
+        "psr-4": {
+          "Dflydev\\DotAccessData\\": "src/"
+        }
+      },
+      "notification-url": "https://packagist.org/downloads/",
+      "license": [
+        "MIT"
+      ],
+      "authors": [
+        {
+          "name": "Dragonfly Development Inc.",
+          "email": "info@dflydev.com",
+          "homepage": "http://dflydev.com"
+        },
+        {
+          "name": "Beau Simensen",
+          "email": "beau@dflydev.com",
+          "homepage": "http://beausimensen.com"
+        },
+        {
+          "name": "Carlos Frutos",
+          "email": "carlos@kiwing.it",
+          "homepage": "https://github.com/cfrutos"
+        },
+        {
+          "name": "Colin O'Dell",
+          "email": "colinodell@gmail.com",
+          "homepage": "https://www.colinodell.com"
+        }
+      ],
+      "description": "Given a deep data structure, access data by dot notation.",
+      "homepage": "https://github.com/dflydev/dflydev-dot-access-data",
+      "keywords": [
+        "access",
+        "data",
+        "dot",
+        "notation"
+      ],
+      "support": {
+        "issues": "https://github.com/dflydev/dflydev-dot-access-data/issues",
+        "source": "https://github.com/dflydev/dflydev-dot-access-data/tree/v3.0.3"
+      },
+      "time": "2024-07-08T12:26:09+00:00"
+    },
+    {
+      "name": "doctrine/collections",
+      "version": "2.6.0",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/doctrine/collections.git",
+        "reference": "7713da39d8e237f28411d6a616a3dce5e20d5de2"
+      },
+      "dist": {
+        "type": "zip",
+        "url": "https://api.github.com/repos/doctrine/collections/zipball/7713da39d8e237f28411d6a616a3dce5e20d5de2",
+        "reference": "7713da39d8e237f28411d6a616a3dce5e20d5de2",
+        "shasum": ""
+      },
+      "require": {
+        "doctrine/deprecations": "^1",
+        "php": "^8.1",
+        "symfony/polyfill-php84": "^1.30"
+      },
+      "require-dev": {
+        "doctrine/coding-standard": "^14",
+        "ext-json": "*",
+        "phpstan/phpstan": "^2.1.30",
+        "phpstan/phpstan-phpunit": "^2.0.7",
+        "phpunit/phpunit": "^10.5.58 || ^11.5.42 || ^12.4"
+      },
+      "type": "library",
+      "autoload": {
+        "psr-4": {
+          "Doctrine\\Common\\Collections\\": "src"
+        }
+      },
+      "notification-url": "https://packagist.org/downloads/",
+      "license": [
+        "MIT"
+      ],
+      "authors": [
+        {
+          "name": "Guilherme Blanco",
+          "email": "guilhermeblanco@gmail.com"
+        },
+        {
+          "name": "Roman Borschel",
+          "email": "roman@code-factory.org"
+        },
+        {
+          "name": "Benjamin Eberlei",
+          "email": "kontakt@beberlei.de"
+        },
+        {
+          "name": "Jonathan Wage",
+          "email": "jonwage@gmail.com"
+        },
+        {
+          "name": "Johannes Schmitt",
+          "email": "schmittjoh@gmail.com"
+        }
+      ],
+      "description": "PHP Doctrine Collections library that adds additional functionality on top of PHP arrays.",
+      "homepage": "https://www.doctrine-project.org/projects/collections.html",
+      "keywords": [
+        "array",
+        "collections",
+        "iterators",
+        "php"
+      ],
+      "support": {
+        "issues": "https://github.com/doctrine/collections/issues",
+        "source": "https://github.com/doctrine/collections/tree/2.6.0"
+      },
+      "funding": [
+        {
+          "url": "https://www.doctrine-project.org/sponsorship.html",
+          "type": "custom"
+        },
+        {
+          "url": "https://www.patreon.com/phpdoctrine",
+          "type": "patreon"
+        },
+        {
+          "url": "https://tidelift.com/funding/github/packagist/doctrine%2Fcollections",
+          "type": "tidelift"
+        }
+      ],
+      "time": "2026-01-15T10:01:58+00:00"
+    }
+  ],
+  "packages-dev": [
+    {
+      "name": "clue/ndjson-react",
+      "version": "v1.3.0",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/clue/reactphp-ndjson.git",
+        "reference": "392dc165fce93b5bb5c637b67e59619223c931b0"
+      },
+      "dist": {
+        "type": "zip",
+        "url": "https://api.github.com/repos/clue/reactphp-ndjson/zipball/392dc165fce93b5bb5c637b67e59619223c931b0",
+        "reference": "392dc165fce93b5bb5c637b67e59619223c931b0",
+        "shasum": ""
+      },
+      "require": {
+        "php": ">=5.3",
+        "react/stream": "^1.2"
+      },
+      "require-dev": {
+        "phpunit/phpunit": "^9.5 || ^5.7 || ^4.8.35",
+        "react/event-loop": "^1.2"
+      },
+      "type": "library",
+      "autoload": {
+        "psr-4": {
+          "Clue\\React\\NDJson\\": "src/"
+        }
+      },
+      "notification-url": "https://packagist.org/downloads/",
+      "license": [
+        "MIT"
+      ],
+      "authors": [
+        {
+          "name": "Christian L\u00fcck",
+          "email": "christian@clue.engineering"
+        }
+      ],
+      "description": "Streaming newline-delimited JSON (NDJSON) parser and encoder for ReactPHP.",
+      "homepage": "https://github.com/clue/reactphp-ndjson",
+      "keywords": [
+        "NDJSON",
+        "json",
+        "jsonlines",
+        "newline",
+        "reactphp",
+        "streaming"
+      ],
+      "support": {
+        "issues": "https://github.com/clue/reactphp-ndjson/issues",
+        "source": "https://github.com/clue/reactphp-ndjson/tree/v1.3.0"
+      },
+      "funding": [
+        {
+          "url": "https://clue.engineering/support",
+          "type": "custom"
+        },
+        {
+          "url": "https://github.com/clue",
+          "type": "github"
+        }
+      ],
+      "time": "2022-12-23T10:58:28+00:00"
+    },
+    {
+      "name": "composer/pcre",
+      "version": "3.4.0",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/composer/pcre.git",
+        "reference": "d5a341b3fb61f3001970940afb1d332968a183ed"
+      },
+      "dist": {
+        "type": "zip",
+        "url": "https://api.github.com/repos/composer/pcre/zipball/d5a341b3fb61f3001970940afb1d332968a183ed",
+        "reference": "d5a341b3fb61f3001970940afb1d332968a183ed",
+        "shasum": ""
+      },
+      "require": {
+        "php": "^7.4 || ^8.0"
+      },
+      "conflict": {
+        "phpstan/phpstan": "<2.2.2"
+      },
+      "require-dev": {
+        "phpstan/phpstan": "^2",
+        "phpstan/phpstan-deprecation-rules": "^2",
+        "phpstan/phpstan-strict-rules": "^2",
+        "phpunit/phpunit": "^9"
+      },
+      "type": "library",
+      "extra": {
+        "phpstan": {
+          "includes": [
+            "extension.neon"
+          ]
+        },
+        "branch-alias": {
+          "dev-main": "3.x-dev"
+        }
+      },
+      "autoload": {
+        "psr-4": {
+          "Composer\\Pcre\\": "src"
+        }
+      },
+      "notification-url": "https://packagist.org/downloads/",
+      "license": [
+        "MIT"
+      ],
+      "authors": [
+        {
+          "name": "Jordi Boggiano",
+          "email": "j.boggiano@seld.be",
+          "homepage": "http://seld.be"
+        }
+      ],
+      "description": "PCRE wrapping library that offers type-safe preg_* replacements.",
+      "keywords": [
+        "PCRE",
+        "preg",
+        "regex",
+        "regular expression"
+      ],
+      "support": {
+        "issues": "https://github.com/composer/pcre/issues",
+        "source": "https://github.com/composer/pcre/tree/3.4.0"
+      },
+      "funding": [
+        {
+          "url": "https://packagist.com",
+          "type": "custom"
+        },
+        {
+          "url": "https://github.com/composer",
+          "type": "github"
+        }
+      ],
+      "time": "2026-06-07T11:47:49+00:00"
+    },
+    {
+      "name": "composer/xdebug-handler",
+      "version": "3.0.5",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/composer/xdebug-handler.git",
+        "reference": "6c1925561632e83d60a44492e0b344cf48ab85ef"
+      },
+      "dist": {
+        "type": "zip",
+        "url": "https://api.github.com/repos/composer/xdebug-handler/zipball/6c1925561632e83d60a44492e0b344cf48ab85ef",
+        "reference": "6c1925561632e83d60a44492e0b344cf48ab85ef",
+        "shasum": ""
+      },
+      "require": {
+        "composer/pcre": "^1 || ^2 || ^3",
+        "php": "^7.2.5 || ^8.0",
+        "psr/log": "^1 || ^2 || ^3"
+      },
+      "require-dev": {
+        "phpstan/phpstan": "^1.0",
+        "phpstan/phpstan-strict-rules": "^1.1",
+        "phpunit/phpunit": "^8.5 || ^9.6 || ^10.5"
+      },
+      "type": "library",
+      "autoload": {
+        "psr-4": {
+          "Composer\\XdebugHandler\\": "src"
+        }
+      },
+      "notification-url": "https://packagist.org/downloads/",
+      "license": [
+        "MIT"
+      ],
+      "authors": [
+        {
+          "name": "John Stevenson",
+          "email": "john-stevenson@blueyonder.co.uk"
+        }
+      ],
+      "description": "Restarts a process without Xdebug.",
+      "keywords": [
+        "Xdebug",
+        "performance"
+      ],
+      "support": {
+        "irc": "ircs://irc.libera.chat:6697/composer",
+        "issues": "https://github.com/composer/xdebug-handler/issues",
+        "source": "https://github.com/composer/xdebug-handler/tree/3.0.5"
+      },
+      "funding": [
+        {
+          "url": "https://packagist.com",
+          "type": "custom"
+        },
+        {
+          "url": "https://github.com/composer",
+          "type": "github"
+        },
+        {
+          "url": "https://tidelift.com/funding/github/packagist/composer/composer",
+          "type": "tidelift"
+        }
+      ],
+      "time": "2024-05-06T16:37:16+00:00"
+    }
+  ],
+  "aliases": [],
+  "minimum-stability": "stable",
+  "stability-flags": {},
+  "prefer-stable": true,
+  "prefer-lowest": false,
+  "platform": {
+    "php": ">=8.4",
+    "ext-ctype": "*",
+    "ext-iconv": "*",
+    "ext-pdo_sqlite": "*"
+  },
+  "platform-dev": {},
+  "platform-overrides": {
+    "php": "8.4.1"
+  },
+  "plugin-api-version": "2.9.0"
+}

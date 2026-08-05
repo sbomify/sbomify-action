@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Clone the real projects the ecosystem matrix runs against.
+
+Not lock files -- whole repositories, shallow-cloned at a pinned tag.
+
+Assembling a project out of a few downloaded files does not work, and the
+failures are instructive rather than incidental. cdxgen accepted a lone
+packages.lock.json and rejected the same file beside its .csproj, which is
+the shape every real .NET project has. An sbt build needs all of project/,
+because plugins.sbt declares what build.sbt references. Gradle resolves
+versions through a catalog and buildSrc. A Go module without its source
+collapses to one component. In each case a partial fixture tests something
+nobody ships, and can pass while the product is broken.
+
+These are too large to commit, so they are cloned on demand into a cache
+directory. The committed fixtures under tests/test-data/projects stay small
+and hermetic for the routing tests; this is for the integration matrix, which
+needs the network anyway to fetch bundles and resolve dependencies.
+
+    python scripts/fetch_fixtures.py [--only ecosystem] [--dir PATH]
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+DEFAULT_DIR = Path(os.environ.get("SBOMIFY_REAL_PROJECTS", Path.home() / ".cache" / "sbomify" / "real-projects"))
+
+#: ecosystem -> (repo, pinned ref, path to the lock file within the checkout)
+#:
+#: Chosen to be popular and maintained, and small enough to clone. Two
+#: exclusions worth recording: commons-lang has no compile-scope dependencies,
+#: so a correct SBOM of it is empty and it cannot tell success from failure;
+#: ripgrep is a cargo workspace, where cyclonedx-cargo writes one SBOM per
+#: member and the generator declines by design.
+REPOS: dict[str, tuple[str, str, str]] = {
+    # The lock file has to be one the generators actually claim, and a real
+    # one. flask keeps its requirements under requirements/dev.txt and
+    # requests names its requirements-dev.txt -- neither is
+    # "requirements.txt", so the chain reported "no generator found". Pointing
+    # at requests' pyproject.toml instead got further and then failed:
+    # cyclonedx-py claims pyproject.toml but resolves it through poetry.lock,
+    # which a setuptools project does not have.
+    "python": ("python-poetry/poetry", "1.8.4", "poetry.lock"),
+    "javascript": ("axios/axios", "v1.7.7", "package-lock.json"),
+    "java": ("spring-projects/spring-petclinic", "main", "pom.xml"),
+    "java-gradle": ("square/okhttp", "parent-5.0.0-alpha.14", "build.gradle.kts"),
+    "scala": ("typelevel/cats", "v2.12.0", "build.sbt"),
+    "go": ("gohugoio/hugo", "v0.136.5", "go.mod"),
+    "rust": ("sharkdp/fd", "v10.2.0", "Cargo.lock"),
+    "ruby": ("rails/rails", "v7.2.2", "Gemfile.lock"),
+    "elixir": ("phoenixframework/phoenix", "v1.7.14", "mix.lock"),
+    "dart": ("flutter/gallery", "main", "pubspec.lock"),
+    "php": ("symfony/demo", "main", "composer.lock"),
+    "swift": ("ChimeHQ/Neon", "main", "Package.resolved"),
+    # A project's own lock file, not the repository-level one in .nuget/.
+    # Hangfire has one per project, which is the normal .NET layout; pointing
+    # at .nuget/ describes that directory and nothing else -- 4 components
+    # against 306 for the project itself.
+    "dotnet": ("HangfireIO/Hangfire", "v1.8.15", "samples/NetCoreSample/packages.lock.json"),
+    # From sbomify/library, which tracks these same projects. Keycloak is the
+    # scale test: a large multi-module Maven reactor, not a sample app.
+    "keycloak": ("keycloak/keycloak", "26.4.7", "quarkus/runtime/pom.xml"),
+    # pnpm, which none of the other JavaScript fixtures exercise.
+    "keycloak-js": ("keycloak/keycloak", "26.4.7", "js/pnpm-lock.yaml"),
+    "go-osv": ("google/osv-scanner", "v2.3.1", "go.mod"),
+    # Every remaining lock file name the README claims. Half the table was
+    # untested: one file per ecosystem proves the ecosystem routes, not that
+    # each name the docs promise actually resolves. Verified to exist at the
+    # pinned ref before being added here, not assumed.
+    #
+    # Five names need no clone of their own because a fixture already cloned
+    # contains them: pyproject.toml (python), package.json (javascript),
+    # go.sum (go), composer.json (php), Package.swift (swift). Those are
+    # declared in the matrix against the existing checkout.
+    "python-requirements": ("home-assistant/core", "2026.7.4", "requirements.txt"),
+    "python-pipenv": ("pypa/pipenv", "v2026.7.1", "Pipfile.lock"),
+    "python-uv": ("astral-sh/ruff", "0.16.1", "uv.lock"),
+    "js-yarn": ("facebook/react", "v19.2.8", "yarn.lock"),
+    "js-bun": ("elysiajs/elysia", "1.4.29", "bun.lock"),
+    "java-groovy": ("apache/kafka", "4.3.1", "build.gradle"),
+    # Gradle dependency locking is rare enough that this took a code search
+    # to find at all -- most Gradle projects never write one.
+    "java-lockfile": ("embulk/embulk", "v0.11.5", "gradle.lockfile"),
+    "cpp": ("XRPLF/rippled", "3.2.1", "conan.lock"),
+    # HashiCorp's own teaching repository. A committed .terraform.lock.hcl is
+    # normal in application repositories and rare in public module ones, so
+    # the realistic public example is small.
+    "terraform": ("hashicorp/learn-terraform-provider-versioning", "main", ".terraform.lock.hcl"),
+    # syft describing syft. Also the tree that found a harness bug: it ships
+    # dangling symlinks and a symlink loop as file-resolver fixtures.
+    "go-syft": ("anchore/syft", "v1.39.0", "go.mod"),
+}
+
+
+def clone(repo: str, ref: str, target: Path) -> bool:
+    """Shallow-clone one repository at a pinned ref."""
+    marker = target / ".sbomify-clone"
+    if marker.is_file() and marker.read_text().strip() == f"{repo}@{ref}":
+        print(f"  {target.name:<14}already cloned")
+        return True
+    if target.exists():
+        shutil.rmtree(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(  # noqa: S603
+        [
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            ref,
+            "--quiet",  # noqa: S607
+            f"https://github.com/{repo}.git",
+            str(target),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=1800,
+    )
+    if result.returncode != 0:
+        print(f"  {target.name:<14}CLONE FAILED: {result.stderr.strip()[:100]}", file=sys.stderr)
+        return False
+    # --depth 1 already fetches a single commit, but the pack is still about
+    # half the checkout and nothing here reads git history afterwards.
+    shutil.rmtree(target / ".git", ignore_errors=True)
+    marker.write_text(f"{repo}@{ref}\n")
+    size = sum(f.stat().st_size for f in target.rglob("*") if f.is_file()) / (1024 * 1024)
+    print(f"  {target.name:<14}{repo}@{ref}  {size:.0f} MB")
+    return True
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--only")
+    parser.add_argument("--dir", type=Path, default=DEFAULT_DIR)
+    args = parser.parse_args()
+
+    failures = 0
+    for name, (repo, ref, _lock) in sorted(REPOS.items()):
+        if args.only and args.only != name:
+            continue
+        if not clone(repo, ref, args.dir / name):
+            failures += 1
+    print(f"  -> {args.dir}")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
