@@ -103,4 +103,3 @@ version_from = { file = "tools/build.gradle", coordinate = "org.cyclonedx:cyclon
 
 [plugin.sbt-sbom]
 version_from = { file = "tools/pom.xml", artifact = "sbt-sbom_2.12_1.0" }
-

@@ -13,6 +13,7 @@ from .generators import (
     CycloneDXMavenGenerator,
     CycloneDXPyGenerator,
     CycloneDXSbtGenerator,
+    GradleLockfileGenerator,
     SyftFsGenerator,
     SyftImageGenerator,
 )
@@ -84,6 +85,9 @@ def create_default_registry() -> GeneratorRegistry:
     # plugins return 106/340/288 components where syft returns 42/92/34.
     registry.register(CycloneDXMavenGenerator())
     registry.register(CycloneDXGradleGenerator())
+    # Reads gradle.lockfile without running Gradle, so it wins over the
+    # plugin when a project has one -- see the module docstring.
+    registry.register(GradleLockfileGenerator())
     registry.register(CycloneDXSbtGenerator())
 
     # Priority 20: cdxgen generators (comprehensive multi-ecosystem)

@@ -69,6 +69,29 @@ REPOS: dict[str, tuple[str, str, str]] = {
     # pnpm, which none of the other JavaScript fixtures exercise.
     "keycloak-js": ("keycloak/keycloak", "26.4.7", "js/pnpm-lock.yaml"),
     "go-osv": ("google/osv-scanner", "v2.3.1", "go.mod"),
+    # Every remaining lock file name the README claims. Half the table was
+    # untested: one file per ecosystem proves the ecosystem routes, not that
+    # each name the docs promise actually resolves. Verified to exist at the
+    # pinned ref before being added here, not assumed.
+    #
+    # Five names need no clone of their own because a fixture already cloned
+    # contains them: pyproject.toml (python), package.json (javascript),
+    # go.sum (go), composer.json (php), Package.swift (swift). Those are
+    # declared in the matrix against the existing checkout.
+    "python-requirements": ("home-assistant/core", "2026.7.4", "requirements.txt"),
+    "python-pipenv": ("pypa/pipenv", "v2026.7.1", "Pipfile.lock"),
+    "python-uv": ("astral-sh/ruff", "0.16.1", "uv.lock"),
+    "js-yarn": ("facebook/react", "v19.2.8", "yarn.lock"),
+    "js-bun": ("elysiajs/elysia", "1.4.29", "bun.lock"),
+    "java-groovy": ("apache/kafka", "4.3.1", "build.gradle"),
+    # Gradle dependency locking is rare enough that this took a code search
+    # to find at all -- most Gradle projects never write one.
+    "java-lockfile": ("embulk/embulk", "v0.11.5", "gradle.lockfile"),
+    "cpp": ("XRPLF/rippled", "3.2.1", "conan.lock"),
+    # HashiCorp's own teaching repository. A committed .terraform.lock.hcl is
+    # normal in application repositories and rare in public module ones, so
+    # the realistic public example is small.
+    "terraform": ("hashicorp/learn-terraform-provider-versioning", "main", ".terraform.lock.hcl"),
     # syft describing syft. Also the tree that found a harness bug: it ships
     # dangling symlinks and a symlink loop as file-resolver fixtures.
     "go-syft": ("anchore/syft", "v1.39.0", "go.mod"),

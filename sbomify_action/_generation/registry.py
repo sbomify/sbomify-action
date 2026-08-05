@@ -2,6 +2,7 @@
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,45 @@ def fallback_is_a_bug() -> bool:
         return True
     # Belt and braces for images built before the marker existed.
     return Path("/.dockerenv").exists()
+
+
+#: A manifest and the lock file that supersedes it, when both are present.
+#:
+#: These names are all documented as supported, and they are -- but a manifest
+#: declares ranges while its lock file pins versions, and several tools read
+#: only the latter. Pointed at pyproject.toml, package.json, composer.json or
+#: go.sum, syft emitted a one-package SPDX document: valid, exit code 0, and
+#: empty of everything the caller wanted. Package.swift was worse, producing
+#: nothing at all in CycloneDX while Package.resolved beside it worked.
+#:
+#: So when a caller names the manifest and the lock file is right there, the
+#: lock file is what gets read. It is the same project either way, described
+#: more precisely. Absent the sibling, nothing changes.
+LOCKFILE_FOR_MANIFEST = {
+    "pyproject.toml": ("poetry.lock", "uv.lock", "Pipfile.lock"),
+    "package.json": ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"),
+    "composer.json": ("composer.lock",),
+    "Package.swift": ("Package.resolved",),
+    # go.sum records hashes for the whole module graph but is not itself a
+    # manifest; cyclonedx-gomod wants the go.mod beside it.
+    "go.sum": ("go.mod",),
+}
+
+
+def promote_to_lockfile(input: GenerationInput) -> GenerationInput:
+    """Read the lock file when the caller named a manifest sitting beside one."""
+    if not input.lock_file:
+        return input
+    # os.path rather than Path: tests substitute Path in this module to drive
+    # the fallback paths, and a helper this small should not be entangled with
+    # that. The operations are basename/dirname/isfile either way.
+    name = os.path.basename(input.lock_file)
+    for candidate in LOCKFILE_FOR_MANIFEST.get(name, ()):
+        sibling = os.path.join(os.path.dirname(input.lock_file), candidate)
+        if os.path.isfile(sibling):
+            logger.info(f"Reading {candidate} rather than {name}: it pins what the manifest only constrains")
+            return replace(input, lock_file=sibling)
+    return input
 
 
 class _DowngradeRefused(SBOMGenerationError):
@@ -164,6 +204,7 @@ class GeneratorRegistry:
         Raises:
             ValueError: If no generator supports the input
         """
+        input = promote_to_lockfile(input)
         generators = self.get_generators_for(input)
 
         if not generators:

@@ -79,13 +79,38 @@ from fetch_fixtures import DEFAULT_DIR, REPOS  # noqa: E402
 
 PROJECTS = Path(os.environ.get("SBOMIFY_REAL_PROJECTS", DEFAULT_DIR))
 
+#: Rows that test a second lock file inside a checkout another row already
+#: cloned: name -> (fixture directory, path within it).
+#:
+#: The README promises 28 lock file names, not 14 ecosystems, and a name that
+#: never resolves is a broken promise whether or not its ecosystem works. Five
+#: of them sit beside a file already covered -- pyproject.toml next to
+#: poetry.lock, go.sum next to go.mod -- so they need no clone of their own.
+ALIASES: dict[str, tuple[str, str]] = {
+    "python-pyproject": ("python", "pyproject.toml"),
+    "js-package-json": ("javascript", "package.json"),
+    "go-sum": ("go", "go.sum"),
+    "php-json": ("php", "composer.json"),
+    "swift-manifest": ("swift", "Package.swift"),
+}
+
 
 def run_one(project: str, sbom_format: str) -> tuple[str, int, str]:
     """Generate into a scratch copy so fixtures are never written to."""
-    _repo, _ref, lock_file = REPOS[project]
-    src = PROJECTS / project
+    if project in ALIASES:
+        fixture, lock_file = ALIASES[project]
+    else:
+        fixture, (_repo, _ref, lock_file) = project, REPOS[project]
+    src = PROJECTS / fixture
     if not src.is_dir():
         return ("not cloned", -1, "run scripts/fetch_fixtures.py first")
+    # The directory existing is not the same as the fixture being there.
+    # fetch_fixtures creates the target before git populates it, so a sweep run
+    # against a clone still in flight scans an empty tree and reports zero
+    # components -- which reads as a broken tool rather than a missing fixture.
+    # It cost a wrong finding about bun.lock before this check existed.
+    if not (src / lock_file).is_file():
+        return ("fixture incomplete", -1, f"{lock_file} missing from {fixture}; re-run fetch_fixtures.py")
     # Cleaned up on every path. These are whole checkouts now, not a lock
     # file each -- leaking one per ecosystem filled /tmp and took the shell
     # down with it.

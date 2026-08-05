@@ -23,6 +23,7 @@ from .cyclonedx_jvm import (
     CycloneDXSbtGenerator,
 )
 from .cyclonedx_py import CycloneDXPyGenerator
+from .gradle_lockfile import GradleLockfileGenerator
 from .syft import SyftFsGenerator, SyftImageGenerator
 from .trivy import TrivyFsGenerator, TrivyImageGenerator
 
@@ -31,6 +32,7 @@ __all__ = [
     "CycloneDXCargoGenerator",
     "CycloneDXGomodGenerator",
     "CycloneDXGradleGenerator",
+    "GradleLockfileGenerator",
     "CycloneDXMavenGenerator",
     "CycloneDXSbtGenerator",
     "CdxgenFsGenerator",
