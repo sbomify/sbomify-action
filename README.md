@@ -312,7 +312,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 
 | Variable                   | Required | Description                                                                      |
 | -------------------------- | -------- | -------------------------------------------------------------------------------- |
-| `LOCK_FILE`                | †        | Path to lockfile, or `none` for additional-packages-only mode                    |
+| `LOCK_FILE`                | †        | Path to a lockfile **or a directory** to scan, or `none` for additional-packages-only mode |
 | `SBOM_FILE`                | †        | Path to existing SBOM file, or `none` for additional-packages-only mode          |
 | `DOCKER_IMAGE`             | †        | Docker image name                                                                |
 | `OUTPUT_FILE`              | No       | Write final SBOM to this path                                                    |
@@ -425,6 +425,12 @@ When uploading to Dependency Track (`UPLOAD_DESTINATIONS=dependency-track`), con
 | Scala      | `build.sbt`                                                                    |
 | C++        | `conan.lock`                                                                   |
 | Terraform  | `.terraform.lock.hcl`                                                          |
+
+Pointing `LOCK_FILE` at a **directory** scans the whole tree with Syft instead
+of reading a single manifest. That covers what no lock file describes: an
+unpacked release archive, a vendored dependency tree, or any build output. It
+is how sbomify describes its own tool bundles, which carry a JDK, Maven,
+Gradle and a Go toolchain that no manifest in the repository mentions.
 
 ## Yocto/OpenEmbedded
 

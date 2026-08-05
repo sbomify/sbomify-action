@@ -111,3 +111,58 @@ empty=testAnnotationProcessor
         from sbomify_action._generation.generators.cyclonedx_jvm import CycloneDXGradleGenerator
 
         assert GradleLockfileGenerator().priority <= CycloneDXGradleGenerator().priority
+
+
+class TestDirectoriesCanBeScanned:
+    """The action had three input kinds and none of them was "a directory".
+
+    That meant it could not describe an unpacked release bundle, a vendored
+    tree, or any build output that is not a lock file, an SBOM or a container
+    image -- and describing sbomify's own shipped bundles meant reaching past
+    the action to raw syft. Syft treats a directory as its native subject.
+    """
+
+    def test_syft_claims_a_directory(self, tmp_path):
+        from sbomify_action._generation.generators.syft import SyftFsGenerator
+
+        target = tmp_path / "unpacked"
+        target.mkdir()
+        assert SyftFsGenerator().supports(
+            GenerationInput(lock_file=str(target), output_file="o.json", output_format="cyclonedx")
+        )
+
+    def test_an_unknown_file_is_still_declined(self, tmp_path):
+        """Claiming directories must not turn syft into a generator for anything."""
+        from sbomify_action._generation.generators.syft import SyftFsGenerator
+
+        stray = tmp_path / "notes.txt"
+        stray.write_text("hello")
+        assert not SyftFsGenerator().supports(
+            GenerationInput(lock_file=str(stray), output_file="o.json", output_format="cyclonedx")
+        )
+
+    def test_the_subject_is_prefixed_so_syft_cannot_guess_wrong(self, tmp_path, monkeypatch):
+        """A bare path that looks like an image reference gets fetched as one.
+
+        That is how bun.lock was handed to a container registry: syft infers
+        the source type from the string. `dir:` states it.
+        """
+        from sbomify_action._generation.generators import syft as syft_module
+
+        recorded: dict = {}
+
+        def fake_run(cmd, *args, **kwargs):
+            recorded["cmd"] = cmd
+            raise RuntimeError("stop here -- the argument is what matters")
+
+        monkeypatch.setattr(syft_module, "run_command", fake_run)
+        monkeypatch.setattr(syft_module, "ensure_runtime", lambda *_a, **_k: None)
+        target = tmp_path / "bundle"
+        target.mkdir()
+        try:
+            syft_module.SyftFsGenerator().generate(
+                GenerationInput(lock_file=str(target), output_file=str(tmp_path / "o.json"))
+            )
+        except Exception:
+            pass
+        assert f"dir:{target}" in recorded.get("cmd", [])

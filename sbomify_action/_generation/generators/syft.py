@@ -97,8 +97,14 @@ class SyftFsGenerator:
         if not input.is_lock_file:
             return False
 
-        # Check if it's a supported lock file for Syft
-        if input.lock_file_name not in SYFT_LOCK_FILES:
+        # A directory is syft's native subject, not a special case: it walks
+        # the tree and catalogues whatever it recognises. Without this the
+        # action could describe a lock file, an SBOM or a container image, but
+        # not a directory -- so it could not describe an unpacked release
+        # bundle, a vendored tree, or any build output that is not one of the
+        # three. Scanning our own bundles meant reaching past the action to
+        # raw syft, which is a gap worth closing rather than working around.
+        if not Path(input.lock_file).is_dir() and input.lock_file_name not in SYFT_LOCK_FILES:
             return False
 
         # Check format
@@ -131,10 +137,15 @@ class SyftFsGenerator:
         # Syft output format: -o format@version=file
         output_spec = f"{format_str}@{version}={input.output_file}"
 
+        # dir: is explicit rather than inferred. Syft guesses the source type
+        # from the string, and a directory name that happens to look like an
+        # image reference is read as one -- which is how bun.lock ended up
+        # being handed to a container registry.
+        subject = f"dir:{input.lock_file}" if Path(input.lock_file).is_dir() else input.lock_file
         cmd = [
             "syft",
             "scan",
-            input.lock_file,
+            subject,
             "-o",
             output_spec,
             "--source-name",
