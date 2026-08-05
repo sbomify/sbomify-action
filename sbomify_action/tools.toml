@@ -59,7 +59,6 @@ purl = "pkg:github/sbomify/sbom-tools@{release}#sigstore"
 # ---------------------------------------------------------------------------
 
 [tool.cosign]
-# Version comes from tools/go.mod -- do not restate it here.
 # A literal, because there is no longer a lockfile here to read it from:
 # cosign is pinned in sbomify/sbom-tools like every other tool, and this
 # copy exists only so the bootstrap fetch has a digest to check.

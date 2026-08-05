@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Freeze lockfile-derived tool versions into the shipped manifest.
 
-On master the versions live in the ecosystems' own lockfiles -- tools/go.mod
-and tools/Cargo.lock -- so Dependabot maintains them and there is no bespoke
-version file to keep in step.
+On master the versions live in the manifests that own them -- uv.lock for uv,
+tools/pom.xml and tools/build.gradle for the JVM build plugins -- so
+Dependabot maintains them and there is no bespoke version file to keep in
+step.
 
-Those lockfiles are not part of the Python package, and the published image
-has no Go or Cargo toolchain to consult them with. So the image build resolves
-them once and writes literal versions into sbomify_action/tools.toml before
-the wheel is built. A release therefore hard-codes the versions it was built
-against, and will fetch exactly those for as long as it exists -- which is the
-only way its SBOM can be telling the truth.
+Those manifests are not part of the Python package, so an installed copy
+cannot read them: the path resolves under site-packages, where they do not
+exist. The image build resolves them once and writes literal versions into
+sbomify_action/tools.toml before the wheel is built. A release therefore
+hard-codes the versions it was built against, and will fetch exactly those for
+as long as it exists -- which is the only way its SBOM can be telling the
+truth.
 
 Run with --check to verify a manifest is already frozen (used in CI to catch a
 wheel built without this step).

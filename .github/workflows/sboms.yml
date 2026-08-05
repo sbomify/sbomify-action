@@ -93,46 +93,6 @@ jobs:
             lockfile: bun.lock
             sbom_format: spdx
             output_file: sbomify-action-frontend.spdx.json
-          # The tools we ship and fetch are dependencies too, and until now the
-          # only record of them was a hand-written list of three bare PURLs with
-          # no transitive dependencies. These two lockfiles carry 602 components
-          # between them (483 Go, 119 Cargo), measured in the built image.
-          - name: go-tools-cyclonedx
-            kind: source
-            is_action: false
-            component_name: sbomify Action - Go Stack
-            staging_id: RTJwLK2FfnCf
-            prod_id: Z3h0vxP1WMTs
-            lockfile: tools/go.mod
-            sbom_format: cyclonedx
-            output_file: sbomify-action-go-tools.cdx.json
-          - name: go-tools-spdx
-            kind: source
-            is_action: false
-            component_name: sbomify Action - Go Stack
-            staging_id: RTJwLK2FfnCf
-            prod_id: Z3h0vxP1WMTs
-            lockfile: tools/go.mod
-            sbom_format: spdx
-            output_file: sbomify-action-go-tools.spdx.json
-          - name: rust-tools-cyclonedx
-            kind: source
-            is_action: false
-            component_name: sbomify Action - Rust Stack
-            staging_id: Cc1VJdfrm72W
-            prod_id: lTIkL5r8HjYt
-            lockfile: tools/Cargo.lock
-            sbom_format: cyclonedx
-            output_file: sbomify-action-rust-tools.cdx.json
-          - name: rust-tools-spdx
-            kind: source
-            is_action: false
-            component_name: sbomify Action - Rust Stack
-            staging_id: Cc1VJdfrm72W
-            prod_id: lTIkL5r8HjYt
-            lockfile: tools/Cargo.lock
-            sbom_format: spdx
-            output_file: sbomify-action-rust-tools.spdx.json
           - name: container-cyclonedx
             kind: container
             is_action: false

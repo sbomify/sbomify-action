@@ -1043,22 +1043,37 @@ sbomify uses a plugin architecture for SBOM generation, automatically selecting 
 
 Generators are tried in priority order. Native tools (optimized for specific ecosystems) are preferred over generic scanners. Each tool supports different ecosystems:
 
-| Priority | Generator           | Supported Ecosystems                                                                                           | Output Formats                  |
-| -------- | ------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| 10       | **cyclonedx-py**    | Python only                                                                                                    | CycloneDX 1.0–1.7               |
-| 10       | **cargo-cyclonedx** | Rust only                                                                                                      | CycloneDX 1.4–1.6               |
-| 20       | **cdxgen**          | Python, JavaScript, **Java/Gradle**, Go, Rust, Ruby, Dart, C++, PHP, .NET, Swift, Elixir, Scala, Docker images | CycloneDX 1.4–1.7               |
-| ~~30~~   | ~~**Trivy**~~       | ~~Temporarily disabled due to security vulnerabilities~~                                                        | ~~CycloneDX 1.6, SPDX 2.3~~     |
-| 35       | **Syft**            | Python, JavaScript, Go, Rust, Ruby, Dart, C++, PHP, .NET, Swift, Elixir, Terraform, Docker images              | CycloneDX 1.2–1.6, SPDX 2.2–2.3 |
+| Priority | Generator            | Supported Ecosystems                                                                          | Output Formats                  |
+| -------- | -------------------- | --------------------------------------------------------------------------------------------- | ------------------------------- |
+| 10       | **cyclonedx-py**     | Python                                                                                        | CycloneDX 1.2–1.7               |
+| 10       | **cargo-cyclonedx**  | Rust                                                                                          | CycloneDX 1.3–1.5, SPDX 2.3     |
+| 10       | **cyclonedx-gomod**  | Go                                                                                            | CycloneDX 1.4–1.6, SPDX 2.3     |
+| 10       | **cyclonedx-maven**  | Java (`pom.xml`)                                                                              | CycloneDX 1.4–1.6, SPDX 2.3     |
+| 10       | **cyclonedx-gradle** | Java (`build.gradle`, `build.gradle.kts`)                                                     | CycloneDX 1.4–1.6, SPDX 2.3     |
+| 10       | **cyclonedx-sbt**    | Scala (`build.sbt`)                                                                           | CycloneDX 1.4–1.6, SPDX 2.3     |
+| 10       | **gradle-lockfile**  | Java (`gradle.lockfile`) — read directly, no Gradle run                                       | CycloneDX 1.2–1.7, SPDX 2.2–2.3 |
+| 20       | **cdxgen**           | JavaScript, Ruby, Dart, C++, PHP, .NET, Elixir, and Python/Go/Java where no native tool wins   | CycloneDX 1.4–1.7               |
+| ~~30~~   | ~~**Trivy**~~        | ~~Temporarily disabled due to security vulnerabilities~~                                       | ~~CycloneDX 1.6, SPDX 2.3~~     |
+| 35       | **Syft**             | Swift, Terraform, Docker images, and SPDX wherever no native tool emits it                     | CycloneDX 1.2–1.6, SPDX 2.2–2.3 |
+
+The native generators at priority 10 resolve dependencies the way the
+ecosystem itself does, which is why they outrank the scanners. Several emit
+SPDX directly rather than leaving it to Syft.
 
 #### How It Works
 
-1. **Python lockfiles** → cyclonedx-py (native, most accurate for Python)
-2. **Rust lockfiles** (Cargo.lock) → cargo-cyclonedx (native, most accurate for Rust)
-3. **Java lockfiles** (pom.xml, build.gradle, gradle.lockfile) → cdxgen (best Java support)
-4. **Dart lockfiles** (pubspec.lock) → cdxgen or Syft
-5. **Other lockfiles** (package-lock.json, go.mod, etc.) → cdxgen (then Syft as fallback)
-6. **Docker images** → cdxgen (then Syft as fallback)
+1. **Python** (`requirements.txt`, `poetry.lock`, `Pipfile.lock`) → cyclonedx-py
+2. **Rust** (`Cargo.lock`) → cargo-cyclonedx
+3. **Go** (`go.mod`, `go.sum`) → cyclonedx-gomod
+4. **Java** (`pom.xml`) → cyclonedx-maven; (`build.gradle`, `build.gradle.kts`) → cyclonedx-gradle; (`gradle.lockfile`) → read directly
+5. **Scala** (`build.sbt`) → cyclonedx-sbt
+6. **Everything else with a lock file** (`package-lock.json`, `Gemfile.lock`, `composer.lock`, …) → cdxgen, then Syft
+7. **Docker images** → Syft, then cdxgen
+
+Naming a *manifest* that sits beside its lock file reads the lock file
+instead: `package.json` defers to `package-lock.json`, `pyproject.toml` to
+`poetry.lock`, `Package.swift` to `Package.resolved`. A manifest states ranges
+and the lock file states what was actually resolved.
 
 If the primary generator fails or doesn't support the input, the next one in priority order is tried automatically.
 
@@ -1067,7 +1082,7 @@ If the primary generator fails or doesn't support the input, the next one in pri
 Control the output format with the `SBOM_FORMAT` environment variable:
 
 - **CycloneDX** (`SBOM_FORMAT=cyclonedx`): Default format. Emits 1.6 — every generator's default — not the newest version it could produce; override with `SPEC_VERSION`.
-- **SPDX** (`SBOM_FORMAT=spdx`): Uses Syft, which emits 2.2/2.3. Defaults to 2.3; select 2.2 with `SPEC_VERSION=2.2`.
+- **SPDX** (`SBOM_FORMAT=spdx`): Emitted natively where the ecosystem's own tool can (Maven, Gradle, sbt, Go, Cargo), and by Syft everywhere else. Defaults to 2.3; select 2.2 with `SPEC_VERSION=2.2`.
 
 SPDX **3.0.1** is not generated — no generator emits it, and `SPEC_VERSION=3.0.1` fails with `No generator found for input`. It is supported as *input*: an existing 3.0.1 document passed via `SBOM_FILE` is parsed, augmented/enriched, and written back as 3.0.1 by sbomify-action's own SPDX 3 reader/writer.
 

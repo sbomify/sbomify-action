@@ -34,8 +34,8 @@ def test_versions_come_from_native_lockfiles_on_master():
     """Tool versions must not be restated in tools.toml.
 
     A second copy is a second thing to bump, and Dependabot cannot see a
-    bespoke file -- which is the whole reason these live in tools/go.mod and
-    tools/Cargo.lock. The image build freezes them in (see
+    bespoke file -- which is the whole reason these live in the manifests that
+    own them. The image build freezes them in (see
     scripts/freeze_tool_versions.py), so this only holds on a source tree.
     """
     manifest = (Path(__file__).resolve().parent.parent / "sbomify_action" / "tools.toml").read_text()

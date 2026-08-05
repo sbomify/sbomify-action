@@ -50,10 +50,10 @@ RUN uv venv /opt/venv
 # shipped mypy, pytest, pre-commit, coverage and ruff into the published image
 # (218MB -> 91MB for /opt/venv). Nothing in the runtime path imports them.
 RUN uv sync --frozen --active --no-dev
-# Resolve tools/go.mod and tools/Cargo.lock into literal versions before the
-# wheel is built. The lockfiles are not part of the package and the runtime
-# image has no Go or Cargo toolchain, so the release must carry the versions
-# it was built against -- see scripts/freeze_tool_versions.py.
+# Resolve uv.lock and the JVM plugin manifests into literal versions before
+# the wheel is built. Those files are not part of the package, so a release
+# must carry the versions it was built against rather than expecting to read
+# them later -- see scripts/freeze_tool_versions.py.
 RUN python scripts/freeze_tool_versions.py && python scripts/freeze_tool_versions.py --check
 RUN rm -rf dist/ && uv build
 RUN uv pip install dist/sbomify_action-*.whl
