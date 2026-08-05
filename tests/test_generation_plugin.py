@@ -1815,5 +1815,48 @@ class TestRegistryErrorAggregation(unittest.TestCase):
         self.assertIn("second error", result.error_message)
 
 
+class TestRustManifestSupport(unittest.TestCase):
+    """Cargo.toml must be treated as Rust everywhere the registries reach.
+
+    It was previously absent from RUST_LOCK_FILES, which meant a crate with no
+    committed Cargo.lock was invisible to wizard discovery *and* rejected by
+    LOCK_FILE validation with "not a recognized lock file type". Since
+    ALL_LOCK_FILES and CDXGEN_LOCK_FILES are both derived from the per-ecosystem
+    lists, these assertions pin the whole cascade.
+    """
+
+    def test_cargo_toml_resolves_to_rust(self):
+        from sbomify_action._generation.utils import get_lock_file_ecosystem
+
+        self.assertEqual(get_lock_file_ecosystem("Cargo.toml"), "rust")
+        self.assertEqual(get_lock_file_ecosystem("Cargo.lock"), "rust")
+
+    def test_cargo_toml_is_a_recognized_lock_file(self):
+        from sbomify_action._generation.utils import ALL_LOCK_FILES
+
+        self.assertIn("Cargo.toml", ALL_LOCK_FILES)
+
+    def test_cdxgen_accepts_cargo_toml(self):
+        """cdxgen is the generator that actually handles a lockless crate.
+
+        cyclonedx-cargo requires Cargo.lock specifically, so without this the
+        input would be discovered and then fail with "No generator found".
+        """
+        from sbomify_action._generation.utils import CDXGEN_LOCK_FILES
+
+        self.assertIn("Cargo.toml", CDXGEN_LOCK_FILES)
+
+    def test_every_manifest_the_wizard_prioritises_is_discoverable(self):
+        """No entry in the wizard's priority table may be undiscoverable.
+
+        Cargo.toml was the only one, which is exactly how this bug hid.
+        """
+        from sbomify_action._generation.utils import ALL_LOCK_FILES
+        from sbomify_action.cli.wizard.discovery import _LOCKFILE_PRIORITY
+
+        unreachable = sorted(n for n in _LOCKFILE_PRIORITY if n not in ALL_LOCK_FILES)
+        self.assertEqual(unreachable, [])
+
+
 if __name__ == "__main__":
     unittest.main()

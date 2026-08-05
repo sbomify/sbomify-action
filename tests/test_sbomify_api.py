@@ -380,9 +380,101 @@ def test_list_products_paginates() -> None:
 
 
 def test_create_product() -> None:
+    """The thin wrapper stays backward-compatible: returns the product dict."""
     client, _ = _client_with([_FakeResponse(201, {"id": "p1", "name": "X"})])
     product = client.create_product("X")
     assert product["id"] == "p1"
+
+
+def test_get_or_create_product_creates() -> None:
+    client, _ = _client_with([_FakeResponse(201, {"id": "p1", "name": "X"})])
+    product, was_created = client.get_or_create_product("X")
+    assert product["id"] == "p1"
+    assert was_created is True
+
+
+def test_get_or_create_product_recovers_from_duplicate_name() -> None:
+    """A DUPLICATE_NAME rejection resolves to the existing product — the
+    retry-after-partial-apply path (product created, later step failed)
+    must reuse the product instead of dead-ending on the duplicate."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(400, {"error_code": "DUPLICATE_NAME", "detail": "exists"}),
+            _FakeResponse(
+                200,
+                {"items": [{"id": "p-existing", "name": "X"}], "pagination": {"has_next": False}},
+            ),
+        ]
+    )
+    product, was_created = client.get_or_create_product("X")
+    assert product["id"] == "p-existing"
+    assert was_created is False
+
+
+def test_get_or_create_product_reraises_when_not_found() -> None:
+    """A non-duplicate create failure with no matching existing product
+    must re-raise, not silently swallow the error."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(500, {"detail": "boom"}),
+            _FakeResponse(200, {"items": [], "pagination": {"has_next": False}}),
+        ]
+    )
+    with pytest.raises(APIError):
+        client.get_or_create_product("X")
+
+
+def test_get_or_create_product_propagates_plan_limit() -> None:
+    """A plan-limit failure is not a name collision — it must propagate as
+    PlanLimitError, not get masked by a name lookup."""
+    client, _ = _client_with(
+        [_FakeResponse(403, {"detail": "maximum products reached", "error_code": "BILLING_LIMIT_EXCEEDED"})]
+    )
+    with pytest.raises(PlanLimitError) as exc:
+        client.get_or_create_product("X")
+    assert exc.value.resource == "product"
+
+
+def test_create_product_plan_limit_is_clean_and_typed() -> None:
+    """The plan-limit 403 raises PlanLimitError tagged with the resource,
+    and the message carries the human detail without the status code."""
+    detail = "You have reached the maximum 1 products allowed by your plan. You currently have 1 products."
+    client, _ = _client_with([_FakeResponse(403, {"detail": detail, "error_code": "BILLING_LIMIT_EXCEEDED"})])
+    with pytest.raises(PlanLimitError) as exc:
+        client.create_product("Notipus")
+    assert exc.value.resource == "product"
+    message = str(exc.value)
+    assert detail in message
+    assert "[403]" not in message
+
+
+def test_create_component_plan_limit_is_clean_and_typed() -> None:
+    client, _ = _client_with([_FakeResponse(403, {"detail": "maximum components reached"})])
+    with pytest.raises(PlanLimitError) as exc:
+        client.create_component("foo", component_type="bom")
+    assert exc.value.resource == "component"
+    assert "[403]" not in str(exc.value)
+
+
+def test_create_component_plan_limit_non_string_detail_stays_clean() -> None:
+    """A BILLING_LIMIT_EXCEEDED 403 whose detail is a structured list (not a
+    plain string) must not leak the raw repr or the status code into the
+    user-facing message — it falls back to a generic human sentence."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(
+                403,
+                {"detail": [{"msg": "limit"}], "error_code": "BILLING_LIMIT_EXCEEDED"},
+            )
+        ]
+    )
+    with pytest.raises(PlanLimitError) as exc:
+        client.create_component("foo", component_type="bom")
+    message = str(exc.value)
+    assert exc.value.resource == "component"
+    assert "[403]" not in message
+    assert "{'msg'" not in message and "[{" not in message
+    assert "your plan's component limit has been reached" in message
 
 
 def test_attach_components_unions_existing() -> None:
@@ -419,12 +511,67 @@ def test_list_contact_profiles_404_returns_empty() -> None:
     assert client.list_contact_profiles("acme-team") == []
 
 
+def test_list_contact_profiles_403_raises_forbidden() -> None:
+    """A 403 raises the typed ForbiddenError (a subclass of APIError) so the
+    wizard's workspace resolver can tell scope denial apart from a transient
+    failure and only switch workspaces on the former."""
+    from sbomify_action.exceptions import ForbiddenError
+
+    client, _ = _client_with([_FakeResponse(403, {"detail": "Forbidden"})])
+    with pytest.raises(ForbiddenError):
+        client.list_contact_profiles("acme-team")
+
+
 def test_list_contact_profiles_success() -> None:
     # Real endpoint returns a bare list — `[{...}, {...}]` — not a
     # paginated envelope. Filtered out non-dict entries defensively.
     client, _ = _client_with([_FakeResponse(200, [{"id": "cp1", "name": "Team"}])])
     profiles = client.list_contact_profiles("acme-team")
     assert profiles[0]["id"] == "cp1"
+
+
+def test_list_contact_profiles_accepts_paginated_envelope() -> None:
+    """A future backend migration to the `{items: [...]}` envelope must not
+    silently hide every existing profile."""
+    client, _ = _client_with([_FakeResponse(200, {"items": [{"id": "cp1", "name": "Team"}]})])
+    profiles = client.list_contact_profiles("acme-team")
+    assert profiles[0]["id"] == "cp1"
+
+
+def test_create_contact_profile_recovers_from_duplicate_name() -> None:
+    """A DUPLICATE_NAME rejection resolves to the existing profile — a
+    resubmit whose first POST created the profile but lost the response
+    must succeed instead of dead-ending on the constraint error."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(
+                400,
+                {
+                    "detail": "Could not save contact profile due to a database constraint (possibly a duplicate name)",
+                    "error_code": "DUPLICATE_NAME",
+                },
+            ),
+            _FakeResponse(200, [{"id": "cp-existing", "name": "Default"}]),
+        ]
+    )
+    profile = client.create_contact_profile("acme-team", {"name": "Default", "entities": []})
+    assert profile["id"] == "cp-existing"
+
+
+def test_create_contact_profile_duplicate_not_found_points_at_dashboard() -> None:
+    """When the duplicate exists but the token can't see it in the list,
+    the error points the user at the dashboard instead of the raw
+    constraint text."""
+    client, _ = _client_with(
+        [
+            _FakeResponse(400, {"detail": "constraint", "error_code": "DUPLICATE_NAME"}),
+            _FakeResponse(200, []),
+        ]
+    )
+    with pytest.raises(APIError) as exc:
+        client.create_contact_profile("acme-team", {"name": "Default", "entities": []})
+    assert "already exists" in str(exc.value)
+    assert "dashboard" in str(exc.value)
 
 
 def test_list_workspaces_returns_workspace_keys() -> None:

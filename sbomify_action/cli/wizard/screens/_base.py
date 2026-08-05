@@ -13,6 +13,7 @@ always see where they are without needing to re-orient.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Callable, ClassVar
 
 from textual import events
@@ -27,6 +28,28 @@ if TYPE_CHECKING:
 
 
 TOTAL_STEPS = 8
+
+# HTTP status markers as ``_build_error`` emits them: ``prefix [NNN]`` at the
+# end of a clause, or ``prefix [NNN] - detail`` when a detail follows. Anchored
+# to that exact shape — the code must be a real HTTP status (1xx–5xx) AND be
+# followed by `` - `` or the end of the string — so an embedded, quoted name
+# like ``'Widget [123]'`` (the ``[123]`` is followed by ``'``, not `` - ``/end)
+# is left untouched.
+_STATUS_CODE_RE = re.compile(r"\s*\[[1-5]\d{2}\]\s*(?:-\s*|$)")
+
+
+def strip_status_codes(message: str) -> str:
+    """Remove HTTP status-code markers from an API error message.
+
+    ``"Failed to create product 'X'. [403] - You have reached…"`` becomes
+    ``"Failed to create product 'X'. You have reached…"``. Full error text
+    (codes included) still lands in the debug log via the exception itself;
+    this only cleans what the TUI renders. Only markers in the shape
+    ``_build_error`` produces are stripped, so a bracketed number inside a
+    product/component name isn't mangled.
+    """
+    return _STATUS_CODE_RE.sub(" ", message).strip()
+
 
 # Responsive breakpoints (terminal cells). The wizard is a fit-to-viewport
 # TUI — nothing scrolls — so every screen has to render inside whatever the

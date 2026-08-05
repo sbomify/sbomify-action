@@ -30,7 +30,7 @@ from typing import Any
 # emitted line appends the generating build's version (eg.
 # ``# sbomify-action wizard v26.7.0``; older releases wrote a literal
 # ``v1``), so ownership detection matches this version-agnostic
-# prefix — files stamped by any wizard version stay recognised.
+# prefix — files stamped by any wizard version stay recognized.
 WIZARD_HEADER_SENTINEL = "# sbomify-action wizard"
 
 # Top-level key on every wizard-generated sbomify.json. Its presence
@@ -124,8 +124,8 @@ def write_sbomify_json(path: Path, payload: dict[str, Any]) -> None:
     Mirrors ``write_workflow``: refuses to overwrite a file that exists
     but lacks the wizard sentinel key, so a hand-crafted sbomify.json
     is never silently clobbered. The sentinel key is injected before
-    serialisation; the action's json_config provider ignores unknown
-    top-level keys so its presence doesn't change runtime behaviour.
+    serialization; the action's json_config provider ignores unknown
+    top-level keys so its presence doesn't change runtime behavior.
 
     When the existing wizard-stamped file's content differs from what we're
     about to write, the previous version is saved next to it as

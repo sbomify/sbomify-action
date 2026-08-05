@@ -2,7 +2,6 @@ ARG UV_VERSION=0.10.8
 ARG BUN_VERSION=1.3.10
 
 # Define tool versions
-ARG BOMCTL_VERSION=0.4.3
 ARG SYFT_VERSION=1.46.0
 ARG CARGO_CYCLONEDX_VERSION=0.5.9
 ARG CRANE_VERSION=0.21.7
@@ -14,7 +13,6 @@ FROM python:3.14-slim-trixie AS fetcher
 ARG TARGETARCH
 
 # Re-declare global ARGs needed in this stage
-ARG BOMCTL_VERSION
 ARG SYFT_VERSION
 ARG CRANE_VERSION
 ARG COSIGN_VERSION
@@ -26,19 +24,6 @@ RUN apt-get update && \
     apt-get install -y curl unzip
 
 # NOTE: Trivy installation removed - temporarily disabled due to security vulnerabilities
-
-# Install bomctl (uses linux_amd64 / linux_arm64 naming)
-RUN curl -sL \
-        -o bomctl_${BOMCTL_VERSION}_linux_${TARGETARCH}.tar.gz \
-        "https://github.com/bomctl/bomctl/releases/download/v${BOMCTL_VERSION}/bomctl_${BOMCTL_VERSION}_linux_${TARGETARCH}.tar.gz" && \
-    curl -sL \
-        -o bomctl_checksum.txt \
-        "https://github.com/bomctl/bomctl/releases/download/v${BOMCTL_VERSION}/bomctl_${BOMCTL_VERSION}_checksums.txt" && \
-    sha256sum --ignore-missing -c bomctl_checksum.txt && \
-    tar xvfz bomctl_${BOMCTL_VERSION}_linux_${TARGETARCH}.tar.gz && \
-    chmod +x /tmp/bomctl && \
-    mv bomctl /usr/local/bin && \
-    rm -rf /tmp/*
 
 # Install Syft (uses linux_amd64 / linux_arm64 naming)
 RUN curl -sL \
@@ -84,7 +69,9 @@ FROM oven/bun:${BUN_VERSION}-debian@sha256:367842b35abbdf23f39e23c71f3a08eee940f
 
 WORKDIR /app
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+# --production omits devDependencies (@types/bun and the TypeScript peer it
+# drags in); only cdxgen is needed to run.
+RUN bun install --frozen-lockfile --production
 
 # cargo-cyclonedx builder stage
 # Downloads pre-built binary for amd64, compiles from source for arm64
@@ -121,6 +108,18 @@ ARG VERSION=0.0.0
 RUN apt-get update && \
     apt-get install -y build-essential libxml2-dev libxslt-dev
 
+# pipdeptree is a meson/cargo package from 4.0.0 on and publishes no linux
+# aarch64 wheels, so on arm64 uv builds it from the sdist and needs a Rust
+# toolchain. Reuse the pinned one from rust-builder rather than pulling a
+# second (and differently versioned) toolchain from apt.
+# Only bin/ is copied: on arm64 rust-builder runs `cargo install`, so
+# CARGO_HOME also holds registry/git crate caches that are useless here.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo
+ENV PATH="/usr/local/cargo/bin:$PATH"
+COPY --from=rust-builder /usr/local/rustup /usr/local/rustup
+COPY --from=rust-builder /usr/local/cargo/bin /usr/local/cargo/bin
+
 COPY --from=uv-fetcher /uv /uvx /usr/local/bin/
 
 WORKDIR /app
@@ -136,7 +135,10 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN uv venv /opt/venv
 # Use --active so uv installs into the existing VIRTUAL_ENV (/opt/venv) instead of .venv
 # Use --frozen to avoid lockfile validation after version override
-RUN uv sync --frozen --active
+# Use --no-dev because uv syncs the `dev` dependency-group by default, which
+# shipped mypy, pytest, pre-commit, coverage and ruff into the published image
+# (218MB -> 91MB for /opt/venv). Nothing in the runtime path imports them.
+RUN uv sync --frozen --active --no-dev
 RUN rm -rf dist/ && uv build
 RUN uv pip install dist/sbomify_action-*.whl
 
@@ -185,7 +187,6 @@ RUN apt-get update && \
 # This reduces the base image size by ~330MB for non-Java workloads
 
 # Copy tools from fetcher
-COPY --from=fetcher /usr/local/bin/bomctl /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/syft /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/crane /usr/local/bin/
 COPY --from=fetcher /usr/local/bin/cosign /usr/local/bin/

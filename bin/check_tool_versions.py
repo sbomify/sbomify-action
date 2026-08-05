@@ -58,7 +58,6 @@ class ToolInfo:
 # Tools to check - maps ENV variable name to GitHub repo
 TOOLS = [
     ToolInfo(name="syft", env_var="SYFT_VERSION", github_repo="anchore/syft"),
-    ToolInfo(name="bomctl", env_var="BOMCTL_VERSION", github_repo="bomctl/bomctl"),
     ToolInfo(
         name="cargo-cyclonedx",
         env_var="CARGO_CYCLONEDX_VERSION",
@@ -99,9 +98,8 @@ def parse_dockerfile(dockerfile_path: Path) -> dict[str, str]:
     content = dockerfile_path.read_text()
 
     # Match ENV blocks like:
-    # ENV BOMCTL_VERSION=0.4.3 \
-    #     TRIVY_VERSION=0.67.2 \
-    #     SYFT_VERSION=1.39.0
+    # ENV SYFT_VERSION=1.39.0 \
+    #     TRIVY_VERSION=0.67.2
     # Also handles single-line: ENV FOO=bar
     env_pattern = re.compile(r"(\w+_VERSION)=([^\s\\]+)")
 

@@ -59,6 +59,40 @@ def test_discover_keeps_one_lockfile_per_ecosystem_in_same_directory(tmp_path: P
     ]
 
 
+def test_discover_finds_rust_via_cargo_toml_when_no_lockfile(tmp_path: Path) -> None:
+    """A library crate without a committed Cargo.lock is still Rust.
+
+    ``cargo new --lib`` gitignores Cargo.lock by convention, so plenty of Rust
+    repos have only the manifest. Cargo.toml used to be absent from
+    RUST_LOCK_FILES, which made those repos look like they contained no Rust at
+    all -- in a polyglot repo the wizard would silently offer only the other
+    ecosystem.
+    """
+    (tmp_path / "Cargo.toml").write_text("")
+    (tmp_path / "bun.lock").write_text("")
+    (tmp_path / "package.json").write_text("{}")
+
+    found = discover(tmp_path, repo_name="dslf")
+    assert [(str(lf.rel_path), lf.ecosystem) for lf in found] == [
+        ("Cargo.toml", "rust"),
+        ("bun.lock", "javascript"),
+    ]
+
+
+def test_discover_prefers_cargo_lock_over_cargo_toml(tmp_path: Path) -> None:
+    """With both present the lockfile wins, and Rust yields exactly one entry."""
+    (tmp_path / "Cargo.lock").write_text("")
+    (tmp_path / "Cargo.toml").write_text("")
+    (tmp_path / "bun.lock").write_text("")
+    (tmp_path / "package.json").write_text("{}")
+
+    found = discover(tmp_path, repo_name="dslf")
+    assert [(str(lf.rel_path), lf.ecosystem) for lf in found] == [
+        ("Cargo.lock", "rust"),
+        ("bun.lock", "javascript"),
+    ]
+
+
 def test_discover_disambiguates_colliding_suggested_names(tmp_path: Path) -> None:
     # Same ecosystem at root and in a subdir would both suggest
     # ``<repo>-javascript`` — the nested one gets its directory in the name.
@@ -155,14 +189,27 @@ def _stub_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _init_git_repo(path: Path, *, remote: str = "git@github.com:acme/widget.git") -> None:
-    env = {
+def _git_env() -> dict[str, str]:
+    """Git environment for the throwaway repos these tests build.
+
+    ``GIT_CONFIG_GLOBAL``/``GIT_CONFIG_SYSTEM`` are pinned to os.devnull so the
+    developer's own git config cannot leak in. Without that, settings such as
+    ``tag.gpgsign = true`` turn ``git tag v1.0.0`` into a signed tag, which
+    needs a message and fails with "no tag message?".
+    """
+    return {
         **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
         "GIT_AUTHOR_NAME": "T",
         "GIT_AUTHOR_EMAIL": "t@t",
         "GIT_COMMITTER_NAME": "T",
         "GIT_COMMITTER_EMAIL": "t@t",
     }
+
+
+def _init_git_repo(path: Path, *, remote: str = "git@github.com:acme/widget.git") -> None:
+    env = _git_env()
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True, env=env)
     subprocess.run(["git", "remote", "add", "origin", remote], cwd=path, check=True, env=env)
     (path / "README.md").write_text("# test")
@@ -182,14 +229,7 @@ def test_gather_repo_facts_parses_owner_repo(tmp_path: Path) -> None:
 
 def test_gather_repo_facts_with_release_tags(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
-    env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "T",
-        "GIT_AUTHOR_EMAIL": "t@t",
-        "GIT_COMMITTER_NAME": "T",
-        "GIT_COMMITTER_EMAIL": "t@t",
-    }
-    subprocess.run(["git", "tag", "v1.0.0"], cwd=tmp_path, check=True, env=env)
+    subprocess.run(["git", "tag", "v1.0.0"], cwd=tmp_path, check=True, env=_git_env())
     facts = gather_repo_facts(tmp_path)
     assert facts.has_release_tags is True
 
@@ -198,14 +238,7 @@ def test_gather_repo_facts_with_calver_release_tags(tmp_path: Path) -> None:
     """Bare-numeric version tags (CalVer / unprefixed SemVer) count as
     release tags — the old ``v*``-only detection missed them."""
     _init_git_repo(tmp_path)
-    env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "T",
-        "GIT_AUTHOR_EMAIL": "t@t",
-        "GIT_COMMITTER_NAME": "T",
-        "GIT_COMMITTER_EMAIL": "t@t",
-    }
-    subprocess.run(["git", "tag", "2026.7.1"], cwd=tmp_path, check=True, env=env)
+    subprocess.run(["git", "tag", "2026.7.1"], cwd=tmp_path, check=True, env=_git_env())
     facts = gather_repo_facts(tmp_path)
     assert facts.has_release_tags is True
 

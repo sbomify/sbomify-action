@@ -22,7 +22,7 @@ HERO_TITLE = "[b][#4059D0]sbom[/][#CC58BB]ify[/][#F4B57F] wizard[/][/]"
 # from any one artist — a real wizard hat is at least as tall as the
 # face + beard, which is what the previous draft was missing.
 #
-# Rows are coloured to echo the sbomify gradient: peach hat tip,
+# Rows are colored to echo the sbomify gradient: peach hat tip,
 # magenta hat base with stars, silvery beard (Gandalf cue), blue
 # robe deepening to brand-primary at the hem. Pure ASCII (no
 # box-drawing or exotic Unicode) so the figure renders uniformly

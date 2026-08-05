@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Code Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -30,7 +30,7 @@ jobs:
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "${{ env.UV_VERSION }}"
 
@@ -55,13 +55,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Code Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Set up Python
         id: setup-python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
 
@@ -71,7 +71,7 @@ jobs:
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "${{ env.UV_VERSION }}"
 
@@ -100,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Code Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -125,7 +125,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Code Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -136,7 +136,7 @@ jobs:
           echo "SYFT_VERSION=$SYFT_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "${{ env.UV_VERSION }}"
 
@@ -167,6 +167,12 @@ jobs:
           OUTPUT_FILE: alpine-enriched.cdx.json
           ENRICH: "true"
           UPLOAD: "false"
+          # The license database is fetched from this repo's GitHub releases.
+          # Unauthenticated that API allows 60 requests/hour per IP, and runners
+          # share IPs, so it intermittently 403s and enrichment silently degrades:
+          #   Failed to fetch releases: 403 ... rate limit exceeded
+          # which then fails the assertion below. Authenticated gets 5000/hour.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate and enrich Alpine SBOM (SPDX)
         run: |
@@ -180,6 +186,7 @@ jobs:
           OUTPUT_FILE: alpine-enriched.spdx.json
           ENRICH: "true"
           UPLOAD: "false"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify CycloneDX license database enrichment
         run: |
@@ -412,7 +419,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Code Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -423,7 +430,7 @@ jobs:
           echo "SYFT_VERSION=$SYFT_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "${{ env.UV_VERSION }}"
 
@@ -541,7 +548,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Code Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -551,7 +558,7 @@ jobs:
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "${{ env.UV_VERSION }}"
 
@@ -1048,7 +1055,6 @@ jobs:
   docker-meta:
     name: Docker Build Metadata
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     permissions:
       contents: read
     outputs:
@@ -1058,7 +1064,7 @@ jobs:
       dockerhub_repo: ${{ steps.meta.outputs.dockerhub_repo }}
       build_date: ${{ steps.meta.outputs.build_date }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Prepare build metadata
         id: meta
@@ -1106,7 +1112,6 @@ jobs:
       - cle-integration-test
       - augmentation-integration-test
       - docker-meta
-    if: github.event_name == 'push'
     permissions:
       packages: write
       contents: read
@@ -1120,24 +1125,29 @@ jobs:
             slug: linux-arm64
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        if: github.event_name == 'push'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        if: github.event_name == 'push'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: sbomifyhub
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # On pull_request this builds only -- no registry, no push -- so the
+      # arm64 image is actually compiled in review. Pushing by digest stays
+      # limited to push events, where the registry secrets exist.
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -1153,11 +1163,12 @@ jobs:
             COMMIT_SHA=${{ github.sha }}
             BUILD_DATE=${{ needs.docker-meta.outputs.build_date }}
             VCS_REF=${{ github.ref_name }}
-          outputs: type=image,"name=${{ needs.docker-meta.outputs.ghcr_repo }},${{ needs.docker-meta.outputs.dockerhub_repo }}",push-by-digest=true,name-canonical=true,push=true
+          outputs: ${{ github.event_name == 'push' && format('type=image,"name={0},{1}",push-by-digest=true,name-canonical=true,push=true', needs.docker-meta.outputs.ghcr_repo, needs.docker-meta.outputs.dockerhub_repo) || 'type=cacheonly' }}
           cache-from: type=gha,scope=build-${{ matrix.slug }}
-          cache-to: type=gha,mode=max,scope=build-${{ matrix.slug }}
+          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope=build-{0}', matrix.slug) || '' }}
 
       - name: Export digest
+        if: github.event_name == 'push'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
@@ -1165,6 +1176,7 @@ jobs:
           touch "${{ runner.temp }}/digests/${DIGEST#sha256:}"
 
       - name: Upload digest
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digests-${{ matrix.slug }}
@@ -1199,14 +1211,14 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: sbomifyhub
           password: ${{ secrets.DOCKERHUB_TOKEN }}

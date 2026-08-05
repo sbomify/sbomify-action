@@ -109,7 +109,7 @@ class PyPISource:
         #   3. Build the cache key from the now-validated name/version.
         #
         # Path-traversal rules:
-        #   - Names: PEP 503 allows "." and "_" inside a normalised project
+        #   - Names: PEP 503 allows "." and "_" inside a normalized project
         #     name (so "a..b" is a legal-but-unusual name). Reject only
         #     actual path separators ("/", "\\") and the whole-name
         #     dot-segments ("." / ".."). The ":" character is refused too
@@ -321,7 +321,7 @@ class PyPISource:
         # (BSI TR-03183-2 §5.2.2 filename + hash / NTIA / CISA hash element).
         # Prefer wheel (.whl) over sdist (.tar.gz); take the hashes of the
         # distribution whose filename we record so the two fields describe
-        # the same artefact.
+        # the same artifact.
         distribution_filename = None
         distribution_hashes: Dict[str, str] = {}
         urls = data.get("urls", [])
