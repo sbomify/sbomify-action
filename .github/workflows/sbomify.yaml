@@ -137,7 +137,6 @@ jobs:
         run: |
           source ./scripts/generate_additional_packages.sh
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
-          echo "SYFT_VERSION=$SYFT_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -149,18 +148,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --dev
 
-      - name: Install Syft
-        run: |
-          curl -sL -o syft_${SYFT_VERSION}_linux_amd64.tar.gz \
-            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
-          curl -sL -o syft_checksum.txt \
-            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt"
-          grep "syft_${SYFT_VERSION}_linux_amd64.tar.gz" syft_checksum.txt | sha256sum -c -
-          tar xvfz syft_${SYFT_VERSION}_linux_amd64.tar.gz
-          chmod +x syft
-          sudo mv syft /usr/local/bin
-          rm -f syft_${SYFT_VERSION}_linux_amd64.tar.gz syft_checksum.txt
-
       - name: Generate and enrich Alpine SBOM (CycloneDX)
         run: |
           # Use the action to generate SBOM from Docker image and enrich it
@@ -169,6 +156,11 @@ jobs:
           TOKEN: placeholder
           COMPONENT_ID: placeholder
           DOCKER_IMAGE: alpine:3.20
+          # syft is no longer installed onto the runner by hand; the action
+          # fetches the signed bundle it was built against. Outside our image
+          # that fetch is opt-in, because installing a toolchain the user did
+          # not ask for would change which generator wins.
+          SBOMIFY_FETCH_RUNTIMES: "1"
           SBOM_FORMAT: cyclonedx
           OUTPUT_FILE: alpine-enriched.cdx.json
           ENRICH: "true"
@@ -188,6 +180,11 @@ jobs:
           TOKEN: placeholder
           COMPONENT_ID: placeholder
           DOCKER_IMAGE: alpine:3.20
+          # syft is no longer installed onto the runner by hand; the action
+          # fetches the signed bundle it was built against. Outside our image
+          # that fetch is opt-in, because installing a toolchain the user did
+          # not ask for would change which generator wins.
+          SBOMIFY_FETCH_RUNTIMES: "1"
           SBOM_FORMAT: spdx
           OUTPUT_FILE: alpine-enriched.spdx.json
           ENRICH: "true"
@@ -433,7 +430,6 @@ jobs:
         run: |
           source ./scripts/generate_additional_packages.sh
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
-          echo "SYFT_VERSION=$SYFT_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -445,18 +441,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --dev
 
-      - name: Install Syft
-        run: |
-          curl -sL -o syft_${SYFT_VERSION}_linux_amd64.tar.gz \
-            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
-          curl -sL -o syft_checksum.txt \
-            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt"
-          grep "syft_${SYFT_VERSION}_linux_amd64.tar.gz" syft_checksum.txt | sha256sum -c -
-          tar xvfz syft_${SYFT_VERSION}_linux_amd64.tar.gz
-          chmod +x syft
-          sudo mv syft /usr/local/bin
-          rm -f syft_${SYFT_VERSION}_linux_amd64.tar.gz syft_checksum.txt
-
       - name: Generate and enrich Debian SBOM (CycloneDX)
         run: |
           # Use Debian image to test OS component CLE enrichment
@@ -465,6 +449,11 @@ jobs:
           TOKEN: placeholder
           COMPONENT_ID: placeholder
           DOCKER_IMAGE: debian:12-slim
+          # syft is no longer installed onto the runner by hand; the action
+          # fetches the signed bundle it was built against. Outside our image
+          # that fetch is opt-in, because installing a toolchain the user did
+          # not ask for would change which generator wins.
+          SBOMIFY_FETCH_RUNTIMES: "1"
           SBOM_FORMAT: cyclonedx
           OUTPUT_FILE: debian-enriched.cdx.json
           ENRICH: "true"

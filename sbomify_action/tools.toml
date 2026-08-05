@@ -86,3 +86,21 @@ stage = "build"
 purl = "pkg:pypi/uv@{version}"
 github_repo = "astral-sh/uv"
 dockerfile_arg = "UV_VERSION"
+
+# The JVM build plugins are not tools we install -- Maven, Gradle and sbt
+# fetch them themselves -- but they still have to be pinned where Dependabot
+# can see them, which is tools/pom.xml and tools/build.gradle.
+#
+# Those files are not part of the Python package. Reading them directly worked
+# from a checkout and raised inside the image, where the path resolves under
+# site-packages and the file is simply not there. They are frozen into
+# literals before the wheel is built, exactly as the [tool.*] entries are.
+[plugin.cyclonedx-maven]
+version_from = { file = "tools/pom.xml", artifact = "cyclonedx-maven-plugin" }
+
+[plugin.cyclonedx-gradle]
+version_from = { file = "tools/build.gradle", coordinate = "org.cyclonedx:cyclonedx-gradle-plugin" }
+
+[plugin.sbt-sbom]
+version_from = { file = "tools/pom.xml", artifact = "sbt-sbom_2.12_1.0" }
+

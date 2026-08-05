@@ -58,7 +58,7 @@ REPOS: dict[str, tuple[str, str, str]] = {
     "dart": ("flutter/gallery", "main", "pubspec.lock"),
     "php": ("symfony/demo", "main", "composer.lock"),
     "swift": ("ChimeHQ/Neon", "main", "Package.resolved"),
-        # A project's own lock file, not the repository-level one in .nuget/.
+    # A project's own lock file, not the repository-level one in .nuget/.
     # Hangfire has one per project, which is the normal .NET layout; pointing
     # at .nuget/ describes that directory and nothing else -- 4 components
     # against 306 for the project itself.

@@ -62,9 +62,9 @@ JVM_SPDX_DEFAULT = "SPDX-2.3"
 #: carries the Maven plugin and sbt-sbom, while the Gradle plugin is
 #: published to the Gradle Plugin Portal and Central does not have 3.3.0 at
 #: all.
-_MAVEN_PLUGIN_VERSION = plugin_version("tools/pom.xml", artifact="cyclonedx-maven-plugin")
-_GRADLE_PLUGIN_VERSION = plugin_version("tools/build.gradle", coordinate="org.cyclonedx:cyclonedx-gradle-plugin")
-SBT_SBOM_PLUGIN = plugin_version("tools/pom.xml", artifact="sbt-sbom_2.12_1.0")
+_MAVEN_PLUGIN_VERSION = plugin_version("cyclonedx-maven")
+_GRADLE_PLUGIN_VERSION = plugin_version("cyclonedx-gradle")
+SBT_SBOM_PLUGIN = plugin_version("sbt-sbom")
 
 CYCLONEDX_MAVEN_PLUGIN = f"org.cyclonedx:cyclonedx-maven-plugin:{_MAVEN_PLUGIN_VERSION}"
 CYCLONEDX_GRADLE_PLUGIN = f"org.cyclonedx:cyclonedx-gradle-plugin:{_GRADLE_PLUGIN_VERSION}"

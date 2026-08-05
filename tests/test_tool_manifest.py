@@ -8,6 +8,7 @@ failure modes fail loudly instead of silently.
 """
 
 import re
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -302,13 +303,81 @@ class TestPluginVersionsAreWatched:
         from sbomify_action._generation.generators import cyclonedx_jvm
         from sbomify_action.tool_manifest import plugin_version
 
-        assert cyclonedx_jvm.CYCLONEDX_MAVEN_PLUGIN.endswith(
-            plugin_version("tools/pom.xml", artifact="cyclonedx-maven-plugin")
-        )
-        assert cyclonedx_jvm.CYCLONEDX_GRADLE_PLUGIN.endswith(
-            plugin_version("tools/build.gradle", coordinate="org.cyclonedx:cyclonedx-gradle-plugin")
-        )
-        assert cyclonedx_jvm.SBT_SBOM_PLUGIN == plugin_version("tools/pom.xml", artifact="sbt-sbom_2.12_1.0")
+        assert cyclonedx_jvm.CYCLONEDX_MAVEN_PLUGIN.endswith(plugin_version("cyclonedx-maven"))
+        assert cyclonedx_jvm.CYCLONEDX_GRADLE_PLUGIN.endswith(plugin_version("cyclonedx-gradle"))
+        assert cyclonedx_jvm.SBT_SBOM_PLUGIN == plugin_version("sbt-sbom")
+
+    def test_every_plugin_version_traces_back_to_a_watched_manifest(self):
+        """The indirection must not become a place to hide a literal.
+
+        Going through tools.toml is what lets the image ship these versions,
+        but it would also let someone write one straight into the manifest,
+        where no bot would ever update it.
+        """
+        raw = tomllib.loads((REPO_ROOT / "sbomify_action" / "tools.toml").read_text())
+        plugins = raw.get("plugin") or {}
+        assert plugins, "no [plugin.*] entries found"
+        for name, body in plugins.items():
+            source = body.get("version_from")
+            assert source, f"{name}: pins a literal instead of reading a watched manifest"
+            assert (REPO_ROOT / source["file"]).is_file(), f"{name}: {source['file']} does not exist"
+
+    def test_the_versions_survive_without_the_repository(self):
+        """The regression that broke the published image.
+
+        tools/pom.xml and tools/build.gradle are not part of the Python
+        package, so reading them directly worked from a checkout and raised
+        ManifestError on import under site-packages. The image build freezes
+        the versions into the shipped manifest; this asserts a frozen manifest
+        needs no manifest files at all.
+        """
+        import shutil
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "pkg"
+            shutil.copytree(REPO_ROOT / "sbomify_action", root / "sbomify_action")
+            shutil.copytree(REPO_ROOT / "scripts", root / "scripts")
+            # Every file the manifest resolves a version from, wherever it
+            # lives -- tools/pom.xml and tools/build.gradle for the plugins,
+            # uv.lock and the rest for the [tool.*] entries.
+            raw = tomllib.loads((REPO_ROOT / "sbomify_action" / "tools.toml").read_text())
+            sources = {
+                body["version_from"]["file"]
+                for table in ("tool", "plugin")
+                for body in (raw.get(table) or {}).values()
+                if isinstance(body, dict) and "version_from" in body
+            }
+            for relative in sources:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(REPO_ROOT / relative, target)
+            subprocess.run(  # noqa: S603
+                [sys.executable, "scripts/freeze_tool_versions.py"], cwd=root, check=True, capture_output=True
+            )
+            # Only now does it resemble the installed package: sources gone.
+            for relative in sources:
+                (root / relative).unlink()
+            result = subprocess.run(  # noqa: S603
+                [
+                    sys.executable,
+                    "-c",
+                    "from sbomify_action.tool_manifest import plugin_version as p;"
+                    "print(p('cyclonedx-maven'), p('cyclonedx-gradle'), p('sbt-sbom'))",
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, f"import failed without tools/: {result.stderr}"
+            from sbomify_action.tool_manifest import plugin_version
+
+            assert result.stdout.split() == [
+                plugin_version("cyclonedx-maven"),
+                plugin_version("cyclonedx-gradle"),
+                plugin_version("sbt-sbom"),
+            ]
 
     def test_no_plugin_version_is_written_in_the_source(self):
         """A literal here would be invisible to Dependabot."""

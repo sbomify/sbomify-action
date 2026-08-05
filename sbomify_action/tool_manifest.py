@@ -202,23 +202,35 @@ _LOCKFILE_READERS: dict[str, Callable[[Path, dict[str, object]], str]] = {
 }
 
 
-def plugin_version(manifest: str, **selector: str) -> str:
+def plugin_version(name: str) -> str:
     """The pinned version of a build-system plugin.
 
-    The JVM plugins are not tools we install: Maven, Gradle and sbt fetch
-    them themselves, so they have no entry in tools.toml and no bundle. They
-    still have to be pinned somewhere a bot can see, which is tools/pom.xml
-    and tools/build.gradle -- restating them as literals in Python would put
-    them out of Dependabot's reach, the same drift this manifest exists to
-    stop.
+    The JVM plugins are not tools we install: Maven, Gradle and sbt fetch them
+    themselves, so they have no bundle. They still have to be pinned where a
+    bot can see them, which is tools/pom.xml and tools/build.gradle --
+    restating them as literals in Python would put them out of Dependabot's
+    reach, the same drift this manifest exists to stop.
+
+    Those files are not part of the Python package, so reading them directly
+    worked from a checkout and raised inside the image, where the path
+    resolves under site-packages. They go through [plugin.*] in tools.toml for
+    the same reason [tool.*] entries do: the image build freezes them into
+    literals before the wheel is built, and the shipped manifest carries the
+    versions the release was built against.
     """
-    path = _REPO_ROOT / manifest
-    if not path.exists():
-        raise ManifestError(f"{manifest} not found (looked in {path})")
-    reader = _LOCKFILE_READERS.get(path.name)
-    if reader is None:
-        raise ManifestError(f"no reader for {path.name}")
-    return reader(path, dict(selector))
+    try:
+        raw = tomllib.loads(_MANIFEST.read_text())
+    except FileNotFoundError as exc:  # pragma: no cover - packaging error
+        raise ManifestError(f"Tool manifest not found at {_MANIFEST}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ManifestError(f"Tool manifest is not valid TOML: {exc}") from exc
+    plugins = raw.get("plugin") or {}
+    assert isinstance(plugins, dict)
+    body = plugins.get(name)
+    if body is None:
+        raise ManifestError(f"unknown plugin {name!r}; known: {', '.join(sorted(plugins))}")
+    assert isinstance(body, dict)
+    return _resolve_version(name, body)
 
 
 def _resolve_version(name: str, body: dict[str, object]) -> str:
