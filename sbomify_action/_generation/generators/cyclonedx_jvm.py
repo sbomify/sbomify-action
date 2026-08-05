@@ -268,7 +268,15 @@ class CycloneDXGradleGenerator(_JvmGenerator):
     288 components for okhttp against syft's 34, with cdxgen failing.
     """
 
-    build_files = ("build.gradle", "build.gradle.kts", "gradle.lockfile")
+    build_files = (
+        "build.gradle",
+        "build.gradle.kts",
+        # gradle.lockfile is deliberately absent. This generator runs the
+        # project's build; the lock file exists so that is unnecessary, and
+        # GradleLockfileGenerator reads it directly. Claiming it here meant
+        # winning the tie at equal priority and then failing the build, which
+        # in strict mode aborts instead of falling through to the reader.
+    )
     tool_name = "cyclonedx-gradle"
     runtime = "gradle"
 

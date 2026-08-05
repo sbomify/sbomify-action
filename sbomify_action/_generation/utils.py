@@ -131,7 +131,10 @@ CDXGEN_LOCK_FILES = (
     + CPP_LOCK_FILES
     + PHP_LOCK_FILES
     + DOTNET_LOCK_FILES
-    + SWIFT_LOCK_FILES
+    # Swift is deliberately absent. cdxgen claims SwiftPM and then fails on a
+    # real project, and in strict mode a generator that claims an input and
+    # fails is fatal -- so claiming it cost the SBOM entirely instead of
+    # degrading to syft, which produces one. Syft still lists Swift.
     + ELIXIR_LOCK_FILES
     + SCALA_LOCK_FILES
 )
