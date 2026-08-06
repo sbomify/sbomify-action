@@ -2683,7 +2683,8 @@ def cli(
 ) -> None:
     """Generate, augment, enrich, and manage SBOMs in your CI/CD pipeline.
 
-    Provide one of: --sbom-file, --lock-file, or --docker-image as input.
+    Provide one of: --sbom-file, --lock-file, --source-dir, or --docker-image
+    as input.
 
     \b
     Commands:
@@ -2732,8 +2733,14 @@ def cli(
     if ctx.invoked_subcommand is not None:
         return
 
-    # Show help with banner if no input source is provided
-    if not any([sbom_file, docker_image, lock_file]):
+    # Show help with banner if no input source is provided.
+    #
+    # source_dir belongs in this list. Without it, SOURCE_DIR on its own read
+    # as "no input at all": the banner and help printed and the process exited
+    # 0, so the action step went green having produced no SBOM. Silent, because
+    # exit 0 is success -- the failure only surfaced downstream, where
+    # something looked for the output file that was never written.
+    if not any([sbom_file, docker_image, lock_file, source_dir]):
         # Check if additional packages are configured — user likely forgot --lock-file none
         from ..additional_packages import has_additional_packages_configured
 

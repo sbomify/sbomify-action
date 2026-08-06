@@ -705,3 +705,51 @@ class TestEvaluateBoolean(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSourceDirIsRecognisedAsInput(unittest.TestCase):
+    """SOURCE_DIR alone must count as an input source.
+
+    It was absent from the ``if not any([...])`` guard that decides whether the
+    user supplied anything, so a run given only SOURCE_DIR printed the banner
+    and help and exited 0 -- a green step that produced no SBOM. Nothing
+    surfaced at the time; the failure appeared downstream, wherever something
+    looked for the output file that was never written.
+    """
+
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def test_source_dir_alone_does_not_print_help_and_exit(self):
+        """Exercised through the environment, which is how the container runs.
+
+        action.yml passes SOURCE_DIR as an env var; build_config_from_env then
+        reads os.getenv. The regression was in the callback guard between the
+        two.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.runner.invoke(cli, [], env={"SOURCE_DIR": tmp, "UPLOAD": "false"})
+
+        self.assertNotIn(
+            "Usage:",
+            result.output,
+            "SOURCE_DIR was treated as no input at all: help printed instead of a run",
+        )
+        # Whatever happens next, it must not be the silent exit-0 no-op: either
+        # the pipeline runs or it fails loudly. Exiting 0 having printed help is
+        # the specific failure this guards.
+        self.assertNotEqual(
+            (result.exit_code, "Usage:" in result.output),
+            (0, True),
+            "a green exit that produced nothing",
+        )
+
+    def test_no_input_at_all_still_shows_help(self):
+        """The guard must still fire when nothing is supplied."""
+        result = self.runner.invoke(cli, [], env={"UPLOAD": "false"})
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Usage:", result.output)
+
+    def test_help_lists_source_dir(self):
+        result = self.runner.invoke(cli, ["--help"])
+        self.assertIn("--source-dir", result.output)
