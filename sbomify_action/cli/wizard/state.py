@@ -62,6 +62,18 @@ component publishing in both formats produces two artifacts.
 """
 
 
+NestedRepoKind = Literal["submodule", "vendored"]
+"""Why a lockfile's directory belongs to a different repository.
+
+- ``submodule`` — under a path declared in ``.gitmodules``.
+- ``vendored`` — under a directory carrying its own ``.git`` entry
+  without being declared in ``.gitmodules``. Typically a checked-in
+  clone, but the entry may equally be a ``.git`` *file* (a worktree, or
+  a submodule checkout the parent never declared); detection does not
+  distinguish them, so they all land here.
+"""
+
+
 @dataclass(frozen=True)
 class DiscoveredLockfile:
     """One lockfile the wizard found in the repo."""
@@ -70,6 +82,12 @@ class DiscoveredLockfile:
     rel_path: Path
     ecosystem: str
     suggested_name: str
+    nested_repo: str | None = None
+    """Repo-relative POSIX path of the enclosing submodule / vendored
+    repo root, when the lockfile belongs to one. Those lockfiles are
+    better tracked from their own repository, so the discover screen
+    annotates them and leaves them deselected by default."""
+    nested_repo_kind: NestedRepoKind | None = None
 
 
 @dataclass(frozen=True)

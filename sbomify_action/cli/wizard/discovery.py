@@ -19,7 +19,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from sbomify_action._generation.utils import ALL_LOCK_FILES, get_lock_file_ecosystem
-from sbomify_action.cli.wizard.state import DiscoveredLockfile
+from sbomify_action.cli.wizard.state import DiscoveredLockfile, NestedRepoKind
 
 # Cap the walk so we never scan a degenerate monorepo into memory. 200
 # is enormous in practice; if a repo legitimately has more lockfiles
@@ -165,15 +165,21 @@ def discover(repo_root: Path, *, repo_name: str | None = None) -> list[Discovere
         if len(best_per_dir_eco) >= DISCOVERY_CAP:
             break
 
+    submodule_paths = _submodule_paths(repo_root)
+    nested_cache: dict[Path, tuple[str, NestedRepoKind] | None] = {}
+
     found: list[DiscoveredLockfile] = []
     for (_dir, ecosystem), (_priority, path) in best_per_dir_eco.items():
         rel = path.relative_to(repo_root)
+        nested = _enclosing_nested_repo(path.parent, repo_root, submodule_paths, nested_cache)
         found.append(
             DiscoveredLockfile(
                 path=path,
                 rel_path=rel,
                 ecosystem=ecosystem,
                 suggested_name=_suggested_name(repo_name, path.name),
+                nested_repo=nested[0] if nested else None,
+                nested_repo_kind=nested[1] if nested else None,
             )
         )
 
@@ -195,6 +201,57 @@ def discover(repo_root: Path, *, repo_name: str | None = None) -> list[Discovere
 
     found.sort(key=lambda lf: (str(lf.rel_path.parent), lf.rel_path.name))
     return found
+
+
+# ``path = <value>`` lines inside .gitmodules. Values may be quoted when
+# they contain spaces; git writes forward slashes on every platform.
+_GITMODULES_PATH_RE = re.compile(r"^\s*path\s*=\s*(?P<path>.+?)\s*$", re.MULTILINE)
+
+
+def _submodule_paths(repo_root: Path) -> frozenset[str]:
+    """Repo-relative POSIX paths declared as submodules in ``.gitmodules``.
+
+    Parsed directly from the file rather than via ``git submodule`` so it
+    works without a git binary and for submodules that were declared but
+    never initialised.
+    """
+    try:
+        text = (repo_root / ".gitmodules").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return frozenset()
+    return frozenset(m.group("path").strip('"').rstrip("/") for m in _GITMODULES_PATH_RE.finditer(text))
+
+
+def _enclosing_nested_repo(
+    directory: Path,
+    repo_root: Path,
+    submodule_paths: frozenset[str],
+    cache: dict[Path, tuple[str, NestedRepoKind] | None],
+) -> tuple[str, NestedRepoKind] | None:
+    """Innermost ancestor of ``directory`` that is its own repository.
+
+    A directory counts if it is declared in ``.gitmodules``
+    (``submodule``) or carries its own ``.git`` entry (``vendored``).
+    The second branch does not inspect the entry: a ``.git`` directory
+    (checked-in clone) and a ``.git`` file (worktree, or a submodule
+    checkout the parent never declared) are both ``vendored``, since
+    either way the code belongs to another repository. Results are
+    memoised per directory since sibling lockfiles share ancestors.
+    """
+    if directory == repo_root:
+        return None
+    if directory in cache:
+        return cache[directory]
+    rel = directory.relative_to(repo_root).as_posix()
+    result: tuple[str, NestedRepoKind] | None
+    if rel in submodule_paths:
+        result = (rel, "submodule")
+    elif (directory / ".git").exists():
+        result = (rel, "vendored")
+    else:
+        result = _enclosing_nested_repo(directory.parent, repo_root, submodule_paths, cache)
+    cache[directory] = result
+    return result
 
 
 def _walk(root: Path) -> Iterator[Path]:

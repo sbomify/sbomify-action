@@ -227,6 +227,7 @@ class Config:
     component_name: Optional[str] = None
     component_purl: Optional[str] = None
     product_releases: Optional[str | list[str]] = None
+    submodule_path: Optional[str] = None
     api_base_url: str = SBOMIFY_PRODUCTION_API
     sbom_format: SBOMFormat = "cyclonedx"
     bom_type: Optional[str] = None
@@ -323,6 +324,21 @@ class Config:
             raise ConfigurationError("Please provide one of: SBOM_FILE, LOCK_FILE, SOURCE_DIR, or DOCKER_IMAGE")
         if self.source_dir and not Path(self.source_dir).is_dir():
             raise ConfigurationError(f"SOURCE_DIR '{self.source_dir}' is not a directory")
+
+        # Submodule mode: attach-or-backfill against the submodule's
+        # component. Needs a lockfile to backfill from, and only makes
+        # sense when talking to sbomify.
+        if self.submodule_path:
+            if not self.lock_file or self.is_additional_packages_only:
+                raise ConfigurationError(
+                    "SUBMODULE_PATH requires LOCK_FILE (the submodule's lockfile) so the SBOM "
+                    "can be generated when no existing one is found for the pinned version."
+                )
+            if not self.uploads_to_sbomify:
+                raise ConfigurationError(
+                    "SUBMODULE_PATH requires uploading to sbomify (UPLOAD=true with the 'sbomify' "
+                    "destination) — submodule mode looks up and attaches SBOMs via the sbomify API."
+                )
 
         # Validate additional-packages-only mode
         if self.is_additional_packages_only:
@@ -599,6 +615,7 @@ def build_config(
     component_name: Optional[str] = None,
     component_purl: Optional[str] = None,
     product_releases: Optional[str] = None,
+    submodule_path: Optional[str] = None,
     api_base_url: str = SBOMIFY_PRODUCTION_API,
     sbom_format: str = "cyclonedx",
     bom_type: Optional[str] = None,
@@ -646,6 +663,12 @@ def build_config(
     if product_releases:
         logger.info(f"Raw product release input: {product_releases}")
 
+    # Submodule mode: empty string (unset matrix field in the emitted
+    # workflow) means disabled.
+    normalized_submodule_path = submodule_path.strip() if submodule_path and submodule_path.strip() else None
+    if normalized_submodule_path:
+        logger.info(f"Submodule mode: {normalized_submodule_path} (attach-or-backfill)")
+
     # Log SBOM format
     sbom_format_lower: SBOMFormat = cast(SBOMFormat, sbom_format.lower())
     logger.info(f"SBOM format: {format_display_name(sbom_format_lower)}")
@@ -692,6 +715,7 @@ def build_config(
         component_name=final_component_name,
         component_purl=component_purl,
         product_releases=product_releases,
+        submodule_path=normalized_submodule_path,
         api_base_url=api_base_url,
         sbom_format=sbom_format_lower,
         bom_type=normalized_bom_type,
@@ -741,6 +765,7 @@ def load_config() -> Config:
         component_name=os.getenv("COMPONENT_NAME"),
         component_purl=os.getenv("COMPONENT_PURL"),
         product_releases=os.getenv("PRODUCT_RELEASE"),
+        submodule_path=os.getenv("SUBMODULE_PATH"),
         api_base_url=os.getenv("API_BASE_URL", SBOMIFY_PRODUCTION_API),
         sbom_format=os.getenv("SBOM_FORMAT", "cyclonedx"),
         bom_type=os.getenv("BOM_TYPE"),
@@ -1364,6 +1389,154 @@ def _finalize_post_upload(results: "AggregateResult") -> None:
     _log_step_end(6)
 
 
+def _find_existing_submodule_sbom(config: "Config", sbom_format: str) -> Optional[str]:
+    """ID of the submodule component's SBOM at the pin-derived version, or None.
+
+    ``config.component_version`` must already hold the pin-derived version
+    (set by :func:`_prepare_submodule_mode`). Soft-fails to None on API
+    errors so callers fall back to generation rather than aborting.
+    """
+    from ..sbomify_api import SbomifyApiClient
+
+    if not (config.token and config.component_id and config.component_version):
+        return None
+    client = SbomifyApiClient(config.api_base_url, config.token)
+    try:
+        return client.find_component_sbom(config.component_id, config.component_version, sbom_format)
+    except APIError as e:
+        logger.warning(f"Could not look up an existing submodule SBOM: {e}")
+        return None
+
+
+def _prepare_submodule_mode(config: "Config") -> Optional[str]:
+    """Resolve the submodule pin; return an existing SBOM's ID if one matches.
+
+    Side effect: overrides ``config.component_version`` with the
+    pin-derived version (exact version tag at the pinned commit, else the
+    short SHA) so that a backfill uploads under the version the
+    submodule's own CI would have published.
+
+    Returns the sbom_id to attach (skip generation/upload entirely), or
+    None to proceed with the normal pipeline as a backfill.
+    """
+    from ..submodule import resolve_submodule_pin
+
+    assert config.submodule_path is not None  # guarded by the caller
+    pin = resolve_submodule_pin(Path.cwd(), config.submodule_path)
+    if pin is None:
+        logger.error(
+            f"SUBMODULE_PATH '{config.submodule_path}' is not a git submodule or vendored repo "
+            "in this checkout: the parent tree has no gitlink at that path and the directory "
+            "has no embedded .git. Check the path, and ensure the workflow checks out the "
+            "parent repository (the pin is read from the parent tree, not the submodule)."
+        )
+        sys.exit(1)
+
+    source_desc = "version tag" if pin.version_source == "tag" else "short commit SHA"
+    logger.info(f"Submodule '{pin.path}' pinned at {pin.sha} → version '{pin.version}' ({source_desc})")
+    if config.component_version and config.component_version != pin.version:
+        logger.info(f"Overriding COMPONENT_VERSION '{config.component_version}' with the pin-derived '{pin.version}'")
+    config.component_version = pin.version
+
+    existing = _find_existing_submodule_sbom(config, config.sbom_format)
+    if existing:
+        logger.info(
+            f"Component {config.component_id} already has a {format_display_name(config.sbom_format)} "
+            f"SBOM at version '{pin.version}' (id: {existing})"
+        )
+        return existing
+    logger.info(
+        f"No existing {format_display_name(config.sbom_format)} SBOM for component "
+        f"{config.component_id} at version '{pin.version}' — generating one (backfill)."
+    )
+    return None
+
+
+def _run_post_upload_processing(config: "Config", sbom_id: str) -> None:
+    """Step 6: post-upload processors (release tagging etc.) for ``sbom_id``."""
+    _log_step_header(6, "Post-upload Processing")
+    try:
+        from sbomify_action._processors import ProcessorInput, ProcessorOrchestrator
+
+        # Re-mint the OIDC token before kicking off processors: long pipelines
+        # (large Docker images, Yocto builds, slow enrichment) can exceed the
+        # 15-minute default TTL on the originally minted token.
+        if config.token_is_oidc_minted:
+            from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
+            from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
+
+            if is_github_oidc_available():
+                try:
+                    config.token = obtain_sbomify_token_via_oidc(
+                        component_id=config.component_id,
+                        api_base_url=config.api_base_url,
+                        audience=config.oidc_audience,
+                    )
+                except (OIDCBindingMissingError, OIDCExchangeError) as exc:
+                    logger.warning(
+                        f"Could not refresh OIDC-minted token before processors: {exc}. "
+                        "Continuing with the original token — long-running pipelines may see 401s."
+                    )
+
+        orchestrator = ProcessorOrchestrator(
+            api_base_url=config.api_base_url,
+            token=config.token,
+        )
+        # Normalize product_releases to list[str] | None for ProcessorInput
+        pr_list: list[str] | None = None
+        if isinstance(config.product_releases, list):
+            pr_list = config.product_releases
+        elif isinstance(config.product_releases, str):
+            pr_list = json.loads(config.product_releases)
+
+        processor_input = ProcessorInput(
+            sbom_id=sbom_id,
+            sbom_file=config.output_file,
+            product_releases=pr_list,
+            api_base_url=config.api_base_url,
+            token=config.token,
+        )
+
+        # Check if any processors are enabled
+        enabled_processors = orchestrator.get_enabled_processors(processor_input)
+        if enabled_processors:
+            logger.info(f"Running {len(enabled_processors)} processor(s): {enabled_processors}")
+            results = orchestrator.process_all(processor_input)
+            # Raises SystemExit(1) if any processor failed (e.g. a 403 cutting
+            # a release) so the failure isn't swallowed as a green run.
+            _finalize_post_upload(results)
+        else:
+            logger.info("No processors enabled for this run")
+            _log_step_end(6)
+    except Exception as e:
+        # Crash in orchestrator setup. A processor's own failure already
+        # comes back as a failure_result (handled above), so this only
+        # catches setup/import errors; keep it non-fatal as before.
+        logger.error(f"Step 6 (post-upload processing) failed: {e}")
+        _log_step_end(6, success=False)
+
+
+def _finalize_run(config: "Config") -> None:
+    """Finalize + persist the audit trail and print the success summary."""
+    audit_trail = get_audit_trail()
+    audit_trail.output_file = config.output_file
+
+    # Write audit trail file
+    audit_trail_path = Path(config.output_file).parent / "audit_trail.txt"
+    try:
+        audit_trail.write_audit_file(str(audit_trail_path))
+        logger.info(f"Audit trail written to: {audit_trail_path}")
+    except Exception as e:
+        logger.warning(f"Failed to write audit trail file: {e}")
+
+    # Print summary and full audit trail for attestation
+    audit_trail.print_summary()
+    audit_trail.print_to_stdout_for_attestation()
+
+    # Final success message
+    print_final_success()
+
+
 def run_pipeline(config: Config) -> None:
     """
     Run the SBOM pipeline with the given configuration.
@@ -1427,6 +1600,24 @@ def run_pipeline(config: Config) -> None:
                 "grants `permissions: id-token: write` for the runner."
             )
             sys.exit(1)
+
+    # Submodule mode: resolve the pin to a version and check whether the
+    # submodule's component already published an SBOM at exactly that
+    # version. Hit → attach it to the configured release(s), skipping
+    # generation and upload entirely (the submodule's own CI produced the
+    # authoritative artifact). Miss → fall through to the normal pipeline
+    # as a backfill, with COMPONENT_VERSION overridden to the pin-derived
+    # version so the upload lands where the next run's lookup will find it.
+    if config.submodule_path:
+        existing_sbom_id = _prepare_submodule_mode(config)
+        if existing_sbom_id:
+            logger.info("Skipping SBOM generation and upload — attaching the existing SBOM instead.")
+            if config.product_releases:
+                _run_post_upload_processing(config, existing_sbom_id)
+            else:
+                logger.info("No PRODUCT_RELEASE configured; the existing SBOM already covers this pin.")
+            _finalize_run(config)
+            return
 
     # Step 1: SBOM Generation/Validation
     _log_step_header(1, "SBOM Generation/Input Processing")
@@ -1912,6 +2103,27 @@ def run_pipeline(config: Config) -> None:
                     bom_type=config.bom_type,
                 )
 
+                if (
+                    not upload_result.success
+                    and upload_result.error_code == "DUPLICATE_ARTIFACT"
+                    and config.submodule_path
+                    and destination == "sbomify"
+                ):
+                    # Backfill race: another workflow published this
+                    # (component, version, format) between our preflight
+                    # lookup and this upload. The backend's uniqueness
+                    # constraint guarantees a single winner — recover by
+                    # re-looking it up and attaching that SBOM instead of
+                    # failing the run.
+                    recovered = _find_existing_submodule_sbom(config, FORMAT)
+                    if recovered:
+                        logger.info(
+                            f"Duplicate upload for submodule component — another workflow published "
+                            f"this SBOM first; reusing the existing one (id: {recovered})."
+                        )
+                        sbom_id = recovered
+                        continue
+
                 if not upload_result.success:
                     if upload_result.error_code == "DUPLICATE_ARTIFACT":
                         logger.error(
@@ -1953,89 +2165,13 @@ def run_pipeline(config: Config) -> None:
 
     # Step 6: Post-upload Processing (releases, signing, etc.)
     if sbom_id:
-        _log_step_header(6, "Post-upload Processing")
-        try:
-            from sbomify_action._processors import ProcessorInput, ProcessorOrchestrator
-
-            # Re-mint the OIDC token before kicking off processors: long pipelines
-            # (large Docker images, Yocto builds, slow enrichment) can exceed the
-            # 15-minute default TTL on the originally minted token.
-            if config.token_is_oidc_minted:
-                from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
-                from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
-
-                if is_github_oidc_available():
-                    try:
-                        config.token = obtain_sbomify_token_via_oidc(
-                            component_id=config.component_id,
-                            api_base_url=config.api_base_url,
-                            audience=config.oidc_audience,
-                        )
-                    except (OIDCBindingMissingError, OIDCExchangeError) as exc:
-                        logger.warning(
-                            f"Could not refresh OIDC-minted token before processors: {exc}. "
-                            "Continuing with the original token — long-running pipelines may see 401s."
-                        )
-
-            orchestrator = ProcessorOrchestrator(
-                api_base_url=config.api_base_url,
-                token=config.token,
-            )
-            # Normalize product_releases to list[str] | None for ProcessorInput
-            pr_list: list[str] | None = None
-            if isinstance(config.product_releases, list):
-                pr_list = config.product_releases
-            elif isinstance(config.product_releases, str):
-                pr_list = json.loads(config.product_releases)
-
-            processor_input = ProcessorInput(
-                sbom_id=sbom_id,
-                sbom_file=config.output_file,
-                product_releases=pr_list,
-                api_base_url=config.api_base_url,
-                token=config.token,
-            )
-
-            # Check if any processors are enabled
-            enabled_processors = orchestrator.get_enabled_processors(processor_input)
-            if enabled_processors:
-                logger.info(f"Running {len(enabled_processors)} processor(s): {enabled_processors}")
-                results = orchestrator.process_all(processor_input)
-                # Raises SystemExit(1) if any processor failed (e.g. a 403 cutting
-                # a release) so the failure isn't swallowed as a green run.
-                _finalize_post_upload(results)
-            else:
-                logger.info("No processors enabled for this run")
-                _log_step_end(6)
-        except Exception as e:
-            # Crash in orchestrator setup. A processor's own failure already
-            # comes back as a failure_result (handled above), so this only
-            # catches setup/import errors; keep it non-fatal as before.
-            logger.error(f"Step 6 (post-upload processing) failed: {e}")
-            _log_step_end(6, success=False)
+        _run_post_upload_processing(config, sbom_id)
     elif config.product_releases and not sbom_id:
         _log_step_header(6, "Post-upload Processing - SKIPPED")
         logger.warning("Product releases specified but no SBOM ID available (upload may have been disabled or failed)")
         _log_step_end(6, success=False)
 
-    # Finalize audit trail
-    audit_trail = get_audit_trail()
-    audit_trail.output_file = config.output_file
-
-    # Write audit trail file
-    audit_trail_path = Path(config.output_file).parent / "audit_trail.txt"
-    try:
-        audit_trail.write_audit_file(str(audit_trail_path))
-        logger.info(f"Audit trail written to: {audit_trail_path}")
-    except Exception as e:
-        logger.warning(f"Failed to write audit trail file: {e}")
-
-    # Print summary and full audit trail for attestation
-    audit_trail.print_summary()
-    audit_trail.print_to_stdout_for_attestation()
-
-    # Final success message
-    print_final_success()
+    _finalize_run(config)
 
 
 def _validate_cyclonedx_sbom(sbom_file_path: str) -> bool | None:
@@ -2636,6 +2772,16 @@ def _parse_upload_destinations_callback(
     help="Tag SBOM with product releases (JSON array: '[\"product_id:v1.0.0\"]').",
 )
 @click.option(
+    "--submodule-path",
+    envvar="SUBMODULE_PATH",
+    default=None,
+    help=(
+        "Treat the component as a git submodule pinned at this path: resolve the pin to a "
+        "version (tag or short SHA), attach the component's existing SBOM at that version if "
+        "one exists, otherwise generate and upload it (backfill)."
+    ),
+)
+@click.option(
     "--api-base-url",
     envvar="API_BASE_URL",
     default=SBOMIFY_PRODUCTION_API,
@@ -2719,6 +2865,7 @@ def cli(
     component_name: Optional[str],
     component_purl: Optional[str],
     product_releases: Optional[str],
+    submodule_path: Optional[str],
     api_base_url: str,
     sbom_format: str,
     bom_type: Optional[str],
@@ -2851,6 +2998,7 @@ def cli(
         component_name=component_name,
         component_purl=component_purl,
         product_releases=product_releases,
+        submodule_path=submodule_path,
         api_base_url=api_base_url,
         sbom_format=sbom_format,
         bom_type=bom_type,

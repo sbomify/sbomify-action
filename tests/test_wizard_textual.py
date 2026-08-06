@@ -209,6 +209,80 @@ async def test_welcome_to_discover_navigates(tmp_path: Path, monkeypatch: pytest
         assert len(app.state.discovered) == 1
 
 
+async def test_discover_deselects_nested_repo_lockfiles_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Submodule / vendored-repo lockfiles are annotated and start
+    deselected — they belong to another repository and should get their
+    own SBOM setup there."""
+    from textual.widgets import SelectionList
+
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "uv.lock",
+            rel_path=Path("uv.lock"),
+            ecosystem="python",
+            suggested_name="widget-py",
+        ),
+        DiscoveredLockfile(
+            path=tmp_path / "extern" / "lib" / "Cargo.lock",
+            rel_path=Path("extern") / "lib" / "Cargo.lock",
+            ecosystem="rust",
+            suggested_name="widget-rust",
+            nested_repo="extern/lib",
+            nested_repo_kind="submodule",
+        ),
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # welcome → discover
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.discover import DiscoverScreen
+
+        assert isinstance(app.screen, DiscoverScreen)
+        sel = app.screen.query_one("#lockfile-list", SelectionList)
+        # Only the top-level lockfile is pre-selected.
+        assert list(sel.selected) == [0]
+        # The submodule row carries the annotation, and the explanatory
+        # note is present.
+        labels = [str(sel.get_option_at_index(i).prompt) for i in range(sel.option_count)]
+        assert any("submodule: extern/lib" in label for label in labels)
+        app.screen.query_one("#nested-repo-note")
+
+
+async def test_discover_labels_nested_repo_of_unknown_kind_neutrally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``nested_repo`` without a ``nested_repo_kind`` must not be
+    labelled 'vendored repo' — both fields are optional, so an unset
+    kind gets a neutral annotation rather than a wrong one."""
+    from textual.widgets import SelectionList
+
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "extern" / "lib" / "Cargo.lock",
+            rel_path=Path("extern") / "lib" / "Cargo.lock",
+            ecosystem="rust",
+            suggested_name="widget-rust",
+            nested_repo="extern/lib",
+        ),
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # welcome → discover
+        await pilot.pause()
+
+        sel = app.screen.query_one("#lockfile-list", SelectionList)
+        label = str(sel.get_option_at_index(0).prompt)
+        assert "nested repo: extern/lib" in label
+        assert "vendored" not in label
+
+
 async def test_enter_on_focused_radio_set_toggles_radio(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: Enter while a RadioSet has focus must commit the
     highlighted radio (not skip past the whole screen).
