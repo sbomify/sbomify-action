@@ -102,10 +102,14 @@ class SourceRegistry:
                 # the one place every source is called, and it keys on the same
                 # (source, coordinate) pair they all cache on in memory.
                 #
-                # Only a completed fetch is stored. A source that raises -- a
-                # timeout, a connection error -- falls through to the except
-                # below and is never persisted, so a throttled or unreachable
-                # upstream cannot be remembered as "this package has no data".
+                # Only a completed fetch is stored. Anything that raises falls
+                # through to the handlers below and is never persisted, which
+                # is why sources signal a timeout, connection error, 429 or 5xx
+                # with TransientSourceError rather than returning None: a None
+                # reaching this line is a definitive "upstream has no data for
+                # this package" and is cached as such. Blurring the two would
+                # let one throttled run suppress a package's enrichment until
+                # the entry expired.
                 cache_key = purl.to_string()
                 hit, metadata = cache.get(source.name, cache_key)
                 if hit:
