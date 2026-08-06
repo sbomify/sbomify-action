@@ -2516,7 +2516,12 @@ def _parse_upload_destinations_callback(
     "--source-dir",
     envvar="SOURCE_DIR",
     type=click.Path(exists=False, file_okay=False),
-    help="Directory to scan. Reports what is on disk, where a lock file reports what the ecosystem resolved.",
+    help=(
+        "Directory to scan (last resort). Prefer --lock-file wherever one exists: "
+        "a lock file is the graph the ecosystem resolved, while a scan finds only "
+        "what is on disk and what Syft recognises. Use this for what no lock file "
+        "describes, such as an unpacked release archive or a vendored tree."
+    ),
 )
 @click.option(
     "-o",
