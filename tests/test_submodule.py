@@ -20,6 +20,7 @@ from sbomify_action.submodule import SubmodulePin, _pick_version_tag, resolve_su
 # export, so monkeypatch string paths can't reach the module — import it
 # explicitly (same workaround as tests/test_config.py).
 cli_main_module = import_module("sbomify_action.cli.main")
+submodule_module = import_module("sbomify_action.submodule")
 
 # ----------------------------------------------------------------------
 # git fixtures
@@ -151,6 +152,59 @@ def test_returns_none_for_plain_directory(tmp_path: Path) -> None:
     (parent / "just-a-dir").mkdir()
     assert resolve_submodule_pin(parent, "just-a-dir") is None
     assert resolve_submodule_pin(parent, "missing/path") is None
+
+
+def test_resolves_pin_when_run_from_a_subdirectory(parent_with_submodule: tuple[Path, Path]) -> None:
+    """``SUBMODULE_PATH`` is repo-root-relative, but the caller passes
+    the process cwd. From a subdirectory, ``ls-tree`` would resolve the
+    pathspec against that subdirectory and ``.gitmodules`` would be
+    missing entirely — resolution must normalise to the worktree root
+    first."""
+    parent, sub = parent_with_submodule
+    workdir = parent / "services" / "api"
+    workdir.mkdir(parents=True)
+
+    pin = resolve_submodule_pin(workdir, "extern/lib")
+    assert pin is not None
+    assert pin.path == "extern/lib"
+    assert pin.sha == _git(["rev-parse", "HEAD"], cwd=sub)
+    # .gitmodules was found, so the tag resolved rather than degrading to a SHA.
+    assert pin.version == "v1.2.3"
+    assert pin.version_source == "tag"
+
+
+def test_submodule_url_is_redacted_before_logging(
+    parent_with_submodule: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``.gitmodules`` URL may embed credentials, so the no-tags debug
+    line must not carry them."""
+    parent, _sub = parent_with_submodule
+    gitmodules = parent / ".gitmodules"
+    original = gitmodules.read_text()
+    url_line = [line for line in original.splitlines() if "url =" in line][0]
+    gitmodules.write_text(original.replace(url_line, "\turl = https://x-access-token:s3cr3t@example.invalid/o/l.git"))
+
+    # No network: the point is what reaches the log, not the lookup.
+    monkeypatch.setattr(submodule_module, "_tags_at_sha_remote", lambda *_args, **_kwargs: [])
+    messages: list[str] = []
+    monkeypatch.setattr(submodule_module.logger, "debug", lambda msg: messages.append(str(msg)))
+
+    resolve_submodule_pin(parent, "extern/lib")
+
+    logged = "\n".join(messages)
+    assert "s3cr3t" not in logged
+    assert "***@example.invalid" in logged
+
+
+def test_redact_url_leaves_ordinary_urls_intact() -> None:
+    redact = submodule_module._redact_url
+    assert redact("https://github.com/org/repo.git") == "https://github.com/org/repo.git"
+    # scp-style: a username, not a secret.
+    assert redact("git@github.com:org/repo.git") == "git@github.com:org/repo.git"
+    assert redact("../sibling-repo") == "../sibling-repo"
+    # An @ in the path is not userinfo.
+    assert redact("https://host/org/repo@v1.git") == "https://host/org/repo@v1.git"
+    assert redact("ssh://user:pw@host:22/o/l.git") == "ssh://***@host:22/o/l.git"
 
 
 def test_gitmodules_url_cannot_inject_git_options(tmp_path: Path) -> None:

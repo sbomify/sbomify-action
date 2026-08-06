@@ -83,6 +83,40 @@ def _run_git(args: list[str], *, cwd: Path, timeout: int = _LOCAL_TIMEOUT) -> st
     return result.stdout.strip()
 
 
+def _repo_toplevel(start: Path) -> Path:
+    """The worktree root of the repo containing ``start``.
+
+    ``SUBMODULE_PATH`` is repo-root-relative (that is what the wizard
+    emits), but the caller passes the process's cwd. Those differ
+    whenever the action runs from a subdirectory, and every lookup below
+    would then miss: ``ls-tree`` resolves its pathspec relative to cwd,
+    and ``.gitmodules`` only exists at the root. Normalise once here.
+
+    ``start`` is returned unchanged when it is not inside a git worktree
+    — a vendored clone still resolves through its own ``.git``.
+    """
+    out = _run_git(["rev-parse", "--show-toplevel"], cwd=start)
+    return Path(out).resolve() if out else start
+
+
+def _redact_url(url: str) -> str:
+    """``https://user:token@host/x`` → ``https://***@host/x``.
+
+    ``.gitmodules`` URLs can embed credentials, so the URL must never
+    reach a log line verbatim. Only the authority carries userinfo; an
+    ``@`` later in the path is left alone, as is scp-style
+    ``git@host:path`` (a username, not a secret).
+    """
+    scheme, sep, rest = url.partition("://")
+    if not sep:
+        return url
+    authority, slash, path = rest.partition("/")
+    if "@" not in authority:
+        return url
+    _, _, host = authority.rpartition("@")
+    return f"{scheme}://***@{host}{slash}{path}"
+
+
 def _gitlink_sha(repo_root: Path, submodule_path: str) -> str | None:
     """The commit SHA the parent tree records for ``submodule_path``.
 
@@ -198,7 +232,7 @@ def resolve_submodule_pin(repo_root: Path, submodule_path: str) -> SubmodulePin 
     nor a vendored clone with its own ``.git`` — the caller treats that
     as a configuration error.
     """
-    repo_root = repo_root.resolve()
+    repo_root = _repo_toplevel(repo_root.resolve())
     normalized = submodule_path.strip().strip("/")
 
     sha = _gitlink_sha(repo_root, normalized)
@@ -212,7 +246,7 @@ def resolve_submodule_pin(repo_root: Path, submodule_path: str) -> SubmodulePin 
     if url:
         tags = _tags_at_sha_remote(repo_root, url, sha)
         if not tags:
-            logger.debug(f"No remote tags at {sha} for submodule '{normalized}' (url: {url})")
+            logger.debug(f"No remote tags at {sha} for submodule '{normalized}' (url: {_redact_url(url)})")
     if not tags:
         tags = _tags_at_sha_local(repo_root, normalized, sha)
 
