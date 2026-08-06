@@ -666,6 +666,13 @@ def build_config(
         if (lock_file and lock_file.lower() == NONE_SENTINEL)
         else (path_expansion(lock_file) if lock_file else None)
     )
+    # Expanded like the others, but by directory_expansion: path_expansion
+    # tests is_file(), so a directory fails it with "Specified input file
+    # 'unpacked' not found" -- the same message that made passing a directory
+    # as LOCK_FILE look like a missing file. No "none" sentinel either: that
+    # keyword means "build from additional packages alone", which is a
+    # statement about lock files and has no reading for a directory.
+    expanded_source_dir = directory_expansion(source_dir) if source_dir else None
 
     config = Config(
         token=token or "",
@@ -673,6 +680,7 @@ def build_config(
         sbom_file=expanded_sbom_file,
         docker_image=docker_image,
         lock_file=expanded_lock_file,
+        source_dir=expanded_source_dir,
         output_file=output_file,
         upload=upload,
         upload_destinations=upload_destinations,
@@ -1036,6 +1044,41 @@ def path_expansion(path: str) -> str:
         raise FileProcessingError(
             f"Specified input file '{path}' not found. Searched in: '{relative_path}', '{workspace_relative_path}'"
         )
+
+
+def directory_expansion(path: str) -> str:
+    """Resolve a directory the same way path_expansion resolves a file.
+
+    Separate from path_expansion because that one tests ``is_file()``, so a
+    directory fails it with "Specified input file ... not found" -- accurate
+    only about the name it was given, and the message that made an early
+    attempt at directory scanning look like a missing file.
+
+    The three-location search is the part worth sharing: inside the action's
+    container a relative path resolves against the working directory or
+    against /github/workspace, and which one applies depends on how the
+    workflow was written.
+    """
+    if path.startswith("-"):
+        raise FileProcessingError(
+            f"Invalid directory path '{path}' - this looks like a CLI flag. "
+            f"Did you forget to specify a directory? "
+            f"Example: --source-dir dist or set the SOURCE_DIR environment variable."
+        )
+
+    current_dir = Path.cwd()
+    relative_path = current_dir / path
+    workspace_relative_path = Path("/github/workspace") / path
+
+    logger.debug(f"Searching for directory '{path}'...")
+    for candidate in (Path(path), relative_path, workspace_relative_path):
+        if candidate.is_dir():
+            logger.info(f"Using source directory '{candidate}'.")
+            return str(candidate if candidate.is_absolute() else current_dir / candidate)
+
+    raise FileProcessingError(
+        f"Specified source directory '{path}' not found. Searched in: '{relative_path}', '{workspace_relative_path}'"
+    )
 
 
 def get_last_sbom_from_last_step() -> Optional[str]:
@@ -2516,7 +2559,12 @@ def _parse_upload_destinations_callback(
     "--source-dir",
     envvar="SOURCE_DIR",
     type=click.Path(exists=False, file_okay=False),
-    help="Directory to scan. Reports what is on disk, where a lock file reports what the ecosystem resolved.",
+    help=(
+        "Directory to scan (last resort). Prefer --lock-file wherever one exists: "
+        "a lock file is the graph the ecosystem resolved, while a scan finds only "
+        "what is on disk and what Syft recognises. Use this for what no lock file "
+        "describes, such as an unpacked release archive or a vendored tree."
+    ),
 )
 @click.option(
     "-o",
@@ -2683,7 +2731,8 @@ def cli(
 ) -> None:
     """Generate, augment, enrich, and manage SBOMs in your CI/CD pipeline.
 
-    Provide one of: --sbom-file, --lock-file, or --docker-image as input.
+    Provide one of: --sbom-file, --lock-file, --source-dir, or --docker-image
+    as input.
 
     \b
     Commands:
@@ -2732,8 +2781,14 @@ def cli(
     if ctx.invoked_subcommand is not None:
         return
 
-    # Show help with banner if no input source is provided
-    if not any([sbom_file, docker_image, lock_file]):
+    # Show help with banner if no input source is provided.
+    #
+    # source_dir belongs in this list. Without it, SOURCE_DIR on its own read
+    # as "no input at all": the banner and help printed and the process exited
+    # 0, so the action step went green having produced no SBOM. Silent, because
+    # exit 0 is success -- the failure only surfaced downstream, where
+    # something looked for the output file that was never written.
+    if not any([sbom_file, docker_image, lock_file, source_dir]):
         # Check if additional packages are configured — user likely forgot --lock-file none
         from ..additional_packages import has_additional_packages_configured
 
@@ -2785,6 +2840,7 @@ def cli(
         sbom_file=sbom_file,
         docker_image=docker_image,
         lock_file=lock_file,
+        source_dir=source_dir,
         output_file=output_file,
         upload=upload,
         upload_destinations=upload_destinations,

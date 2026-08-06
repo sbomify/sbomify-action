@@ -314,7 +314,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | -------------------------- | -------- | -------------------------------------------------------------------------------- |
 | `LOCK_FILE`                | †        | Path to lockfile, or `none` for additional-packages-only mode                    |
 | `SBOM_FILE`                | †        | Path to existing SBOM file, or `none` for additional-packages-only mode          |
-| `SOURCE_DIR`               | †        | Directory to scan with Syft — reports what is on disk, not what a lockfile pins   |
+| `SOURCE_DIR`               | †        | Directory to scan with Syft. **Last resort** — prefer `LOCK_FILE` whenever one exists, see [Directory scanning](#directory-scanning-source_dir--last-resort) |
 | `DOCKER_IMAGE`             | †        | Docker image name                                                                |
 | `OUTPUT_FILE`              | No       | Write final SBOM to this path                                                    |
 | `SBOM_FORMAT`              | No       | Output format: `cyclonedx` (default) or `spdx`                                   |
@@ -427,16 +427,40 @@ When uploading to Dependency Track (`UPLOAD_DESTINATIONS=dependency-track`), con
 | C++        | `conan.lock`                                                                   |
 | Terraform  | `.terraform.lock.hcl`                                                          |
 
-`SOURCE_DIR` scans a whole tree with Syft rather than reading a manifest. It is
-a separate input because it is a different claim: a lock file is the dependency
-graph its ecosystem resolved, and a directory is whatever is on disk. The second
-is weaker — it finds what it recognises — and the SBOM should not pretend
-otherwise.
+### Directory scanning (`SOURCE_DIR`) — last resort
 
-Use it for what no lock file describes: an unpacked release archive, a vendored
-dependency tree, any build output. It is how sbomify describes its own tool
-bundles, which carry a JDK, Maven, Gradle and a Go toolchain that no manifest in
-the repository mentions.
+**Point the action at a lock file wherever one exists.** `SOURCE_DIR` scans a
+whole tree with Syft rather than reading a manifest, and it produces a weaker
+SBOM. Reach for it only when nothing in the table above applies.
+
+The two are different claims. A lock file is the dependency graph its ecosystem
+**resolved** — every transitive dependency, at the exact version that would be
+installed, whether or not it is present on this machine. A directory is whatever
+happens to be **on disk**, catalogued by whatever Syft recognises. In practice
+that means a directory scan:
+
+- **misses what is not installed** — dev and optional dependencies, anything
+  pruned from a production install, anything the build has not fetched yet;
+- **misses what Syft does not recognise** — an unsupported ecosystem, a vendored
+  tree with no manifest, a statically linked binary carrying no build metadata,
+  and it says so nowhere;
+- **reports whatever else is lying around** — build caches, test fixtures, a
+  stale `node_modules`, a second copy of a toolchain;
+- **varies with the machine.** The same commit scanned on a different runner, or
+  at a different point in the build, can produce a different SBOM. A lock file
+  gives the same answer every time.
+
+None of that is Syft doing badly; it is the difference between reading a
+declaration and inspecting a filesystem.
+
+Use `SOURCE_DIR` for what no lock file can describe: an unpacked release
+archive, a vendored dependency tree, a build output. It is how sbomify describes
+its own tool bundles, which carry a JDK, Maven, Gradle and a Go toolchain that no
+manifest in the repository mentions — there is no lock file that could describe
+them, which is exactly when this input is the right choice.
+
+If a lock file exists and you use `SOURCE_DIR` anyway, you are choosing a less
+complete and less reproducible SBOM.
 
 ## Yocto/OpenEmbedded
 

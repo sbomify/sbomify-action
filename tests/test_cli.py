@@ -703,5 +703,74 @@ class TestEvaluateBoolean(unittest.TestCase):
             self.assertFalse(evaluate_boolean(value), f"'{value}' should be False (case-insensitive)")
 
 
+class TestSourceDirIsRecognisedAsInput(unittest.TestCase):
+    """SOURCE_DIR alone must count as an input source.
+
+    It was absent from the ``if not any([...])`` guard that decides whether the
+    user supplied anything, so a run given only SOURCE_DIR printed the banner
+    and help and exited 0 -- a green step that produced no SBOM. Nothing
+    surfaced at the time; the failure appeared downstream, wherever something
+    looked for the output file that was never written.
+    """
+
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def test_source_dir_reaches_the_pipeline(self):
+        """Exercised through the environment, which is how the container runs.
+
+        action.yml passes SOURCE_DIR as an env var; build_config reads it and
+        must carry it into Config. Asserting on the config the pipeline is
+        handed, rather than on the absence of "Usage:" -- the weaker check
+        passed while build_config was still dropping source_dir on the floor,
+        because a run that dies in validation also prints no usage.
+
+        The side-effectful calls are stubbed so this exercises argument
+        handling only, and cannot start a scan or reach the network.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(cli_main_module, "run_pipeline") as run_pipeline,
+                patch.object(cli_main_module, "setup_dependencies"),
+            ):
+                result = self.runner.invoke(cli, [], env={"SOURCE_DIR": tmp, "UPLOAD": "false"})
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        run_pipeline.assert_called_once()
+        config = run_pipeline.call_args.args[0]
+        self.assertEqual(
+            config.source_dir,
+            tmp,
+            "SOURCE_DIR did not survive the trip from the environment to the config",
+        )
+        self.assertIsNone(config.lock_file, "a directory must not be recorded as a lock file")
+
+    def test_source_dir_that_is_a_file_is_refused_as_a_directory(self):
+        """The error must name what was actually wrong.
+
+        Click's own ``file_okay=False`` catches this at parse time and says so
+        precisely. Worth pinning: routing a directory through the file-oriented
+        path expansion instead produces "Specified input file ... not found",
+        which reads as a missing file and sent an earlier attempt at directory
+        scanning looking in the wrong place.
+        """
+        with tempfile.NamedTemporaryFile() as handle:
+            result = self.runner.invoke(cli, [], env={"SOURCE_DIR": handle.name, "UPLOAD": "false"})
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("is a file", result.output.lower())
+        self.assertNotIn("not found", result.output.lower())
+
+    def test_no_input_at_all_still_shows_help(self):
+        """The guard must still fire when nothing is supplied."""
+        result = self.runner.invoke(cli, [], env={"UPLOAD": "false"})
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("Usage:", result.output)
+
+    def test_help_lists_source_dir(self):
+        result = self.runner.invoke(cli, ["--help"])
+        self.assertIn("--source-dir", result.output)
+
+
 if __name__ == "__main__":
     unittest.main()
