@@ -230,10 +230,13 @@ def _enclosing_nested_repo(
 ) -> tuple[str, NestedRepoKind] | None:
     """Innermost ancestor of ``directory`` that is its own repository.
 
-    A directory counts if it is declared in ``.gitmodules`` (submodule)
-    or has its own ``.git`` entry — a file for submodule checkouts, a
-    directory for vendored clones. Results are memoised per directory
-    since sibling lockfiles share ancestors.
+    A directory counts if it is declared in ``.gitmodules``
+    (``submodule``) or carries its own ``.git`` entry (``vendored``).
+    The second branch does not inspect the entry: a ``.git`` directory
+    (checked-in clone) and a ``.git`` file (worktree, or a submodule
+    checkout the parent never declared) are both ``vendored``, since
+    either way the code belongs to another repository. Results are
+    memoised per directory since sibling lockfiles share ancestors.
     """
     if directory == repo_root:
         return None

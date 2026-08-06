@@ -8,6 +8,13 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, SelectionList, Static
 
 from sbomify_action.cli.wizard.screens._base import WizardScreen
+from sbomify_action.cli.wizard.state import NestedRepoKind
+
+# How each nested-repo kind is described in a row annotation.
+_NESTED_REPO_LABELS: dict[NestedRepoKind | None, str] = {
+    "submodule": "submodule",
+    "vendored": "vendored repo",
+}
 
 
 class DiscoverScreen(WizardScreen):
@@ -57,7 +64,10 @@ class DiscoverScreen(WizardScreen):
         for idx, lf in enumerate(self.wizard.state.discovered):
             label = f"{lf.rel_path}  [#5E5E5E]({lf.ecosystem})[/]"
             if lf.nested_repo:
-                kind = "submodule" if lf.nested_repo_kind == "submodule" else "vendored repo"
+                # Both fields are optional on DiscoveredLockfile, so an
+                # unset/unknown kind falls back to a neutral label rather
+                # than claiming "vendored".
+                kind = _NESTED_REPO_LABELS.get(lf.nested_repo_kind, "nested repo")
                 label += f"  [#F4B57F]({kind}: {lf.nested_repo})[/]"
             # Nested-repo lockfiles default to deselected — they belong to
             # another repository and are better tracked from there.

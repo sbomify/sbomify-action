@@ -253,6 +253,36 @@ async def test_discover_deselects_nested_repo_lockfiles_by_default(
         app.screen.query_one("#nested-repo-note")
 
 
+async def test_discover_labels_nested_repo_of_unknown_kind_neutrally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``nested_repo`` without a ``nested_repo_kind`` must not be
+    labelled 'vendored repo' — both fields are optional, so an unset
+    kind gets a neutral annotation rather than a wrong one."""
+    from textual.widgets import SelectionList
+
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "extern" / "lib" / "Cargo.lock",
+            rel_path=Path("extern") / "lib" / "Cargo.lock",
+            ecosystem="rust",
+            suggested_name="widget-rust",
+            nested_repo="extern/lib",
+        ),
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.press("enter")  # welcome → discover
+        await pilot.pause()
+
+        sel = app.screen.query_one("#lockfile-list", SelectionList)
+        label = str(sel.get_option_at_index(0).prompt)
+        assert "nested repo: extern/lib" in label
+        assert "vendored" not in label
+
+
 async def test_enter_on_focused_radio_set_toggles_radio(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: Enter while a RadioSet has focus must commit the
     highlighted radio (not skip past the whole screen).

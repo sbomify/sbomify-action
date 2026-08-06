@@ -66,8 +66,11 @@ NestedRepoKind = Literal["submodule", "vendored"]
 """Why a lockfile's directory belongs to a different repository.
 
 - ``submodule`` — under a path declared in ``.gitmodules``.
-- ``vendored`` — under a directory with its own ``.git`` (a checked-in
-  clone that isn't a registered submodule).
+- ``vendored`` — under a directory carrying its own ``.git`` entry
+  without being declared in ``.gitmodules``. Typically a checked-in
+  clone, but the entry may equally be a ``.git`` *file* (a worktree, or
+  a submodule checkout the parent never declared); detection does not
+  distinguish them, so they all land here.
 """
 
 
