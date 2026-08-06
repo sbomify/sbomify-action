@@ -135,8 +135,13 @@ def _tags_at_sha_remote(repo_root: Path, url: str, sha: str) -> list[str]:
     ``http.<url>.extraheader`` credential actions/checkout installs)
     applies to the remote call. Annotated tags are resolved through
     their peeled (``^{}``) entries, which override the tag-object SHA.
+
+    ``url`` comes from the scanned repo's ``.gitmodules``, so it is
+    untrusted input: it is passed after ``--`` so a leading-dash value
+    cannot be read as an option (``--upload-pack=...`` would otherwise
+    execute a command, silently — ``_run_git`` swallows the failure).
     """
-    out = _run_git(["ls-remote", "--tags", url], cwd=repo_root, timeout=_REMOTE_TIMEOUT)
+    out = _run_git(["ls-remote", "--tags", "--", url], cwd=repo_root, timeout=_REMOTE_TIMEOUT)
     if not out:
         return []
     targets: dict[str, str] = {}

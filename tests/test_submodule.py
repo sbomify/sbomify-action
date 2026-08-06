@@ -153,6 +153,40 @@ def test_returns_none_for_plain_directory(tmp_path: Path) -> None:
     assert resolve_submodule_pin(parent, "missing/path") is None
 
 
+def test_gitmodules_url_cannot_inject_git_options(tmp_path: Path) -> None:
+    """A leading-dash ``.gitmodules`` URL must never be read as an option.
+
+    ``.gitmodules`` belongs to the scanned repo, so it is untrusted (fork
+    PRs, third-party code). Without an end-of-options marker,
+    ``--upload-pack=<cmd>`` makes ``git ls-remote`` *execute* ``<cmd>``
+    against the default remote — and git's non-zero exit hides it, since
+    ``_run_git`` returns None on any failure.
+    """
+    sub = tmp_path / "sub-remote"
+    _make_repo(sub)
+
+    parent = tmp_path / "parent"
+    _make_repo(parent)
+    _git(
+        ["-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), "extern/lib"],
+        cwd=parent,
+    )
+    _git(["commit", "-q", "-m", "add submodule"], cwd=parent)
+    # actions/checkout leaves an origin behind; ls-remote falls back to it
+    # when its repository argument is swallowed as an option.
+    _git(["remote", "add", "origin", str(sub)], cwd=parent)
+
+    canary = tmp_path / "canary"
+    gitmodules = parent / ".gitmodules"
+    gitmodules.write_text(gitmodules.read_text().replace(str(sub), f"--upload-pack=touch {canary}"))
+
+    # Resolution still succeeds (untagged pin → short SHA); the point is
+    # what did *not* happen.
+    pin = resolve_submodule_pin(parent, "extern/lib")
+    assert pin is not None
+    assert not canary.exists(), "git executed the injected --upload-pack command"
+
+
 def test_pick_version_tag_prefers_v_prefixed() -> None:
     assert _pick_version_tag(["1.2.3", "v1.2.3"]) == "v1.2.3"
     assert _pick_version_tag(["2026.7.1"]) == "2026.7.1"
