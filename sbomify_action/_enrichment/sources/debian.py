@@ -8,6 +8,7 @@ from packageurl import PackageURL
 
 from sbomify_action.logging_config import logger
 
+from ..exceptions import TransientSourceError
 from ..metadata import NormalizedMetadata
 from ..sanitization import normalize_vcs_url
 
@@ -115,10 +116,10 @@ class DebianSource:
 
         except requests.exceptions.Timeout:
             logger.warning(f"Timeout fetching Debian Sources metadata for {package_name}")
-            return None
+            raise TransientSourceError(f"Timeout from {self.name}") from None
         except requests.exceptions.RequestException as e:
             logger.warning(f"Error fetching Debian Sources metadata for {package_name}: {e}")
-            return None
+            raise TransientSourceError(f"RequestException from {self.name}") from None
         except json.JSONDecodeError as e:
             logger.warning(f"JSON decode error for Debian Sources {package_name}: {e}")
             return None

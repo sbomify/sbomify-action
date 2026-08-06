@@ -161,7 +161,11 @@ def get(source: str, key: str) -> Tuple[bool, Optional[NormalizedMetadata]]:
         if payload is not None
         else _ttl("SBOMIFY_ENRICHMENT_CACHE_MISS_TTL", DEFAULT_MISS_TTL_SECONDS)
     )
-    if ttl and (time.time() - fetched_at) > ttl:
+    # No truthiness guard: TTL 0 means "expire immediately", not "never
+    # expire". Setting a TTL to zero is a reasonable way to bypass one half of
+    # the cache, and reading it as unlimited would do the exact opposite of
+    # what was asked.
+    if (time.time() - fetched_at) >= ttl:
         return False, None
 
     try:

@@ -8,6 +8,7 @@ from packageurl import PackageURL
 
 from sbomify_action.logging_config import logger
 
+from ..exceptions import TransientSourceError
 from ..license_utils import normalize_license_list
 from ..metadata import NormalizedMetadata
 
@@ -141,8 +142,15 @@ class RepologySource:
                 metadata = self._normalize_response(purl, data, repo_name)
             elif response.status_code == 404:
                 logger.debug(f"Package not found in Repology: {purl.name}")
-            elif response.status_code == 429:
-                logger.warning(f"Repology rate limit exceeded for {purl.name}. Consider reducing request frequency.")
+            elif response.status_code == 429 or response.status_code >= 500:
+                # Transient: must not be persisted as "no metadata".
+                if response.status_code == 429:
+                    logger.warning(
+                        f"Repology rate limit exceeded for {purl.name}. Consider reducing request frequency."
+                    )
+                else:
+                    logger.warning(f"Repology upstream error for {purl.name}: HTTP {response.status_code}")
+                raise TransientSourceError(f"HTTP {response.status_code} from {self.name}")
             else:
                 logger.warning(f"Failed to fetch Repology metadata for {purl.name}: HTTP {response.status_code}")
 
@@ -152,12 +160,10 @@ class RepologySource:
 
         except requests.exceptions.Timeout:
             logger.warning(f"Timeout fetching Repology metadata for {purl.name}")
-            _cache[cache_key] = None
-            return None
+            raise TransientSourceError(f"Timeout from {self.name}") from None
         except requests.exceptions.RequestException as e:
             logger.warning(f"Error fetching Repology metadata for {purl.name}: {e}")
-            _cache[cache_key] = None
-            return None
+            raise TransientSourceError(f"RequestException from {self.name}") from None
         except json.JSONDecodeError as e:
             logger.warning(f"JSON decode error for Repology {purl.name}: {e}")
             _cache[cache_key] = None

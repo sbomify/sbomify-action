@@ -8,6 +8,7 @@ from packageurl import PackageURL
 from sbomify_action.logging_config import logger
 
 from . import cache
+from .exceptions import TransientSourceError
 from .metadata import NormalizedMetadata
 from .protocol import DataSource
 
@@ -124,6 +125,13 @@ class SourceRegistry:
                         # First result wins
                         break
 
+            except TransientSourceError as e:
+                # Deliberately not cached. A timeout or a 429 says nothing
+                # about the package, and persisting it as a miss would
+                # suppress this package's enrichment on every run until the
+                # entry expired.
+                logger.warning(f"Transient failure from {source.name} for {purl.name}: {e} (not cached)")
+                continue
             except Exception as e:
                 logger.warning(f"Error fetching from {source.name} for {purl.name}: {e}")
                 continue

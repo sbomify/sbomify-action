@@ -2,13 +2,16 @@
 
 import json
 import re
+from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import requests
 from packageurl import PackageURL
 
 from sbomify_action.logging_config import logger
 
+from ..exceptions import TransientSourceError
 from ..license_utils import normalize_license_list
 from ..metadata import NormalizedMetadata
 from ..sanitization import normalize_vcs_url
@@ -46,15 +49,27 @@ def clear_cache() -> None:
 # Hosts whose URLs are actual repositories. ``sourceLocation.url`` is otherwise
 # a download or registry link (Maven returns a sources jar, PyPI a project
 # page), which is not a repository_url however plausible it looks.
-_VCS_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org", "sr.ht", "git.sr.ht")
+_VCS_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org", "sr.ht")
+_ARCHIVE_SUFFIXES = (".jar", ".zip", ".gz", ".tgz", ".whl", ".gem", ".crate", ".bz2", ".xz")
 
 
 def _is_vcs_url(url: str) -> bool:
-    """True when ``url`` points at a source repository rather than an artifact."""
-    lowered = url.lower()
-    if lowered.endswith((".jar", ".zip", ".tar.gz", ".tgz", ".whl", ".gem", ".crate")):
+    """True when ``url`` points at a source repository rather than an artifact.
+
+    Matches on the parsed hostname, not a substring of the whole URL: the
+    latter accepts ``https://notgithub.com/x`` and
+    ``https://example.com/?ref=github.com``, and this gates repository_url.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
         return False
-    return any(host in lowered for host in _VCS_HOSTS)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if PurePosixPath(parsed.path).suffix.lower() in _ARCHIVE_SUFFIXES:
+        return False
+    return any(host == vcs or host.endswith(f".{vcs}") for vcs in _VCS_HOSTS)
 
 
 def _cleanest_party(parties: List[str]) -> Optional[str]:
@@ -142,6 +157,13 @@ class ClearlyDefinedSource:
                 metadata = self._normalize_response(purl.name, data)
             elif response.status_code == 404:
                 logger.debug(f"Package not found in ClearlyDefined: {purl}")
+            elif response.status_code == 429 or response.status_code >= 500:
+                # Throttled or upstream failure. Neither is evidence the
+                # package has no metadata, so this must not be remembered as a
+                # miss -- ClearlyDefined is rate limited per IP and CI runners
+                # share one, so caching a 429 would suppress enrichment for
+                # this package on every later run.
+                raise TransientSourceError(f"HTTP {response.status_code} from {self.name}")
             else:
                 logger.warning(f"Failed to fetch ClearlyDefined metadata for {purl}: HTTP {response.status_code}")
 
@@ -151,12 +173,10 @@ class ClearlyDefinedSource:
 
         except requests.exceptions.Timeout:
             logger.warning(f"Timeout fetching ClearlyDefined metadata for {purl}")
-            _cache[cache_key] = None
-            return None
+            raise TransientSourceError(f"Timeout from {self.name}") from None
         except requests.exceptions.RequestException as e:
             logger.warning(f"Error fetching ClearlyDefined metadata for {purl}: {e}")
-            _cache[cache_key] = None
-            return None
+            raise TransientSourceError(f"RequestException from {self.name}") from None
         except json.JSONDecodeError as e:
             logger.warning(f"JSON decode error for ClearlyDefined {purl}: {e}")
             _cache[cache_key] = None

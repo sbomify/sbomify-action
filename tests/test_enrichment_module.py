@@ -19,6 +19,7 @@ from spdx_tools.spdx.model import (
 )
 
 from sbomify_action._enrichment.enricher import Enricher, clear_all_caches, create_default_registry
+from sbomify_action._enrichment.exceptions import TransientSourceError
 from sbomify_action._enrichment.metadata import NormalizedMetadata
 from sbomify_action._enrichment.registry import SourceRegistry
 from sbomify_action._enrichment.sources.debian import DebianSource
@@ -401,9 +402,8 @@ class TestPyPISource:
 
         mock_session.get.side_effect = requests.exceptions.Timeout()
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_fetch_author_from_email_field(self, mock_session):
         """Test extraction of author name from author_email when author is empty.
@@ -1065,9 +1065,8 @@ class TestPyPISource:
 
         mock_session.get.side_effect = _requests.exceptions.Timeout("simulated")
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
         assert "pypi:foo:1.0" not in pypi_module._cache, "timeouts must not be cached — later components may retry"
 
     def test_direct_path_connection_error_not_cached(self, mock_session):
@@ -1083,9 +1082,8 @@ class TestPyPISource:
 
         mock_session.get.side_effect = _requests.exceptions.ConnectionError("refused")
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
         assert "pypi:foo:1.0" not in pypi_module._cache
 
     def test_direct_path_404_is_cached(self, mock_session):
@@ -1283,9 +1281,8 @@ class TestPubDevSource:
 
         mock_session.get.side_effect = requests.exceptions.Timeout()
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_fetch_cache_functionality(self, mock_session):
         """Test that pub.dev responses are cached."""
@@ -1395,9 +1392,8 @@ class TestRepologySource:
         mock_response.status_code = 429
         mock_session.get.return_value = mock_response
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
 
 # =============================================================================
@@ -2197,9 +2193,8 @@ class TestCacheAndAPIBehavior:
         mock_response.status_code = 429
         mock_session.get.return_value = mock_response
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
         assert "rate limit" in caplog.text.lower()
 
     def test_api_timeout(self, mock_session):
@@ -2209,9 +2204,8 @@ class TestCacheAndAPIBehavior:
 
         mock_session.get.side_effect = requests.exceptions.Timeout()
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_api_connection_error(self, mock_session):
         """Test handling of connection errors."""
@@ -2220,9 +2214,8 @@ class TestCacheAndAPIBehavior:
 
         mock_session.get.side_effect = requests.exceptions.ConnectionError()
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_clear_all_caches(self, mock_session):
         """Test clearing all source caches."""
