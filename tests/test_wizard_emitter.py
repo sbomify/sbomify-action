@@ -275,6 +275,28 @@ def test_emit_cache_step_always_present(tmp_path: Path) -> None:
     assert "SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft" in yaml
 
 
+def test_emit_cache_key_is_unique_per_run_with_a_restore_prefix(tmp_path: Path) -> None:
+    """A static primary key would make the cache write-once.
+
+    actions/cache skips its save step on an exact primary-key hit, so a key of
+    just ``sbomify-${{ runner.os }}`` freezes the directory after the first
+    run: the enrichment cache never grows past that snapshot, and license_db
+    re-downloads a refreshed database on every run forever.
+    """
+    facts = _facts(tmp_path)
+    plan = Plan(
+        use_product_id="prod-1",
+        create_components=[PlannedComponent(lockfile=_python_lockfile(tmp_path), name="widget-py")],
+    )
+    yaml = emit_workflow(plan, facts=facts, api_base_url="https://app.sbomify.com")
+
+    assert "key: sbomify-${{ runner.os }}-${{ github.run_id }}" in yaml
+    assert "restore-keys: |" in yaml
+    assert "sbomify-${{ runner.os }}-" in yaml
+    # The bare form must not survive as the primary key.
+    assert "key: sbomify-${{ runner.os }}\n" not in yaml
+
+
 def test_emit_component_name_env_uses_matrix(tmp_path: Path) -> None:
     facts = _facts(tmp_path)
     plan = Plan(

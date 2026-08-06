@@ -430,15 +430,32 @@ def augmentation_to_env(value: str) -> str:
 def _cache_step() -> str:
     """Cache step — always emitted.
 
-    Speeds up enrichment lookups (sbomify cache) and the syft scanner.
-    The cache is keyed only on ``runner.os`` so it stays warm across
-    workflow runs.
+    Caches the enrichment lookups and license databases (SBOMIFY_CACHE_DIR)
+    and the syft scanner (SYFT_CACHE_DIR).
+
+    The key must be unique per run, with a prefix in restore-keys. A static
+    key looks like it "stays warm" but does the opposite: actions/cache skips
+    its save step whenever the primary key hits exactly, so the directory is
+    written once -- on the first run that misses -- and then frozen. Nothing
+    that accumulates can accumulate:
+
+    * the enrichment cache stays pinned to whatever the first run happened to
+      look up, and every package added afterwards misses forever;
+    * once a newer license database is released, ``license_db`` downloads it
+      on every run into a directory that is never saved back, so it re-pays
+      that download indefinitely -- silently, because a failed download just
+      falls through to the other sources.
+
+    ``github.run_id`` is monotonic per repository, so each run writes a new
+    entry and the prefix restores the most recent one.
     """
     return (
         f"      - uses: actions/cache@{PINNED_CACHE_SHA}  # {PINNED_CACHE_VERSION}\n"
         "        with:\n"
         "          path: .sbomify-cache\n"
-        "          key: sbomify-${{ runner.os }}\n"
+        "          key: sbomify-${{ runner.os }}-${{ github.run_id }}\n"
+        "          restore-keys: |\n"
+        "            sbomify-${{ runner.os }}-\n"
     )
 
 
