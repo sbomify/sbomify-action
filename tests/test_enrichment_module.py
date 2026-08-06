@@ -19,6 +19,7 @@ from spdx_tools.spdx.model import (
 )
 
 from sbomify_action._enrichment.enricher import Enricher, clear_all_caches, create_default_registry
+from sbomify_action._enrichment.exceptions import TransientSourceError
 from sbomify_action._enrichment.metadata import NormalizedMetadata
 from sbomify_action._enrichment.registry import SourceRegistry
 from sbomify_action._enrichment.sources.debian import DebianSource
@@ -401,9 +402,8 @@ class TestPyPISource:
 
         mock_session.get.side_effect = requests.exceptions.Timeout()
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_fetch_author_from_email_field(self, mock_session):
         """Test extraction of author name from author_email when author is empty.
@@ -1065,9 +1065,8 @@ class TestPyPISource:
 
         mock_session.get.side_effect = _requests.exceptions.Timeout("simulated")
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
         assert "pypi:foo:1.0" not in pypi_module._cache, "timeouts must not be cached — later components may retry"
 
     def test_direct_path_connection_error_not_cached(self, mock_session):
@@ -1083,9 +1082,8 @@ class TestPyPISource:
 
         mock_session.get.side_effect = _requests.exceptions.ConnectionError("refused")
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
         assert "pypi:foo:1.0" not in pypi_module._cache
 
     def test_direct_path_404_is_cached(self, mock_session):
@@ -1283,9 +1281,8 @@ class TestPubDevSource:
 
         mock_session.get.side_effect = requests.exceptions.Timeout()
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_fetch_cache_functionality(self, mock_session):
         """Test that pub.dev responses are cached."""
@@ -1395,9 +1392,8 @@ class TestRepologySource:
         mock_response.status_code = 429
         mock_session.get.return_value = mock_response
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
 
 # =============================================================================
@@ -2197,9 +2193,8 @@ class TestCacheAndAPIBehavior:
         mock_response.status_code = 429
         mock_session.get.return_value = mock_response
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
         assert "rate limit" in caplog.text.lower()
 
     def test_api_timeout(self, mock_session):
@@ -2209,9 +2204,8 @@ class TestCacheAndAPIBehavior:
 
         mock_session.get.side_effect = requests.exceptions.Timeout()
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_api_connection_error(self, mock_session):
         """Test handling of connection errors."""
@@ -2220,9 +2214,8 @@ class TestCacheAndAPIBehavior:
 
         mock_session.get.side_effect = requests.exceptions.ConnectionError()
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_clear_all_caches(self, mock_session):
         """Test clearing all source caches."""
@@ -2811,8 +2804,14 @@ class TestClearlyDefinedSource:
 
         metadata = source.fetch(purl, mock_session)
 
-        # Should return metadata or None based on implementation
-        assert metadata is None or isinstance(metadata, NormalizedMetadata)
+        # Asserting the fields, not just the type. This fixture already carried
+        # the correct attribution shape, but the previous assertion
+        # ("is None or isinstance(...)") held whether or not anything was
+        # extracted, which is how the supplier bug survived it.
+        assert metadata is not None
+        assert metadata.licenses == ["BSD-3-Clause"]
+        assert metadata.supplier == "Django Software Foundation"
+        assert metadata.homepage == "https://www.djangoproject.com/"
 
     def test_fetch_not_found(self, mock_session):
         """Test handling of 404 response."""
@@ -2828,6 +2827,136 @@ class TestClearlyDefinedSource:
         metadata = source.fetch(purl, mock_session)
 
         assert metadata is None
+
+
+class TestClearlyDefinedExtraction:
+    """Field extraction against the shapes api.clearlydefined.io actually returns.
+
+    Payloads below are trimmed from live responses for requests 2.32.3,
+    lodash 4.17.21, commons-lang3 3.12.0 and serde 1.0.197.
+    """
+
+    def _fetch(self, mock_session, purl_str, payload):
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = payload
+        mock_session.get.return_value = response
+        return ClearlyDefinedSource().fetch(PackageURL.from_string(purl_str), mock_session)
+
+    def test_supplier_comes_from_the_core_facet(self, mock_session):
+        """The live API puts attribution under licensed.facets.core, and leaves
+        licensed.attribution unset. Reading the latter yielded supplier=None on
+        every package."""
+        metadata = self._fetch(
+            mock_session,
+            "pkg:pypi/requests@2.32.3",
+            {
+                "licensed": {
+                    "declared": "Apache-2.0",
+                    "attribution": None,
+                    "facets": {"core": {"attribution": {"parties": ["Copyright Kenneth Reitz"]}}},
+                },
+                "described": {"sourceLocation": {"url": "https://pypi.org/project/requests/2.32.3/"}},
+            },
+        )
+        assert metadata is not None
+        assert metadata.supplier == "Copyright Kenneth Reitz"
+        assert metadata.field_sources["supplier"] == "clearlydefined.io"
+
+    def test_undated_copyright_line_is_preferred(self, mock_session):
+        """Scanners return every spelling they find; the undated one is canonical."""
+        metadata = self._fetch(
+            mock_session,
+            "pkg:pypi/requests@2.32.3",
+            {
+                "licensed": {
+                    "declared": "Apache-2.0",
+                    "facets": {
+                        "core": {
+                            "attribution": {
+                                "parties": [
+                                    "copyright (c) 2012 by Kenneth Reitz",
+                                    "Copyright Kenneth Reitz",
+                                    "Copyright 2019 Kenneth Reitz",
+                                ]
+                            }
+                        }
+                    },
+                },
+                "described": {},
+            },
+        )
+        assert metadata.supplier == "Copyright Kenneth Reitz"
+
+    def test_empty_parties_leaves_supplier_unset(self, mock_session):
+        """serde 1.0.197 really does have no attribution parties upstream."""
+        metadata = self._fetch(
+            mock_session,
+            "pkg:cargo/serde@1.0.197",
+            {
+                "licensed": {"declared": "MIT OR Apache-2.0", "facets": {"core": {"attribution": {"parties": []}}}},
+                "described": {"projectWebsite": "https://serde.rs"},
+            },
+        )
+        assert metadata.supplier is None
+        assert metadata.homepage == "https://serde.rs"
+
+    def test_maven_sources_jar_is_not_treated_as_a_repository(self, mock_session):
+        """sourceLocation.url for Maven is a sources-jar download, not a repo."""
+        metadata = self._fetch(
+            mock_session,
+            "pkg:maven/org.apache.commons/commons-lang3@3.12.0",
+            {
+                "licensed": {
+                    "declared": "Apache-2.0",
+                    "facets": {
+                        "core": {"attribution": {"parties": ["Copyright 2001-2021 The Apache Software Foundation"]}}
+                    },
+                },
+                "described": {
+                    "sourceLocation": {
+                        "url": (
+                            "https://search.maven.org/remotecontent?filepath="
+                            "org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0-sources.jar"
+                        )
+                    }
+                },
+            },
+        )
+        assert metadata.repository_url is None
+        assert "repository_url" not in metadata.field_sources
+
+    def test_real_vcs_url_is_kept(self, mock_session):
+        metadata = self._fetch(
+            mock_session,
+            "pkg:npm/lodash@4.17.21",
+            {
+                "licensed": {
+                    "declared": "MIT",
+                    "facets": {"core": {"attribution": {"parties": ["Copyright OpenJS Foundation"]}}},
+                },
+                "described": {
+                    "projectWebsite": "https://lodash.com/",
+                    "sourceLocation": {"url": "https://github.com/lodash/lodash/tree/f299b52"},
+                },
+            },
+        )
+        assert metadata.repository_url is not None
+        assert "github.com/lodash/lodash" in metadata.repository_url
+
+    def test_pypi_project_page_is_not_a_repository(self, mock_session):
+        metadata = self._fetch(
+            mock_session,
+            "pkg:pypi/requests@2.32.3",
+            {
+                "licensed": {"declared": "Apache-2.0"},
+                "described": {"sourceLocation": {"url": "https://pypi.org/project/requests/2.32.3/"}},
+            },
+        )
+        assert metadata is None or metadata.repository_url is None
 
 
 # =============================================================================

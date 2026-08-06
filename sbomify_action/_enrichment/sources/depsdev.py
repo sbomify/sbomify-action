@@ -9,6 +9,7 @@ from packageurl import PackageURL
 
 from sbomify_action.logging_config import logger
 
+from ..exceptions import TransientSourceError
 from ..license_utils import normalize_license_list
 from ..metadata import NormalizedMetadata
 from ..sanitization import normalize_vcs_url
@@ -122,12 +123,10 @@ class DepsDevSource:
 
         except requests.exceptions.Timeout:
             logger.warning(f"Timeout fetching deps.dev metadata for {purl}")
-            _cache[cache_key] = None
-            return None
+            raise TransientSourceError(f"Timeout from {self.name}") from None
         except requests.exceptions.RequestException as e:
             logger.warning(f"Error fetching deps.dev metadata for {purl}: {e}")
-            _cache[cache_key] = None
-            return None
+            raise TransientSourceError(f"RequestException from {self.name}") from None
         except json.JSONDecodeError as e:
             logger.warning(f"JSON decode error for deps.dev {purl}: {e}")
             _cache[cache_key] = None

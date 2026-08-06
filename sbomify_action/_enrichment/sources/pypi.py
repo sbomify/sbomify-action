@@ -16,6 +16,7 @@ from packageurl import PackageURL
 
 from sbomify_action.logging_config import logger
 
+from ..exceptions import TransientSourceError
 from ..license_utils import normalize_license_list
 from ..metadata import NormalizedMetadata
 from ..sanitization import normalize_vcs_url
@@ -235,7 +236,7 @@ class PyPISource:
                 f"Timeout fetching PyPI metadata for {purl.name}@{purl.version or 'latest'} "
                 f"(not caching — later components will retry)"
             )
-            return None
+            raise TransientSourceError(f"Timeout from {self.name}") from None
         except requests.exceptions.RequestException as e:
             # Network-layer exceptions (ConnectionError, SSLError,
             # TooManyRedirects, etc.) are almost always transient.
@@ -243,7 +244,7 @@ class PyPISource:
                 f"Network error fetching PyPI metadata for {purl.name}@{purl.version or 'latest'}: "
                 f"{e.__class__.__name__}: {e} (not caching — later components will retry)"
             )
-            return None
+            raise TransientSourceError(f"RequestException from {self.name}") from None
         except json.JSONDecodeError as e:
             # Malformed response is almost always a deterministic
             # upstream issue (HTML error page, corrupt encoding) — cache

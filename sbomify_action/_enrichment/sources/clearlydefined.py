@@ -1,13 +1,17 @@
 """ClearlyDefined data source for package metadata (license and attribution)."""
 
 import json
+import re
+from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import requests
 from packageurl import PackageURL
 
 from sbomify_action.logging_config import logger
 
+from ..exceptions import TransientSourceError
 from ..license_utils import normalize_license_list
 from ..metadata import NormalizedMetadata
 from ..sanitization import normalize_vcs_url
@@ -40,6 +44,49 @@ _cache: Dict[str, Optional[NormalizedMetadata]] = {}
 def clear_cache() -> None:
     """Clear the ClearlyDefined metadata cache."""
     _cache.clear()
+
+
+# Hosts whose URLs are actual repositories. ``sourceLocation.url`` is otherwise
+# a download or registry link (Maven returns a sources jar, PyPI a project
+# page), which is not a repository_url however plausible it looks.
+_VCS_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org", "sr.ht")
+_ARCHIVE_SUFFIXES = (".jar", ".zip", ".gz", ".tgz", ".whl", ".gem", ".crate", ".bz2", ".xz")
+
+
+def _is_vcs_url(url: str) -> bool:
+    """True when ``url`` points at a source repository rather than an artifact.
+
+    Matches on the parsed hostname, not a substring of the whole URL: the
+    latter accepts ``https://notgithub.com/x`` and
+    ``https://example.com/?ref=github.com``, and this gates repository_url.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if PurePosixPath(parsed.path).suffix.lower() in _ARCHIVE_SUFFIXES:
+        return False
+    return any(host == vcs or host.endswith(f".{vcs}") for vcs in _VCS_HOSTS)
+
+
+def _cleanest_party(parties: List[str]) -> Optional[str]:
+    """Pick the most useful attribution party to use as the supplier.
+
+    ClearlyDefined returns every copyright line its scanners found, so the list
+    is usually several spellings of one holder -- for requests 2.32.3 it is
+    "Copyright Kenneth Reitz" alongside three dated "copyright (c) 2012 by
+    Kenneth Reitz" variants. Prefer an entry without a year, which is the
+    canonical form, and fall back to the first entry so behaviour is stable
+    when every line carries a date.
+    """
+    cleaned = [p.strip() for p in parties if p and p.strip()]
+    if not cleaned:
+        return None
+    undated = [p for p in cleaned if not re.search(r"\b(19|20)\d{2}\b", p)]
+    return (undated or cleaned)[0]
 
 
 class ClearlyDefinedSource:
@@ -110,6 +157,13 @@ class ClearlyDefinedSource:
                 metadata = self._normalize_response(purl.name, data)
             elif response.status_code == 404:
                 logger.debug(f"Package not found in ClearlyDefined: {purl}")
+            elif response.status_code == 429 or response.status_code >= 500:
+                # Throttled or upstream failure. Neither is evidence the
+                # package has no metadata, so this must not be remembered as a
+                # miss -- ClearlyDefined is rate limited per IP and CI runners
+                # share one, so caching a 429 would suppress enrichment for
+                # this package on every later run.
+                raise TransientSourceError(f"HTTP {response.status_code} from {self.name}")
             else:
                 logger.warning(f"Failed to fetch ClearlyDefined metadata for {purl}: HTTP {response.status_code}")
 
@@ -119,12 +173,10 @@ class ClearlyDefinedSource:
 
         except requests.exceptions.Timeout:
             logger.warning(f"Timeout fetching ClearlyDefined metadata for {purl}")
-            _cache[cache_key] = None
-            return None
+            raise TransientSourceError(f"Timeout from {self.name}") from None
         except requests.exceptions.RequestException as e:
             logger.warning(f"Error fetching ClearlyDefined metadata for {purl}: {e}")
-            _cache[cache_key] = None
-            return None
+            raise TransientSourceError(f"RequestException from {self.name}") from None
         except json.JSONDecodeError as e:
             logger.warning(f"JSON decode error for ClearlyDefined {purl}: {e}")
             _cache[cache_key] = None
@@ -153,27 +205,38 @@ class ClearlyDefinedSource:
         if declared_license and declared_license != "NOASSERTION":
             licenses, license_texts = normalize_license_list([declared_license])
 
-        # Extract description from described section
         described = data.get("described", {})
-        description = None
-
-        # Try to get description from source info
-        source_info = described.get("sourceLocation", {})
+        source_info = described.get("sourceLocation") or {}
 
         # Extract URLs
         homepage = described.get("projectWebsite")
         repository_url = None
 
-        if source_info:
-            repo_url = source_info.get("url")
-            if repo_url:
-                repository_url = normalize_vcs_url(repo_url)
+        # ``sourceLocation.url`` is whatever the harvester resolved the source
+        # to, which is not always a repository: Maven yields a sources-jar
+        # download (search.maven.org/remotecontent?filepath=...jar) and PyPI a
+        # project page. Only take it when it looks like a VCS location, so the
+        # field is either a real repository or left for another source to fill.
+        repo_url = source_info.get("url")
+        if repo_url and _is_vcs_url(repo_url):
+            repository_url = normalize_vcs_url(repo_url)
 
-        # Extract supplier from attribution
+        # Extract supplier from the curated attribution parties.
+        #
+        # These live under ``licensed.facets.core.attribution.parties``. The
+        # top-level ``licensed.attribution`` this used to read is absent from
+        # every response the API actually returns, so supplier was always None
+        # and ClearlyDefined's curated copyright data -- the one thing it
+        # provides that the other sources do not -- was fetched and discarded.
         supplier = None
-        attribution_parties = licensed.get("attribution", {}).get("parties", [])
+        attribution_parties = (
+            licensed.get("facets", {}).get("core", {}).get("attribution", {}).get("parties")
+            # Kept as a fallback in case the shape ever changes back.
+            or licensed.get("attribution", {}).get("parties")
+            or []
+        )
         if attribution_parties:
-            supplier = attribution_parties[0]
+            supplier = _cleanest_party(attribution_parties)
 
         # Build field_sources for attribution
         field_sources = {}
@@ -187,7 +250,11 @@ class ClearlyDefinedSource:
             field_sources["repository_url"] = self.name
 
         metadata = NormalizedMetadata(
-            description=description,
+            # No description: ClearlyDefined definitions carry no such field.
+            # ``described`` holds releaseDate, urls, hashes, files, tools,
+            # sourceLocation and scores -- nothing summarising the package.
+            # This is why this source can never satisfy the registry's
+            # description-and-licenses-and-supplier early exit on its own.
             licenses=licenses,
             license_texts=license_texts,
             supplier=supplier,
