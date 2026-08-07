@@ -1,14 +1,24 @@
-"""ClearlyDefined data source for package metadata (license and attribution)."""
+"""ClearlyDefined data source for package metadata (license and attribution).
 
-import json
+Requests go through clearly-cached (https://github.com/sbomify/clearly-cached),
+a caching, normalising front end for the ClearlyDefined definitions API. It
+retries the transient failures that make ~40% of cold upstream requests look
+like "this package has no metadata", collapses concurrent misses onto a single
+fetch, and returns a ~0.4KB projection instead of a definition that can run to
+190KB. Point `SBOMIFY_CLEARLY_CACHED_URL` at another instance (or at a local
+container) to use your own.
+"""
+
+import os
 import re
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 from packageurl import PackageURL
 
+from sbomify_action.http_client import get_default_headers
 from sbomify_action.logging_config import logger
 
 from ..exceptions import TransientSourceError
@@ -16,10 +26,15 @@ from ..license_utils import normalize_license_list
 from ..metadata import NormalizedMetadata
 from ..sanitization import normalize_vcs_url
 
-CLEARLYDEFINED_API_BASE = "https://api.clearlydefined.io"
-DEFAULT_TIMEOUT = 10  # seconds - short timeout, API can be slow/unreliable
+DEFAULT_API_BASE = "https://clearly-cached.sbomify.com"
+API_BASE_ENV_VAR = "SBOMIFY_CLEARLY_CACHED_URL"
 
-# Mapping from PURL type to ClearlyDefined type
+# (connect, read). The service retries upstream within a 25s deadline, so a cold
+# coordinate can legitimately take that long; the short connect timeout keeps an
+# unreachable service from costing 30s per package.
+DEFAULT_TIMEOUT = (5, 30)
+
+# Mapping from PURL type to ClearlyDefined type/provider coordinate prefix.
 # NOTE: Only include types that ClearlyDefined reliably supports.
 # Tested 2024-12: deb, apk, rpm are NOT reliably supported (timeouts, 404s).
 # See: https://docs.clearlydefined.io/docs/curation/coordinates
@@ -37,18 +52,60 @@ PURL_TYPE_TO_CD_TYPE: Dict[str, str] = {
     # "rpm": Timeouts, not properly indexed
 }
 
+# Consecutive transient failures before this source stops being consulted for
+# the rest of the process. A cold coordinate can cost the full upstream deadline
+# and yield nothing, so a run against a struggling service would otherwise spend
+# ~25s per package on a source that is only a fallback. The fetch continues
+# server-side after we hang up, so what is skipped here is picked up cheaply by
+# the next run rather than lost.
+TRANSIENT_FAILURE_LIMIT = 5
+
 # Simple in-memory cache
 _cache: Dict[str, Optional[NormalizedMetadata]] = {}
+_consecutive_failures = 0
+_circuit_open = False
 
 
 def clear_cache() -> None:
-    """Clear the ClearlyDefined metadata cache."""
+    """Clear the ClearlyDefined metadata cache and re-arm the circuit breaker."""
+    global _consecutive_failures, _circuit_open
     _cache.clear()
+    _consecutive_failures = 0
+    _circuit_open = False
 
 
-# Hosts whose URLs are actual repositories. ``sourceLocation.url`` is otherwise
-# a download or registry link (Maven returns a sources jar, PyPI a project
-# page), which is not a repository_url however plausible it looks.
+def _record_transient_failure(purl: PackageURL) -> None:
+    """Count a transient failure and trip the breaker once the limit is reached."""
+    global _consecutive_failures, _circuit_open
+    _consecutive_failures += 1
+    if _consecutive_failures >= TRANSIENT_FAILURE_LIMIT and not _circuit_open:
+        _circuit_open = True
+        logger.warning(
+            f"Skipping ClearlyDefined for the rest of this run: "
+            f"{_consecutive_failures} consecutive failures (last: {purl}). "
+            f"Other enrichment sources are unaffected."
+        )
+
+
+def _record_success() -> None:
+    """A definite answer - including a 404 - clears the failure streak."""
+    global _consecutive_failures
+    _consecutive_failures = 0
+
+
+def get_api_base() -> str:
+    """Return the clearly-cached base URL, honouring the environment override."""
+    return (os.environ.get(API_BASE_ENV_VAR) or DEFAULT_API_BASE).rstrip("/")
+
+
+def _as_str(value: Any) -> Optional[str]:
+    """Return value if it is a non-empty string, else None."""
+    return value if isinstance(value, str) and value else None
+
+
+# Hosts whose URLs are actual repositories. ``source_url`` is otherwise a
+# download or registry link (Maven returns a sources jar, PyPI a project page),
+# which is not a repository_url however plausible it looks.
 _VCS_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org", "sr.ht")
 _ARCHIVE_SUFFIXES = (".jar", ".zip", ".gz", ".tgz", ".whl", ".gem", ".crate", ".bz2", ".xz")
 
@@ -82,7 +139,7 @@ def _cleanest_party(parties: List[str]) -> Optional[str]:
     canonical form, and fall back to the first entry so behaviour is stable
     when every line carries a date.
     """
-    cleaned = [p.strip() for p in parties if p and p.strip()]
+    cleaned = [p.strip() for p in parties if isinstance(p, str) and p.strip()]
     if not cleaned:
         return None
     undated = [p for p in cleaned if not re.search(r"\b(19|20)\d{2}\b", p)]
@@ -91,7 +148,7 @@ def _cleanest_party(parties: List[str]) -> Optional[str]:
 
 class ClearlyDefinedSource:
     """
-    Data source for ClearlyDefined API.
+    Data source for ClearlyDefined, served via clearly-cached.
 
     ClearlyDefined provides curated license and attribution data for
     open source packages across many ecosystems.
@@ -118,21 +175,32 @@ class ClearlyDefinedSource:
 
     def fetch(self, purl: PackageURL, session: requests.Session) -> Optional[NormalizedMetadata]:
         """
-        Fetch metadata from ClearlyDefined API.
+        Fetch metadata from clearly-cached.
 
         Args:
             purl: Parsed PackageURL
             session: requests.Session with configured headers
 
         Returns:
-            NormalizedMetadata if successful, None otherwise
+            NormalizedMetadata if successful, None if the coordinate genuinely
+            has no data.
+
+        Raises:
+            TransientSourceError: the service said nothing about this package -
+                it stalled, refused, or has not harvested the coordinate yet.
+                Never a definitive answer, so the registry does not persist it.
         """
         cd_type = PURL_TYPE_TO_CD_TYPE.get(purl.type)
         if not cd_type:
             return None
 
-        # Build the coordinate for ClearlyDefined API
-        # Format: type/provider/namespace/name/revision
+        if _circuit_open:
+            # Transient, not a miss: the packages skipped here are unexamined,
+            # not empty, and returning None would persist them as empty.
+            raise TransientSourceError(f"{self.name} skipped after {TRANSIENT_FAILURE_LIMIT} consecutive failures")
+
+        # Build the coordinate for the definitions endpoint
+        # Format: type/provider/namespace/name/revision ("-" for an absent namespace)
         # e.g., maven/mavencentral/org.apache.commons/commons-lang3/3.12.0
         version = purl.version or "-"
         namespace = purl.namespace or "-"
@@ -144,26 +212,41 @@ class ClearlyDefinedSource:
             return _cache[cache_key]
 
         try:
-            # Build coordinate: type/provider/namespace/name/version
-            coordinate = f"{cd_type}/{namespace}/{purl.name}/{version}"
-            url = f"{CLEARLYDEFINED_API_BASE}/definitions/{coordinate}"
+            # Each of namespace/name/revision is one path segment, so anything
+            # inside them must be escaped - a Go namespace like
+            # "github.com/gorilla" would otherwise split into two segments and
+            # miss the coordinate entirely.
+            coordinate = "/".join(quote(part, safe="") for part in (namespace, purl.name, version))
+            url = f"{get_api_base()}/v1/definitions/{cd_type}/{coordinate}"
 
             logger.debug(f"Fetching ClearlyDefined metadata for: {purl}")
-            response = session.get(url, timeout=DEFAULT_TIMEOUT)
+            # Send the User-Agent explicitly rather than relying on the caller's
+            # session: clearly-cached is ours, and its logs should say who is
+            # asking even when a bare session is passed in.
+            response = session.get(url, timeout=DEFAULT_TIMEOUT, headers=get_default_headers())
+
+            if response.status_code == 429 or response.status_code >= 500:
+                # Throttled, or the upstream stalled past the service's
+                # deadline. Neither is evidence the package has no metadata.
+                _record_transient_failure(purl)
+                raise TransientSourceError(f"HTTP {response.status_code} from {self.name}")
+
+            _record_success()
 
             metadata = None
             if response.status_code == 200:
                 data = response.json()
-                metadata = self._normalize_response(purl.name, data)
+                if not self._is_harvested(purl, data):
+                    # Not examined yet, so there is nothing to record. This is
+                    # the distinction clearly-cached exists to expose:
+                    # ClearlyDefined never 404s, and an unharvested coordinate
+                    # returns an empty definition that is indistinguishable
+                    # from a package with genuinely no licence. Caching it as a
+                    # miss would hold that answer past the point it changes.
+                    raise TransientSourceError(f"{purl} not yet harvested by {self.name}")
+                metadata = self._normalize_response(purl, data)
             elif response.status_code == 404:
                 logger.debug(f"Package not found in ClearlyDefined: {purl}")
-            elif response.status_code == 429 or response.status_code >= 500:
-                # Throttled or upstream failure. Neither is evidence the
-                # package has no metadata, so this must not be remembered as a
-                # miss -- ClearlyDefined is rate limited per IP and CI runners
-                # share one, so caching a 429 would suppress enrichment for
-                # this package on every later run.
-                raise TransientSourceError(f"HTTP {response.status_code} from {self.name}")
             else:
                 logger.warning(f"Failed to fetch ClearlyDefined metadata for {purl}: HTTP {response.status_code}")
 
@@ -173,70 +256,86 @@ class ClearlyDefinedSource:
 
         except requests.exceptions.Timeout:
             logger.warning(f"Timeout fetching ClearlyDefined metadata for {purl}")
+            _record_transient_failure(purl)
             raise TransientSourceError(f"Timeout from {self.name}") from None
+        except ValueError as e:
+            # A body that is not JSON is a CDN error page, not an answer about
+            # the package.
+            logger.warning(f"JSON decode error for ClearlyDefined {purl}: {e}")
+            _record_transient_failure(purl)
+            raise TransientSourceError(f"Malformed response from {self.name}") from None
         except requests.exceptions.RequestException as e:
             logger.warning(f"Error fetching ClearlyDefined metadata for {purl}: {e}")
+            _record_transient_failure(purl)
             raise TransientSourceError(f"RequestException from {self.name}") from None
-        except json.JSONDecodeError as e:
-            logger.warning(f"JSON decode error for ClearlyDefined {purl}: {e}")
-            _cache[cache_key] = None
-            return None
 
-    def _normalize_response(self, package_name: str, data: Dict[str, Any]) -> Optional[NormalizedMetadata]:
+    def _is_harvested(self, purl: PackageURL, data: Any) -> bool:
+        """False when the coordinate has not been examined by ClearlyDefined yet.
+
+        The flag is validated as a boolean rather than tested for truthiness.
+        A malformed value - the string "false" is the obvious way to get this
+        wrong - would otherwise read as harvested and let an empty definition
+        be recorded as "this package has no licence", which is the one
+        conclusion this check exists to prevent. Anything that is not a
+        boolean is treated as unharvested, so a projection we cannot read
+        costs a re-fetch rather than a wrong answer.
         """
-        Normalize ClearlyDefined API response to NormalizedMetadata.
+        if not isinstance(data, dict):
+            return True  # Not a projection at all; _normalize_response rejects it.
+        harvested = data.get("harvested", True)
+        if harvested is True:
+            return True
+        if harvested is False:
+            logger.debug(f"Not yet harvested by ClearlyDefined: {purl}")
+        else:
+            logger.warning(f"Non-boolean 'harvested' from {self.name} for {purl}: {harvested!r}")
+        return False
+
+    def _normalize_response(self, purl: PackageURL, data: Dict[str, Any]) -> Optional[NormalizedMetadata]:
+        """
+        Normalize a clearly-cached projection to NormalizedMetadata.
+
+        The projection is flat, unlike the upstream definition:
+
+            {"declared": "Apache-2.0", "parties": [...], "homepage": null,
+             "source_url": null, "harvested": true, "score": 73}
 
         Args:
-            package_name: Name of the package
-            data: Raw ClearlyDefined API response
+            purl: Parsed PackageURL (for logging)
+            data: Projection returned by clearly-cached
 
         Returns:
             NormalizedMetadata with extracted fields, or None if no data
         """
-        if not data:
+        if not isinstance(data, dict) or not data:
             return None
 
-        # Extract licensed info
-        licensed = data.get("licensed", {})
-        declared_license = licensed.get("declared")
+        # Every field below is type-checked rather than trusted: a CDN error
+        # page, a proxy in between, or a future change to the projection should
+        # cost this package its enrichment, not raise mid-SBOM.
+        declared_license = _as_str(data.get("declared"))
 
         licenses: List[str] = []
         license_texts: Dict[str, str] = {}
         if declared_license and declared_license != "NOASSERTION":
             licenses, license_texts = normalize_license_list([declared_license])
 
-        described = data.get("described", {})
-        source_info = described.get("sourceLocation") or {}
+        homepage = _as_str(data.get("homepage"))
 
-        # Extract URLs
-        homepage = described.get("projectWebsite")
+        # ``source_url`` is whatever the harvester resolved the source to, which
+        # is not always a repository: Maven yields a sources-jar download and
+        # PyPI a project page. Only take it when it looks like a VCS location,
+        # so the field is either a real repository or left for another source.
+        source_url = _as_str(data.get("source_url"))
         repository_url = None
+        if source_url and _is_vcs_url(source_url):
+            repository_url = normalize_vcs_url(source_url)
 
-        # ``sourceLocation.url`` is whatever the harvester resolved the source
-        # to, which is not always a repository: Maven yields a sources-jar
-        # download (search.maven.org/remotecontent?filepath=...jar) and PyPI a
-        # project page. Only take it when it looks like a VCS location, so the
-        # field is either a real repository or left for another source to fill.
-        repo_url = source_info.get("url")
-        if repo_url and _is_vcs_url(repo_url):
-            repository_url = normalize_vcs_url(repo_url)
-
-        # Extract supplier from the curated attribution parties.
-        #
-        # These live under ``licensed.facets.core.attribution.parties``. The
-        # top-level ``licensed.attribution`` this used to read is absent from
-        # every response the API actually returns, so supplier was always None
-        # and ClearlyDefined's curated copyright data -- the one thing it
-        # provides that the other sources do not -- was fetched and discarded.
-        supplier = None
-        attribution_parties = (
-            licensed.get("facets", {}).get("core", {}).get("attribution", {}).get("parties")
-            # Kept as a fallback in case the shape ever changes back.
-            or licensed.get("attribution", {}).get("parties")
-            or []
-        )
-        if attribution_parties:
-            supplier = _cleanest_party(attribution_parties)
+        # The curated attribution parties, which the projection exposes as a
+        # flat list. This is the one thing ClearlyDefined provides that the
+        # other sources do not.
+        parties = data.get("parties")
+        supplier = _cleanest_party(parties) if isinstance(parties, list) else None
 
         # Build field_sources for attribution
         field_sources = {}
@@ -250,10 +349,9 @@ class ClearlyDefinedSource:
             field_sources["repository_url"] = self.name
 
         metadata = NormalizedMetadata(
-            # No description: ClearlyDefined definitions carry no such field.
-            # ``described`` holds releaseDate, urls, hashes, files, tools,
-            # sourceLocation and scores -- nothing summarising the package.
-            # This is why this source can never satisfy the registry's
+            # No description: ClearlyDefined definitions carry no such field,
+            # and the projection carries no more than the definition did. This
+            # is why this source can never satisfy the registry's
             # description-and-licenses-and-supplier early exit on its own.
             licenses=licenses,
             license_texts=license_texts,
@@ -265,6 +363,6 @@ class ClearlyDefinedSource:
         )
 
         if metadata.has_data():
-            logger.debug(f"Successfully normalized ClearlyDefined metadata for {package_name}")
+            logger.debug(f"Successfully normalized ClearlyDefined metadata for {purl.name}")
             return metadata
         return None
