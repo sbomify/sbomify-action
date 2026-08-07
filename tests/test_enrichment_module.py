@@ -2780,25 +2780,22 @@ class TestClearlyDefinedSource:
         assert source.supports(purl) is False
 
     def test_fetch_success(self, mock_session):
-        """Test successful metadata fetch from ClearlyDefined."""
-        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource
+        """Test successful metadata fetch from clearly-cached."""
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
 
+        clear_cache()
         source = ClearlyDefinedSource()
         purl = PackageURL.from_string("pkg:pypi/django@5.1")
 
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "licensed": {
-                "declared": "BSD-3-Clause",
-                "facets": {
-                    "core": {"attribution": {"parties": ["Django Software Foundation"]}},
-                },
-            },
-            "described": {
-                "projectWebsite": "https://www.djangoproject.com/",
-                "releaseDate": "2024-01-01",
-            },
+            "declared": "BSD-3-Clause",
+            "parties": ["Django Software Foundation"],
+            "homepage": "https://www.djangoproject.com/",
+            "source_url": "https://github.com/django/django",
+            "harvested": True,
+            "score": 73,
         }
         mock_session.get.return_value = mock_response
 
@@ -2812,11 +2809,159 @@ class TestClearlyDefinedSource:
         assert metadata.licenses == ["BSD-3-Clause"]
         assert metadata.supplier == "Django Software Foundation"
         assert metadata.homepage == "https://www.djangoproject.com/"
+        assert metadata.repository_url is not None
+
+    def test_non_vcs_source_url_is_not_a_repository(self, mock_session):
+        """The projection's source_url is gated the same way sourceLocation was."""
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:maven/org.example/thing@1.0")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "declared": "Apache-2.0",
+            "parties": [],
+            "homepage": None,
+            "source_url": "https://search.maven.org/remotecontent?filepath=x/thing-1.0-sources.jar",
+            "harvested": True,
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is not None
+        assert metadata.repository_url is None
+
+    def test_fetch_uses_clearly_cached_endpoint(self, mock_session):
+        """Requests go to the clearly-cached /v1/definitions endpoint."""
+        from sbomify_action._enrichment.sources.clearlydefined import (
+            DEFAULT_API_BASE,
+            ClearlyDefinedSource,
+            clear_cache,
+        )
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:maven/org.apache.commons/commons-lang3@3.12.0")
+
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_session.get.return_value = mock_response
+
+        source.fetch(purl, mock_session)
+
+        url = mock_session.get.call_args[0][0]
+        assert url == f"{DEFAULT_API_BASE}/v1/definitions/maven/mavencentral/org.apache.commons/commons-lang3/3.12.0"
+
+    def test_fetch_uses_env_override(self, mock_session, monkeypatch):
+        """SBOMIFY_CLEARLY_CACHED_URL points the source at another instance."""
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        monkeypatch.setenv("SBOMIFY_CLEARLY_CACHED_URL", "http://localhost:8080/")
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:npm/lodash@4.17.21")
+
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_session.get.return_value = mock_response
+
+        source.fetch(purl, mock_session)
+
+        url = mock_session.get.call_args[0][0]
+        assert url == "http://localhost:8080/v1/definitions/npm/npmjs/-/lodash/4.17.21"
+
+    def test_golang_namespace_is_escaped(self, mock_session):
+        """A Go namespace must not split into extra path segments."""
+        from sbomify_action._enrichment.sources.clearlydefined import (
+            DEFAULT_API_BASE,
+            ClearlyDefinedSource,
+            clear_cache,
+        )
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:golang/github.com/gorilla/mux@v1.8.1")
+
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_session.get.return_value = mock_response
+
+        source.fetch(purl, mock_session)
+
+        url = mock_session.get.call_args[0][0]
+        assert url == f"{DEFAULT_API_BASE}/v1/definitions/go/golang/github.com%2Fgorilla/mux/v1.8.1"
+
+    def test_fetch_sends_user_agent(self, mock_session):
+        """The sbomify user agent is sent even when the session sets none."""
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:pypi/django@5.1")
+
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_session.get.return_value = mock_response
+
+        source.fetch(purl, mock_session)
+
+        headers = mock_session.get.call_args.kwargs["headers"]
+        assert headers["User-Agent"].startswith("sbomify-action/")
+
+    def test_malformed_projection_does_not_raise(self, mock_session):
+        """Wrong types in the projection cost enrichment, not a traceback."""
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:pypi/django@5.1")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "declared": 42,
+            "parties": "not-a-list",
+            "homepage": {"nested": "object"},
+            "source_url": [],
+            "harvested": True,
+        }
+        mock_session.get.return_value = mock_response
+
+        assert source.fetch(purl, mock_session) is None
+
+    def test_fetch_unharvested_is_transient_not_an_absence(self, mock_session):
+        """An unharvested coordinate must not be persisted as 'no licence'."""
+        from sbomify_action._enrichment.exceptions import TransientSourceError
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:pypi/obscure-package@1.0")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "declared": None,
+            "parties": [],
+            "homepage": None,
+            "source_url": None,
+            "harvested": False,
+            "score": 35,
+        }
+        mock_session.get.return_value = mock_response
+
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_fetch_not_found(self, mock_session):
         """Test handling of 404 response."""
-        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
 
+        clear_cache()
         source = ClearlyDefinedSource()
         purl = PackageURL.from_string("pkg:pypi/nonexistent@1.0")
 
@@ -2828,12 +2973,107 @@ class TestClearlyDefinedSource:
 
         assert metadata is None
 
+    def test_circuit_breaker_stops_asking_a_broken_service(self, mock_session):
+        """After a run of transient failures the source stops being consulted."""
+        from sbomify_action._enrichment.exceptions import TransientSourceError
+        from sbomify_action._enrichment.sources.clearlydefined import (
+            TRANSIENT_FAILURE_LIMIT,
+            ClearlyDefinedSource,
+            clear_cache,
+        )
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+
+        error_response = Mock()
+        error_response.status_code = 503
+        mock_session.get.return_value = error_response
+
+        for i in range(TRANSIENT_FAILURE_LIMIT):
+            with pytest.raises(TransientSourceError):
+                source.fetch(PackageURL.from_string(f"pkg:pypi/pkg-{i}@1.0"), mock_session)
+        assert mock_session.get.call_count == TRANSIENT_FAILURE_LIMIT
+
+        # Breaker is open: further packages cost no requests at all, and still
+        # raise rather than return None, so nothing is persisted as a miss.
+        for i in range(10):
+            with pytest.raises(TransientSourceError):
+                source.fetch(PackageURL.from_string(f"pkg:pypi/later-{i}@1.0"), mock_session)
+        assert mock_session.get.call_count == TRANSIENT_FAILURE_LIMIT
+
+        clear_cache()  # re-arms for the next run
+        mock_session.get.return_value = Mock(status_code=404)
+        source.fetch(PackageURL.from_string("pkg:pypi/after-reset@1.0"), mock_session)
+        assert mock_session.get.call_count == TRANSIENT_FAILURE_LIMIT + 1
+
+    def test_a_definite_answer_clears_the_failure_streak(self, mock_session):
+        """Intermittent failures must not accumulate into an open circuit."""
+        from sbomify_action._enrichment.exceptions import TransientSourceError
+        from sbomify_action._enrichment.sources.clearlydefined import (
+            TRANSIENT_FAILURE_LIMIT,
+            ClearlyDefinedSource,
+            clear_cache,
+        )
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+
+        error_response = Mock()
+        error_response.status_code = 503
+        ok_response = Mock()
+        ok_response.status_code = 404
+
+        for i in range(TRANSIENT_FAILURE_LIMIT * 3):
+            # Fail a few times, then get an answer, repeatedly.
+            failing = i % (TRANSIENT_FAILURE_LIMIT - 1) != 0
+            mock_session.get.return_value = error_response if failing else ok_response
+            try:
+                source.fetch(PackageURL.from_string(f"pkg:pypi/pkg-{i}@1.0"), mock_session)
+            except TransientSourceError:
+                pass
+
+        assert mock_session.get.call_count == TRANSIENT_FAILURE_LIMIT * 3
+
+    def test_transient_error_is_not_cached(self, mock_session):
+        """A 5xx must not be remembered as 'this package has no metadata'."""
+        from sbomify_action._enrichment.exceptions import TransientSourceError
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:pypi/django@5.1")
+
+        error_response = Mock()
+        error_response.status_code = 504
+        mock_session.get.return_value = error_response
+
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
+
+        ok_response = Mock()
+        ok_response.status_code = 200
+        ok_response.json.return_value = {
+            "declared": "BSD-3-Clause",
+            "parties": [],
+            "homepage": None,
+            "source_url": None,
+            "harvested": True,
+            "score": 73,
+        }
+        mock_session.get.return_value = ok_response
+
+        metadata = source.fetch(purl, mock_session)
+        assert metadata is not None
+        assert metadata.licenses == ["BSD-3-Clause"]
+
 
 class TestClearlyDefinedExtraction:
-    """Field extraction against the shapes api.clearlydefined.io actually returns.
+    """Field extraction against the projections clearly-cached actually returns.
 
-    Payloads below are trimmed from live responses for requests 2.32.3,
-    lodash 4.17.21, commons-lang3 3.12.0 and serde 1.0.197.
+    Payloads below are the live responses for requests 2.32.3, lodash 4.17.21,
+    commons-lang3 3.12.0 and serde 1.0.197. The projection is flat: the fields
+    the upstream definition buried under licensed.facets.core.attribution and
+    described.sourceLocation arrive as `parties` and `source_url`.
     """
 
     def _fetch(self, mock_session, purl_str, payload):
@@ -2846,20 +3086,18 @@ class TestClearlyDefinedExtraction:
         mock_session.get.return_value = response
         return ClearlyDefinedSource().fetch(PackageURL.from_string(purl_str), mock_session)
 
-    def test_supplier_comes_from_the_core_facet(self, mock_session):
-        """The live API puts attribution under licensed.facets.core, and leaves
-        licensed.attribution unset. Reading the latter yielded supplier=None on
-        every package."""
+    def test_supplier_comes_from_the_parties_list(self, mock_session):
+        """The projection exposes the core-facet attribution as a flat list."""
         metadata = self._fetch(
             mock_session,
             "pkg:pypi/requests@2.32.3",
             {
-                "licensed": {
-                    "declared": "Apache-2.0",
-                    "attribution": None,
-                    "facets": {"core": {"attribution": {"parties": ["Copyright Kenneth Reitz"]}}},
-                },
-                "described": {"sourceLocation": {"url": "https://pypi.org/project/requests/2.32.3/"}},
+                "declared": "Apache-2.0",
+                "parties": ["Copyright Kenneth Reitz"],
+                "homepage": None,
+                "source_url": "https://pypi.org/project/requests/2.32.3/",
+                "harvested": True,
+                "score": 73,
             },
         )
         assert metadata is not None
@@ -2872,21 +3110,13 @@ class TestClearlyDefinedExtraction:
             mock_session,
             "pkg:pypi/requests@2.32.3",
             {
-                "licensed": {
-                    "declared": "Apache-2.0",
-                    "facets": {
-                        "core": {
-                            "attribution": {
-                                "parties": [
-                                    "copyright (c) 2012 by Kenneth Reitz",
-                                    "Copyright Kenneth Reitz",
-                                    "Copyright 2019 Kenneth Reitz",
-                                ]
-                            }
-                        }
-                    },
-                },
-                "described": {},
+                "declared": "Apache-2.0",
+                "parties": [
+                    "copyright (c) 2012 by Kenneth Reitz",
+                    "Copyright Kenneth Reitz",
+                    "Copyright 2019 Kenneth Reitz",
+                ],
+                "harvested": True,
             },
         )
         assert metadata.supplier == "Copyright Kenneth Reitz"
@@ -2897,33 +3127,30 @@ class TestClearlyDefinedExtraction:
             mock_session,
             "pkg:cargo/serde@1.0.197",
             {
-                "licensed": {"declared": "MIT OR Apache-2.0", "facets": {"core": {"attribution": {"parties": []}}}},
-                "described": {"projectWebsite": "https://serde.rs"},
+                "declared": "MIT OR Apache-2.0",
+                "parties": [],
+                "homepage": "https://serde.rs",
+                "source_url": None,
+                "harvested": True,
             },
         )
         assert metadata.supplier is None
         assert metadata.homepage == "https://serde.rs"
 
     def test_maven_sources_jar_is_not_treated_as_a_repository(self, mock_session):
-        """sourceLocation.url for Maven is a sources-jar download, not a repo."""
+        """source_url for Maven is a sources-jar download, not a repo."""
         metadata = self._fetch(
             mock_session,
             "pkg:maven/org.apache.commons/commons-lang3@3.12.0",
             {
-                "licensed": {
-                    "declared": "Apache-2.0",
-                    "facets": {
-                        "core": {"attribution": {"parties": ["Copyright 2001-2021 The Apache Software Foundation"]}}
-                    },
-                },
-                "described": {
-                    "sourceLocation": {
-                        "url": (
-                            "https://search.maven.org/remotecontent?filepath="
-                            "org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0-sources.jar"
-                        )
-                    }
-                },
+                "declared": "Apache-2.0",
+                "parties": ["Copyright 2001-2021 The Apache Software Foundation"],
+                "homepage": None,
+                "source_url": (
+                    "https://search.maven.org/remotecontent?filepath="
+                    "org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0-sources.jar"
+                ),
+                "harvested": True,
             },
         )
         assert metadata.repository_url is None
@@ -2934,14 +3161,11 @@ class TestClearlyDefinedExtraction:
             mock_session,
             "pkg:npm/lodash@4.17.21",
             {
-                "licensed": {
-                    "declared": "MIT",
-                    "facets": {"core": {"attribution": {"parties": ["Copyright OpenJS Foundation"]}}},
-                },
-                "described": {
-                    "projectWebsite": "https://lodash.com/",
-                    "sourceLocation": {"url": "https://github.com/lodash/lodash/tree/f299b52"},
-                },
+                "declared": "MIT",
+                "parties": ["Copyright OpenJS Foundation"],
+                "homepage": "https://lodash.com/",
+                "source_url": "https://github.com/lodash/lodash/tree/f299b52",
+                "harvested": True,
             },
         )
         assert metadata.repository_url is not None
@@ -2952,8 +3176,11 @@ class TestClearlyDefinedExtraction:
             mock_session,
             "pkg:pypi/requests@2.32.3",
             {
-                "licensed": {"declared": "Apache-2.0"},
-                "described": {"sourceLocation": {"url": "https://pypi.org/project/requests/2.32.3/"}},
+                "declared": "Apache-2.0",
+                "parties": [],
+                "homepage": None,
+                "source_url": "https://pypi.org/project/requests/2.32.3/",
+                "harvested": True,
             },
         )
         assert metadata is None or metadata.repository_url is None

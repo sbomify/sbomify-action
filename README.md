@@ -337,6 +337,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `ADDITIONAL_PACKAGES`      | No       | Inline PURLs to inject (comma or newline separated)                              |
 | `DISABLE_VCS_AUGMENTATION` | No       | Set to `true` to disable auto-detection of VCS info from CI environment          |
 | `SBOMIFY_CACHE_DIR`        | No       | Directory for sbomify license database cache                                     |
+| `SBOMIFY_CLEARLY_CACHED_URL` | No     | Override the ClearlyDefined cache URL (default: `https://clearly-cached.sbomify.com`) |
 | `WORKING_DIR`              | No       | Working directory (relative to cwd or `$GITHUB_WORKSPACE` in GHA; monorepo)      |
 | `SYFT_CACHE_DIR`           | No       | Directory for Syft cache                                                         |
 
@@ -630,8 +631,17 @@ env:
 | Debian Sources | Debian packages                                                  | Maintainer, description, homepage               |
 | deps.dev       | Python, npm, Maven, Go, Ruby, NuGet (+ Rust fallback)            | License, homepage, repo                         |
 | ecosyste.ms    | All major ecosystems                                             | License, description, maintainer                |
-| ClearlyDefined | Python, npm, Cargo, Maven, Ruby, NuGet, Go                       | License, attribution                            |
+| ClearlyDefined | Python, npm, Cargo, Maven, Ruby, NuGet, Go                       | License, homepage, repo                         |
 | Repology       | Linux distros                                                    | License, homepage                               |
+
+ClearlyDefined is queried through
+[clearly-cached](https://github.com/sbomify/clearly-cached), a caching front end
+run at `https://clearly-cached.sbomify.com`. It retries the transient upstream
+failures that would otherwise be recorded as "this package has no licence", and
+returns a ~0.4KB projection instead of a definition that can run to 190KB. Set
+`SBOMIFY_CLEARLY_CACHED_URL` to use your own instance. If the service is
+unreachable or failing, enrichment stops consulting it for the rest of the run
+and continues with the other sources.
 
 <details>
 <summary><strong>License database details</strong></summary>
