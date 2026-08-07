@@ -41,6 +41,12 @@ class ConfigureWorkflowScreen(WizardScreen):
 
     def compose_body(self) -> ComposeResult:
         has_tags = self.wizard.state.facts.has_release_tags
+        # Seed from the plan, not from the repo heuristic directly. Pressing
+        # Back pops this screen, so a re-entry composes a fresh one; reading
+        # the plan is what makes the user's earlier choice survive that.
+        plan = self.wizard.state.plan
+        strategy = plan.release_strategy
+        credential = plan.credential_mode
 
         release = Vertical(classes="wizard-panel")
         release.border_title = "◆  Release strategy"
@@ -50,14 +56,18 @@ class ConfigureWorkflowScreen(WizardScreen):
                 yield RadioButton(
                     "Trunk — every push to the default branch",
                     id="rel-trunk",
-                    value=not has_tags,
+                    value=strategy == "trunk",
                 )
                 yield RadioButton(
                     "Tag — version tags (v1.2.3 or 2026.7.1)" + ("  [#86EFAC]✓ recommended[/]" if has_tags else ""),
                     id="rel-tag",
-                    value=has_tags,
+                    value=strategy == "tag",
                 )
-                yield RadioButton("Manual — workflow_dispatch only", id="rel-manual")
+                yield RadioButton(
+                    "Manual — workflow_dispatch only",
+                    id="rel-manual",
+                    value=strategy == "manual",
+                )
 
         cred = Vertical(classes="wizard-panel")
         cred.border_title = "◆  Credentials"
@@ -67,9 +77,26 @@ class ConfigureWorkflowScreen(WizardScreen):
                 yield RadioButton(
                     "OIDC trusted publishing — no token secret  [#86EFAC]✓ recommended[/]",
                     id="cred-oidc",
-                    value=True,
+                    value=credential == "oidc",
                 )
-                yield RadioButton("Token — uses SBOMIFY_TOKEN secret", id="cred-token")
+                yield RadioButton(
+                    "Token — uses SBOMIFY_TOKEN secret",
+                    id="cred-token",
+                    value=credential == "token",
+                )
+
+    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        """Commit each choice to the plan as it is made.
+
+        Writing only on Next meant a choice made here and then abandoned via
+        Back was thrown away silently — the user returned to a screen showing
+        the default and a Review that agreed with it.
+        """
+        plan = self.wizard.state.plan
+        if event.radio_set.id == "release":
+            plan.release_strategy = self._selected_release_strategy()
+        elif event.radio_set.id == "credential":
+            plan.credential_mode = self._selected_credential_mode()
 
     def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):

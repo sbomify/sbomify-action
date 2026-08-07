@@ -625,6 +625,367 @@ async def test_apply_failure_keeps_the_error_and_the_recovery_on_screen(
         assert "Applying" not in rendered, "panel still claims the apply is in progress"
 
 
+def _rendered(screen) -> str:  # noqa: ANN001
+    return "\n".join(strip.text for strip in screen._compositor.render_strips())
+
+
+def _visible_region(screen, widget):  # noqa: ANN001
+    """The widget's region, asserted to be on screen. Returns it for reuse."""
+    geometry = screen._compositor.full_map.get(widget)
+    assert geometry is not None, f"{widget!r} is not composited"
+    region = geometry.region
+    assert region.height > 0, f"{widget!r} rendered with zero height"
+    assert region.bottom <= screen.size.height, f"{widget!r} runs past the bottom of the viewport"
+    return region
+
+
+@pytest.mark.parametrize(("width", "height"), [(80, 24), (80, 12), (160, 48)])
+async def test_discover_validation_message_is_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, width: int, height: int
+) -> None:
+    """Pressing Next with nothing selected explains why nothing happened.
+
+    The message answers a press of Next, so it moved into the pinned action
+    area with the button — inside the scrolling body it could sit below the
+    fold, which would be indistinguishable from the bell-only behaviour it
+    replaced.
+    """
+    from textual.widgets import SelectionList, Static
+
+    _stub_wizard(monkeypatch, tmp_path, 2)
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(width, height)) as pilot:
+        await pilot.pause()
+        await _advance(pilot, "start")
+        app.screen.query_one("#lockfile-list", SelectionList).deselect_all()
+        await pilot.pause()
+        await _advance(pilot, "next")
+
+        from sbomify_action.cli.wizard.screens.discover import DiscoverScreen
+
+        assert isinstance(app.screen, DiscoverScreen), "advanced with no lockfiles selected"
+        _visible_region(app.screen, app.screen.query_one("#discover-status", Static))
+        assert "Pick at least one lockfile" in _rendered(app.screen)
+
+
+@pytest.mark.parametrize(("width", "height"), [(80, 24), (160, 48)])
+async def test_back_navigation_preserves_every_choice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, width: int, height: int
+) -> None:
+    """Walking back through the wizard doesn't discard what you entered.
+
+    Also pins the screen stack: re-entering a screen must reuse its place
+    in the stack rather than pushing a fresh copy each round trip.
+    """
+    from textual.widgets import Input, RadioSet, SelectionList
+
+    from sbomify_action.cli.wizard.widgets import PickOrCreate
+
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.app.discovery.discover",
+        lambda _root, repo_name=None: _lockfiles(tmp_path, 2),
+    )
+    client = MagicMock()
+    client.whoami.return_value = None
+    client.list_workspaces.return_value = [{"key": "acme", "name": "Acme Inc"}]
+    client.list_products.return_value = [
+        {"id": "p1", "name": "Acme Platform"},
+        {"id": "p2", "name": "Beta Product"},
+    ]
+    client.list_components.return_value = [{"id": "c1", "name": "widget-py"}]
+    client.list_contact_profiles.return_value = [{"id": "cp1", "name": "Acme Eng"}]
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.screens.authenticate.SbomifyApiClient",
+        lambda *args, **kwargs: client,
+    )
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(width, height)) as pilot:
+        await pilot.pause()
+        await _advance(pilot, "start")
+
+        selection = app.screen.query_one("#lockfile-list", SelectionList)
+        selection.select_all()
+        selection.deselect(1)  # a distinctive, non-default selection
+        await pilot.pause()
+        chosen = sorted(selection.selected)
+        await _advance(pilot, "next", wait=1.0)
+
+        app.screen.query_one("#product-picker-list").highlighted = 2  # the second real product
+        await pilot.pause()
+        picked = app.screen.query_one("#product-picker", PickOrCreate).picked_id
+        depth_on_product = len(app.screen_stack)
+        await _advance(pilot)
+
+        app.screen.query_one("#component-0-input", Input).value = "my-custom-name"
+        await pilot.pause()
+        await _advance(pilot)
+
+        release_set = app.screen.query_one("#release", RadioSet)
+        for button in release_set.query("RadioButton"):
+            if button.id == "rel-tag":
+                button.value = True
+        await pilot.pause()
+        pressed_now = release_set.pressed_button
+        assert pressed_now is not None and pressed_now.id == "rel-tag", "failed to select the tag strategy"
+
+        await _advance(pilot, "back")  # -> Components
+        assert app.screen.query_one("#component-0-input", Input).value == "my-custom-name"
+        await _advance(pilot, "back")  # -> Product
+        assert app.screen.query_one("#product-picker", PickOrCreate).picked_id == picked
+        # Authenticate is crumb step 03 and Product 04, so Back lands there.
+        await _advance(pilot, "back")
+        from sbomify_action.cli.wizard.screens.authenticate import AuthenticateScreen
+
+        assert isinstance(app.screen, AuthenticateScreen)
+        await _advance(pilot, "back")  # -> Discover
+        assert sorted(app.screen.query_one("#lockfile-list", SelectionList).selected) == chosen
+
+        # Forward again: same screen, same stack depth — no leak per trip.
+        await _advance(pilot, "next", wait=1.0)
+        assert len(app.screen_stack) == depth_on_product, "screen stack grew over a back/forward round trip"
+        await _advance(pilot)  # Components
+        await _advance(pilot)  # Configure (workflow)
+        # Back pops this screen, so returning composes a fresh one — the
+        # choice survives only because it was committed to the plan when the
+        # radio changed, not when Next was pressed.
+        pressed = app.screen.query_one("#release", RadioSet).pressed_button
+        assert pressed is not None and pressed.id == "rel-tag", "release strategy reset on re-entry"
+        assert app.state.plan.release_strategy == "tag"
+
+
+@pytest.mark.parametrize(("width", "height"), [(80, 24), (80, 12), (160, 48)])
+async def test_paged_form_navigates_persists_and_reports_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, width: int, height: int
+) -> None:
+    """The multi-page forms keep their buttons pinned and their errors visible.
+
+    Field values must survive moving between pages (the pages stay mounted
+    for exactly this reason), and a validation failure has to be readable
+    from wherever Save is.
+    """
+    from textual.widgets import Button, Input, Static
+
+    from sbomify_action.cli.wizard.screens.configure_sbomify_json import ConfigureSbomifyJsonScreen
+
+    _stub_wizard(monkeypatch, tmp_path, 1)
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(width, height)) as pilot:
+        await pilot.pause()
+        app.push_screen(ConfigureSbomifyJsonScreen())
+        await pilot.pause()
+        screen = app.screen
+
+        assert "Page 1 of 3" in _rendered(screen), "page indicator missing (or still says 'Step')"
+        for button_id in ("form-back", "form-next"):
+            _visible_region(screen, screen.query_one(f"#{button_id}", Button))
+
+        screen.query_one("#sup-name", Input).value = "Acme Inc"
+        await pilot.pause()
+        await _advance(pilot, "form-next")
+        assert "Page 2 of 3" in _rendered(screen)
+        await _advance(pilot, "form-back")
+        assert screen.query_one("#sup-name", Input).value == "Acme Inc", "value lost moving between pages"
+
+        # Clear the required field and try to save from the last page.
+        screen.query_one("#sup-name", Input).value = ""
+        await pilot.pause()
+        screen._show_page(2)
+        await pilot.pause()
+        await _advance(pilot, "form-next")
+
+        assert isinstance(app.screen, ConfigureSbomifyJsonScreen), "saved despite an empty required field"
+        _visible_region(screen, screen.query_one("#form-status", Static))
+
+
+@pytest.mark.parametrize(("width", "height"), [(80, 24), (250, 70)])
+async def test_mouse_clicks_land_on_the_centred_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, width: int, height: int
+) -> None:
+    """The body is capped and centred, which moves every click target.
+
+    Covers both the pinned action row and a row inside the scrolling body.
+    """
+    from textual.widgets import SelectionList
+
+    _stub_wizard(monkeypatch, tmp_path, 2)
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(width, height)) as pilot:
+        await pilot.pause()
+        await pilot.click("#start")
+        await pilot.pause()
+
+        from sbomify_action.cli.wizard.screens.discover import DiscoverScreen
+
+        assert isinstance(app.screen, DiscoverScreen), "clicking Start missed"
+
+        selection = app.screen.query_one("#lockfile-list", SelectionList)
+        selection.deselect_all()
+        await pilot.pause()
+        await pilot.click("#lockfile-list", offset=(4, 1))
+        await pilot.pause()
+        assert list(selection.selected), "clicking a row inside the scrolling body missed"
+
+        await pilot.click("#next")
+        await pilot.pause(1.0)
+        from sbomify_action.cli.wizard.screens.product import ProductScreen
+
+        assert isinstance(app.screen, ProductScreen), "clicking Next missed"
+
+
+@pytest.mark.parametrize(("width", "height"), [(80, 24), (80, 12), (160, 48)])
+async def test_components_reload_keeps_the_screen_usable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, width: int, height: int
+) -> None:
+    """Reload rebuilds the screen via recompose() — including the pinned row.
+
+    recompose() re-runs compose(), so the action row and status line have to
+    come back with it, the user's typed names have to survive, and the body
+    must not be left scrolled.
+    """
+    from textual.widgets import Input, Static
+
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.app.discovery.discover",
+        lambda _root, repo_name=None: _lockfiles(tmp_path, 2),
+    )
+    client = MagicMock()
+    client.whoami.return_value = None
+    client.list_workspaces.return_value = [{"key": "acme", "name": "Acme Inc"}]
+    client.list_products.return_value = [{"id": "p1", "name": "Acme Platform"}]
+    client.list_components.return_value = [{"id": "c1", "name": "widget-py"}]
+    client.list_contact_profiles.return_value = []
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.screens.authenticate.SbomifyApiClient",
+        lambda *args, **kwargs: client,
+    )
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(width, height)) as pilot:
+        await pilot.pause()
+        await _advance(pilot, "start")
+        from textual.widgets import SelectionList
+
+        app.screen.query_one("#lockfile-list", SelectionList).select_all()
+        await pilot.pause()
+        await _advance(pilot, "next", wait=1.0)
+        await _advance(pilot)  # -> Components
+
+        app.screen.query_one("#component-0-input", Input).value = "typed-by-hand"
+        await pilot.pause()
+
+        # A component appears server-side between the prefetch and the reload.
+        client.list_components.return_value = [
+            {"id": "c1", "name": "widget-py"},
+            {"id": "c2", "name": "brand-new"},
+        ]
+        await _advance(pilot, "reload")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await pilot.pause()
+
+        screen = app.screen
+        assert not _offscreen_buttons(screen), "action row lost after recompose"
+        _visible_region(screen, screen.query_one("#components-status", Static))
+        assert "Reloaded" in _rendered(screen)
+        assert screen.query_one("#component-0-input", Input).value == "typed-by-hand", (
+            "reload discarded the typed component name"
+        )
+        assert screen.query_one(".wizard-scroll").scroll_offset.y == 0, "body left scrolled after reload"
+
+
+@pytest.mark.parametrize(("width", "height"), [(80, 24), (120, 30), (160, 48)])
+async def test_a_monorepos_worth_of_lockfiles_stays_navigable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, width: int, height: int
+) -> None:
+    """Twenty lockfiles: the card stack scrolls, the action row doesn't.
+
+    This is the shape that used to fail hardest — Components grew ~10 rows
+    per lockfile with no cap, so the buttons left the screen at three.
+    """
+    from textual.widgets import SelectionList
+
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / f"services/service-{index:02d}/uv.lock",
+            rel_path=Path(f"services/service-{index:02d}/uv.lock"),
+            ecosystem="python",
+            suggested_name=f"svc-{index:02d}",
+        )
+        for index in range(20)
+    ]
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.app.discovery.discover",
+        lambda _root, repo_name=None: lockfiles,
+    )
+    _stub_wizard(monkeypatch, tmp_path, 1)
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.app.discovery.discover",
+        lambda _root, repo_name=None: lockfiles,
+    )
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(width, height)) as pilot:
+        await pilot.pause()
+        await _advance(pilot, "start")
+        app.screen.query_one("#lockfile-list", SelectionList).select_all()
+        await pilot.pause()
+        await _advance(pilot, "next", wait=1.0)
+        await _advance(pilot)  # -> Components
+
+        screen = app.screen
+        assert not _offscreen_buttons(screen)
+        scroll = screen.query_one(".wizard-scroll")
+        assert scroll.scroll_offset.y == 0, "opened scrolled"
+        assert scroll.virtual_size.height > scroll.size.height, "expected 20 cards to overflow"
+
+        # The last card is reachable, and the buttons stay put while scrolling.
+        scroll.scroll_end(animate=False)
+        await pilot.pause()
+        await pilot.pause()
+        last = screen.query_one("#component-19")
+        geometry = screen._compositor.full_map.get(last)
+        assert geometry is not None and geometry.region.height > 0, "last lockfile card unreachable"
+        assert not _offscreen_buttons(screen), "action row moved while scrolling"
+
+
+@pytest.mark.parametrize(("width", "height"), [(80, 24), (80, 12), (250, 70)])
+async def test_notifications_do_not_cover_the_action_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, width: int, height: int
+) -> None:
+    """A toast must not sit on top of the buttons it is telling you about.
+
+    Textual docks the toast rack bottom-right by default, which is exactly
+    where the pinned action row lives: at 80x24 the Ctrl-C confirmation
+    covered the Cancel button outright. ``run_test`` disables notifications
+    by default, so this has to opt in or it silently tests nothing.
+    """
+    from textual.widgets._toast import Toast
+
+    _stub_wizard(monkeypatch, tmp_path, 1)
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(width, height), notifications=True) as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+        await pilot.pause()
+
+        screen = app.screen
+        toasts = list(screen.query(Toast))
+        assert toasts, "Ctrl-C produced no visible toast — double-tap-to-quit is undiscoverable"
+        assert "Ctrl-C again" in _rendered(screen), "toast text not legible on screen"
+
+        toast_regions = [_visible_region(screen, toast) for toast in toasts]
+        for button in screen.query(Button):
+            geometry = screen._compositor.full_map.get(button)
+            if geometry is None:
+                continue
+            for toast_region in toast_regions:
+                assert not toast_region.overlaps(geometry.region), (
+                    f"toast covers the #{button.id} button at {width}x{height}"
+                )
+
+
 def test_mascot_renders_without_leaking_markup() -> None:
     """The ASCII art survives both markup dialects.
 

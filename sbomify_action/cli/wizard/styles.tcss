@@ -50,6 +50,25 @@ Footer > .footer--key {
     text-style: bold;
 }
 
+/* Notifications. Textual docks the toast rack bottom-right, which is
+ * exactly where the pinned action row lives — at 80x24 a toast covered the
+ * Cancel button outright and clipped Next, so the message telling you what
+ * happened hid the control you needed to respond to it. Dock the rack to
+ * the top instead: the header is the one band of the screen with nothing
+ * interactive in it. Narrower toasts too, so they don't span a wide
+ * terminal for a one-line message. */
+ToastRack {
+    dock: top;
+    align: right top;
+    margin-top: 1;
+    margin-bottom: 0;
+}
+
+Toast {
+    width: 48;
+    max-width: 60%;
+}
+
 /* ---------------------------------------------------------------------
  * Wizard layout — applied by WizardScreen.compose
  * --------------------------------------------------------------------- */

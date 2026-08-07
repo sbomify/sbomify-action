@@ -71,6 +71,14 @@ class WizardApp(App[int]):
             discovered=discovered,
             workflow_exists=wizard_workflow_exists(opts.repo_root),
         )
+        # Seed the release strategy from the repo rather than letting the
+        # Configure screen apply the heuristic to its radio buttons alone.
+        # The plan is the single source of truth for what the wizard will
+        # do, and that screen now both seeds from it and writes back to it
+        # — so a user who picks "tag" and then steps Back to re-check
+        # something doesn't come back to a silently reset "trunk".
+        if facts.has_release_tags:
+            self.state.plan.release_strategy = "tag"
 
     def on_mount(self) -> None:
         # Lazy import keeps screen imports off the hot path during test
