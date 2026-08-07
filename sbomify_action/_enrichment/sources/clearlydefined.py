@@ -1,4 +1,4 @@
-"""ClearlyDefined data source for package metadata (license and attribution).
+"""ClearlyDefined data source for package metadata (license, homepage, repository).
 
 Requests go through clearly-cached (https://github.com/sbomify/clearly-cached),
 a caching, normalising front end for the ClearlyDefined definitions API. It
@@ -10,7 +10,6 @@ container) to use your own.
 """
 
 import os
-import re
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
@@ -103,6 +102,42 @@ def _as_str(value: Any) -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
 
+# The fields read out of a projection, and what each must be when present.
+# Only the fields actually read are listed: `parties` and `score` are ignored,
+# so a bad type in either says nothing about whether the licence can be
+# trusted, and failing the whole projection over one would lose enrichment for
+# no reason. `harvested` is validated separately, in _is_harvested.
+_PROJECTION_TYPES: Dict[str, type] = {
+    "declared": str,
+    "homepage": str,
+    "source_url": str,
+}
+
+
+def _reject_malformed(purl: PackageURL, data: Any) -> None:
+    """Raise unless `data` is a projection whose fields have the right types.
+
+    A field of the wrong type says the payload is not one we can read, which
+    says nothing about the package. That has to be distinguished from a
+    well-formed projection whose fields are simply empty - `{"declared": null,
+    "parties": [], ..., "harvested": true}` is a real answer, meaning
+    ClearlyDefined looked and found no licence, and is a definitive miss.
+
+    The distinction matters because the registry persists a definitive miss for
+    the miss TTL. Coercing a bad type to None would put a garbled response and
+    a genuine absence into the same bucket, and let one malformed body suppress
+    a package's enrichment for a day.
+    """
+    if not isinstance(data, dict) or not data:
+        raise TransientSourceError(f"Projection for {purl} is not an object")
+    for key, expected in _PROJECTION_TYPES.items():
+        value = data.get(key)
+        if value is not None and not isinstance(value, expected):
+            raise TransientSourceError(
+                f"Projection for {purl} has {key}={type(value).__name__}, expected {expected.__name__}"
+            )
+
+
 # Hosts whose URLs are actual repositories. ``source_url`` is otherwise a
 # download or registry link (Maven returns a sources jar, PyPI a project page),
 # which is not a repository_url however plausible it looks.
@@ -129,29 +164,13 @@ def _is_vcs_url(url: str) -> bool:
     return any(host == vcs or host.endswith(f".{vcs}") for vcs in _VCS_HOSTS)
 
 
-def _cleanest_party(parties: List[str]) -> Optional[str]:
-    """Pick the most useful attribution party to use as the supplier.
-
-    ClearlyDefined returns every copyright line its scanners found, so the list
-    is usually several spellings of one holder -- for requests 2.32.3 it is
-    "Copyright Kenneth Reitz" alongside three dated "copyright (c) 2012 by
-    Kenneth Reitz" variants. Prefer an entry without a year, which is the
-    canonical form, and fall back to the first entry so behaviour is stable
-    when every line carries a date.
-    """
-    cleaned = [p.strip() for p in parties if isinstance(p, str) and p.strip()]
-    if not cleaned:
-        return None
-    undated = [p for p in cleaned if not re.search(r"\b(19|20)\d{2}\b", p)]
-    return (undated or cleaned)[0]
-
-
 class ClearlyDefinedSource:
     """
     Data source for ClearlyDefined, served via clearly-cached.
 
-    ClearlyDefined provides curated license and attribution data for
-    open source packages across many ecosystems.
+    ClearlyDefined provides curated license data for open source packages
+    across many ecosystems, plus a homepage and source location where it has
+    one. Its copyright parties are not used - see _normalize_response.
 
     Priority: 75 (medium-low - good for license data, slower API)
     Supports: pypi, npm, cargo, maven, gem, nuget, golang packages
@@ -236,14 +255,23 @@ class ClearlyDefinedSource:
             metadata = None
             if response.status_code == 200:
                 data = response.json()
-                if not self._is_harvested(purl, data):
-                    # Not examined yet, so there is nothing to record. This is
-                    # the distinction clearly-cached exists to expose:
-                    # ClearlyDefined never 404s, and an unharvested coordinate
-                    # returns an empty definition that is indistinguishable
-                    # from a package with genuinely no licence. Caching it as a
-                    # miss would hold that answer past the point it changes.
-                    raise TransientSourceError(f"{purl} not yet harvested by {self.name}")
+                try:
+                    if not self._is_harvested(purl, data):
+                        # Not examined yet, so there is nothing to record. This
+                        # is the distinction clearly-cached exists to expose:
+                        # ClearlyDefined never 404s, and an unharvested
+                        # coordinate returns an empty definition that is
+                        # indistinguishable from a package with genuinely no
+                        # licence. Caching it as a miss would hold that answer
+                        # past the point it changes.
+                        raise TransientSourceError(f"{purl} not yet harvested by {self.name}")
+                    _reject_malformed(purl, data)
+                except TransientSourceError:
+                    # Counts towards the breaker like any other non-answer: a
+                    # service returning bodies we cannot read is a service
+                    # worth backing off from.
+                    _record_transient_failure(purl)
+                    raise
                 metadata = self._normalize_response(purl, data)
             elif response.status_code == 404:
                 logger.debug(f"Package not found in ClearlyDefined: {purl}")
@@ -304,15 +332,15 @@ class ClearlyDefinedSource:
             purl: Parsed PackageURL (for logging)
             data: Projection returned by clearly-cached
 
-        Returns:
-            NormalizedMetadata with extracted fields, or None if no data
-        """
-        if not isinstance(data, dict) or not data:
-            return None
+        Callers must run _reject_malformed first, so everything below is
+        already known to be the right type; _as_str still normalises an empty
+        string to None.
 
-        # Every field below is type-checked rather than trusted: a CDN error
-        # page, a proxy in between, or a future change to the projection should
-        # cost this package its enrichment, not raise mid-SBOM.
+        Returns:
+            NormalizedMetadata with extracted fields, or None when the
+            projection is well-formed but carries nothing - a real answer,
+            meaning ClearlyDefined looked and found nothing.
+        """
         declared_license = _as_str(data.get("declared"))
 
         licenses: List[str] = []
@@ -331,18 +359,28 @@ class ClearlyDefinedSource:
         if source_url and _is_vcs_url(source_url):
             repository_url = normalize_vcs_url(source_url)
 
-        # The curated attribution parties, which the projection exposes as a
-        # flat list. This is the one thing ClearlyDefined provides that the
-        # other sources do not.
-        parties = data.get("parties")
-        supplier = _cleanest_party(parties) if isinstance(parties, list) else None
+        # `parties` is deliberately not read. It is every copyright line the
+        # scanners found across the package's files, so a notice from vendored
+        # code outranks nothing, and picking one of them named the wrong entity
+        # often enough to matter: sqlalchemy got clipboard.js's author, numpy
+        # got meson's, charset-normalizer got the literal string "COPYRIGHT (c)
+        # FOOBAR", pydantic got "Copyright (c) 2017", which names nobody.
+        #
+        # Preferring an undated line made that worse rather than better -
+        # "(c), Good News" for django and "(c) N Revealed" for attrs were
+        # chosen precisely because they carry no year, over a dated line naming
+        # the right holder.
+        #
+        # supplier feeds NTIA conformance, so a wrong value is not a smaller
+        # version of a right one: it puts a false claim in the SBOM, where an
+        # absent field merely leaves a gap another source can fill. The licence
+        # is taken - it was accurate on all 76 coordinates sampled - and the
+        # parties are not.
 
         # Build field_sources for attribution
         field_sources = {}
         if licenses:
             field_sources["licenses"] = self.name
-        if supplier:
-            field_sources["supplier"] = self.name
         if homepage:
             field_sources["homepage"] = self.name
         if repository_url:
@@ -355,7 +393,7 @@ class ClearlyDefinedSource:
             # description-and-licenses-and-supplier early exit on its own.
             licenses=licenses,
             license_texts=license_texts,
-            supplier=supplier,
+            supplier=None,
             homepage=homepage,
             repository_url=repository_url,
             source=self.name,

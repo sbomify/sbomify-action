@@ -2801,15 +2801,15 @@ class TestClearlyDefinedSource:
 
         metadata = source.fetch(purl, mock_session)
 
-        # Asserting the fields, not just the type. This fixture already carried
-        # the correct attribution shape, but the previous assertion
+        # Asserting the fields, not just the type: the previous assertion
         # ("is None or isinstance(...)") held whether or not anything was
-        # extracted, which is how the supplier bug survived it.
+        # extracted, which is how an extraction bug survived it once already.
         assert metadata is not None
         assert metadata.licenses == ["BSD-3-Clause"]
-        assert metadata.supplier == "Django Software Foundation"
         assert metadata.homepage == "https://www.djangoproject.com/"
         assert metadata.repository_url is not None
+        # Copyright parties are not an identity - see test_parties_are_not_read.
+        assert metadata.supplier is None
 
     def test_non_vcs_source_url_is_not_a_repository(self, mock_session):
         """The projection's source_url is gated the same way sourceLocation was."""
@@ -2912,8 +2912,22 @@ class TestClearlyDefinedSource:
         headers = mock_session.get.call_args.kwargs["headers"]
         assert headers["User-Agent"].startswith("sbomify-action/")
 
-    def test_malformed_projection_does_not_raise(self, mock_session):
-        """Wrong types in the projection cost enrichment, not a traceback."""
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("declared", 42),
+            ("homepage", {"nested": "object"}),
+            ("source_url", []),
+        ],
+    )
+    def test_malformed_projection_is_transient_not_a_miss(self, mock_session, field, value):
+        """A field of the wrong type is an unreadable payload, not an absence.
+
+        Returning None here would have the registry persist it for the miss
+        TTL, letting one garbled body suppress this package's enrichment for a
+        day. It raises instead, and never reaches the SBOM as a traceback.
+        """
+        from sbomify_action._enrichment.exceptions import TransientSourceError
         from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
 
         clear_cache()
@@ -2923,11 +2937,81 @@ class TestClearlyDefinedSource:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "declared": 42,
-            "parties": "not-a-list",
-            "homepage": {"nested": "object"},
-            "source_url": [],
+            "declared": "MIT",
+            "parties": [],
+            "homepage": None,
+            "source_url": None,
             "harvested": True,
+            field: value,
+        }
+        mock_session.get.return_value = mock_response
+
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
+
+    @pytest.mark.parametrize("body", [None, [], "a string", 42])
+    def test_non_object_body_is_transient(self, mock_session, body):
+        """A 200 whose body is not a projection says nothing about the package."""
+        from sbomify_action._enrichment.exceptions import TransientSourceError
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:pypi/django@5.1")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = body
+        mock_session.get.return_value = mock_response
+
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
+
+    def test_a_bad_type_in_an_unread_field_is_tolerated(self, mock_session):
+        """`parties` is no longer read, so its type cannot invalidate a licence."""
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:pypi/django@5.1")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "declared": "MIT",
+            "parties": "not-a-list",
+            "homepage": None,
+            "source_url": None,
+            "harvested": True,
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+        assert metadata is not None
+        assert metadata.licenses == ["MIT"]
+        assert metadata.supplier is None
+
+    def test_well_formed_but_empty_projection_is_a_definitive_miss(self, mock_session):
+        """The counterpart: ClearlyDefined looked and found nothing.
+
+        This one is safe to persist, and must not be swept up by the malformed
+        check - the fields are the right types, they are simply empty.
+        """
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:pypi/django@5.1")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "declared": None,
+            "parties": [],
+            "homepage": None,
+            "source_url": None,
+            "harvested": True,
+            "score": 40,
         }
         mock_session.get.return_value = mock_response
 
@@ -3116,8 +3200,8 @@ class TestClearlyDefinedExtraction:
         mock_session.get.return_value = response
         return ClearlyDefinedSource().fetch(PackageURL.from_string(purl_str), mock_session)
 
-    def test_supplier_comes_from_the_parties_list(self, mock_session):
-        """The projection exposes the core-facet attribution as a flat list."""
+    def test_parties_are_not_read(self, mock_session):
+        """Even a well-formed party list leaves supplier unset."""
         metadata = self._fetch(
             mock_session,
             "pkg:pypi/requests@2.32.3",
@@ -3131,25 +3215,31 @@ class TestClearlyDefinedExtraction:
             },
         )
         assert metadata is not None
-        assert metadata.supplier == "Copyright Kenneth Reitz"
-        assert metadata.field_sources["supplier"] == "clearlydefined.io"
+        assert metadata.licenses == ["Apache-2.0"]
+        assert metadata.supplier is None
+        assert "supplier" not in metadata.field_sources
 
-    def test_undated_copyright_line_is_preferred(self, mock_session):
-        """Scanners return every spelling they find; the undated one is canonical."""
-        metadata = self._fetch(
-            mock_session,
-            "pkg:pypi/requests@2.32.3",
-            {
-                "declared": "Apache-2.0",
-                "parties": [
-                    "copyright (c) 2012 by Kenneth Reitz",
-                    "Copyright Kenneth Reitz",
-                    "Copyright 2019 Kenneth Reitz",
-                ],
-                "harvested": True,
-            },
-        )
-        assert metadata.supplier == "Copyright Kenneth Reitz"
+    def test_misattributed_parties_do_not_reach_the_sbom(self, mock_session):
+        """The real projections that motivated dropping the extraction.
+
+        Each of these was picked as the package's supplier before: sqlalchemy
+        got clipboard.js's author, charset-normalizer a literal placeholder,
+        django and attrs lines that name nobody. The undated-line preference
+        selected the last two *because* they carry no year.
+        """
+        for purl_str, parties in [
+            ("pkg:pypi/sqlalchemy@2.0.29", ["Copyright 2005-2024 Michael Bayer", "(c) Zeno Rocha"]),
+            ("pkg:pypi/charset-normalizer@3.3.2", ["Copyright (c) 2019 TAHRI Ahmed", "COPYRIGHT (c) FOOBAR"]),
+            ("pkg:pypi/django@5.0.3", ["Copyright (c) Django Software Foundation", "(c), Good News"]),
+            ("pkg:pypi/attrs@23.2.0", ["Copyright (c) 2015 Hynek Schlawack", "(c) N Revealed"]),
+        ]:
+            metadata = self._fetch(
+                mock_session,
+                purl_str,
+                {"declared": "MIT", "parties": parties, "homepage": None, "source_url": None, "harvested": True},
+            )
+            assert metadata is not None, purl_str
+            assert metadata.supplier is None, purl_str
 
     def test_empty_parties_leaves_supplier_unset(self, mock_session):
         """serde 1.0.197 really does have no attribution parties upstream."""
