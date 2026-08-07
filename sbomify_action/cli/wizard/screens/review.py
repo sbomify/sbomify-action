@@ -13,7 +13,13 @@ from textual.worker import Worker, WorkerState
 
 from sbomify_action.cli.wizard import ci_emitter
 from sbomify_action.cli.wizard.existing import workflow_path
-from sbomify_action.cli.wizard.screens._base import WizardScreen
+from sbomify_action.cli.wizard.screens._base import WizardScreen, ellipsize
+
+# Longest value the plan summary renders before truncating. The summary is a
+# fixed 20-cell label column plus the value; at the 60-column minimum that
+# leaves ~34 cells, and wrapping (rather than truncating) re-flows the
+# continuation to column 0 and breaks the alignment of every row below.
+_SUMMARY_VALUE_WIDTH = 34
 
 
 class ReviewScreen(WizardScreen):
@@ -44,21 +50,43 @@ class ReviewScreen(WizardScreen):
         diff_panel = Vertical(classes="wizard-panel", id="diff-panel")
         target = workflow_path(self.wizard.state.facts.repo_root)
         verb = "overwrite" if self.wizard.state.workflow_exists else "create"
-        diff_panel.border_title = f"◆  Diff — {verb} {target}"
+        diff_panel.border_title = f"◆  Diff — {verb} {self._display_path(target)}"
         diff_panel.border_subtitle = "preview of what apply will write"
         with diff_panel:
-            yield RichLog(id="workflow-diff", wrap=False, markup=True, highlight=False)
+            # auto_scroll=False: this is a document preview, not a live log.
+            # RichLog's default auto-scroll parked it at the *end* of the
+            # generated workflow, so the "preview of what apply will write"
+            # opened on the tail of a comment block instead of line 1.
+            yield RichLog(id="workflow-diff", wrap=False, markup=True, highlight=False, auto_scroll=False)
 
+    def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Apply  ▸", id="apply", variant="primary")
 
+    def _display_path(self, target: Path) -> str:
+        """Repo-relative path for the diff panel title.
+
+        The absolute path ate the entire title bar at 80 columns (and leaks
+        the developer's directory layout into a screenshot); the file is
+        always inside the repo the user is standing in, so the relative form
+        is both shorter and the one they'd type.
+        """
+        try:
+            return str(target.relative_to(self.wizard.state.facts.repo_root))
+        except ValueError:
+            return str(target)
+
     def on_mount(self) -> None:
         table = self.query_one("#components-table", DataTable)
-        table.add_columns("Lockfile", "Ecosystem", "Component", "Action")
+        # Action first. It was last, and DataTable scrolls horizontally
+        # rather than wrapping, so a long component name pushed
+        # reuse-vs-create off the right edge — silently hiding the single
+        # most important fact on the confirmation screen.
+        table.add_columns("Action", "Lockfile", "Ecosystem", "Component")
         for c in self.wizard.state.plan.create_components:
             action = "[#CBCCCE]reuse[/]" if c.existing_id is not None else "[#86EFAC]create[/]"
-            table.add_row(str(c.lockfile.rel_path), c.lockfile.ecosystem, c.name, action)
+            table.add_row(action, str(c.lockfile.rel_path), c.lockfile.ecosystem, c.name)
         # Paint immediately with the network-free tag-pinned ref so the
         # screen never stalls on a GitHub request, then resolve the
         # SHA-pinned ref on a worker thread and repaint when it lands.
@@ -110,11 +138,14 @@ class ReviewScreen(WizardScreen):
     def _summary(self) -> str:
         from rich.markup import escape as _esc
 
+        def _clip(value: str) -> str:
+            return ellipsize(value, _SUMMARY_VALUE_WIDTH)
+
         plan = self.wizard.state.plan
         workspace = self.wizard.state.workspace
         product_label = "(no product)"
         if plan.create_product:
-            product_label = f"new: {_esc(plan.create_product)}"
+            product_label = f"new: {_esc(_clip(plan.create_product))}"
         elif plan.use_product_id and workspace:
             match = next(
                 (p for p in workspace.products if str(p.get("id")) == plan.use_product_id),
@@ -126,7 +157,7 @@ class ReviewScreen(WizardScreen):
                 # summary renders verbatim instead of crashing or
                 # silently emitting garbled output on the Review
                 # screen.
-                product_label = f"existing: {_esc(str(match.get('name')))} ({_esc(plan.use_product_id)})"
+                product_label = f"existing: {_esc(_clip(str(match.get('name'))))} ({_esc(plan.use_product_id)})"
             else:
                 product_label = f"existing: {_esc(plan.use_product_id)}"
         formats_label = " + ".join(plan.sbom_formats) or "cyclonedx"
@@ -142,7 +173,7 @@ class ReviewScreen(WizardScreen):
             )
             if match:
                 augmentation_label = (
-                    f"profile · [b]{_esc(str(match.get('name')))}[/]  ({_esc(plan.contact_profile_id)})"
+                    f"profile · [b]{_esc(_clip(str(match.get('name'))))}[/]  ({_esc(plan.contact_profile_id)})"
                 )
             else:
                 augmentation_label = f"profile · {_esc(plan.contact_profile_id)}"
@@ -150,7 +181,7 @@ class ReviewScreen(WizardScreen):
             data = plan.sbomify_json_data
             supplier = data.get("supplier") if isinstance(data.get("supplier"), dict) else None
             sup_name = supplier.get("name") if isinstance(supplier, dict) and supplier.get("name") else "(unnamed)"
-            augmentation_label = f"sbomify.json · supplier [b]{_esc(str(sup_name))}[/]"
+            augmentation_label = f"sbomify.json · supplier [b]{_esc(_clip(str(sup_name)))}[/]"
         return (
             f"[#CBCCCE]Product           [/]  {product_label}\n"
             f"[#CBCCCE]Release strategy  [/]  {plan.release_strategy}\n"

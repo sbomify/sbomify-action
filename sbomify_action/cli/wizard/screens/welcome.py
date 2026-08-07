@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -27,30 +28,72 @@ HERO_TITLE = "[b][#4059D0]sbom[/][#CC58BB]ify[/][#F4B57F] wizard[/][/]"
 # robe deepening to brand-primary at the hem. Pure ASCII (no
 # box-drawing or exotic Unicode) so the figure renders uniformly
 # across terminals and SSH sessions.
-ASCII_WIZARD = (
-    "[#F4B57F]            *[/]\n"
-    "[#F4B57F]           /\\[/]\n"
-    "[#F4B57F]          /  \\[/]\n"
-    "[#CC58BB]         /    \\         [#F4B57F]( )[/][/]\n"
-    "[#CC58BB]        /  *   \\         [#F4B57F]|[/][/]\n"
-    "[#CC58BB]       /        \\        [#F4B57F]|[/][/]\n"
-    "[#CC58BB]      /    *     \\       [#F4B57F]|[/][/]\n"
-    "[#CC58BB]     /            \\      [#F4B57F]|[/][/]\n"
-    "[#CC58BB]    /______________\\     [#F4B57F]|[/][/]\n"
-    "[#CBCCCE]        ~^~  ~^~         [#F4B57F]|[/][/]\n"
-    "[#CBCCCE]         o    o          [#F4B57F]|[/][/]\n"
-    "[#CBCCCE]          \\--/           [#F4B57F]|[/][/]\n"
-    "[#E0E0E5]         /WWWWW\\         [#F4B57F]|[/][/]\n"
-    "[#E0E0E5]        /WWWWWWW\\        [#F4B57F]|[/][/]\n"
-    "[#E0E0E5]       /WWWWWWWWW\\       [#F4B57F]|[/][/]\n"
-    "[#E0E0E5]      /WWWWWWWWWWW\\      [#F4B57F]|[/][/]\n"
-    "[#8A7DFF]      WWWWWWWWWWWWW      [#F4B57F]|[/][/]\n"
-    "[#8A7DFF]       WWWWWWWWWWW       [#F4B57F]|[/][/]\n"
-    "[#4059D0]        WWWWWWWWW        [#F4B57F]|[/][/]\n"
-    "[#4059D0]         WWWWWWW         [#F4B57F]|[/][/]\n"
-    "[#4059D0]          WWWWW          [#F4B57F]|[/][/]\n"
-    "[#37306B]           WWW          [#37306B]_|_[/][/]"
-)
+#
+# The rows below are PLAIN TEXT. ``_build_mascot`` assembles them into a
+# styled ``rich.text.Text`` — deliberately NOT a markup string.
+#
+# This art is almost entirely backslashes, and a backslash adjacent to a
+# tag is an escape character in both markup dialects in play here. As
+# hand-written markup, ``/\[/]`` made the top of the hat render as
+# ``/[/]``: right edge eaten, closing tag printed as literal text. And
+# the two dialects disagree on the fix — ``rich.markup.escape`` doubles a
+# trailing backslash, which Rich unescapes but Textual's own parser
+# renders as ``\`` *plus* a literal ``[/]``. Building a Text with explicit
+# style spans sidesteps markup parsing altogether, so no escaping rule has
+# to be right.
+_MASCOT_FIGURE: list[tuple[str, str]] = [
+    ("#F4B57F", "            *"),
+    ("#F4B57F", "           /\\"),
+    ("#F4B57F", "          /  \\"),
+    ("#CC58BB", "         /    \\"),
+    ("#CC58BB", "        /  *   \\"),
+    ("#CC58BB", "       /        \\"),
+    ("#CC58BB", "      /    *     \\"),
+    ("#CC58BB", "     /            \\"),
+    ("#CC58BB", "    /______________\\"),
+    ("#CBCCCE", "        ~^~  ~^~"),
+    ("#CBCCCE", "         o    o"),
+    ("#CBCCCE", "          \\--/"),
+    ("#E0E0E5", "         /WWWWW\\"),
+    ("#E0E0E5", "        /WWWWWWW\\"),
+    ("#E0E0E5", "       /WWWWWWWWW\\"),
+    ("#E0E0E5", "      /WWWWWWWWWWW\\"),
+    ("#8A7DFF", "      WWWWWWWWWWWWW"),
+    ("#8A7DFF", "       WWWWWWWWWWW"),
+    ("#4059D0", "        WWWWWWWWW"),
+    ("#4059D0", "         WWWWWWW"),
+    ("#4059D0", "          WWWWW"),
+    ("#37306B", "           WWW"),
+]
+
+# The staff the wizard holds, drawn in its own color to the right of the
+# figure. Each glyph is centered on ``_MASCOT_STAFF_COL``; rows not listed
+# here (the hat tip, which the staff doesn't reach) get no staff.
+_MASCOT_STAFF_COL = 25
+_MASCOT_STAFF: dict[int, tuple[str, str]] = {
+    **{3: ("#F4B57F", "( )")},
+    **{row: ("#F4B57F", "|") for row in range(4, 21)},
+    **{21: ("#37306B", "_|_")},
+}
+
+
+def _build_mascot() -> Text:
+    """Compose the mascot as a styled ``Text`` from the plain rows above."""
+    art = Text(no_wrap=True)
+    for index, (color, figure) in enumerate(_MASCOT_FIGURE):
+        if index:
+            art.append("\n")
+        art.append(figure, style=color)
+        staff = _MASCOT_STAFF.get(index)
+        if staff is not None:
+            staff_color, glyph = staff
+            start = _MASCOT_STAFF_COL - len(glyph) // 2
+            art.append(" " * (start - len(figure)))
+            art.append(glyph, style=staff_color)
+    return art
+
+
+ASCII_WIZARD = _build_mascot()
 
 
 class WelcomeScreen(WizardScreen):
@@ -64,9 +107,32 @@ class WelcomeScreen(WizardScreen):
         # priority=True so the binding wins over default Button activations —
         # we route Enter through ``route_enter`` (in WizardScreen) so a
         # focused Cancel button gets pressed instead of advancing the wizard.
+        #
+        # Two Enter bindings, gated by ``check_action``: with no lockfiles
+        # there is nothing to continue *to* — Enter exits — so advertising
+        # "Continue" in the footer would tell the user the opposite of what
+        # the key does. Textual dispatches to the first enabled binding and
+        # the Footer only renders enabled ones, so exactly one shows.
         Binding("enter", "start", "Continue", show=True, priority=True),
+        Binding("enter", "exit_empty", "Exit", show=True, priority=True),
         Binding("escape", "app.quit_with_cancel", "Cancel", show=True),
     ]
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "start":
+            return bool(self.wizard.state.discovered)
+        if action == "exit_empty":
+            return not self.wizard.state.discovered
+        return True
+
+    def action_exit_empty(self) -> None:
+        """Enter on a repo with no lockfiles — leave immediately.
+
+        ``app.quit_with_cancel`` is for accidental Ctrl-C presses mid-flow
+        and needs a double-tap; pressing Enter on a dead-end screen is an
+        explicit signal that the user wants out.
+        """
+        self.route_enter(lambda: self.wizard.exit(0))
 
     def compose_body(self) -> ComposeResult:
         # Hero card — the wizard's first impression. Two columns:
@@ -130,10 +196,16 @@ class WelcomeScreen(WizardScreen):
         with repo:
             yield Static("\n".join(self._repo_lines()))
 
+    def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):
             if self.wizard.state.discovered:
                 yield Button("Start  ▸", id="start", variant="primary")
-            yield Button("Cancel", id="cancel", variant="primary" if not self.wizard.state.discovered else "default")
+                yield Button("Cancel", id="cancel")
+            else:
+                # Nothing to onboard: leaving is the only action, so name the
+                # button for what it does rather than offering a "Cancel" that
+                # cancels nothing.
+                yield Button("Exit", id="cancel", variant="primary")
 
     def on_mount(self) -> None:
         # When there's nothing to do, Start isn't rendered — focus the
@@ -148,17 +220,7 @@ class WelcomeScreen(WizardScreen):
         # pressed instead of advancing — without this, a user who tabs to
         # Cancel and presses Enter still moves forward, which is the opposite
         # of what every other wizard screen does.
-        self.route_enter(self._advance_or_exit)
-
-    def _advance_or_exit(self) -> None:
-        if self.wizard.state.discovered:
-            self._advance()
-        else:
-            # Nothing to onboard — exit straight away. ``action_quit_with_cancel``
-            # is for accidental Ctrl-C presses mid-flow and requires a double-tap
-            # confirmation; pressing Enter on an empty repo is an explicit signal
-            # that the user wants out.
-            self.wizard.exit(0)
+        self.route_enter(self._advance)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "start":
@@ -176,15 +238,20 @@ class WelcomeScreen(WizardScreen):
         self.wizard.push_screen(DiscoverScreen())
 
     def _steps_list(self) -> list[str]:
+        # Numbering matches the progress crumb exactly — this screen is
+        # step 01, so the work ahead starts at 02. The two used to disagree
+        # (this list started at 01 and ended at 08 while the crumb had
+        # already reached 08/08 on Review), which made the crumb look like
+        # it had finished with two screens still to go.
         return [
-            "[#8A7DFF]01[/]  Pick which lockfiles to track",
-            "[#8A7DFF]02[/]  Authenticate against sbomify",
-            "[#8A7DFF]03[/]  Pick a product",
-            "[#8A7DFF]04[/]  Reuse or create a component per lockfile",
-            "[#8A7DFF]05[/]  Configure the workflow shape (release / credentials / metadata)",
-            "[#8A7DFF]06[/]  Configure SBOM content (enrichment / formats / provenance)",
-            "[#8A7DFF]07[/]  Review the plan",
-            "[#8A7DFF]08[/]  Apply — write the workflow file & finalise components",
+            "[#8A7DFF]02[/]  Pick which lockfiles to track",
+            "[#8A7DFF]03[/]  Authenticate against sbomify",
+            "[#8A7DFF]04[/]  Pick a product",
+            "[#8A7DFF]05[/]  Reuse or create a component per lockfile",
+            "[#8A7DFF]06[/]  Configure the workflow shape (release / credentials / metadata)",
+            "[#8A7DFF]07[/]  Configure SBOM content (enrichment / formats / provenance)",
+            "[#8A7DFF]08[/]  Review the plan",
+            "[#8A7DFF]09[/]  Apply — write the workflow file & finalise components",
         ]
 
     def _repo_lines(self) -> list[str]:

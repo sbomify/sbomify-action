@@ -186,6 +186,8 @@ class AuthenticateScreen(WizardScreen):
             )
             yield Static("", id="auth-status", markup=True)
             yield Container(id="auth-progress")
+
+    def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Authenticate  ▸", id="submit", variant="primary")

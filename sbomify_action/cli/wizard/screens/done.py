@@ -13,7 +13,7 @@ from sbomify_action.cli.wizard.screens._base import WizardScreen
 class DoneScreen(WizardScreen):
     """Phase 6c — summary + next steps."""
 
-    step_index = 8
+    step_index = 9
     step_title = "Done"
     step_subtitle = "All set. Here's what you'll want to do next."
 
@@ -31,6 +31,15 @@ class DoneScreen(WizardScreen):
         # action no-ops cleanly when there isn't.
         Binding("c", "copy_first_url", "Copy URL", show=True),
     ]
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "copy_first_url":
+            # Hide the hint when pressing it could only ever produce a
+            # warning: nothing applied, or a dry-run whose component IDs are
+            # synthetic placeholders that resolve to a 404.
+            state = self.wizard.state
+            return bool(state.component_ids) and not state.is_dry_run
+        return True
 
     def compose_body(self) -> ComposeResult:
         applied = Vertical(classes="wizard-panel-emphasis")
@@ -75,6 +84,7 @@ class DoneScreen(WizardScreen):
             with tok:
                 yield Static(self._token_instructions(), classes="wizard-muted")
 
+    def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):
             yield Button("Finish", id="finish", variant="primary")
 

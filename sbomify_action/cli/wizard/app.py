@@ -45,6 +45,12 @@ class WizardApp(App[int]):
         Binding("ctrl+c", "quit_with_cancel", "Cancel", priority=True, show=True),
         Binding("ctrl+q", "quit_with_cancel", "Cancel", show=False),
         Binding("question_mark", "show_help", "Help", priority=True, show=True),
+        # Non-printable alias. Textual (correctly) lets a focused Input keep
+        # printable keys, so "?" types a literal question mark on the token
+        # and contact-profile forms rather than opening help — and the
+        # footer hint disappears with it. F1 has no such conflict, so help
+        # stays reachable from every screen including the forms.
+        Binding("f1", "show_help", "Help", priority=True, show=False),
     ]
 
     def __init__(self, opts: WizardOptions) -> None:

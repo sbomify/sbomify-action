@@ -28,7 +28,13 @@ class DiscoverScreen(WizardScreen):
         Binding("enter", "submit", "Next ▸", show=True, priority=True),
         # priority so the SelectionList can't swallow Escape.
         Binding("escape", "app.pop_screen", "Back", show=True, priority=True),
-        Binding("space", "toggle_selection", "Toggle", show=True),
+        # priority=True so this wins over SelectionList's own Space binding.
+        # Not for behaviour — ``action_toggle_selection`` calls straight
+        # through to ``SelectionList.action_select`` — but for the footer:
+        # a binding shadowed by the focused widget is never rendered, so
+        # without priority the screen's primary interaction had no hint at
+        # any terminal width, while the secondary "a / n" bulk keys did.
+        Binding("space", "toggle_selection", "Toggle", show=True, priority=True),
         # Bulk operations for users with many lockfiles — Tab-and-Space
         # through 20 rows gets old fast.
         Binding("a", "select_all", "All", show=True),
@@ -46,15 +52,25 @@ class DiscoverScreen(WizardScreen):
                 classes="wizard-help",
             )
             if any(lf.nested_repo for lf in self.wizard.state.discovered):
+                # ``wizard-muted``, not ``wizard-help``: this is the only
+                # explanation for why some rows arrive pre-deselected, so
+                # dropping it in compact mode left those rows looking
+                # arbitrary. Help prose is expendable on small terminals;
+                # the reason a default was chosen for the user is not.
                 yield Static(
                     "[#F4B57F]Lockfiles inside submodules or vendored repos are deselected "
                     "by default — they belong to another repository, so set up SBOMs there "
                     "instead.[/]",
                     id="nested-repo-note",
-                    classes="wizard-help",
+                    classes="wizard-muted",
                 )
             yield SelectionList[int](id="lockfile-list")
-            yield Static("", id="discover-status", markup=True)
+
+    def compose_actions(self) -> ComposeResult:
+        # The "pick at least one" validation message lives with the buttons,
+        # not inside the scrolling panel — it fires in response to pressing
+        # Next, so it has to be visible from wherever Next is.
+        yield Static("", id="discover-status", markup=True)
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")
