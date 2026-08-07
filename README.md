@@ -631,7 +631,7 @@ env:
 | Debian Sources | Debian packages                                                  | Maintainer, description, homepage               |
 | deps.dev       | Python, npm, Maven, Go, Ruby, NuGet (+ Rust fallback)            | License, homepage, repo                         |
 | ecosyste.ms    | All major ecosystems                                             | License, description, maintainer                |
-| ClearlyDefined | Python, npm, Cargo, Maven, Ruby, NuGet, Go                       | License, attribution, homepage, repo            |
+| ClearlyDefined | Python, npm, Cargo, Maven, Ruby, NuGet, Go                       | License, homepage, repo                         |
 | Repology       | Linux distros                                                    | License, homepage                               |
 
 ClearlyDefined is queried through

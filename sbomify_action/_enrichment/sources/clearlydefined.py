@@ -1,4 +1,4 @@
-"""ClearlyDefined data source for package metadata (license and attribution).
+"""ClearlyDefined data source for package metadata (license, homepage, repository).
 
 Requests go through clearly-cached (https://github.com/sbomify/clearly-cached),
 a caching, normalising front end for the ClearlyDefined definitions API. It
@@ -10,7 +10,6 @@ container) to use your own.
 """
 
 import os
-import re
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
@@ -129,29 +128,13 @@ def _is_vcs_url(url: str) -> bool:
     return any(host == vcs or host.endswith(f".{vcs}") for vcs in _VCS_HOSTS)
 
 
-def _cleanest_party(parties: List[str]) -> Optional[str]:
-    """Pick the most useful attribution party to use as the supplier.
-
-    ClearlyDefined returns every copyright line its scanners found, so the list
-    is usually several spellings of one holder -- for requests 2.32.3 it is
-    "Copyright Kenneth Reitz" alongside three dated "copyright (c) 2012 by
-    Kenneth Reitz" variants. Prefer an entry without a year, which is the
-    canonical form, and fall back to the first entry so behaviour is stable
-    when every line carries a date.
-    """
-    cleaned = [p.strip() for p in parties if isinstance(p, str) and p.strip()]
-    if not cleaned:
-        return None
-    undated = [p for p in cleaned if not re.search(r"\b(19|20)\d{2}\b", p)]
-    return (undated or cleaned)[0]
-
-
 class ClearlyDefinedSource:
     """
     Data source for ClearlyDefined, served via clearly-cached.
 
-    ClearlyDefined provides curated license and attribution data for
-    open source packages across many ecosystems.
+    ClearlyDefined provides curated license data for open source packages
+    across many ecosystems, plus a homepage and source location where it has
+    one. Its copyright parties are not used - see _normalize_response.
 
     Priority: 75 (medium-low - good for license data, slower API)
     Supports: pypi, npm, cargo, maven, gem, nuget, golang packages
@@ -331,18 +314,28 @@ class ClearlyDefinedSource:
         if source_url and _is_vcs_url(source_url):
             repository_url = normalize_vcs_url(source_url)
 
-        # The curated attribution parties, which the projection exposes as a
-        # flat list. This is the one thing ClearlyDefined provides that the
-        # other sources do not.
-        parties = data.get("parties")
-        supplier = _cleanest_party(parties) if isinstance(parties, list) else None
+        # `parties` is deliberately not read. It is every copyright line the
+        # scanners found across the package's files, so a notice from vendored
+        # code outranks nothing, and picking one of them named the wrong entity
+        # often enough to matter: sqlalchemy got clipboard.js's author, numpy
+        # got meson's, charset-normalizer got the literal string "COPYRIGHT (c)
+        # FOOBAR", pydantic got "Copyright (c) 2017", which names nobody.
+        #
+        # Preferring an undated line made that worse rather than better -
+        # "(c), Good News" for django and "(c) N Revealed" for attrs were
+        # chosen precisely because they carry no year, over a dated line naming
+        # the right holder.
+        #
+        # supplier feeds NTIA conformance, so a wrong value is not a smaller
+        # version of a right one: it puts a false claim in the SBOM, where an
+        # absent field merely leaves a gap another source can fill. The licence
+        # is taken - it was accurate on all 76 coordinates sampled - and the
+        # parties are not.
 
         # Build field_sources for attribution
         field_sources = {}
         if licenses:
             field_sources["licenses"] = self.name
-        if supplier:
-            field_sources["supplier"] = self.name
         if homepage:
             field_sources["homepage"] = self.name
         if repository_url:
@@ -355,7 +348,7 @@ class ClearlyDefinedSource:
             # description-and-licenses-and-supplier early exit on its own.
             licenses=licenses,
             license_texts=license_texts,
-            supplier=supplier,
+            supplier=None,
             homepage=homepage,
             repository_url=repository_url,
             source=self.name,

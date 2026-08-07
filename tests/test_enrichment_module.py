@@ -2801,15 +2801,15 @@ class TestClearlyDefinedSource:
 
         metadata = source.fetch(purl, mock_session)
 
-        # Asserting the fields, not just the type. This fixture already carried
-        # the correct attribution shape, but the previous assertion
+        # Asserting the fields, not just the type: the previous assertion
         # ("is None or isinstance(...)") held whether or not anything was
-        # extracted, which is how the supplier bug survived it.
+        # extracted, which is how an extraction bug survived it once already.
         assert metadata is not None
         assert metadata.licenses == ["BSD-3-Clause"]
-        assert metadata.supplier == "Django Software Foundation"
         assert metadata.homepage == "https://www.djangoproject.com/"
         assert metadata.repository_url is not None
+        # Copyright parties are not an identity - see test_parties_are_not_read.
+        assert metadata.supplier is None
 
     def test_non_vcs_source_url_is_not_a_repository(self, mock_session):
         """The projection's source_url is gated the same way sourceLocation was."""
@@ -3116,8 +3116,8 @@ class TestClearlyDefinedExtraction:
         mock_session.get.return_value = response
         return ClearlyDefinedSource().fetch(PackageURL.from_string(purl_str), mock_session)
 
-    def test_supplier_comes_from_the_parties_list(self, mock_session):
-        """The projection exposes the core-facet attribution as a flat list."""
+    def test_parties_are_not_read(self, mock_session):
+        """Even a well-formed party list leaves supplier unset."""
         metadata = self._fetch(
             mock_session,
             "pkg:pypi/requests@2.32.3",
@@ -3131,25 +3131,31 @@ class TestClearlyDefinedExtraction:
             },
         )
         assert metadata is not None
-        assert metadata.supplier == "Copyright Kenneth Reitz"
-        assert metadata.field_sources["supplier"] == "clearlydefined.io"
+        assert metadata.licenses == ["Apache-2.0"]
+        assert metadata.supplier is None
+        assert "supplier" not in metadata.field_sources
 
-    def test_undated_copyright_line_is_preferred(self, mock_session):
-        """Scanners return every spelling they find; the undated one is canonical."""
-        metadata = self._fetch(
-            mock_session,
-            "pkg:pypi/requests@2.32.3",
-            {
-                "declared": "Apache-2.0",
-                "parties": [
-                    "copyright (c) 2012 by Kenneth Reitz",
-                    "Copyright Kenneth Reitz",
-                    "Copyright 2019 Kenneth Reitz",
-                ],
-                "harvested": True,
-            },
-        )
-        assert metadata.supplier == "Copyright Kenneth Reitz"
+    def test_misattributed_parties_do_not_reach_the_sbom(self, mock_session):
+        """The real projections that motivated dropping the extraction.
+
+        Each of these was picked as the package's supplier before: sqlalchemy
+        got clipboard.js's author, charset-normalizer a literal placeholder,
+        django and attrs lines that name nobody. The undated-line preference
+        selected the last two *because* they carry no year.
+        """
+        for purl_str, parties in [
+            ("pkg:pypi/sqlalchemy@2.0.29", ["Copyright 2005-2024 Michael Bayer", "(c) Zeno Rocha"]),
+            ("pkg:pypi/charset-normalizer@3.3.2", ["Copyright (c) 2019 TAHRI Ahmed", "COPYRIGHT (c) FOOBAR"]),
+            ("pkg:pypi/django@5.0.3", ["Copyright (c) Django Software Foundation", "(c), Good News"]),
+            ("pkg:pypi/attrs@23.2.0", ["Copyright (c) 2015 Hynek Schlawack", "(c) N Revealed"]),
+        ]:
+            metadata = self._fetch(
+                mock_session,
+                purl_str,
+                {"declared": "MIT", "parties": parties, "homepage": None, "source_url": None, "harvested": True},
+            )
+            assert metadata is not None, purl_str
+            assert metadata.supplier is None, purl_str
 
     def test_empty_parties_leaves_supplier_unset(self, mock_session):
         """serde 1.0.197 really does have no attribution parties upstream."""
