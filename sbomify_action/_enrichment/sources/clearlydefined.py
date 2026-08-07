@@ -102,6 +102,42 @@ def _as_str(value: Any) -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
 
+# The fields read out of a projection, and what each must be when present.
+# Only the fields actually read are listed: `parties` and `score` are ignored,
+# so a bad type in either says nothing about whether the licence can be
+# trusted, and failing the whole projection over one would lose enrichment for
+# no reason. `harvested` is validated separately, in _is_harvested.
+_PROJECTION_TYPES: Dict[str, type] = {
+    "declared": str,
+    "homepage": str,
+    "source_url": str,
+}
+
+
+def _reject_malformed(purl: PackageURL, data: Any) -> None:
+    """Raise unless `data` is a projection whose fields have the right types.
+
+    A field of the wrong type says the payload is not one we can read, which
+    says nothing about the package. That has to be distinguished from a
+    well-formed projection whose fields are simply empty - `{"declared": null,
+    "parties": [], ..., "harvested": true}` is a real answer, meaning
+    ClearlyDefined looked and found no licence, and is a definitive miss.
+
+    The distinction matters because the registry persists a definitive miss for
+    the miss TTL. Coercing a bad type to None would put a garbled response and
+    a genuine absence into the same bucket, and let one malformed body suppress
+    a package's enrichment for a day.
+    """
+    if not isinstance(data, dict) or not data:
+        raise TransientSourceError(f"Projection for {purl} is not an object")
+    for key, expected in _PROJECTION_TYPES.items():
+        value = data.get(key)
+        if value is not None and not isinstance(value, expected):
+            raise TransientSourceError(
+                f"Projection for {purl} has {key}={type(value).__name__}, expected {expected.__name__}"
+            )
+
+
 # Hosts whose URLs are actual repositories. ``source_url`` is otherwise a
 # download or registry link (Maven returns a sources jar, PyPI a project page),
 # which is not a repository_url however plausible it looks.
@@ -219,14 +255,23 @@ class ClearlyDefinedSource:
             metadata = None
             if response.status_code == 200:
                 data = response.json()
-                if not self._is_harvested(purl, data):
-                    # Not examined yet, so there is nothing to record. This is
-                    # the distinction clearly-cached exists to expose:
-                    # ClearlyDefined never 404s, and an unharvested coordinate
-                    # returns an empty definition that is indistinguishable
-                    # from a package with genuinely no licence. Caching it as a
-                    # miss would hold that answer past the point it changes.
-                    raise TransientSourceError(f"{purl} not yet harvested by {self.name}")
+                try:
+                    if not self._is_harvested(purl, data):
+                        # Not examined yet, so there is nothing to record. This
+                        # is the distinction clearly-cached exists to expose:
+                        # ClearlyDefined never 404s, and an unharvested
+                        # coordinate returns an empty definition that is
+                        # indistinguishable from a package with genuinely no
+                        # licence. Caching it as a miss would hold that answer
+                        # past the point it changes.
+                        raise TransientSourceError(f"{purl} not yet harvested by {self.name}")
+                    _reject_malformed(purl, data)
+                except TransientSourceError:
+                    # Counts towards the breaker like any other non-answer: a
+                    # service returning bodies we cannot read is a service
+                    # worth backing off from.
+                    _record_transient_failure(purl)
+                    raise
                 metadata = self._normalize_response(purl, data)
             elif response.status_code == 404:
                 logger.debug(f"Package not found in ClearlyDefined: {purl}")
@@ -287,15 +332,15 @@ class ClearlyDefinedSource:
             purl: Parsed PackageURL (for logging)
             data: Projection returned by clearly-cached
 
-        Returns:
-            NormalizedMetadata with extracted fields, or None if no data
-        """
-        if not isinstance(data, dict) or not data:
-            return None
+        Callers must run _reject_malformed first, so everything below is
+        already known to be the right type; _as_str still normalises an empty
+        string to None.
 
-        # Every field below is type-checked rather than trusted: a CDN error
-        # page, a proxy in between, or a future change to the projection should
-        # cost this package its enrichment, not raise mid-SBOM.
+        Returns:
+            NormalizedMetadata with extracted fields, or None when the
+            projection is well-formed but carries nothing - a real answer,
+            meaning ClearlyDefined looked and found nothing.
+        """
         declared_license = _as_str(data.get("declared"))
 
         licenses: List[str] = []

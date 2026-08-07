@@ -2912,8 +2912,22 @@ class TestClearlyDefinedSource:
         headers = mock_session.get.call_args.kwargs["headers"]
         assert headers["User-Agent"].startswith("sbomify-action/")
 
-    def test_malformed_projection_does_not_raise(self, mock_session):
-        """Wrong types in the projection cost enrichment, not a traceback."""
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("declared", 42),
+            ("homepage", {"nested": "object"}),
+            ("source_url", []),
+        ],
+    )
+    def test_malformed_projection_is_transient_not_a_miss(self, mock_session, field, value):
+        """A field of the wrong type is an unreadable payload, not an absence.
+
+        Returning None here would have the registry persist it for the miss
+        TTL, letting one garbled body suppress this package's enrichment for a
+        day. It raises instead, and never reaches the SBOM as a traceback.
+        """
+        from sbomify_action._enrichment.exceptions import TransientSourceError
         from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
 
         clear_cache()
@@ -2923,11 +2937,81 @@ class TestClearlyDefinedSource:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "declared": 42,
-            "parties": "not-a-list",
-            "homepage": {"nested": "object"},
-            "source_url": [],
+            "declared": "MIT",
+            "parties": [],
+            "homepage": None,
+            "source_url": None,
             "harvested": True,
+            field: value,
+        }
+        mock_session.get.return_value = mock_response
+
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
+
+    @pytest.mark.parametrize("body", [None, [], "a string", 42])
+    def test_non_object_body_is_transient(self, mock_session, body):
+        """A 200 whose body is not a projection says nothing about the package."""
+        from sbomify_action._enrichment.exceptions import TransientSourceError
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:pypi/django@5.1")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = body
+        mock_session.get.return_value = mock_response
+
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
+
+    def test_a_bad_type_in_an_unread_field_is_tolerated(self, mock_session):
+        """`parties` is no longer read, so its type cannot invalidate a licence."""
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:pypi/django@5.1")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "declared": "MIT",
+            "parties": "not-a-list",
+            "homepage": None,
+            "source_url": None,
+            "harvested": True,
+        }
+        mock_session.get.return_value = mock_response
+
+        metadata = source.fetch(purl, mock_session)
+        assert metadata is not None
+        assert metadata.licenses == ["MIT"]
+        assert metadata.supplier is None
+
+    def test_well_formed_but_empty_projection_is_a_definitive_miss(self, mock_session):
+        """The counterpart: ClearlyDefined looked and found nothing.
+
+        This one is safe to persist, and must not be swept up by the malformed
+        check - the fields are the right types, they are simply empty.
+        """
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:pypi/django@5.1")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "declared": None,
+            "parties": [],
+            "homepage": None,
+            "source_url": None,
+            "harvested": True,
+            "score": 40,
         }
         mock_session.get.return_value = mock_response
 
