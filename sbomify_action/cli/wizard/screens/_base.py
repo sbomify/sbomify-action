@@ -98,6 +98,38 @@ ROOMY_WIDTH = 100
 ROOMY_HEIGHT = 63
 
 
+class WizardScroll(VerticalScroll):
+    """The screen body's scroll region.
+
+    Focusable only while it actually has something to scroll. Textual makes
+    every scrollable container focusable so keyboard users can pan text that
+    isn't otherwise reachable — which the wizard needs on the screens whose
+    overflow is pure prose (Done's OIDC instructions, Welcome's panels).
+
+    But an unconditionally-focusable container is a tab stop with no visible
+    effect whenever the content already fits, which is most screens most of
+    the time: Tab appears to do nothing, then works again on the next press.
+    Gating on ``show_vertical_scrollbar`` keeps the stop exactly when it does
+    something and the scrollbar is on screen to show it.
+    """
+
+    def allow_focus(self) -> bool:
+        return self.show_vertical_scrollbar
+
+    def on_mount(self) -> None:
+        # Open at the top of the content, always. A screen whose body
+        # overflows can otherwise land mid-way through it: Review's diff
+        # panel takes ``1fr`` and, once its min-height pushes the body past
+        # the viewport, the initial layout settled at the *bottom* — so the
+        # confirmation screen opened with the plan summary (product,
+        # release strategy, credentials) already scrolled off the top, which
+        # is precisely the part the user is there to check.
+        #
+        # Deferred: the offending scroll is applied during the screen's own
+        # mount/layout pass, so resetting synchronously here would be undone.
+        self.call_after_refresh(self.scroll_home, animate=False)
+
+
 class WizardScreen(Screen[None]):
     """Common header + body + footer frame for every wizard phase."""
 
@@ -118,7 +150,7 @@ class WizardScreen(Screen[None]):
             # therefore be as tall as they need to be (a monorepo's worth of
             # component cards, the full attestation rationale) without ever
             # pushing Back/Next past the bottom of the terminal.
-            with VerticalScroll(classes="wizard-scroll"):
+            with WizardScroll(classes="wizard-scroll"):
                 yield from self.compose_body()
             yield from self.compose_actions()
         # Shown (and the body hidden) only when the terminal is below the

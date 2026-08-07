@@ -87,6 +87,13 @@ Screen {
     scrollbar-color-active: $sbom-purple;
 }
 
+/* The region is only a tab stop when it can scroll (see WizardScroll), and
+ * it has no border to light up — so brighten the scrollbar to show that
+ * arrow keys now pan the body rather than move a selection. */
+.wizard-scroll:focus {
+    scrollbar-color: $sbom-purple;
+}
+
 .wizard-step-crumb {
     color: $sbom-purple;
     margin-bottom: 1;

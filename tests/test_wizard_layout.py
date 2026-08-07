@@ -90,6 +90,30 @@ def _offscreen_buttons(screen) -> list[str]:  # noqa: ANN001
     return offscreen
 
 
+async def _advance(pilot, button_id: str = "next", wait: float = 0.0) -> None:
+    """Press a screen's primary button directly.
+
+    Navigation by Enter is focus-sensitive (``route_enter``), so tests that
+    move focus around can't also use Enter to advance without accidentally
+    pressing whatever they happened to land on.
+    """
+    pilot.app.screen.query_one(f"#{button_id}", Button).press()
+    await pilot.pause(wait) if wait else await pilot.pause()
+
+
+async def _walk_to_configure_sbom(pilot) -> None:  # noqa: ANN001
+    """Drive the flow as far as the tallest screen in the wizard."""
+    from textual.widgets import SelectionList
+
+    await _advance(pilot, "start")
+    pilot.app.screen.query_one("#lockfile-list", SelectionList).select_all()
+    await pilot.pause()
+    await _advance(pilot, "next", wait=1.0)  # Authenticate auto-advances to Product
+    await _advance(pilot)  # -> Components
+    await _advance(pilot)  # -> Configure (workflow)
+    await _advance(pilot)  # -> Configure (SBOM)
+
+
 @pytest.mark.parametrize(("width", "height"), SIZES)
 @pytest.mark.parametrize("lockfile_count", [1, 3])
 async def test_action_row_stays_on_screen_through_the_whole_flow(
@@ -246,6 +270,359 @@ async def test_help_modal_always_shows_how_to_close_itself(
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, HelpScreen)
+
+
+@pytest.mark.parametrize(("width", "height"), [(80, 24), (120, 30), (160, 48)])
+@pytest.mark.parametrize("lockfile_count", [1, 3])
+async def test_every_screen_opens_at_the_top_of_its_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    width: int,
+    height: int,
+    lockfile_count: int,
+) -> None:
+    """A screen never opens already scrolled past its own first panel.
+
+    Review's diff panel takes ``1fr``, and once its min-height pushed the
+    body past the viewport the initial layout settled at the *bottom* — so
+    the confirmation screen opened with the plan summary (product, release
+    strategy, credentials) scrolled off the top, which is exactly what the
+    user is on that screen to check. Components did the same from three
+    lockfiles up.
+    """
+    _stub_wizard(monkeypatch, tmp_path, lockfile_count)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(width, height)) as pilot:
+        await pilot.pause()
+
+        def at_top(label: str) -> None:
+            offset = app.screen.query_one(".wizard-scroll").scroll_offset.y
+            assert offset == 0, f"{label} at {width}x{height} opened scrolled to y={offset}"
+
+        at_top("Welcome")
+        await _walk_to_configure_sbom(pilot)
+        at_top("Configure (SBOM)")
+        await _advance(pilot)
+        at_top("Review")
+        await _advance(pilot, "apply")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        at_top("Apply")
+        await _advance(pilot, "continue")
+        at_top("Done")
+
+
+@pytest.mark.parametrize(("width", "height"), [(80, 24), (80, 12), (200, 20), (160, 48)])
+async def test_tabbing_never_lands_on_something_invisible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, width: int, height: int
+) -> None:
+    """Focus stays inside the viewport as the user tabs.
+
+    The scrolling body trades "the control is off-screen" for "the control
+    is below the fold", which is only an improvement if tabbing to it
+    scrolls it into view. If it doesn't, the focus ring is invisible and
+    the user is just as stuck as before.
+    """
+    _stub_wizard(monkeypatch, tmp_path, 3)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(width, height)) as pilot:
+        await pilot.pause()
+        await _walk_to_configure_sbom(pilot)
+
+        screen = app.screen
+        seen: list[str] = []
+        for _ in range(25):
+            await pilot.press("tab")
+            await pilot.pause()
+            focused = app.focused
+            if focused is None:
+                continue
+            key = f"{type(focused).__name__}#{focused.id}"
+            if key in seen:
+                break
+            seen.append(key)
+
+            geometry = screen._compositor.full_map.get(focused)
+            assert geometry is not None, f"{key} is focused but not composited"
+            region = geometry.region
+            assert region.height > 0, f"{key} focused with zero height"
+            assert region.y >= 0 and region.bottom <= height, (
+                f"{key} focused at rows {region.y}..{region.bottom}, outside a {width}x{height} viewport"
+            )
+            clip = geometry.clip
+            assert not (clip.height and (region.y >= clip.bottom or region.bottom <= clip.y)), (
+                f"{key} focused but scrolled out of its own container"
+            )
+
+        assert len(seen) >= 4, f"expected several tab stops on Configure (SBOM), got {seen}"
+
+
+async def test_scroll_region_is_only_a_tab_stop_when_it_can_scroll(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The body container doesn't add a dead tab stop.
+
+    Textual makes scrollable containers focusable so keyboard users can pan
+    text no widget owns — which the wizard needs. But when the content
+    already fits there's nothing to pan and no visible focus change, so the
+    stop reads as "Tab did nothing".
+    """
+    from sbomify_action.cli.wizard.screens._base import WizardScroll
+
+    _stub_wizard(monkeypatch, tmp_path, 1)
+
+    # Roomy: Welcome fits, so the body must not be focusable.
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(160, 48)) as pilot:
+        await pilot.pause()
+        scroll = app.screen.query_one(WizardScroll)
+        assert not scroll.show_vertical_scrollbar
+        assert not scroll.focusable, "body should not be a tab stop when nothing can scroll"
+
+    # Cramped: the same screen overflows, so panning must stay reachable.
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(80, 12)) as pilot:
+        await pilot.pause()
+        scroll = app.screen.query_one(WizardScroll)
+        assert scroll.show_vertical_scrollbar
+        assert scroll.focusable, "body must be a tab stop when there is content to pan"
+
+
+async def test_wizard_survives_being_resized_across_every_breakpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dragging the window around mid-flow doesn't strand the user.
+
+    Every other test cold-starts at a fixed size. This one sits on the
+    tallest screen and crosses each breakpoint in both directions,
+    including in and out of the too-small guard.
+    """
+    from sbomify_action.cli.wizard.screens.configure_sbom import ConfigureSbomScreen
+    from sbomify_action.cli.wizard.screens.review import ReviewScreen
+
+    _stub_wizard(monkeypatch, tmp_path, 2)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await _walk_to_configure_sbom(pilot)
+        assert isinstance(app.screen, ConfigureSbomScreen)
+
+        for width, height in [
+            (100, 63),  # roomy
+            (80, 24),  # compact
+            (60, 11),  # below the floor
+            (40, 10),  # far below
+            (200, 20),  # IDE panel
+            (250, 70),  # ultrawide
+            (80, 24),  # back to the default
+        ]:
+            await pilot.resize_terminal(width, height)
+            await pilot.pause()
+            await pilot.pause()
+            if app.screen.has_class("-tiny"):
+                continue
+            missing = _offscreen_buttons(app.screen)
+            assert not missing, f"after resizing to {width}x{height}: {missing} off-screen"
+
+        # Still interactive after the round trip.
+        await _advance(pilot)
+        assert isinstance(app.screen, ReviewScreen), "Next stopped working after resizing"
+
+
+async def test_whole_wizard_is_completable_by_keyboard_at_80x24(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end on a default terminal, keyboard only.
+
+    This is the scenario the layout bug actually broke: at 80x24 the user
+    could reach Configure (SBOM) and then had no visible way onward.
+    """
+    _stub_wizard(monkeypatch, tmp_path, 2)
+
+    app = WizardApp(_opts(tmp_path))
+    trail: list[str] = []
+
+    async def key(name: str, wait: float = 0.0) -> None:
+        await pilot.press(name)
+        await pilot.pause(wait) if wait else await pilot.pause()
+        current = type(app.screen).__name__
+        if not trail or trail[-1] != current:
+            trail.append(current)
+
+    async def tab_to(button_id: str) -> None:
+        for _ in range(10):
+            focused = app.focused
+            if focused is not None and getattr(focused, "id", None) == button_id:
+                return
+            await pilot.press("tab")
+            await pilot.pause()
+        raise AssertionError(f"could not reach #{button_id} by tabbing on {type(app.screen).__name__}")
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        trail.append(type(app.screen).__name__)
+        await key("enter")  # Welcome -> Discover
+        await key("a")  # select every lockfile
+        await key("enter", 1.0)  # -> Authenticate -> Product
+        await key("enter")  # -> Components
+        await key("enter")  # -> Configure (workflow)
+        # These two screens focus a RadioSet, where Enter commits the radio
+        # rather than advancing — the user tabs to Next, so the test does too.
+        await tab_to("next")
+        await key("enter")  # -> Configure (SBOM)
+        await tab_to("next")
+        await key("enter")  # -> Review
+        await key("enter")  # -> Apply
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await key("enter")  # -> Done
+
+    assert trail == [
+        "WelcomeScreen",
+        "DiscoverScreen",
+        "ProductScreen",
+        "ComponentsScreen",
+        "ConfigureWorkflowScreen",
+        "ConfigureSbomScreen",
+        "ReviewScreen",
+        "ApplyScreen",
+        "DoneScreen",
+    ], trail
+
+
+async def test_double_width_and_markup_in_api_names_render_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CJK, emoji and square brackets in workspace names survive the trip.
+
+    Names come from the API, so they can contain anything. Brackets are
+    Rich/Textual markup delimiters and CJK glyphs occupy two cells — both
+    can corrupt a layout that assumes one cell per character.
+    """
+    from sbomify_action.cli.wizard.state import DiscoveredLockfile
+
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.app.discovery.discover",
+        lambda _root, repo_name=None: [
+            DiscoveredLockfile(
+                path=tmp_path / "サービス" / "uv.lock",
+                rel_path=Path("サービス/uv.lock"),
+                ecosystem="python",
+                suggested_name="サービス-py",
+            )
+        ],
+    )
+    client = MagicMock()
+    client.whoami.return_value = None
+    client.list_workspaces.return_value = [{"key": "acme", "name": "Acme Inc"}]
+    client.list_products.return_value = [{"id": "p1", "name": "株式会社テスト [内部] 🚀"}]
+    client.list_components.return_value = [{"id": "c1", "name": "コンポーネント [beta] 🎉"}]
+    client.list_contact_profiles.return_value = [{"id": "cp1", "name": "連絡先 [prod]"}]
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.screens.authenticate.SbomifyApiClient",
+        lambda *args, **kwargs: client,
+    )
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        await _advance(pilot, "start")
+        from textual.widgets import SelectionList
+
+        app.screen.query_one("#lockfile-list", SelectionList).select_all()
+        await pilot.pause()
+        await _advance(pilot, "next", wait=1.0)
+
+        # The bracketed segment must reach the screen as literal text rather
+        # than being parsed away as a markup tag.
+        rendered = "\n".join(strip.text for strip in app.screen._compositor.render_strips())
+        assert "[内部]" in rendered, "bracketed segment of the product name was eaten by the markup parser"
+
+        await _advance(pilot)  # Components
+        await _advance(pilot)  # Configure (workflow)
+        await _advance(pilot)  # Configure (SBOM)
+        await _advance(pilot)  # Review
+
+        from sbomify_action.cli.wizard.screens.review import ReviewScreen
+
+        assert isinstance(app.screen, ReviewScreen), "non-ASCII names derailed the flow"
+        assert not _offscreen_buttons(app.screen)
+
+
+@pytest.mark.parametrize(("width", "height"), [(80, 24), (80, 12), (160, 48)])
+@pytest.mark.parametrize("failure", ["plan-limit", "generic"])
+async def test_apply_failure_keeps_the_error_and_the_recovery_on_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, width: int, height: int, failure: str
+) -> None:
+    """A failed apply shows what went wrong and what to do about it.
+
+    The error banner is mounted above the log precisely so it survives the
+    log scrolling — but the whole panel now lives in a scroll region, so
+    both the banner and the recovery buttons have to be checked for real.
+    """
+    from unittest.mock import MagicMock as _MagicMock
+
+    from sbomify_action.cli.wizard import apply as apply_mod
+    from sbomify_action.cli.wizard.screens.apply import ApplyScreen
+    from sbomify_action.cli.wizard.state import WorkspaceSnapshot
+    from sbomify_action.exceptions import PlanLimitError
+
+    monkeypatch.setattr(
+        "sbomify_action.cli.wizard.app.discovery.discover",
+        lambda _root, repo_name=None: [],
+    )
+
+    def fake_apply(state, opts, *, log=None):  # noqa: ANN001, ANN202
+        # Enough log lines that a naive layout would push the banner away.
+        for index in range(15):
+            log("info", f"step {index}: preparing something with a reasonably long description")
+        if failure == "plan-limit":
+            raise PlanLimitError(
+                "Could not create product 'Notipus': you have reached the maximum 1 "
+                "products allowed by your plan. [403]",
+                resource="product",
+            )
+        raise RuntimeError("the upstream service returned an unexpected response")
+
+    monkeypatch.setattr(apply_mod, "apply_plan", fake_apply)
+
+    options = WizardOptions(
+        token="t-fake",
+        api_base_url="https://app.sbomify.test",
+        repo_root=tmp_path,
+        output_dir=tmp_path / ".github" / "workflows",
+        dry_run=False,
+    )
+    app = WizardApp(options)
+    async with app.run_test(size=(width, height)) as pilot:
+        app.state.api = _MagicMock()
+        app.state.workspace = WorkspaceSnapshot(products=[{"id": "p1", "name": "Existing Product"}], team_key="acme")
+        app.state.plan.create_product = "Notipus"
+        app.push_screen(ApplyScreen())
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, ApplyScreen)
+
+        banner = screen.query_one("#apply-error-banner")
+        geometry = screen._compositor.full_map.get(banner)
+        assert geometry is not None and geometry.region.height > 0, "error banner never rendered"
+        assert geometry.region.bottom <= height, (
+            f"error banner at rows {geometry.region.y}..{geometry.region.bottom} on a {width}x{height} terminal"
+        )
+
+        assert not _offscreen_buttons(screen), "recovery buttons are off-screen after a failure"
+
+        rendered = "\n".join(strip.text for strip in screen._compositor.render_strips())
+        assert "[403]" not in rendered, "HTTP status code leaked into the UI"
+        # The hourglass must not still be hovering over a finished, failed run.
+        assert "Applying" not in rendered, "panel still claims the apply is in progress"
 
 
 def test_mascot_renders_without_leaking_markup() -> None:

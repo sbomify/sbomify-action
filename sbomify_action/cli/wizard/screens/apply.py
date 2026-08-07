@@ -218,6 +218,7 @@ class ApplyScreen(WizardScreen):
             back_btn = self.query_one("#back", Button)
             continue_btn = self.query_one("#continue", Button)
             error_text = strip_status_codes(str(event.worker.error))
+            self._mark_panel_failed()
             self._show_error_banner(error_text)
             # ``RichLog`` is markup=True; escape the worker-error message so a
             # `[` in the exception text doesn't collide with the color tags.
@@ -228,10 +229,25 @@ class ApplyScreen(WizardScreen):
             back_btn.disabled = False
             back_btn.focus()
 
+    def _mark_panel_failed(self) -> None:
+        """Swap the panel's in-progress title for a failure marker.
+
+        Same reasoning as the success case: leaving the hourglass hovering
+        over an operation that has already finished — and failed — reads as
+        "still working" while the user is being asked to choose a recovery.
+        """
+        try:
+            panel = self.query_one("#apply-panel", Vertical)
+            panel.border_title = "✗  Apply failed"
+            panel.border_subtitle = "see the error above"
+        except Exception:  # noqa: BLE001
+            pass
+
     def _on_apply_failed(self, error: Exception, back_btn: Button, continue_btn: Button) -> None:
         """Render the failure state: tailored recovery for plan limits,
         generic Back-and-retry for everything else."""
         self._worker_error = True
+        self._mark_panel_failed()
         if isinstance(error, PlanLimitError):
             self._plan_limit = error
             self._show_plan_limit_banner(error)
