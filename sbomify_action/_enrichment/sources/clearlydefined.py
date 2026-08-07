@@ -270,11 +270,26 @@ class ClearlyDefinedSource:
             raise TransientSourceError(f"RequestException from {self.name}") from None
 
     def _is_harvested(self, purl: PackageURL, data: Any) -> bool:
-        """False when the coordinate has not been examined by ClearlyDefined yet."""
-        if isinstance(data, dict) and not data.get("harvested", True):
+        """False when the coordinate has not been examined by ClearlyDefined yet.
+
+        The flag is validated as a boolean rather than tested for truthiness.
+        A malformed value - the string "false" is the obvious way to get this
+        wrong - would otherwise read as harvested and let an empty definition
+        be recorded as "this package has no licence", which is the one
+        conclusion this check exists to prevent. Anything that is not a
+        boolean is treated as unharvested, so a projection we cannot read
+        costs a re-fetch rather than a wrong answer.
+        """
+        if not isinstance(data, dict):
+            return True  # Not a projection at all; _normalize_response rejects it.
+        harvested = data.get("harvested", True)
+        if harvested is True:
+            return True
+        if harvested is False:
             logger.debug(f"Not yet harvested by ClearlyDefined: {purl}")
-            return False
-        return True
+        else:
+            logger.warning(f"Non-boolean 'harvested' from {self.name} for {purl}: {harvested!r}")
+        return False
 
     def _normalize_response(self, purl: PackageURL, data: Dict[str, Any]) -> Optional[NormalizedMetadata]:
         """

@@ -2957,6 +2957,30 @@ class TestClearlyDefinedSource:
         with pytest.raises(TransientSourceError):
             source.fetch(purl, mock_session)
 
+    @pytest.mark.parametrize("harvested", ["false", "no", 0, None, {}, []])
+    def test_non_boolean_harvested_is_not_treated_as_harvested(self, mock_session, harvested):
+        """A malformed flag must not let an empty definition become 'no licence'."""
+        from sbomify_action._enrichment.exceptions import TransientSourceError
+        from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
+
+        clear_cache()
+        source = ClearlyDefinedSource()
+        purl = PackageURL.from_string("pkg:pypi/obscure-package@1.0")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "declared": None,
+            "parties": [],
+            "homepage": None,
+            "source_url": None,
+            "harvested": harvested,
+        }
+        mock_session.get.return_value = mock_response
+
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
+
     def test_fetch_not_found(self, mock_session):
         """Test handling of 404 response."""
         from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
@@ -3034,8 +3058,14 @@ class TestClearlyDefinedSource:
 
         assert mock_session.get.call_count == TRANSIENT_FAILURE_LIMIT * 3
 
-    def test_transient_error_is_not_cached(self, mock_session):
-        """A 5xx must not be remembered as 'this package has no metadata'."""
+    @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+    def test_transient_error_is_not_cached(self, mock_session, status):
+        """Throttling and upstream failures must not be remembered as 'no metadata'.
+
+        429 matters as much as 5xx here: CI runners share an egress IP, so one
+        throttled response cached as a miss would suppress this package's
+        enrichment for every later build until the entry expired.
+        """
         from sbomify_action._enrichment.exceptions import TransientSourceError
         from sbomify_action._enrichment.sources.clearlydefined import ClearlyDefinedSource, clear_cache
 
@@ -3044,7 +3074,7 @@ class TestClearlyDefinedSource:
         purl = PackageURL.from_string("pkg:pypi/django@5.1")
 
         error_response = Mock()
-        error_response.status_code = 504
+        error_response.status_code = status
         mock_session.get.return_value = error_response
 
         with pytest.raises(TransientSourceError):
