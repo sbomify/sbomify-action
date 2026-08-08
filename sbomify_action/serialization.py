@@ -927,9 +927,12 @@ def _spdx_license_ids() -> tuple[frozenset[str], dict[str, str]]:
     ``spdx.schema.json`` ``$ref``. Reading the one list means the sanitizer
     and the validator cannot disagree about what is acceptable.
 
-    Returns ``(ids, by_lowercase)``; the second maps a casefolded id to its
+    Returns ``(ids, by_casefolded)``; the second maps a casefolded id to its
     canonical spelling so ``apache-2.0`` can be corrected rather than
-    demoted.
+    demoted. ``casefold`` rather than ``lower`` because the lookup side takes
+    arbitrary strings out of an SBOM, and the two agree on the ASCII the SPDX
+    list is made of while casefold also handles what a generator might hand us
+    from a non-ASCII locale.
     """
     try:
         from cyclonedx.schema._res import SPDX_JSON
@@ -940,7 +943,7 @@ def _spdx_license_ids() -> tuple[frozenset[str], dict[str, str]]:
         logger.debug("Could not load the SPDX id enum; falling back to expression parsing", exc_info=True)
         return frozenset(), {}
     ids = frozenset(str(entry) for entry in enum if isinstance(entry, str))
-    return ids, {value.lower(): value for value in ids}
+    return ids, {value.casefold(): value for value in ids}
 
 
 def _canonical_spdx_license_id(license_id: str) -> str | None:
@@ -951,7 +954,7 @@ def _canonical_spdx_license_id(license_id: str) -> str | None:
     """
     if not license_id:
         return None
-    ids, by_lower = _spdx_license_ids()
+    ids, by_casefolded = _spdx_license_ids()
     if not ids:
         # Enum unavailable: keep the previous (permissive) behaviour rather
         # than demoting every license on this SBOM to a bare name.
@@ -960,7 +963,7 @@ def _canonical_spdx_license_id(license_id: str) -> str | None:
         return license_id if validate_spdx_expression(license_id) else None
     if license_id in ids:
         return license_id
-    return by_lower.get(license_id.lower())
+    return by_casefolded.get(license_id.casefold())
 
 
 def _is_valid_spdx_license_id(license_id: str) -> bool:

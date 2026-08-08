@@ -276,12 +276,16 @@ def log_command_error(command_name: str, stderr: str, stdout: str, level: str = 
         return
     # Strip ANSI so the escape bytes don't land in the log (or the issue title).
     message = f"[{command_name}] error: {_ANSI_RE.sub('', output).strip()}"
-    log_fn = {"debug": logger.debug, "warning": logger.warning}.get(level, logger.error)
-    if log_fn is logger.error:
+    # Branch on the level string, NOT on the identity of the bound method.
+    # ``logger.error is logger.error`` is False — attribute access builds a new
+    # bound method each time — so an identity check here silently disables the
+    # fingerprinting for every call.
+    if level not in ("debug", "warning"):
         with _group_tool_error(command_name, output):
-            log_fn(message)
-    else:
-        log_fn(message)
+            logger.error(message)
+        return
+    log_fn = logger.debug if level == "debug" else logger.warning
+    log_fn(message)
 
 
 # Patterns that indicate a Docker image was not found in the registry

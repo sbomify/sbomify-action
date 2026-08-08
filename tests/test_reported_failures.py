@@ -10,8 +10,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import sentry_sdk
 
-from sbomify_action._generation.utils import error_signature
+from sbomify_action._generation.utils import error_signature, log_command_error
 from sbomify_action.cli.main import _format_search_locations, path_expansion
 from sbomify_action.exceptions import APIError, DuplicateArtifactError, FileProcessingError
 from sbomify_action.serialization import (
@@ -20,6 +21,32 @@ from sbomify_action.serialization import (
     sanitize_cyclonedx_licenses,
 )
 from sbomify_action.validation import validate_sbom_data
+
+
+def _capture_fingerprints(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Record every Sentry fingerprint set while logging, without a live SDK."""
+    captured: list[list[str]] = []
+
+    class _Scope:
+        _fingerprint: list[str] = []
+
+        @property
+        def fingerprint(self) -> list[str]:
+            return self._fingerprint
+
+        @fingerprint.setter
+        def fingerprint(self, value: list[str]) -> None:
+            self._fingerprint = value
+            captured.append(value)
+
+        def __enter__(self) -> "_Scope":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    monkeypatch.setattr(sentry_sdk, "new_scope", lambda: _Scope())
+    return captured
 
 
 class TestNonSpdxLicenseIds:
@@ -173,6 +200,40 @@ class TestToolErrorGrouping:
     def test_empty_output_has_no_signature(self) -> None:
         assert error_signature("") == ""
         assert error_signature("\n  \n") == ""
+
+    def test_error_level_actually_applies_the_fingerprint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The grouping is wired up, not merely available.
+
+        The first version of this gated on ``log_fn is logger.error``. Attribute
+        access builds a fresh bound method every time, so that identity check is
+        always False and the fingerprint was never applied — while a test of
+        ``error_signature`` alone still passed. Assert the wiring.
+        """
+        captured = _capture_fingerprints(monkeypatch)
+        log_command_error("cdxgen", "\x1b[1;35mSECURE MODE: DO NOT run cdxgen with root privileges.\x1b[0m", "")
+        assert captured, "error-level tool failures are not being fingerprinted"
+        assert captured[0][:2] == ["tool-error", "cdxgen"]
+        assert "SECURE MODE" in captured[0][2]
+
+    def test_two_variants_of_one_failure_get_the_same_fingerprint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured = _capture_fingerprints(monkeypatch)
+        for variant in self.SECURE_MODE_VARIANTS:
+            log_command_error("cdxgen", variant, "")
+        assert len(captured) == len(self.SECURE_MODE_VARIANTS)
+        assert len({tuple(f) for f in captured}) == 1, captured
+
+    @pytest.mark.parametrize("level", ["debug", "warning"])
+    def test_non_error_levels_are_not_fingerprinted(self, monkeypatch: pytest.MonkeyPatch, level: str) -> None:
+        # Those don't become Sentry events, so there is nothing to group.
+        captured = _capture_fingerprints(monkeypatch)
+        log_command_error("cdxgen", "some failure", "", level=level)
+        assert captured == []
+
+    def test_ansi_is_stripped_from_the_logged_message(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("ERROR"):
+            log_command_error("cdxgen", "\x1b[1;35mSECURE MODE\x1b[0m", "")
+        assert "\x1b[" not in caplog.text
+        assert "SECURE MODE" in caplog.text
 
 
 class TestDuplicateArtifactClassification:
