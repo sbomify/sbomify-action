@@ -130,6 +130,17 @@ def _reject_malformed(purl: PackageURL, data: Any) -> None:
     """
     if not isinstance(data, dict) or not data:
         raise TransientSourceError(f"Projection for {purl} is not an object")
+
+    # `harvested` is checked apart from the map because it is not optional the
+    # way the others are: null there is a body we cannot read, not a field with
+    # nothing in it. It is checked here rather than in _is_harvested so a bad
+    # value is classified as what it is -- calling it "not yet harvested" would
+    # exempt it from the breaker, now that unharvested coordinates do not
+    # count, and would report a garbled response as a coverage gap.
+    harvested = data.get("harvested", True)
+    if not isinstance(harvested, bool):
+        raise TransientSourceError(f"Projection for {purl} has harvested={type(harvested).__name__}, expected bool")
+
     for key, expected in _PROJECTION_TYPES.items():
         value = data.get(key)
         if value is not None and not isinstance(value, expected):
@@ -283,6 +294,21 @@ class ClearlyDefinedSource:
             metadata = None
             if response.status_code == 200:
                 data = response.json()
+                try:
+                    _reject_malformed(purl, data)
+                except TransientSourceError:
+                    # A service returning bodies we cannot read is worth
+                    # backing off from, so this counts.
+                    _record_transient_failure(purl)
+                    raise
+
+                # A projection we can read is evidence the service is working,
+                # whether or not the coordinate happens to be harvested. Both
+                # paths below clear the streak: not doing so would leave an
+                # earlier run of real failures armed while the service was
+                # demonstrably answering again.
+                _record_success()
+
                 if not self._is_harvested(purl, data):
                     # Not examined yet, so there is nothing to record. This is
                     # the distinction clearly-cached exists to expose:
@@ -291,25 +317,17 @@ class ClearlyDefinedSource:
                     # from a package with genuinely no licence. Caching it as a
                     # miss would hold that answer past the point it changes.
                     #
-                    # It does *not* count towards the breaker. An unharvested
-                    # coordinate is a definite answer about one package, which
-                    # is a different thing from the service being unwell -- and
-                    # the breaker exists for the latter. Counting it here meant
-                    # five sparsely-covered packages in a row disabled the
-                    # source for the rest of the run: measured on dotnet
-                    # /runtime, 278 "skipped after 5 consecutive" and no
+                    # It does not count towards the breaker either. An
+                    # unharvested coordinate is a definite answer about one
+                    # package; the breaker is for the service being unwell.
+                    # Counting it meant five sparsely-covered packages in a row
+                    # disabled the source for the rest of the run -- measured on
+                    # dotnet/runtime, 278 "skipped after 5 consecutive" and no
                     # contribution at all, while clearly-cached was answering
                     # Newtonsoft.Json with a declared MIT licence in under a
-                    # second the whole time.
+                    # second throughout.
                     raise TransientSourceError(f"{purl} not yet harvested by {self.name}")
-                try:
-                    _reject_malformed(purl, data)
-                except TransientSourceError:
-                    # This one does count: a service returning bodies we cannot
-                    # read is a service worth backing off from.
-                    _record_transient_failure(purl)
-                    raise
-                _record_success()
+
                 metadata = self._normalize_response(purl, data)
             elif response.status_code == 404:
                 # A definite answer, so it clears the streak like any other.
@@ -340,24 +358,18 @@ class ClearlyDefinedSource:
     def _is_harvested(self, purl: PackageURL, data: Any) -> bool:
         """False when the coordinate has not been examined by ClearlyDefined yet.
 
-        The flag is validated as a boolean rather than tested for truthiness.
-        A malformed value - the string "false" is the obvious way to get this
-        wrong - would otherwise read as harvested and let an empty definition
-        be recorded as "this package has no licence", which is the one
-        conclusion this check exists to prevent. Anything that is not a
-        boolean is treated as unharvested, so a projection we cannot read
-        costs a re-fetch rather than a wrong answer.
+        The flag is a boolean by the time this runs: _reject_malformed checks
+        its type first, so the string "false" -- the obvious way to get this
+        wrong -- is rejected as an unreadable body rather than arriving here to
+        be guessed at. Absent means harvested, which is how clearly-cached
+        renders a definition it has no doubt about.
         """
         if not isinstance(data, dict):
             return True  # Not a projection at all; _normalize_response rejects it.
-        harvested = data.get("harvested", True)
-        if harvested is True:
-            return True
-        if harvested is False:
+        if data.get("harvested", True) is False:
             logger.debug(f"Not yet harvested by ClearlyDefined: {purl}")
-        else:
-            logger.warning(f"Non-boolean 'harvested' from {self.name} for {purl}: {harvested!r}")
-        return False
+            return False
+        return True
 
     def _normalize_response(self, purl: PackageURL, data: Dict[str, Any]) -> Optional[NormalizedMetadata]:
         """

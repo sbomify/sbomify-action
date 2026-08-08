@@ -131,3 +131,45 @@ def test_a_404_still_clears_the_streak():
 
     assert cd._consecutive_failures == 0
     assert cd._circuit_open is False
+
+
+def test_an_unharvested_answer_clears_an_earlier_failure_streak():
+    """Responding correctly is evidence of health, harvested or not.
+
+    Otherwise a run of real failures stays armed while the service is
+    demonstrably answering again, and the next single failure trips a breaker
+    that should have been reset.
+    """
+    clear_cache()
+    source = ClearlyDefinedSource()
+
+    for i in range(TRANSIENT_FAILURE_LIMIT - 1):
+        with pytest.raises(TransientSourceError):
+            source.fetch(_purl(i), _session({}, status=503))
+    assert cd._consecutive_failures == TRANSIENT_FAILURE_LIMIT - 1
+
+    with pytest.raises(TransientSourceError):
+        source.fetch(PackageURL.from_string("pkg:nuget/Fresh@1.0"), _session(UNHARVESTED))
+
+    assert cd._consecutive_failures == 0
+    assert cd._circuit_open is False
+
+
+@pytest.mark.parametrize("bad", ["false", 0, 1, None, []])
+def test_a_non_boolean_harvested_flag_is_malformed_not_unharvested(bad):
+    """It says the body is unreadable, which is a service problem.
+
+    Classifying it as "not yet harvested" would exempt it from the breaker now
+    that unharvested coordinates do not count, and would report a garbled
+    response as a coverage gap.
+    """
+    clear_cache()
+    payload = dict(HARVESTED, harvested=bad)
+    source = ClearlyDefinedSource()
+
+    for i in range(TRANSIENT_FAILURE_LIMIT):
+        with pytest.raises(TransientSourceError) as excinfo:
+            source.fetch(_purl(i), _session(payload))
+        assert "not yet harvested" not in str(excinfo.value)
+
+    assert cd._circuit_open is True
