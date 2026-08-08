@@ -15,6 +15,7 @@ from its PackageReference set.
 
 import pytest
 
+from sbomify_action._generation.generators import cdxgen as cdxgen_module
 from sbomify_action._generation.generators.cdxgen import CdxgenFsGenerator
 from sbomify_action._generation.protocol import GenerationInput
 from sbomify_action._generation.utils import (
@@ -75,3 +76,50 @@ def test_a_solution_outranks_a_project(tmp_path):
     found = discover(tmp_path)
 
     assert [str(f.rel_path) for f in found] == ["Everything.sln"]
+
+
+@pytest.mark.parametrize("name", ["App.csproj", "App.fsproj", "App.vbproj", "Everything.sln"])
+def test_a_project_file_does_not_fetch_the_sdk(tmp_path, monkeypatch, name):
+    """The SDK is for lock files, and the .NET bundle is a 289MB download.
+
+    cdxgen reads PackageReference out of the XML itself; verified end to end
+    with no dotnet in the image, the cache or PATH, a three-package .csproj
+    and the .sln naming it both produce the same SBOM they produce with the
+    SDK present. Fetching it regardless would spend that download to reach an
+    identical result, and would strand the ecosystem on any host the SDK does
+    not build for.
+    """
+    fetched: list[str] = []
+    monkeypatch.setattr(cdxgen_module, "ensure_dotnet_installed", lambda: fetched.append("dotnet"))
+    monkeypatch.setattr(cdxgen_module, "ensure_runtime", lambda _tool: None)
+    monkeypatch.setattr(cdxgen_module, "run_command", lambda *a, **k: None)
+
+    project = tmp_path / name
+    project.write_text("<Project />")
+    output = tmp_path / "o.json"
+    output.write_text('{"components": []}')
+
+    CdxgenFsGenerator().generate(
+        GenerationInput(lock_file=str(project), output_file=str(output), output_format="cyclonedx")
+    )
+
+    assert fetched == []
+
+
+def test_a_nuget_lock_file_still_fetches_the_sdk(tmp_path, monkeypatch):
+    """The other half of the gate: cdxgen shells out to `dotnet` for this one."""
+    fetched: list[str] = []
+    monkeypatch.setattr(cdxgen_module, "ensure_dotnet_installed", lambda: fetched.append("dotnet"))
+    monkeypatch.setattr(cdxgen_module, "ensure_runtime", lambda _tool: None)
+    monkeypatch.setattr(cdxgen_module, "run_command", lambda *a, **k: None)
+
+    lock = tmp_path / "packages.lock.json"
+    lock.write_text("{}")
+    output = tmp_path / "o.json"
+    output.write_text('{"components": []}')
+
+    CdxgenFsGenerator().generate(
+        GenerationInput(lock_file=str(lock), output_file=str(output), output_format="cyclonedx")
+    )
+
+    assert fetched == ["dotnet"]

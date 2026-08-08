@@ -576,7 +576,13 @@ def is_supported_input(name: str) -> bool:
 
 
 def is_supported_lock_file(lock_file_name: str) -> bool:
-    """Check if a lock file is supported."""
+    """Whether an input file is supported. Alias of is_supported_input.
+
+    The name predates .NET project files, which are supported inputs without
+    being lock files -- a .csproj is a manifest. Callers are spread across the
+    CLI and the wizard, so the name stays; what it answers is is_supported_input's
+    question, and new callers should ask that one.
+    """
     return is_supported_input(lock_file_name)
 
 
