@@ -918,23 +918,70 @@ def _is_compound_expression(license_str: str) -> bool:
         return False
 
 
-def _is_valid_spdx_license_id(license_id: str) -> bool:
+@functools.lru_cache(maxsize=1)
+def _spdx_license_ids() -> tuple[frozenset[str], dict[str, str]]:
+    """The official SPDX license IDs valid in CycloneDX ``license.id``.
+
+    Sourced from ``cyclonedx.schema._res.SPDX_JSON`` -- the *same* file
+    ``validation._get_schema_registry`` registers to resolve the
+    ``spdx.schema.json`` ``$ref``. Reading the one list means the sanitizer
+    and the validator cannot disagree about what is acceptable.
+
+    Returns ``(ids, by_casefolded)``; the second maps a casefolded id to its
+    canonical spelling so ``apache-2.0`` can be corrected rather than
+    demoted. ``casefold`` rather than ``lower`` because the lookup side takes
+    arbitrary strings out of an SBOM, and the two agree on the ASCII the SPDX
+    list is made of while casefold also handles what a generator might hand us
+    from a non-ASCII locale.
     """
-    Check if a string is a valid SPDX license ID using the license-expression library.
+    try:
+        from cyclonedx.schema._res import SPDX_JSON
 
-    Args:
-        license_id: The license ID string to check
+        with open(SPDX_JSON) as handle:
+            enum = json.load(handle).get("enum") or []
+    except Exception:  # noqa: BLE001 - fall back rather than fail the run
+        logger.debug("Could not load the SPDX id enum; falling back to expression parsing", exc_info=True)
+        return frozenset(), {}
+    ids = frozenset(str(entry) for entry in enum if isinstance(entry, str))
+    return ids, {value.casefold(): value for value in ids}
 
-    Returns:
-        True if it's a valid SPDX license ID, False otherwise
+
+def _canonical_spdx_license_id(license_id: str) -> str | None:
+    """Return the canonical SPDX spelling of ``license_id``, or None.
+
+    None means "not on the SPDX license list", i.e. not usable as CycloneDX
+    ``license.id`` -- the caller moves it to ``license.name``.
     """
     if not license_id:
-        return False
+        return None
+    ids, by_casefolded = _spdx_license_ids()
+    if not ids:
+        # Enum unavailable: keep the previous (permissive) behaviour rather
+        # than demoting every license on this SBOM to a bare name.
+        from ._enrichment.license_utils import validate_spdx_expression
 
-    # Import here to avoid circular imports
-    from ._enrichment.license_utils import validate_spdx_expression
+        return license_id if validate_spdx_expression(license_id) else None
+    if license_id in ids:
+        return license_id
+    return by_casefolded.get(license_id.casefold())
 
-    return validate_spdx_expression(license_id)
+
+def _is_valid_spdx_license_id(license_id: str) -> bool:
+    """
+    Check whether a string is usable as CycloneDX ``license.id``.
+
+    Membership of the official SPDX license list -- NOT "does
+    license-expression recognise it". That library carries ScanCode's
+    superset: 2447 keys against the SPDX list's 811. The 1636 extras parse
+    happily and then fail schema validation, which is how a real run died on
+    ``{'license': {'id': 'Libselinux-1.0'}}`` -- the sanitizer that exists
+    precisely to move bad ids to ``license.name`` was told the id was fine.
+
+    ``LicenseRef-*`` is deliberately excluded too: valid inside an SPDX
+    *expression*, but never a member of the id enum, so it belongs in
+    ``license.name`` or ``expression``.
+    """
+    return _canonical_spdx_license_id(license_id) is not None
 
 
 def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
@@ -1033,13 +1080,25 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
                             )
                         count += 1
                         # Fall through to expression sanitization below
-                    elif not _is_valid_spdx_license_id(license_id):
-                        # Move invalid id to name
-                        logger.debug(f"Sanitizing invalid license ID: {license_id} -> name")
-                        del license_obj["id"]
-                        license_obj["name"] = license_id
-                        tracker.record_license_sanitized(license_id, f"name:{license_id}", component=component)
-                        count += 1
+                    else:
+                        canonical = _canonical_spdx_license_id(license_id)
+                        if canonical is None:
+                            # Not on the SPDX list — CycloneDX only accepts
+                            # enum members in license.id, so preserve the value
+                            # as a free-text name instead of losing it.
+                            logger.debug(f"Sanitizing invalid license ID: {license_id} -> name")
+                            del license_obj["id"]
+                            license_obj["name"] = license_id
+                            tracker.record_license_sanitized(license_id, f"name:{license_id}", component=component)
+                            count += 1
+                        elif canonical != license_id:
+                            # Right license, wrong casing (eg "apache-2.0").
+                            # The enum is case-sensitive, so correct it rather
+                            # than demoting a perfectly good SPDX id to a name.
+                            logger.debug(f"Correcting license ID casing: {license_id} -> {canonical}")
+                            license_obj["id"] = canonical
+                            tracker.record_license_sanitized(license_id, canonical, component=component)
+                            count += 1
 
             # Handle expression field
             expression = choice.get("expression")

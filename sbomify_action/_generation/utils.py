@@ -198,6 +198,72 @@ def convert_to_spdx(cyclonedx: Path, output: Path, cwd: Path) -> None:
     )
 
 
+# ANSI SGR sequences. cdxgen colours its diagnostics, and the escape bytes end
+# up inside the log message (and therefore inside the Sentry issue title).
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+# Volatile fragments that differ between runs of the *same* failure: absolute
+# paths, hex ids, line/column numbers, durations.
+_VOLATILE_RE = re.compile(
+    r"""
+      (/[^\s'"]+)          # absolute paths
+    | (\b[0-9a-f]{7,}\b)   # shas / hashes
+    | (\b\d+\b)            # any bare number
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def error_signature(output: str) -> str:
+    """A stable grouping key for a tool's error output.
+
+    Sentry groups log-derived events by message, and these messages are raw
+    tool stderr — so one root cause splinters into an issue per variant. A
+    single cdxgen complaint ("SECURE MODE: DO NOT run cdxgen with root
+    privileges") produced 23 separate issues, differing only in colour codes,
+    paths and line numbers.
+
+    Reduce the output to its first meaningful line with the volatile parts
+    removed, so those variants collapse to one issue while genuinely
+    different failures stay apart.
+    """
+    plain = _ANSI_RE.sub("", output or "")
+    for line in plain.splitlines():
+        stripped = line.strip()
+        if stripped:
+            normalised = _VOLATILE_RE.sub("", stripped)
+            return " ".join(normalised.split())[:120]
+    return ""
+
+
+def _log_error_grouped(command_name: str, output: str, message: str) -> None:
+    """Log ``message`` at error level under a stable Sentry fingerprint.
+
+    Exactly one error record is emitted whether or not the telemetry side
+    works, and nothing here can raise. That matters because this sits on the
+    SBOM generation error path: its whole job is to report someone else's
+    failure, so it must not be able to add one. Losing the grouping degrades
+    a Sentry view; turning "the tool failed" into "sbomify-action crashed"
+    would be a regression.
+
+    Not a context manager: ``new_scope()`` runs on ``__enter__``, so a
+    contextmanager-returning helper cannot catch its own failures -- they
+    surface in the caller's ``with``.
+    """
+    logged = False
+    try:
+        import sentry_sdk
+
+        with sentry_sdk.new_scope() as scope:
+            scope.fingerprint = ["tool-error", command_name, error_signature(output)]
+            logger.error(message)
+            logged = True
+    except Exception:  # noqa: BLE001 - deliberately broad; see above
+        logger.debug("Could not scope the tool-error fingerprint", exc_info=True)
+    if not logged:
+        logger.error(message)
+
+
 def log_command_error(command_name: str, stderr: str, stdout: str, level: str = "error") -> None:
     """
     Log command errors with a standardized format.
@@ -213,10 +279,19 @@ def log_command_error(command_name: str, stderr: str, stdout: str, level: str = 
     """
     # Prefer stderr, fall back to stdout (some tools like cdxgen output errors to stdout)
     output = stderr or stdout
-    if output:
-        message = f"[{command_name}] error: {output.strip()}"
-        log_fn = {"debug": logger.debug, "warning": logger.warning}.get(level, logger.error)
-        log_fn(message)
+    if not output:
+        return
+    # Strip ANSI so the escape bytes don't land in the log (or the issue title).
+    message = f"[{command_name}] error: {_ANSI_RE.sub('', output).strip()}"
+    # Branch on the level string, NOT on the identity of the bound method.
+    # ``logger.error is logger.error`` is False — attribute access builds a new
+    # bound method each time — so an identity check here silently disables the
+    # fingerprinting for every call.
+    if level not in ("debug", "warning"):
+        _log_error_grouped(command_name, output, message)
+        return
+    log_fn = logger.debug if level == "debug" else logger.warning
+    log_fn(message)
 
 
 # Patterns that indicate a Docker image was not found in the registry
