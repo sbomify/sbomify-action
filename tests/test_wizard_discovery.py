@@ -555,3 +555,30 @@ def test_discover_ignores_a_symlinked_lockfile_pointing_outside_the_repo(tmp_pat
     found = discover(repo)
 
     assert [str(lf.rel_path) for lf in found] == ["package.json"]
+
+
+def test_within_accepts_paths_when_the_root_is_the_filesystem_root() -> None:
+    """A prefix check would append a separator and produce "//".
+
+    Nothing under "/" starts with "//", so a repo rooted at the filesystem
+    root would have had every symlinked file rejected. Comparing path
+    components instead has no such corner.
+    """
+    from sbomify_action.cli.wizard.discovery import _within
+
+    assert _within("/etc", "/") is True
+    assert _within("/", "/") is True
+
+
+def test_within_does_not_confuse_a_sibling_with_a_prefix_name(tmp_path: Path) -> None:
+    """`/repo-other` must not read as inside `/repo`."""
+    from sbomify_action.cli.wizard.discovery import _within
+
+    repo = tmp_path / "repo"
+    sibling = tmp_path / "repo-other"
+    repo.mkdir()
+    sibling.mkdir()
+    (sibling / "f").write_text("")
+
+    assert _within(str(sibling / "f"), str(repo)) is False
+    assert _within(str(repo), str(repo)) is True

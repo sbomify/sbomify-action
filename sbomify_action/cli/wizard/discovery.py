@@ -318,11 +318,17 @@ def _within(path: str, root_real: str) -> bool:
     """True when ``path`` really resolves inside ``root_real``.
 
     Compared on the resolved path, not the spelling: ``repo/link`` may be
-    written as though it were inside the repo while pointing anywhere. The
-    separator suffix stops ``/repo-other`` from matching a ``/repo`` root.
+    written as though it were inside the repo while pointing anywhere.
+
+    ``is_relative_to`` rather than a string prefix. Prefix comparison needs
+    a trailing separator to stop ``/repo-other`` matching a ``/repo`` root,
+    and appending one breaks when the root *is* the separator: ``"/" +
+    os.sep`` is ``"//"``, which nothing under ``/`` starts with, so a repo
+    at the filesystem root would have had every file rejected. Comparing
+    path components has no such corner.
     """
     try:
         real = os.path.realpath(path)
     except OSError:
         return False
-    return real == root_real or real.startswith(root_real + os.sep)
+    return Path(real).is_relative_to(root_real)
