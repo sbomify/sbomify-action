@@ -102,6 +102,21 @@ def _swift_manifest_without_resolved(input: GenerationInput) -> GenerationResult
 #: special-case.
 _NO_FILE_CATALOGERS = ["--select-catalogers", "-file"]
 
+#: Lock files syft will only read as part of a directory, never on their own.
+#:
+#: Measured on erlang/rebar3 -- same binary, same tree:
+#:
+#:     syft scan rebar.lock                            0 packages
+#:     syft scan dir:<parent>                          9 hex, 14 GitHub Actions
+#:     syft scan dir:<parent> --select-catalogers erlang    9 hex, nothing else
+#:
+#: So the subject becomes the parent directory, and the ecosystem's catalogers
+#: are named to keep the answer about the lock file rather than about whatever
+#: else shares the directory. Listing rebar.lock without this would have
+#: shipped a zero-component document for every rebar3 project, which is worse
+#: than declining because it looks like an answer.
+_DIRECTORY_ONLY_LOCK_FILES = {"rebar.lock": "erlang"}
+
 
 class SyftFsGenerator:
     """
@@ -211,7 +226,15 @@ class SyftFsGenerator:
         # from the string, and a directory name that happens to look like an
         # image reference is read as one -- which is how bun.lock ended up
         # being handed to a container registry.
-        subject = f"dir:{input.source_dir}" if input.is_source_dir else str(input.lock_file)
+        catalogers: list[str] = []
+        if input.is_source_dir:
+            subject = f"dir:{input.source_dir}"
+        elif (ecosystem := _DIRECTORY_ONLY_LOCK_FILES.get(input.lock_file_name or "")) is not None:
+            subject = f"dir:{Path(str(input.lock_file)).parent}"
+            catalogers = ["--select-catalogers", ecosystem]
+        else:
+            subject = str(input.lock_file)
+
         cmd = [
             "syft",
             "scan",
@@ -221,6 +244,7 @@ class SyftFsGenerator:
             "--source-name",
             input.lock_file_name or "unknown",
             *_NO_FILE_CATALOGERS,
+            *catalogers,
         ]
 
         logger.info(

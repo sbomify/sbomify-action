@@ -99,6 +99,19 @@ _LOCKFILE_PRIORITY: dict[str, int] = {
     # .NET. The lock file wins where a project opts into one; otherwise the
     # project file is all there is. Matched by suffix in _priority_of.
     "packages.lock.json": 70,
+    # Haskell. stack resolves into the .lock; the manifest beside it still
+    # pins extra-deps, so it is a usable second choice rather than nothing.
+    "stack.yaml.lock": 80,
+    "stack.yaml": 81,
+    "cabal.project.freeze": 82,
+    # Erlang. Only rebar3 projects have this; erlang.mk ones have no
+    # equivalent and will not appear.
+    "rebar.lock": 85,
+    # Clojure. Neither is a lock file -- tools.deps and Leiningen both resolve
+    # at build time -- so these rank below every real one and are listed in
+    # the order cdxgen prefers.
+    "deps.edn": 90,
+    "project.clj": 91,
 }
 
 #: Suffix-matched inputs and their priority, for names that are the

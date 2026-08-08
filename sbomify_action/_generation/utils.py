@@ -93,6 +93,33 @@ SWIFT_LOCK_FILES = [
 
 ELIXIR_LOCK_FILES = ["mix.lock"]
 
+# Haskell. Two build tools, two conventions, and syft reads both.
+#
+#   stack.yaml.lock   stack's resolved snapshot -- the authoritative one
+#   stack.yaml        the manifest, whose extra-deps are still pinned
+#   cabal.project.freeze  cabal's equivalent, a list of == constraints
+#
+# Measured on PostgREST: 7 packages from either stack file. The freeze file
+# there holds only an index-state and yields nothing, which is the file being
+# empty rather than the parser failing -- given real constraints it returns
+# one package each.
+HASKELL_LOCK_FILES = [
+    "stack.yaml.lock",
+    "stack.yaml",
+    "cabal.project.freeze",
+]
+
+# Erlang, for projects that build with rebar3. rebar.lock pins every
+# dependency with a version, which is what makes it worth reading; projects on
+# erlang.mk have no equivalent and are not covered. Measured on rebar3 itself:
+# 9 hex packages.
+ERLANG_LOCK_FILES = ["rebar.lock"]
+
+# Clojure, via cdxgen rather than syft, which has no Clojure cataloger.
+# deps.edn is the tools.deps manifest and project.clj is Leiningen's; cdxgen
+# reads either. Measured on clj-kondo: 9 components from each, independently.
+CLOJURE_LOCK_FILES = ["deps.edn", "project.clj"]
+
 SCALA_LOCK_FILES = ["build.sbt"]
 
 TERRAFORM_LOCK_FILES = [".terraform.lock.hcl"]
@@ -113,6 +140,9 @@ ALL_LOCK_FILES = (
     + ELIXIR_LOCK_FILES
     + SCALA_LOCK_FILES
     + TERRAFORM_LOCK_FILES
+    + HASKELL_LOCK_FILES
+    + ERLANG_LOCK_FILES
+    + CLOJURE_LOCK_FILES
 )
 
 # =============================================================================
@@ -154,6 +184,9 @@ CDXGEN_LOCK_FILES = (
     # degrading to syft, which produces one. Syft still lists Swift.
     + ELIXIR_LOCK_FILES
     + SCALA_LOCK_FILES
+    # cdxgen is the only tool here that reads Clojure; syft has no cataloger
+    # for it.
+    + CLOJURE_LOCK_FILES
 )
 
 # Trivy: Good multi-ecosystem support
@@ -185,6 +218,9 @@ SYFT_LOCK_FILES = (
     + SWIFT_LOCK_FILES
     + ELIXIR_LOCK_FILES
     + TERRAFORM_LOCK_FILES
+    # syft is the only tool here that reads either of these.
+    + HASKELL_LOCK_FILES
+    + ERLANG_LOCK_FILES
 )
 
 # Default command timeout in seconds
@@ -605,6 +641,12 @@ def get_lock_file_ecosystem(lock_file_name: str) -> Optional[str]:
         return "scala"
     elif lock_file_name in TERRAFORM_LOCK_FILES:
         return "terraform"
+    elif lock_file_name in HASKELL_LOCK_FILES:
+        return "haskell"
+    elif lock_file_name in ERLANG_LOCK_FILES:
+        return "erlang"
+    elif lock_file_name in CLOJURE_LOCK_FILES:
+        return "clojure"
     return None
 
 
