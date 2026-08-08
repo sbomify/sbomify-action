@@ -12,6 +12,7 @@ codebase automatically when new ecosystems land.
 
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter
 from collections.abc import Iterator
@@ -255,18 +256,79 @@ def _enclosing_nested_repo(
 
 
 def _walk(root: Path) -> Iterator[Path]:
-    """Yield every file under ``root``, skipping irrelevant directories."""
+    """Yield every file under ``root``, skipping irrelevant directories.
+
+    Symlinked directories are not descended into. A symlink can point at one
+    of its own ancestors -- ``crystal-lang/crystal`` ships ``lib/markd/lib ->
+    ..``, written by its package manager -- and following it walks
+    ``lib/markd/lib/markd/lib/...`` without end. ``DISCOVERY_CAP`` does not
+    save us: it counts unique (directory, ecosystem) pairs, so a cycle
+    containing no lockfiles never advances it while the stack grows without
+    bound. This is the wizard's first action, so the symptom was the entry
+    point to the whole tool hanging before it drew anything.
+
+    Not descending is the right answer rather than merely the terminating
+    one. A symlinked directory either points inside the repo, in which case
+    its contents are already reachable by their real path, or outside it, in
+    which case they are not part of this project and should not be offered
+    as components of it.
+
+    Symlinked *files* are still yielded: a symlinked lockfile is a real
+    lockfile for this project.
+
+    Nothing outside ``root`` is ever reported, and that is enforced rather
+    than implied: any entry that *is* a symlink has its real path checked
+    against the root before it is used. Declining to descend into symlinked
+    directories already makes escape impossible, so this is belt and braces
+    -- but it is the invariant the wizard depends on (every path it shows
+    becomes a component of *this* repo), so it is worth stating in code that
+    a later change cannot quietly break. Only symlinks pay for the check; a
+    plain entry under a plain parent cannot leave the tree.
+
+    ``os.scandir`` rather than ``Path.iterdir``: its entries answer
+    ``is_dir(follow_symlinks=False)`` and ``is_symlink()`` from the directory
+    data the OS already returned, where ``Path.is_dir(follow_symlinks=...)``
+    needs Python 3.13 and this project supports 3.11.
+    """
+    root_real = os.path.realpath(root)
     stack: list[Path] = [root]
     while stack:
         current = stack.pop()
         try:
-            entries = list(current.iterdir())
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if entry.name in _SKIP_DIRS:
+                                continue
+                            stack.append(Path(entry.path))
+                        elif entry.is_file():
+                            if entry.is_symlink() and not _within(entry.path, root_real):
+                                continue
+                            yield Path(entry.path)
+                    except OSError:
+                        # A dangling symlink, or a race with something
+                        # writing the tree: skip the entry, keep walking.
+                        continue
         except (PermissionError, OSError):
             continue
-        for entry in entries:
-            if entry.is_dir():
-                if entry.name in _SKIP_DIRS:
-                    continue
-                stack.append(entry)
-            elif entry.is_file():
-                yield entry
+
+
+def _within(path: str, root_real: str) -> bool:
+    """True when ``path`` really resolves inside ``root_real``.
+
+    Compared on the resolved path, not the spelling: ``repo/link`` may be
+    written as though it were inside the repo while pointing anywhere.
+
+    ``is_relative_to`` rather than a string prefix. Prefix comparison needs
+    a trailing separator to stop ``/repo-other`` matching a ``/repo`` root,
+    and appending one breaks when the root *is* the separator: ``"/" +
+    os.sep`` is ``"//"``, which nothing under ``/`` starts with, so a repo
+    at the filesystem root would have had every file rejected. Comparing
+    path components has no such corner.
+    """
+    try:
+        real = os.path.realpath(path)
+    except OSError:
+        return False
+    return Path(real).is_relative_to(root_real)
