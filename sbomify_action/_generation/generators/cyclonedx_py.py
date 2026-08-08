@@ -13,9 +13,8 @@ Supported outputs:
 """
 
 import re
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
