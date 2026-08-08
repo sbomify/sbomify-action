@@ -1,0 +1,80 @@
+---
+name: Lifecycle Data Staleness Check
+
+# The CLE lifecycle tables are hand-maintained from vendor sources and nothing
+# in the pipeline notices when they fall behind -- an unknown release just gets
+# no lifecycle properties, silently. This job asks once a month whether any
+# release we do not track has appeared, and opens an issue if so.
+#
+# It deliberately does NOT open a PR with dates filled in. lifecycle_data.py
+# requires vendor-published dates with the source URL recorded in the entry, and
+# the aggregator this job queries is not an acceptable source for the values --
+# only for noticing the gap. A human reads the vendor page and writes the entry.
+
+on:
+  schedule:
+    # 07:00 UTC on the 1st of each month.
+    - cron: '0 7 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check lifecycle data freshness
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Extract tool versions
+        run: |
+          source ./scripts/generate_additional_packages.sh
+          echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "${{ env.UV_VERSION }}"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Check for stale lifecycle data
+        id: check
+        run: |
+          set +e
+          uv run python scripts/check_lifecycle_staleness.py --format=markdown > report.md
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          cat report.md
+
+      - name: Open or update tracking issue
+        if: steps.check.outputs.status == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="Lifecycle data is out of date"
+          printf '\n---\n\n[Staleness check run](%s)\n' "$RUN_URL" >> report.md
+
+          EXISTING="$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file report.md
+            echo "Commented on existing issue #$EXISTING"
+          else
+            gh issue create --title "$TITLE" --body-file report.md --label lifecycle
+            echo "Opened a new issue"
+          fi
+
+      - name: Fail the run when data is stale
+        if: steps.check.outputs.status != '0'
+        run: |
+          echo "Lifecycle staleness check reported problems (exit ${{ steps.check.outputs.status }})."
+          exit 1

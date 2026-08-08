@@ -144,7 +144,7 @@ class TestGetDistroLifecycle:
         lifecycle = get_distro_lifecycle("debian", "12")
         assert lifecycle is not None
         assert lifecycle["release_date"] == "2023-06-10"
-        assert lifecycle["end_of_support"] == "2026-06-10"
+        assert lifecycle["end_of_support"] == "2026-06-11"
         assert lifecycle["end_of_life"] == "2028-06-30"
 
     def test_get_debian_version_normalization(self):
@@ -177,13 +177,16 @@ class TestGetDistroLifecycle:
         """Test that 'amazon' name maps to 'amazonlinux' lifecycle."""
         lifecycle = get_distro_lifecycle("amazon", "2023")
         assert lifecycle is not None
-        assert lifecycle["end_of_life"] == "2029-06"
+        # AWS publishes two distinct phases: standard support to 2027-06-30,
+        # then maintenance (security-only) to 2029-06-30.
+        assert lifecycle["end_of_support"] == "2027-06-30"
+        assert lifecycle["end_of_life"] == "2029-06-30"
 
     def test_get_amazonlinux_complex_version(self):
         """Test Amazon Linux with complex version string like '2023.10.20260105 (Amazon Linux)'."""
         lifecycle = get_distro_lifecycle("amazon", "2023.10.20260105 (Amazon Linux)")
         assert lifecycle is not None
-        assert lifecycle["end_of_life"] == "2029-06"
+        assert lifecycle["end_of_life"] == "2029-06-30"
 
     def test_get_almalinux_with_point_release(self):
         """Test AlmaLinux with point release version like '9.7'."""
@@ -339,10 +342,16 @@ class TestPackageLifecycleData:
         assert vue_2["end_of_life"] == "2023-12-31"
 
     def test_laravel_quarter_dates(self):
-        """Test Laravel 13 has quarter dates."""
+        """Test that quarter-precision dates survive when upstream publishes them.
+
+        Laravel publishes "Q3 2027" for Laravel 13's bug-fix window but a firm
+        date for its security window, so the two fields carry different
+        precisions.
+        """
         laravel_13 = PACKAGE_LIFECYCLE["laravel"]["cycles"]["13"]
-        assert laravel_13["release_date"] == "2026-Q1"
-        assert laravel_13["end_of_support"] == "2026-Q3"
+        assert laravel_13["release_date"] == "2026-03-17"
+        assert laravel_13["end_of_support"] == "2027-Q3"
+        assert laravel_13["end_of_life"] == "2028-03-17"
 
 
 # =============================================================================
@@ -461,7 +470,7 @@ class TestGetPackageLifecycle:
         """Test getting Django 4.2 lifecycle."""
         lifecycle = get_package_lifecycle("django", "4.2.9", purl_type="pypi")
         assert lifecycle is not None
-        assert lifecycle["end_of_life"] == "2026-04-30"
+        assert lifecycle["end_of_life"] == "2026-04-07"
 
     def test_django_wrong_purl_type_returns_none(self):
         """Test Django with wrong PURL type returns None."""
@@ -689,7 +698,7 @@ class TestLifecycleSource:
 
         assert metadata is not None
         assert metadata.cle_eos == "2023-12-04"
-        assert metadata.cle_eol == "2026-04-30"
+        assert metadata.cle_eol == "2026-04-07"
 
     def test_fetch_react_19(self, mock_session):
         """Test fetching React 19 lifecycle (no EOL dates)."""
@@ -820,7 +829,20 @@ class TestLifecycleSource:
 
         assert metadata is not None
         assert metadata.cle_release_date == "2025-02-11"
-        # 1.24 doesn't have EOL yet
+        # Go supports a release until two newer ones exist, so 1.24 ended when
+        # 1.26 shipped.
+        assert metadata.cle_eos == "2026-02-10"
+        assert metadata.cle_eol == "2026-02-10"
+
+    def test_fetch_golang_current_has_no_eol(self, mock_session):
+        """A Go release that is still supported carries no EOS/EOL."""
+        source = LifecycleSource()
+        purl = PackageURL.from_string("pkg:apk/alpine/go@1.26.0")
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is not None
+        assert metadata.cle_release_date == "2026-02-10"
         assert metadata.cle_eos is None
         assert metadata.cle_eol is None
 
@@ -845,7 +867,19 @@ class TestLifecycleSource:
 
         assert metadata is not None
         assert metadata.cle_release_date == "2025-12-11"
-        # 1.92 is current, no EOL yet
+        # Rust supports only the latest stable, so 1.92 ended when 1.93 shipped.
+        assert metadata.cle_eos == "2026-01-22"
+        assert metadata.cle_eol == "2026-01-22"
+
+    def test_fetch_rust_current_has_no_eol(self, mock_session):
+        """The current Rust stable carries no EOS/EOL."""
+        source = LifecycleSource()
+        purl = PackageURL.from_string("pkg:cargo/rust@1.97.0")
+
+        metadata = source.fetch(purl, mock_session)
+
+        assert metadata is not None
+        assert metadata.cle_release_date == "2026-07-09"
         assert metadata.cle_eos is None
         assert metadata.cle_eol is None
 
