@@ -453,3 +453,105 @@ def test_detect_visibility_rate_limit_returns_unknown(monkeypatch: pytest.Monkey
         lambda *args, **kwargs: _FakeResponse(403, {"message": "rate limit"}),
     )
     assert detect_visibility("git@github.com:acme/widget.git", "acme/widget") == "unknown"
+
+
+def test_discover_terminates_on_symlink_cycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A symlink pointing at an ancestor must not explode the walk.
+
+    crystal-lang/crystal ships three of these, written by its package
+    manager: ``lib/markd/lib -> ..``, ``lib/reply/lib -> ..``,
+    ``lib/sanitize/lib -> ..``. Each one re-enters ``lib/``, so the number
+    of distinct paths multiplies at every level and the walk explores an
+    astronomical number of them before the kernel's symlink limit stops it.
+    Against the real repo that ran for 59 minutes without returning.
+
+    DISCOVERY_CAP does not help: it counts unique (directory, ecosystem)
+    pairs, and the cycle contains no lockfiles to count.
+
+    The listing budget is what makes this a regression test rather than a
+    hang. A single cycling symlink terminates on its own via ELOOP after
+    ~40 levels, so asserting only on the result would pass unfixed; the
+    budget fails fast and loudly instead.
+    """
+    lib = tmp_path / "lib"
+    for pkg in ("markd", "reply", "sanitize"):
+        (lib / pkg).mkdir(parents=True)
+        (lib / pkg / "lib").symlink_to("..", target_is_directory=True)
+    (tmp_path / "uv.lock").write_text("")
+
+    real_scandir = os.scandir
+    budget = {"left": 200}
+
+    def counting_scandir(path):  # type: ignore[no-untyped-def]
+        budget["left"] -= 1
+        if budget["left"] < 0:
+            raise AssertionError(
+                "walk listed more than 200 directories for a 4-directory tree: "
+                "it is following symlinks back into their own ancestors"
+            )
+        return real_scandir(path)
+
+    monkeypatch.setattr("sbomify_action.cli.wizard.discovery.os.scandir", counting_scandir)
+
+    found = discover(tmp_path)
+
+    assert [str(lf.rel_path) for lf in found] == ["uv.lock"]
+
+
+def test_discover_ignores_lockfiles_only_reachable_through_a_symlinked_dir(tmp_path: Path) -> None:
+    """Contents of a symlinked directory are not offered as components.
+
+    Either the target is inside the repo, and its lockfiles are already
+    found by their real path, or it is outside, and they belong to another
+    project. This is the case that would otherwise put a stranger's
+    dependencies in this repo's SBOM.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "package.json").write_text("{}")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "uv.lock").write_text("")
+    (repo / "linked").symlink_to(outside, target_is_directory=True)
+
+    found = discover(repo)
+
+    assert [str(lf.rel_path) for lf in found] == ["uv.lock"]
+
+
+def test_discover_follows_a_symlinked_lockfile_inside_the_repo(tmp_path: Path) -> None:
+    """A symlinked lockfile pointing within the repo is this repo's lockfile.
+
+    The monorepo case: one resolved lockfile shared by several packages.
+    """
+    repo = tmp_path / "repo"
+    shared = repo / "shared"
+    shared.mkdir(parents=True)
+    (shared / "base.lock").write_text("")
+    (repo / "uv.lock").symlink_to(shared / "base.lock")
+
+    found = discover(repo)
+
+    assert "uv.lock" in [str(lf.rel_path) for lf in found]
+
+
+def test_discover_ignores_a_symlinked_lockfile_pointing_outside_the_repo(tmp_path: Path) -> None:
+    """A lockfile whose content lives outside the repo is not this repo's.
+
+    It is spelled as though it were inside, so only the resolved path
+    distinguishes it. Nothing the wizard offers may come from outside the
+    tree it was pointed at.
+    """
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "base.lock").write_text("")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "uv.lock").symlink_to(outside / "base.lock")
+    (repo / "package.json").write_text("{}")
+
+    found = discover(repo)
+
+    assert [str(lf.rel_path) for lf in found] == ["package.json"]
