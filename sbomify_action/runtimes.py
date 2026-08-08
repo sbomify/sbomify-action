@@ -44,13 +44,13 @@ import sys
 import tarfile
 import tempfile
 import threading
+import tomllib
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import requests
-import tomllib
 
 from .exceptions import SBOMGenerationError
 from .logging_config import logger

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 sbomify action is an SBOM (Software Bill of Materials) generation, enrichment, augmentation, and management tool for CI/CD pipelines. It supports CycloneDX and SPDX formats, generates SBOMs from lockfiles and Docker images, enriches them with metadata from package registries, and uploads to various destinations.
 
-**Key facts:** Python 3.10+, published to PyPI as `sbomify-action`, also available as Docker image and GitHub Action.
+**Key facts:** Python 3.11+, published to PyPI as `sbomify-action`, also available as Docker image and GitHub Action.
 
 ## Development Commands
 
@@ -85,7 +85,7 @@ Each step maintains an audit trail with timestamps for compliance.
 
 ## Python Best Practices
 
-This project targets Python 3.10+. Use modern Python features:
+This project targets Python 3.11+. Use modern Python features:
 
 - **Type hints**: Use built-in generics (`list[str]`, `dict[str, int]`) instead of `typing.List`, `typing.Dict`
 - **Union types**: Use `X | Y` syntax instead of `Union[X, Y]` or `Optional[X]` (use `X | None`)

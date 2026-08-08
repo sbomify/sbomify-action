@@ -80,7 +80,7 @@ LABEL org.opencontainers.image.title="sbomify action" \
       org.opencontainers.image.vendor="sbomify" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.authors="sbomify <hello@sbomify.com>" \
-      org.opencontainers.image.base.name="python:3.13-slim-trixie"
+      org.opencontainers.image.base.name="python:3.14-slim-trixie"
 
 # Additional metadata labels
 LABEL com.sbomify.maintainer="sbomify <hello@sbomify.com>" \

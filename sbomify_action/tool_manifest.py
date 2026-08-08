@@ -14,12 +14,11 @@ has to be recorded somewhere that both can agree on.
 from __future__ import annotations
 
 import re
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-
-import tomllib
 
 _MANIFEST = Path(__file__).with_name("tools.toml")
 
