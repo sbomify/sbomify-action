@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Callable, ClassVar
 
 from textual import events
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, RadioSet, Static
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from sbomify_action.cli.wizard.app import WizardApp
 
 
-TOTAL_STEPS = 8
+TOTAL_STEPS = 9
 
 # HTTP status markers as ``_build_error`` emits them: ``prefix [NNN]`` at the
 # end of a clause, or ``prefix [NNN] - detail`` when a detail follows. Anchored
@@ -51,27 +51,83 @@ def strip_status_codes(message: str) -> str:
     return _STATUS_CODE_RE.sub(" ", message).strip()
 
 
-# Responsive breakpoints (terminal cells). The wizard is a fit-to-viewport
-# TUI — nothing scrolls — so every screen has to render inside whatever the
-# terminal gives us. Three tiers, each guaranteed to fit at its lower bound:
+def ellipsize(value: str, limit: int) -> str:
+    """Clip ``value`` to ``limit`` cells, ending with a single ellipsis.
+
+    Used for API-supplied names on the label/value screens (the Review plan
+    summary in particular). Those layouts align a fixed-width label column
+    against a value; letting a 70-character product name wrap re-flows the
+    continuation to column 0 and breaks the alignment for every row below
+    it. Truncating keeps the column intact — the full value is still on the
+    Product / Components screen the user just came from.
+    """
+    if limit <= 1 or len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
+# Responsive breakpoints (terminal cells).
 #
-#   * Below MIN_* even the fully-compacted layout can't fit, so we replace
-#     the body with a "resize your terminal" prompt (k9s / lazygit do the
-#     same). 80x24 is the classic default terminal size.
-#   * Below ROOMY_* we shed the roomy "comfortable" layout: the welcome
-#     "what we'll do" preview (redundant with the progress crumb) is
-#     dropped and paddings tighten, via the ``-compact`` class.
-#   * The welcome mascot is governed separately by ART_* — it's the single
-#     tallest element, but it still fits in far more terminals than the
-#     full comfortable layout does, so we keep showing the art whenever
-#     there's room for it (its own ``-no-art`` opt-out below the bound).
-MIN_WIDTH = 80
-MIN_HEIGHT = 24
+# The screen body scrolls (``.wizard-scroll``) and the action row is pinned
+# below it (``compose_actions``), so no breakpoint is ever load-bearing for
+# *reachability* — Back/Next are on screen at every size, and content that
+# doesn't fit scrolls instead of being clipped away. That makes these bounds
+# purely about comfort:
+#
+#   * Below MIN_* the frame itself (header + crumb + one usable body row +
+#     actions + footer) stops making sense, so we swap the body for a
+#     "resize your terminal" prompt (k9s / lazygit do the same). Kept
+#     deliberately low so the wizard still runs in an IDE's integrated
+#     terminal panel, which is typically wide but only 10–20 rows tall.
+#   * Below ROOMY_* we shed the comfortable layout: the explanatory
+#     rationale prose is dropped and paddings tighten, via ``-compact``.
+#   * The welcome mascot (ART_*) and the "what we'll do" preview
+#     (PREVIEW_*) each have their own bound, because they're the two
+#     tallest optional elements and they fit in very different terminals.
+#     They also *compete*: PREVIEW_WITH_ART_HEIGHT is the bound that
+#     applies once the mascot is already taking 22 rows, so a
+#     medium-tall terminal shows one or the other rather than
+#     overflowing with both.
+MIN_WIDTH = 60
+MIN_HEIGHT = 12
 ART_WIDTH = 100
-ART_HEIGHT = 42
-PREVIEW_HEIGHT = 48
+ART_HEIGHT = 44
+PREVIEW_HEIGHT = 30
+PREVIEW_WITH_ART_HEIGHT = 56
 ROOMY_WIDTH = 100
 ROOMY_HEIGHT = 63
+
+
+class WizardScroll(VerticalScroll):
+    """The screen body's scroll region.
+
+    Focusable only while it actually has something to scroll. Textual makes
+    every scrollable container focusable so keyboard users can pan text that
+    isn't otherwise reachable — which the wizard needs on the screens whose
+    overflow is pure prose (Done's OIDC instructions, Welcome's panels).
+
+    But an unconditionally-focusable container is a tab stop with no visible
+    effect whenever the content already fits, which is most screens most of
+    the time: Tab appears to do nothing, then works again on the next press.
+    Gating on ``show_vertical_scrollbar`` keeps the stop exactly when it does
+    something and the scrollbar is on screen to show it.
+    """
+
+    def allow_focus(self) -> bool:
+        return self.show_vertical_scrollbar
+
+    def on_mount(self) -> None:
+        # Open at the top of the content, always. A screen whose body
+        # overflows can otherwise land mid-way through it: Review's diff
+        # panel takes ``1fr`` and, once its min-height pushes the body past
+        # the viewport, the initial layout settled at the *bottom* — so the
+        # confirmation screen opened with the plan summary (product,
+        # release strategy, credentials) already scrolled off the top, which
+        # is precisely the part the user is there to check.
+        #
+        # Deferred: the offending scroll is applied during the screen's own
+        # mount/layout pass, so resetting synchronously here would be undone.
+        self.call_after_refresh(self.scroll_home, animate=False)
 
 
 class WizardScreen(Screen[None]):
@@ -90,7 +146,13 @@ class WizardScreen(Screen[None]):
             yield Static(self._crumb_markup(), classes="wizard-step-crumb")
             if self.step_subtitle:
                 yield Static(self.step_subtitle, classes="wizard-subtitle")
-            yield from self.compose_body()
+            # The body scrolls; the action row below it does not. Panels can
+            # therefore be as tall as they need to be (a monorepo's worth of
+            # component cards, the full attestation rationale) without ever
+            # pushing Back/Next past the bottom of the terminal.
+            with WizardScroll(classes="wizard-scroll"):
+                yield from self.compose_body()
+            yield from self.compose_actions()
         # Shown (and the body hidden) only when the terminal is below the
         # minimum supported size — see ``_apply_responsive``. The text is
         # filled in on resize so it can quote the live dimensions.
@@ -117,11 +179,13 @@ class WizardScreen(Screen[None]):
           we'll do" list. Also its own bound (the list is short text that
           fits well below the roomy layout) so we keep showing it rather
           than leaving the screen half-empty on a medium-tall terminal.
+          The bound is raised when the mascot is already on screen, since
+          the two compete for the same rows.
         """
         too_small = width < MIN_WIDTH or height < MIN_HEIGHT
         roomy = width >= ROOMY_WIDTH and height >= ROOMY_HEIGHT
         show_art = width >= ART_WIDTH and height >= ART_HEIGHT
-        show_preview = height >= PREVIEW_HEIGHT
+        show_preview = height >= (PREVIEW_WITH_ART_HEIGHT if show_art else PREVIEW_HEIGHT)
         self.set_class(too_small, "-tiny")
         self.set_class(not too_small and not roomy, "-compact")
         self.set_class(not too_small and not show_art, "-no-art")
@@ -146,7 +210,21 @@ class WizardScreen(Screen[None]):
         )
 
     def compose_body(self) -> ComposeResult:
-        """Override to yield body widgets (panels, inputs, tables, …)."""
+        """Override to yield body widgets (panels, inputs, tables, …).
+
+        Everything yielded here lands inside the scrolling region. Anything
+        that must stay visible regardless of content height — the Back/Next
+        row, a validation status line — belongs in ``compose_actions``.
+        """
+        return iter(())
+
+    def compose_actions(self) -> ComposeResult:
+        """Override to yield the pinned action row (and any status line
+        that must stay visible with it).
+
+        Rendered below the scrolling body and never scrolls, so the
+        primary action is on screen at every terminal size.
+        """
         return iter(())
 
     def route_enter(self, forward: Callable[[], None]) -> None:

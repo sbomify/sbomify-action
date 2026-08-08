@@ -69,6 +69,8 @@ class ProductScreen(WizardScreen):
                 pre_select_id=str(products[0].get("id")) if products else None,
                 id="product-picker",
             )
+
+    def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")

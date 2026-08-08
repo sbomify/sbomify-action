@@ -87,6 +87,11 @@ class PagedFormScreen(WizardScreen):
                 page.display = False
             with page:
                 yield from self.compose_page(index)
+
+    def compose_actions(self) -> ComposeResult:
+        # Field-validation errors ("Supplier name is required") pin with the
+        # buttons rather than scrolling with the form — the message is a
+        # response to pressing Next, so it has to be readable from there.
         yield Static("", id="form-status", markup=True)
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="form-back")
@@ -105,8 +110,11 @@ class PagedFormScreen(WizardScreen):
         return "Save  ▸" if self._is_last_page() else "Next  ▸"
 
     def _indicator_markup(self) -> str:
+        # "Page", not "Step": the progress crumb directly above this line
+        # already says "07 / 09", so a second counter calling itself a step
+        # read as a contradiction rather than a subdivision.
         title = self.PAGE_TITLES[self._page] if self.PAGE_TITLES else ""
-        return f"[#8A7DFF]Step {self._page + 1} of {self._page_count}[/]  [#37306B]│[/]  [b]{title}[/]"
+        return f"[#8A7DFF]Page {self._page + 1} of {self._page_count}[/]  [#37306B]│[/]  [b]{title}[/]"
 
     def action_submit(self) -> None:
         self.route_enter(self._advance)
