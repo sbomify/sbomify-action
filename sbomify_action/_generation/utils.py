@@ -69,6 +69,23 @@ DOTNET_LOCK_FILES = [
     "packages.lock.json",
 ]
 
+#: .NET project files, matched by extension because their names are the
+#: project's, not a convention.
+#:
+#: `packages.lock.json` only exists if a project opts into NuGet lock files,
+#: which most do not: of ten .NET repositories surveyed, five had no
+#: recognised input at all and the other five were matched on a stray
+#: `package-lock.json` or `requirements.txt` belonging to something else --
+#: `quartznet` was described as 627 JavaScript packages. So .NET was
+#: nominally supported and almost never actually detected.
+#:
+#: cdxgen reads a project file directly, without the SDK and without a lock
+#: file: pointed at AutoMapper, which commits no lock file, it returns its
+#: PackageReference set. Like every manifest read this yields declared
+#: versions rather than a resolved graph -- see LOCKFILE_FOR_MANIFEST -- but
+#: that is the difference between a partial answer and none.
+DOTNET_PROJECT_SUFFIXES = (".csproj", ".fsproj", ".vbproj", ".sln")
+
 SWIFT_LOCK_FILES = [
     "Package.swift",
     "Package.resolved",
@@ -576,6 +593,8 @@ def get_lock_file_ecosystem(lock_file_name: str) -> Optional[str]:
         return "java"
     elif lock_file_name in PHP_LOCK_FILES:
         return "php"
+    elif lock_file_name.endswith(DOTNET_PROJECT_SUFFIXES):
+        return "dotnet"
     elif lock_file_name in DOTNET_LOCK_FILES:
         return "dotnet"
     elif lock_file_name in SWIFT_LOCK_FILES:
@@ -621,9 +640,25 @@ def has_required_manifest(lock_file: str | None) -> bool:
     return (Path(lock_file).parent / required).exists()
 
 
+def is_supported_input(name: str) -> bool:
+    """Whether an input file is one we can generate from.
+
+    Most are matched by exact name. .NET project files are matched by
+    extension instead, because their names belong to the project rather than
+    to a convention.
+    """
+    return name in ALL_LOCK_FILES or name.endswith(DOTNET_PROJECT_SUFFIXES)
+
+
 def is_supported_lock_file(lock_file_name: str) -> bool:
-    """Check if a lock file is supported."""
-    return lock_file_name in ALL_LOCK_FILES
+    """Whether an input file is supported. Alias of is_supported_input.
+
+    The name predates .NET project files, which are supported inputs without
+    being lock files -- a .csproj is a manifest. Callers are spread across the
+    CLI and the wizard, so the name stays; what it answers is is_supported_input's
+    question, and new callers should ask that one.
+    """
+    return is_supported_input(lock_file_name)
 
 
 def ensure_java_maven_installed() -> None:
