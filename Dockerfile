@@ -1,14 +1,6 @@
 ARG UV_VERSION=0.12.1
 
 
-# Rust toolchain stage
-#
-# Not for cargo-cyclonedx any more -- that is fetched at run time like every
-# other ecosystem tool. This exists solely because pipdeptree is a meson/cargo
-# package from 4.0.0 on and publishes no linux aarch64 wheels, so on arm64 uv
-# builds it from the sdist and needs rustc.
-FROM rust:1-slim AS rust-builder
-
 # UV binary stage
 FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:cf4eedcaa81655197f625739489effcbe71b61ceb1506f332c3facae5deceded AS uv-fetcher
 
@@ -16,20 +8,6 @@ FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:cf4eedcaa81655197f625739489effcbe
 FROM python:3.14-slim-trixie AS builder
 
 ARG VERSION=0.0.0
-
-# Install build dependencies
-RUN apt-get update && \
-    apt-get install -y build-essential libxml2-dev libxslt-dev
-
-# pipdeptree is a meson/cargo package from 4.0.0 on and publishes no linux
-# aarch64 wheels, so on arm64 uv builds it from the sdist and needs a Rust
-# toolchain. Reuse the pinned one from rust-builder rather than pulling a
-# second (and differently versioned) toolchain from apt.
-ENV RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo
-ENV PATH="/usr/local/cargo/bin:$PATH"
-COPY --from=rust-builder /usr/local/rustup /usr/local/rustup
-COPY --from=rust-builder /usr/local/cargo/bin /usr/local/cargo/bin
 
 COPY --from=uv-fetcher /uv /uvx /usr/local/bin/
 
