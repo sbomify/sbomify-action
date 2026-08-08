@@ -44,7 +44,7 @@ def test_an_image_scan_drops_the_file_catalogers(tmp_path, monkeypatch):
 
 
 def test_a_lockfile_scan_drops_them_too(tmp_path, monkeypatch):
-    """A directory scan emits file entries as well -- fewer, but the same kind."""
+    """A lock file scan emits file entries as well -- fewer, but the same kind."""
     seen = _captured(monkeypatch)
     lock = tmp_path / "Gemfile.lock"
     lock.write_text("")
