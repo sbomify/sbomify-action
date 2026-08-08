@@ -489,13 +489,14 @@ jobs:
             exit 1
           fi
           
-          # Debian 12 EOS should be 2026-06-10 (regular support end)
+          # Debian 12 EOS should be 2026-06-11 (regular security support end,
+          # per the LTS schedule at https://wiki.debian.org/LTS)
           CLE_EOS=$(jq -r '.components[] | select(.type == "operating-system") | .properties[]? | select(.name == "cdx:lifecycle:milestone:endOfSupport") | .value' debian-enriched.cdx.json)
-          
-          if [ "$CLE_EOS" = "2026-06-10" ]; then
+
+          if [ "$CLE_EOS" = "2026-06-11" ]; then
             echo "✅ Debian 12 EOS date is correct: $CLE_EOS"
           else
-            echo "❌ Debian 12 EOS date incorrect: $CLE_EOS (expected 2026-06-10)"
+            echo "❌ Debian 12 EOS date incorrect: $CLE_EOS (expected 2026-06-11)"
             exit 1
           fi
 
