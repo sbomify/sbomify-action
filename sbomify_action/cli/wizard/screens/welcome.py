@@ -6,6 +6,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.widgets import Button, Static
 
 from sbomify_action.cli.wizard.screens._base import WizardScreen
@@ -131,8 +132,11 @@ class WelcomeScreen(WizardScreen):
         ``app.quit_with_cancel`` is for accidental Ctrl-C presses mid-flow
         and needs a double-tap; pressing Enter on a dead-end screen is an
         explicit signal that the user wants out.
+
+        Presses the button rather than exiting directly, so the keyboard and
+        the mouse cannot drift apart on the exit code again.
         """
-        self.route_enter(lambda: self.wizard.exit(0))
+        self.route_enter(lambda: self.query_one("#exit", Button).press())
 
     def compose_body(self) -> ComposeResult:
         # Hero card — the wizard's first impression. Two columns:
@@ -205,15 +209,23 @@ class WelcomeScreen(WizardScreen):
                 # Nothing to onboard: leaving is the only action, so name the
                 # button for what it does rather than offering a "Cancel" that
                 # cancels nothing.
-                yield Button("Exit", id="cancel", variant="primary")
+                #
+                # Its own id, not a relabelled "#cancel": the two mean
+                # different things to a CI runner. Sharing the id meant this
+                # button exited 130 while Enter on the same screen exited 0,
+                # so "this repo has no lockfiles" failed the workflow step as
+                # though the run had been interrupted.
+                yield Button("Exit", id="exit", variant="primary")
 
     def on_mount(self) -> None:
-        # When there's nothing to do, Start isn't rendered — focus the
-        # Cancel button so Enter quits cleanly instead of dinging.
-        try:
-            self.query_one("#start", Button).focus()
-        except Exception:
-            self.query_one("#cancel", Button).focus()
+        # When there's nothing to do, Start isn't rendered — focus the Exit
+        # button so Enter quits cleanly instead of dinging.
+        for button_id in ("#start", "#exit"):
+            try:
+                self.query_one(button_id, Button).focus()
+                return
+            except NoMatches:
+                continue
 
     def action_start(self) -> None:
         # Route Enter through ``route_enter`` so a focused Cancel button gets
@@ -225,11 +237,17 @@ class WelcomeScreen(WizardScreen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "start":
             self._advance()
+        elif event.button.id == "exit":
+            # Nothing to onboard. A clean, expected outcome — exit 0 so a
+            # workflow that runs the wizard against a repo with no lockfiles
+            # doesn't report a failed step.
+            self.wizard.exit(0)
         elif event.button.id == "cancel":
-            # The Cancel button is an explicit, deliberate click — exit without
-            # the Ctrl-C double-tap confirmation, which would otherwise show
-            # the user a misleading "Press Ctrl-C again" notification despite
-            # no Ctrl-C being involved.
+            # An explicit, deliberate abandonment mid-flow. 130 (SIGINT's
+            # conventional code) is the honest signal here. No Ctrl-C
+            # double-tap confirmation: the click already was the confirmation,
+            # and prompting for one would be misleading when no Ctrl-C was
+            # involved.
             self.wizard.exit(130)
 
     def _advance(self) -> None:
