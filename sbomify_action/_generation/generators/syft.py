@@ -42,6 +42,25 @@ if not _SYFT_AVAILABLE:
     _SYFT_AVAILABLE = can_provide("syft")
 
 
+#: Syft's file catalogers, which describe every file in the subject rather
+#: than the software in it. Dropped from CycloneDX output, where they are the
+#: overwhelming majority of what gets written: eclipse-temurin:21-jre came out
+#: as 7,003 components of which 6,847 were `type: file` entries carrying a
+#: path and nothing else -- no purl, no version, no licence, because a file is
+#: not a package. They cannot be enriched or matched to an advisory, and they
+#: bury the 156 packages that can.
+#:
+#: Verified to remove only noise. Scanning with and without, the package set
+#: is identical -- alpine:3 goes from 96 components to 17 with the same 17
+#: packages, redis:8-alpine from 454 to 24 with the same 24 -- so nothing a
+#: consumer can act on is lost.
+#:
+#: SPDX output is unaffected: its file entries come from package file
+#: ownership rather than these catalogers, and the same scan reports 17
+#: packages and 79 files either way.
+_NO_FILE_CATALOGERS = ["--select-catalogers", "-file"]
+
+
 class SyftFsGenerator:
     """
     Syft filesystem scanner for lock files.
@@ -155,6 +174,7 @@ class SyftFsGenerator:
             output_spec,
             "--source-name",
             input.lock_file_name or "unknown",
+            *_NO_FILE_CATALOGERS,
         ]
 
         logger.info(
@@ -286,6 +306,7 @@ class SyftImageGenerator:
             input.docker_image,
             "-o",
             output_spec,
+            *_NO_FILE_CATALOGERS,
         ]
 
         logger.info(
