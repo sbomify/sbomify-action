@@ -125,14 +125,18 @@ class SourceRegistry:
                 break
 
             # And skip a source whose whole contribution is already present.
-            # The stop above needs *all three* core fields, so a licence-only
-            # source was consulted whenever `description` or `supplier` was
-            # missing -- neither of which it can supply -- and its licence
-            # arrived redundant. That is not free: a cold clearlydefined
-            # lookup runs to a 25-second upstream deadline, and five
-            # consecutive failures latch the source off for the rest of the
-            # run, so the wasted calls were also spending the budget that
-            # should have been available when licences really were missing.
+            # The stop above needs *all three* core fields, so a source that
+            # fills only one of them was consulted whenever any of the others
+            # was missing, and what it returned arrived redundant. A source
+            # that declares nothing is unaffected: it is assumed to be able to
+            # fill anything, which is how every source behaved before
+            # `provides` existed.
+            #
+            # A skipped call is not merely a saved round trip. Sources cost
+            # real time on a cold coordinate and several give up on
+            # themselves after consecutive failures, so consulting one that
+            # cannot help spends a budget that should still be there when it
+            # can -- see ProvidesFields for the case this was measured on.
             if not _can_contribute(source, _still_missing(result)):
                 logger.debug(f"Skipping {source.name} for {purl.name}: it supplies only fields we already have")
                 continue

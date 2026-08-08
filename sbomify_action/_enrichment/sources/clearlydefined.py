@@ -194,6 +194,11 @@ class ClearlyDefinedSource:
 
         Measured rather than guessed: of 400 cached responses sampled, 400
         carried `licenses`, four a `homepage` and three a `repository_url`.
+        `license_texts` comes with the licences -- normalize_license_list
+        returns both, so a declared licence populates it as a matter of
+        course -- which is why it is declared here even though it is not a
+        field the sampling counts separately.
+
         Copyright parties are deliberately not used -- see
         _normalize_response -- so `supplier` is not among them, and this
         source has never returned a description.
