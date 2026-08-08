@@ -42,6 +42,28 @@ if not _SYFT_AVAILABLE:
     _SYFT_AVAILABLE = can_provide("syft")
 
 
+#: Syft's file catalogers, which describe every file in the subject rather
+#: than the software in it. Turned off on every scan, whatever the output
+#: format -- what changes with the format is how much it matters, not whether
+#: the flag is passed. CycloneDX is where they dominate: eclipse-temurin:21-jre
+#: came out as 7,003 components of which 6,847 were `type: file` entries
+#: carrying a path and nothing else -- no purl, no version, no licence, because
+#: a file is not a package. They cannot be enriched or matched to an advisory,
+#: and they bury the 156 packages that can.
+#:
+#: Verified to remove only noise. Scanning with and without, the package set
+#: is identical -- alpine:3 goes from 96 components to 17 with the same 17
+#: packages, redis:8-alpine from 454 to 24 with the same 24 -- so nothing a
+#: consumer can act on is lost.
+#:
+#: SPDX output is where it makes no difference, which is why the flag is
+#: unconditional rather than format-dependent: its file entries come from
+#: package file ownership rather than from these catalogers, and the same scan
+#: reports 17 packages and 79 files either way. One code path, no format to
+#: special-case.
+_NO_FILE_CATALOGERS = ["--select-catalogers", "-file"]
+
+
 class SyftFsGenerator:
     """
     Syft filesystem scanner for lock files.
@@ -155,6 +177,7 @@ class SyftFsGenerator:
             output_spec,
             "--source-name",
             input.lock_file_name or "unknown",
+            *_NO_FILE_CATALOGERS,
         ]
 
         logger.info(
@@ -286,6 +309,7 @@ class SyftImageGenerator:
             input.docker_image,
             "-o",
             output_spec,
+            *_NO_FILE_CATALOGERS,
         ]
 
         logger.info(
