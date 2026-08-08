@@ -11,6 +11,7 @@ Verified capabilities (Syft 1.38.2):
 - Version selection: -o format@version=file
 """
 
+import os
 from pathlib import Path
 
 from sbomify_action import format_display_name
@@ -40,6 +41,44 @@ _SYFT_PATH: str | None
 _SYFT_AVAILABLE, _SYFT_PATH = check_tool_available("syft")
 if not _SYFT_AVAILABLE:
     _SYFT_AVAILABLE = can_provide("syft")
+
+
+def _swift_manifest_without_resolved(input: GenerationInput) -> GenerationResult | None:
+    """Refuse Package.swift when the resolved file it needs is not there.
+
+    Syft is the only generator that claims Package.swift -- cdxgen
+    deliberately excludes SwiftPM, and no Swift toolchain ships in the image
+    -- and syft cannot resolve a manifest. Measured across nine Swift
+    projects, every single one produced an SBOM with zero components:
+    swift-nio, swift-collections, swift-package-manager, swift-log,
+    swift-argument-parser, SwiftyJSON and three more. Pointed at the
+    Package.resolved beside it, the same tool works.
+
+    promote_to_lockfile already redirects to Package.resolved when one is
+    committed, so reaching here means it is genuinely absent. Rather than
+    write an empty document, say what is missing and how to produce it --
+    `swift package resolve` writes the file, and it is meant to be committed.
+
+    Declining rather than failing keeps this a routing decision, so anything
+    added to the chain later still gets its turn.
+    """
+    if input.is_source_dir or not input.lock_file:
+        return None
+    if os.path.basename(input.lock_file) != "Package.swift":
+        return None
+    if os.path.isfile(os.path.join(os.path.dirname(input.lock_file), "Package.resolved")):
+        return None
+    return GenerationResult.declined_result(
+        error_message=(
+            "Package.swift declares version ranges; SwiftPM resolves them into "
+            "Package.resolved, which is what an SBOM can be built from. No "
+            "Package.resolved was found beside it -- run `swift package resolve` "
+            "and commit the result, then point LOCK_FILE at it."
+        ),
+        sbom_format=input.output_format or "cyclonedx",
+        spec_version=input.spec_version or "",
+        generator_name="syft-fs",
+    )
 
 
 class SyftFsGenerator:
@@ -130,6 +169,10 @@ class SyftFsGenerator:
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using Syft scan command."""
         assert input.lock_file is not None or input.source_dir is not None  # guaranteed by supports()
+
+        if declined := _swift_manifest_without_resolved(input):
+            return declined
+
         ensure_runtime("syft")
         # Determine format string and version
         if input.output_format == "cyclonedx":
