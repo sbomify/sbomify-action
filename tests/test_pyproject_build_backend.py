@@ -73,6 +73,45 @@ name = "widget"
 version = "0.1.0"
 """
 
+# Poetry's pre-1.1 backend module, still declared by projects that have not
+# retouched their build-system table since.
+LEGACY_BACKEND = """\
+[project]
+name = "widget"
+
+[build-system]
+requires = ["some-other-builder"]
+build-backend = "poetry.masonry.api"
+"""
+
+# PEP 503 treats "poetry_core" and "poetry-core" as the same distribution and
+# both spellings appear in the wild, so the requires check normalises.
+UNDERSCORE_REQUIREMENT = """\
+[project]
+name = "widget"
+
+[build-system]
+requires = ["poetry_core>=1.0.0"]
+"""
+
+# The bare distribution, from before poetry-core was split out.
+BARE_POETRY_REQUIREMENT = """\
+[project]
+name = "widget"
+
+[build-system]
+requires = ["poetry>=1.0"]
+"""
+
+# Cased and space-padded, because a requirement string is free text.
+ODD_CASING = """\
+[project]
+name = "widget"
+
+[build-system]
+requires = ["  Poetry-Core >= 1.0.0  "]
+"""
+
 
 def _pyproject(tmp_path, body):
     path = tmp_path / "pyproject.toml"
@@ -86,6 +125,10 @@ def _pyproject(tmp_path, body):
         (POETRY, True),
         (POETRY_WITHOUT_BACKEND, True),
         (LEGACY_POETRY, True),
+        (LEGACY_BACKEND, True),
+        (UNDERSCORE_REQUIREMENT, True),
+        (BARE_POETRY_REQUIREMENT, True),
+        (ODD_CASING, True),
         (SETUPTOOLS, False),
         (HATCHLING, False),
         (FLIT, False),
