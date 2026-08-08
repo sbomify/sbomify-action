@@ -274,30 +274,46 @@ class ClearlyDefinedSource:
                 _record_transient_failure(purl)
                 raise TransientSourceError(f"HTTP {response.status_code} from {self.name}")
 
-            _record_success()
-
+            # Deliberately not _record_success() here. A status code we can
+            # read is not yet an answer: the body still has to be a projection
+            # we understand. Resetting the streak this early meant a run of
+            # malformed 200s never accumulated -- each one incremented the
+            # counter and the next request's reset wiped it, so the breaker
+            # could not trip on the case its own comment said it would.
             metadata = None
             if response.status_code == 200:
                 data = response.json()
+                if not self._is_harvested(purl, data):
+                    # Not examined yet, so there is nothing to record. This is
+                    # the distinction clearly-cached exists to expose:
+                    # ClearlyDefined never 404s, and an unharvested coordinate
+                    # returns an empty definition that is indistinguishable
+                    # from a package with genuinely no licence. Caching it as a
+                    # miss would hold that answer past the point it changes.
+                    #
+                    # It does *not* count towards the breaker. An unharvested
+                    # coordinate is a definite answer about one package, which
+                    # is a different thing from the service being unwell -- and
+                    # the breaker exists for the latter. Counting it here meant
+                    # five sparsely-covered packages in a row disabled the
+                    # source for the rest of the run: measured on dotnet
+                    # /runtime, 278 "skipped after 5 consecutive" and no
+                    # contribution at all, while clearly-cached was answering
+                    # Newtonsoft.Json with a declared MIT licence in under a
+                    # second the whole time.
+                    raise TransientSourceError(f"{purl} not yet harvested by {self.name}")
                 try:
-                    if not self._is_harvested(purl, data):
-                        # Not examined yet, so there is nothing to record. This
-                        # is the distinction clearly-cached exists to expose:
-                        # ClearlyDefined never 404s, and an unharvested
-                        # coordinate returns an empty definition that is
-                        # indistinguishable from a package with genuinely no
-                        # licence. Caching it as a miss would hold that answer
-                        # past the point it changes.
-                        raise TransientSourceError(f"{purl} not yet harvested by {self.name}")
                     _reject_malformed(purl, data)
                 except TransientSourceError:
-                    # Counts towards the breaker like any other non-answer: a
-                    # service returning bodies we cannot read is a service
-                    # worth backing off from.
+                    # This one does count: a service returning bodies we cannot
+                    # read is a service worth backing off from.
                     _record_transient_failure(purl)
                     raise
+                _record_success()
                 metadata = self._normalize_response(purl, data)
             elif response.status_code == 404:
+                # A definite answer, so it clears the streak like any other.
+                _record_success()
                 logger.debug(f"Package not found in ClearlyDefined: {purl}")
             else:
                 logger.warning(f"Failed to fetch ClearlyDefined metadata for {purl}: HTTP {response.status_code}")
