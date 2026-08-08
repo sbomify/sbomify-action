@@ -248,9 +248,22 @@ class CycloneDXMavenGenerator(_JvmGenerator):
             mvn,
             "-B",
             "-q",
-            # -N: this module only. makeAggregateBom already walks the reactor,
-            # and without it Maven would build every module first.
-            "-N",
+            # No -N. It used to be passed here on the reasoning that
+            # "makeAggregateBom already walks the reactor", which has it
+            # backwards: the goal aggregates the BOMs of the reactor projects
+            # Maven *built*, and -N (--non-recursive) restricts the reactor to
+            # the aggregator POM alone. The goal then walks a reactor of one,
+            # finds no modules, and writes a BOM with zero components -- while
+            # exiting 0, so nothing downstream noticed.
+            #
+            # Measured on netty, jenkins, nacos and camel: every one produced
+            # 0 components, each with a `?type=pom` aggregator as its root.
+            # On a two-module fixture, the same command with and without -N
+            # gives 0 components and 10.
+            #
+            # Naming the goal directly (rather than a lifecycle phase) still
+            # avoids compiling anything: Maven runs that goal across the
+            # reactor and nothing else.
             f"{maven_plugin_coordinate()}:makeAggregateBom",
             "-DoutputFormat=json",
             "-DoutputName=bom",
