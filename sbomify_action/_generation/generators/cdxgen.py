@@ -65,6 +65,7 @@ CDXGEN_TYPE_MAP = {
     "elixir": "elixir",
     "scala": "scala",
     "cpp": "cpp",
+    "clojure": "clojure",
 }
 
 # Ecosystems that use parent/child project structures (e.g., Maven parent POMs, Gradle multi-project)
