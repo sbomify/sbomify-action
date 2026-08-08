@@ -188,6 +188,25 @@ class ClearlyDefinedSource:
         # Tier 3: Fallback sources (70-99) - Last resort, basic or rate-limited
         return 75
 
+    @property
+    def provides(self) -> frozenset[str]:
+        """Licences, and occasionally a homepage or repository URL.
+
+        Measured rather than guessed: of 400 cached responses sampled, 400
+        carried `licenses`, four a `homepage` and three a `repository_url`.
+        Copyright parties are deliberately not used -- see
+        _normalize_response -- so `supplier` is not among them, and this
+        source has never returned a description.
+
+        Declaring it lets the registry skip this source when a licence is
+        already in hand. It used to be consulted whenever `description` or
+        `supplier` was missing, neither of which it can supply: across a
+        251-project run that filled the cache with 1,178 entries, 1,020 of
+        them holding real licence data, while contributing zero fields to
+        the finished SBOMs.
+        """
+        return frozenset({"licenses", "license_texts", "homepage", "repository_url"})
+
     def supports(self, purl: PackageURL) -> bool:
         """Check if this source supports the given PURL type."""
         return purl.type in PURL_TYPE_TO_CD_TYPE

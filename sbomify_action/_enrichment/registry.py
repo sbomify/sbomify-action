@@ -12,6 +12,33 @@ from .exceptions import TransientSourceError
 from .metadata import NormalizedMetadata
 from .protocol import DataSource
 
+#: Fields the early-stop treats as the point of enrichment. A source that can
+#: fill none of the ones still missing is not worth a network round trip.
+_CORE_FIELDS = ("description", "licenses", "supplier")
+
+
+def _still_missing(result: Optional[NormalizedMetadata]) -> set[str]:
+    """Which NormalizedMetadata fields are not yet populated."""
+    if result is None:
+        return set(_CORE_FIELDS) | {"homepage", "repository_url", "license_texts"}
+    missing = set()
+    for field_name in (*_CORE_FIELDS, "homepage", "repository_url", "license_texts"):
+        if not getattr(result, field_name, None):
+            missing.add(field_name)
+    return missing
+
+
+def _can_contribute(source: object, missing: set[str]) -> bool:
+    """Whether this source can fill anything still absent.
+
+    A source that does not declare `provides` is assumed to be able to fill
+    anything, which is how every source behaved before the field existed.
+    """
+    provides = getattr(source, "provides", None)
+    if not provides:
+        return True
+    return bool(set(provides) & missing)
+
 
 class SourceRegistry:
     """
@@ -96,6 +123,19 @@ class SourceRegistry:
             if result and result.description and result.licenses and result.supplier:
                 logger.debug(f"Skipping {source.name} - already have sufficient data for {purl.name}")
                 break
+
+            # And skip a source whose whole contribution is already present.
+            # The stop above needs *all three* core fields, so a licence-only
+            # source was consulted whenever `description` or `supplier` was
+            # missing -- neither of which it can supply -- and its licence
+            # arrived redundant. That is not free: a cold clearlydefined
+            # lookup runs to a 25-second upstream deadline, and five
+            # consecutive failures latch the source off for the rest of the
+            # run, so the wasted calls were also spending the budget that
+            # should have been available when licences really were missing.
+            if not _can_contribute(source, _still_missing(result)):
+                logger.debug(f"Skipping {source.name} for {purl.name}: it supplies only fields we already have")
+                continue
 
             try:
                 # Persistent cache sits here rather than in each source: this is
