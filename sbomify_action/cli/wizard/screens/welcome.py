@@ -136,7 +136,13 @@ class WelcomeScreen(WizardScreen):
         Presses the button rather than exiting directly, so the keyboard and
         the mouse cannot drift apart on the exit code again.
         """
-        self.route_enter(lambda: self.query_one("#exit", Button).press())
+        self.route_enter(self._press_exit)
+
+    def _press_exit(self) -> None:
+        # Named rather than a lambda: ``Button.press`` returns the button for
+        # chaining, so a lambda wrapping it types as ``Callable[[], Button]``
+        # and fails ``route_enter``'s ``Callable[[], None]``.
+        self.query_one("#exit", Button).press()
 
     def compose_body(self) -> ComposeResult:
         # Hero card — the wizard's first impression. Two columns:
