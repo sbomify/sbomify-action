@@ -179,3 +179,46 @@ def test_classification_never_fails_the_run(tmp_path, monkeypatch):
     out.write_text(json.dumps({"bomFormat": "CycloneDX", "components": []}))
 
     assert _describes_nothing(_result_for(out)) is True
+
+
+def test_the_last_generator_being_empty_still_warns(tmp_path, caplog):
+    """An empty result from the *last* generator must not skip the explanation.
+
+    It used to fall straight through to the success return, so the one
+    message telling the caller the document is empty -- and where to look --
+    was never printed for the commonest shape of all: a single applicable
+    generator that finds nothing.
+    """
+    only = _Stub("syft-fs", 10, [])
+    registry = GeneratorRegistry()
+    registry.register(only)
+
+    with caplog.at_level("WARNING"):
+        result = registry.generate(_input(tmp_path), validate=False)
+
+    assert result.success
+    assert json.loads(Path(result.output_file).read_text())["components"] == []
+    assert any("empty SBOM" in r.message for r in caplog.records), (
+        "an empty SBOM must say so; that is the whole point of the guard"
+    )
+
+
+def test_the_empty_returned_is_the_highest_priority_one(tmp_path):
+    """When everything comes back empty, keep the preferred generator's answer.
+
+    Falling through returned whichever ran last, which is the least preferred
+    tool by construction -- so the document's own `tools` block named the
+    wrong producer.
+    """
+    first = _Stub("cyclonedx-maven", 10, [])
+    second = _Stub("syft-fs", 20, [])
+    registry = GeneratorRegistry()
+    registry.register(first)
+    registry.register(second)
+
+    result = registry.generate(_input(tmp_path), validate=False)
+
+    assert second.ran, "the later generator must still get its chance"
+    assert result.generator_name == "cyclonedx-maven", (
+        "the empty result handed back should be the preferred generator's"
+    )

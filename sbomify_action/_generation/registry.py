@@ -298,18 +298,21 @@ class GeneratorRegistry:
             try:
                 result = generator.generate(input)
                 if result.success and _describes_nothing(result):
-                    remaining = [g.name for g in generators[index + 1 :]]
-                    if remaining:
+                    # Always hand on, including from the last generator.
+                    # Returning here instead would skip the block after the
+                    # loop, which is the only thing that tells the caller the
+                    # document is empty and where to look -- and would hand
+                    # back whichever generator happened to be last rather than
+                    # the first, highest-priority one recorded below.
+                    if empty is None:
+                        empty, empty_from = result, generator.name
+                    errors.append(f"{generator.name}: produced an SBOM with no components")
+                    if remaining := [g.name for g in generators[index + 1 :]]:
                         logger.warning(
                             f"Generator '{generator.name}' produced an SBOM with no components; "
                             f"trying {remaining[0]} to see if it can read this input"
                         )
-                        if empty is None:
-                            empty, empty_from = result, generator.name
-                        errors.append(f"{generator.name}: produced an SBOM with no components")
-                        continue
-                    if empty is None:
-                        empty, empty_from = result, generator.name
+                    continue
                 if result.success:
                     logger.info(f"Successfully generated SBOM with {generator.name}")
 
