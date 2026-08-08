@@ -28,6 +28,7 @@ from ..result import GenerationResult
 from ..utils import (
     CDXGEN_LOCK_FILES,
     DEFAULT_TIMEOUT,
+    DOTNET_PROJECT_SUFFIXES,
     ensure_dotnet_installed,
     ensure_go_installed,
     ensure_java_maven_installed,
@@ -126,8 +127,12 @@ class CdxgenFsGenerator:
         if not input.is_lock_file:
             return False
 
-        # Check if it's a supported lock file for cdxgen
-        if input.lock_file_name not in CDXGEN_LOCK_FILES:
+        # Check if it's a supported lock file for cdxgen. .NET project files
+        # are matched by extension: their names are the project's own, so
+        # there is no fixed name to list. cdxgen reads the PackageReference
+        # set out of one directly, without the SDK and without a lock file.
+        name = input.lock_file_name or ""
+        if name not in CDXGEN_LOCK_FILES and not name.endswith(DOTNET_PROJECT_SUFFIXES):
             return False
 
         # Some lock files need their project manifest beside them. Without

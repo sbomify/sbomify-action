@@ -19,7 +19,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
-from sbomify_action._generation.utils import ALL_LOCK_FILES, get_lock_file_ecosystem
+from sbomify_action._generation.utils import get_lock_file_ecosystem, is_supported_input
 from sbomify_action.cli.wizard.state import DiscoveredLockfile, NestedRepoKind
 
 # Cap the walk so we never scan a degenerate monorepo into memory. 200
@@ -96,7 +96,29 @@ _LOCKFILE_PRIORITY: dict[str, int] = {
     # Swift
     "Package.resolved": 60,
     "Package.swift": 61,
+    # .NET. The lock file wins where a project opts into one; otherwise the
+    # project file is all there is. Matched by suffix in _priority_of.
+    "packages.lock.json": 70,
 }
+
+#: Suffix-matched inputs and their priority, for names that are the
+#: project's own rather than a convention.
+_SUFFIX_PRIORITY: tuple[tuple[str, int], ...] = (
+    (".sln", 71),
+    (".csproj", 72),
+    (".fsproj", 72),
+    (".vbproj", 72),
+)
+
+
+def _priority_of(name: str) -> int:
+    """Rank an input within its ecosystem, lowest first."""
+    if (exact := _LOCKFILE_PRIORITY.get(name)) is not None:
+        return exact
+    for suffix, priority in _SUFFIX_PRIORITY:
+        if name.endswith(suffix):
+            return priority
+    return 99
 
 
 def slugify(value: str) -> str:
@@ -148,11 +170,11 @@ def discover(repo_root: Path, *, repo_name: str | None = None) -> list[Discovere
 
     for path in _walk(repo_root):
         name = path.name
-        if name not in ALL_LOCK_FILES:
+        if not is_supported_input(name):
             continue
 
         ecosystem = get_lock_file_ecosystem(name) or "unknown"
-        priority = _LOCKFILE_PRIORITY.get(name, 99)
+        priority = _priority_of(name)
         key = (path.parent, ecosystem)
         current = best_per_dir_eco.get(key)
         if current is None or priority < current[0]:
