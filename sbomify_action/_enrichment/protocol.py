@@ -57,32 +57,6 @@ class DataSource(Protocol):
         """
         ...
 
-    @property
-    def provides(self) -> frozenset[str]:
-        """The NormalizedMetadata fields this source can actually fill.
-
-        Optional. A source that does not declare it is assumed to be able to
-        supply anything, which is what every source was assumed to do before
-        this existed.
-
-        The registry uses it to skip a source whose entire contribution is
-        already present. Without it, a licence-only source is consulted
-        whenever *any* core field is missing -- including `description` and
-        `supplier`, which it cannot supply -- and its licence arrives
-        redundant.
-
-        Measured on clearlydefined.io, which is exactly that shape: of 400
-        cached responses sampled, 400 carried `licenses`, four a `homepage`
-        and three a `repository_url`. Across a 251-project run it filled the
-        persistent cache with 1,178 entries, 1,020 of them holding real
-        licence data, and contributed zero fields to the finished SBOMs --
-        because in every one of those cases the licence was already there.
-        Those lookups are not free: a cold one runs to a 25-second upstream
-        deadline, and five consecutive failures latch the source off for the
-        rest of the run.
-        """
-        ...
-
     def supports(self, purl: PackageURL) -> bool:
         """
         Check if this source can handle the given PURL type.
@@ -112,4 +86,37 @@ class DataSource(Protocol):
         Returns:
             NormalizedMetadata if successful, None if fetch fails or no data
         """
+        ...
+
+
+class ProvidesFields(Protocol):
+    """A source that declares which fields it can fill.
+
+    Deliberately separate from DataSource rather than a member of it. A
+    Protocol member is required for conformance, so putting `provides` on
+    DataSource means every existing source stops satisfying it -- which is
+    exactly what mypy said when that was tried.
+
+    Declaring it is optional and additive: the registry reads it with
+    `getattr` and treats its absence as "can supply anything", which is how
+    every source behaved before this existed.
+
+    The registry uses it to skip a source whose entire contribution is
+    already present. Without it, a licence-only source is consulted whenever
+    *any* core field is missing -- including `description` and `supplier`,
+    which it cannot supply -- and its licence arrives redundant.
+
+    Measured on clearlydefined.io, which is exactly that shape: of 400 cached
+    responses sampled, 400 carried `licenses`, four a `homepage` and three a
+    `repository_url`. Across a 251-project run it filled the persistent cache
+    with 1,178 entries, 1,020 of them holding real licence data, and
+    contributed zero fields to the finished SBOMs -- because in every one of
+    those cases the licence was already there. Those lookups are not free: a
+    cold one runs to a 25-second upstream deadline, and five consecutive
+    failures latch the source off for the rest of the run.
+    """
+
+    @property
+    def provides(self) -> frozenset[str]:
+        """NormalizedMetadata field names this source can populate."""
         ...
