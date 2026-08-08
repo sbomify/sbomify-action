@@ -44,9 +44,8 @@ def _get_version() -> str:
 
     # Try reading from pyproject.toml using tomllib (Python 3.11+)
     try:
-        from pathlib import Path
-
         import tomllib
+        from pathlib import Path
 
         pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
         if pyproject_path.exists():

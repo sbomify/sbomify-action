@@ -296,9 +296,8 @@ def _get_package_version() -> str:
         return version("sbomify-action")
     except Exception:
         try:
-            from pathlib import Path
-
             import tomllib
+            from pathlib import Path
 
             pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
             if pyproject_path.exists():

@@ -8,10 +8,10 @@ failure modes fail loudly instead of silently.
 """
 
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
-import tomllib
 
 from sbomify_action import runtimes, tool_manifest
 from sbomify_action.tool_manifest import (

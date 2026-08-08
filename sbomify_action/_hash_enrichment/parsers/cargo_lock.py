@@ -1,8 +1,7 @@
 """Parser for Cargo.lock files (Rust)."""
 
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 from ..models import HashAlgorithm, PackageHash
 
