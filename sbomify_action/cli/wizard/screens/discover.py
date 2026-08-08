@@ -100,8 +100,11 @@ class DiscoverScreen(WizardScreen):
                 # than claiming "vendored".
                 kind = _NESTED_REPO_LABELS.get(lf.nested_repo_kind, "nested repo")
                 label += f"  [#F4B57F]({kind}: {lf.nested_repo})[/]"
-            # Nested-repo lockfiles default to deselected — they belong to
-            # another repository and are better tracked from there.
+            # What starts ticked is decided by _default_selected: the
+            # shallowest depth that has anything selectable, with nested-repo
+            # lockfiles excluded entirely because they belong to another
+            # repository. So a deeper lockfile of this repo's own is listed
+            # and left unticked too, not only a vendored one.
             sel.add_option((label, idx, idx in default))
         sel.focus()
 
