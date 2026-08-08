@@ -88,6 +88,48 @@ def promote_to_lockfile(input: GenerationInput) -> GenerationInput:
     return input
 
 
+def _describes_nothing(result: GenerationResult) -> bool:
+    """True when a successful result contains no components at all.
+
+    Exit status alone made this invisible. cyclonedx-maven pointed at a
+    multi-module aggregator, or syft pointed at a manifest whose lock file
+    is not committed, writes a schema-valid document holding its root
+    component and nothing else, and returns 0. The run then reported
+    success while describing none of the software it was asked about.
+
+    Worse, it stopped the search: the registry returns on the first
+    generator that exits 0, so an empty result kept a working generator
+    from ever being tried. On apache/dubbo, cyclonedx-maven produced 0
+    components and cdxgen -- next in line, never reached -- produces 763.
+
+    Emptiness is treated as "keep looking", not as failure, because an
+    empty SBOM is the correct answer for a project with no dependencies.
+    The caller only falls back to it once nothing else has found anything.
+
+    Anything unreadable, unparseable or otherwise surprising returns False.
+    This only classifies a result that already succeeded, so it must never
+    be the reason a run fails -- hence the bare ``Exception`` and the plain
+    ``open`` rather than ``Path``, which callers monkeypatch in this module.
+    """
+    if not result.output_file:
+        return False
+    try:
+        with open(result.output_file, encoding="utf-8") as handle:
+            document = json.load(handle)
+    except Exception:  # noqa: BLE001 - classification must not raise
+        return False
+    if not isinstance(document, dict):
+        return False
+    # CycloneDX counts `components`, SPDX `packages`. An SPDX document
+    # always describes the root as a package, so one entry there is the
+    # same emptiness as zero in CycloneDX.
+    if "packages" in document:
+        packages = document.get("packages")
+        return isinstance(packages, list) and len(packages) <= 1
+    components = document.get("components")
+    return isinstance(components, list) and len(components) == 0
+
+
 class _DowngradeRefused(SBOMGenerationError):
     """Raised by strict mode to abort rather than silently downgrade.
 
@@ -244,11 +286,30 @@ class GeneratorRegistry:
         errors: list[str] = []
         attempted_generators: list[str] = []
         strict = fallback_is_a_bug()
+        # A generator that exits 0 having described nothing. Kept rather than
+        # returned, because a project with no dependencies is entitled to an
+        # empty SBOM -- but only used if nothing else does better. See
+        # _describes_nothing.
+        empty: GenerationResult | None = None
+        empty_from: str | None = None
         for index, generator in enumerate(generators):
             logger.info(f"Trying generator: {generator.name}")
             attempted_generators.append(generator.name)
             try:
                 result = generator.generate(input)
+                if result.success and _describes_nothing(result):
+                    remaining = [g.name for g in generators[index + 1 :]]
+                    if remaining:
+                        logger.warning(
+                            f"Generator '{generator.name}' produced an SBOM with no components; "
+                            f"trying {remaining[0]} to see if it can read this input"
+                        )
+                        if empty is None:
+                            empty, empty_from = result, generator.name
+                        errors.append(f"{generator.name}: produced an SBOM with no components")
+                        continue
+                    if empty is None:
+                        empty, empty_from = result, generator.name
                 if result.success:
                     logger.info(f"Successfully generated SBOM with {generator.name}")
 
@@ -275,6 +336,21 @@ class GeneratorRegistry:
                 if strict and remaining:
                     raise _DowngradeRefused(_degraded_message(generator.name, remaining, str(e))) from e
                 self._warn_degraded(generator.name, remaining, str(e))
+
+        # Nothing found components, but something did produce a well-formed
+        # empty document. A project genuinely without dependencies is
+        # entitled to exactly that, and refusing it would be worse than
+        # reporting it -- so hand it back, saying clearly what it contains.
+        if empty is not None:
+            logger.warning(
+                f"No generator found any components for this input; returning the empty "
+                f"SBOM from '{empty_from}'. If this project does have dependencies, they "
+                f"are not being read -- check that the file passed to LOCK_FILE is the one "
+                f"that declares them."
+            )
+            if validate and empty.output_file:
+                empty = self._validate_result(empty)
+            return empty
 
         # All generators failed - check if it's a tool availability issue
         logger.info(f"All {len(attempted_generators)} generator(s) failed: {', '.join(attempted_generators)}")
