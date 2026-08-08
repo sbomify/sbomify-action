@@ -870,3 +870,116 @@ async def test_apply_plan_limit_back_jumps_to_product_screen(tmp_path: Path, mon
         screen._go_back()
         await pilot.pause()
         assert app.screen is product_screen, "Back after a product plan-limit must land on the product step"
+
+
+def _lockfile(tmp_path: Path, rel: str, ecosystem: str = "javascript", **kwargs) -> DiscoveredLockfile:
+    return DiscoveredLockfile(
+        path=tmp_path / rel,
+        rel_path=Path(rel),
+        ecosystem=ecosystem,
+        suggested_name=rel.replace("/", "-"),
+        **kwargs,
+    )
+
+
+async def test_discover_preselects_only_the_shallowest_lockfiles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A monorepo must not arrive with every package ticked.
+
+    Measured across 251 repositories, ticking everything meant a mean of
+    31.8 selections and nine repos at the discovery cap of 200 -- vite,
+    next.js, spring-boot, rust-lang/rust, deno. Pressing Enter on vite
+    created two hundred components, most of them scaffolding templates that
+    are not dependencies of vite at all.
+    """
+    from textual.widgets import SelectionList
+
+    lockfiles = [
+        _lockfile(tmp_path, "pnpm-lock.yaml"),
+        _lockfile(tmp_path, "packages/create-vite/template-lit/package.json"),
+        _lockfile(tmp_path, "packages/create-vite/template-preact/package.json"),
+        _lockfile(tmp_path, "docs/package.json"),
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+
+        sel = app.screen.query_one("#lockfile-list", SelectionList)
+        assert list(sel.selected) == [0], "only the root lockfile should start ticked"
+        # The rest are still offered, just not chosen for the user.
+        assert sel.option_count == 4
+
+
+async def test_discover_preselects_every_lockfile_at_the_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A polyglot root is several real projects, so all of them start ticked."""
+    from textual.widgets import SelectionList
+
+    lockfiles = [
+        _lockfile(tmp_path, "uv.lock", "python"),
+        _lockfile(tmp_path, "bun.lock"),
+        _lockfile(tmp_path, "sub/go.sum", "go"),
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+
+        sel = app.screen.query_one("#lockfile-list", SelectionList)
+        assert list(sel.selected) == [0, 1]
+
+
+async def test_discover_falls_back_to_the_shallowest_when_nothing_is_at_the_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Thirty of the surveyed repositories have no lockfile at the root.
+
+    Ticking "root only" would leave those on a screen that refuses to
+    advance, which is why the rule is depth-relative rather than absolute.
+    """
+    from textual.widgets import SelectionList
+
+    lockfiles = [
+        _lockfile(tmp_path, "frontend/package.json"),
+        _lockfile(tmp_path, "backend/go.sum", "go"),
+        _lockfile(tmp_path, "deep/nested/thing/package.json"),
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+
+        sel = app.screen.query_one("#lockfile-list", SelectionList)
+        assert list(sel.selected) == [0, 1], "both depth-1 entries, not the depth-3 one"
+
+
+async def test_discover_skips_nested_repos_when_choosing_the_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A submodule at the root must not decide the depth for everyone else.
+
+    It is excluded by policy, so letting it set the shallowest depth would
+    tick nothing and strand the user.
+    """
+    from textual.widgets import SelectionList
+
+    lockfiles = [
+        _lockfile(tmp_path, "vendored/Cargo.lock", "rust", nested_repo="vendored", nested_repo_kind="submodule"),
+        _lockfile(tmp_path, "app/package.json"),
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+
+        sel = app.screen.query_one("#lockfile-list", SelectionList)
+        assert list(sel.selected) == [1]
