@@ -235,6 +235,36 @@ class TestToolErrorGrouping:
         assert "\x1b[" not in caplog.text
         assert "SECURE MODE" in caplog.text
 
+    def test_a_broken_telemetry_scope_cannot_break_generation(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Reporting a tool failure must not be able to cause one.
+
+        This runs on the SBOM generation error path. Losing the grouping is a
+        cosmetic degradation; raising here would turn "the tool failed" into
+        "sbomify-action crashed".
+        """
+
+        def exploding_scope():  # noqa: ANN202
+            raise RuntimeError("sentry is having a bad day")
+
+        monkeypatch.setattr(sentry_sdk, "new_scope", exploding_scope)
+        with caplog.at_level("ERROR"):
+            log_command_error("cdxgen", "the tool failed", "")
+        # Still exactly one error record, carrying the real failure.
+        errors = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert len(errors) == 1, [r.getMessage() for r in errors]
+        assert "the tool failed" in errors[0].getMessage()
+
+    def test_the_error_is_logged_exactly_once_when_grouping_works(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _capture_fingerprints(monkeypatch)
+        with caplog.at_level("ERROR"):
+            log_command_error("cdxgen", "the tool failed", "")
+        errors = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert len(errors) == 1, [r.getMessage() for r in errors]
+
 
 class TestDuplicateArtifactClassification:
     """~10% of all reported events were "this version already exists".
