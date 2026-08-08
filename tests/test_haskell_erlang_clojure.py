@@ -171,8 +171,17 @@ def test_rebar_lock_is_scanned_as_a_directory(tmp_path, monkeypatch):
     assert f"dir:{project}" in cmd, "rebar.lock must be scanned via its directory"
     assert str(lock) not in cmd
     # Scoped to the ecosystem, or the directory's GitHub Actions arrive too --
-    # 14 of them on rebar3, against 9 real packages.
-    assert cmd[cmd.index("--select-catalogers", cmd.index("-file")) + 1] == "erlang"
+    # 14 of them on rebar3, against 9 real packages. Exactly one
+    # --select-catalogers, carrying the ecosystem instead of the usual -file:
+    # naming a cataloger set replaces the defaults rather than adding to them,
+    # so both would be redundant and their merge order would matter.
+    # Exactly one --select-catalogers, carrying both terms. Scoping to the
+    # ecosystem keeps out the directory's 14 GitHub Actions; keeping `-file`
+    # matters because selecting an ecosystem does *not* displace the file
+    # catalogers -- in CycloneDX output `erlang` alone returns 9 libraries and
+    # 6 file entries, `erlang,-file` returns the 9 alone.
+    assert cmd.count("--select-catalogers") == 1
+    assert cmd[cmd.index("--select-catalogers") + 1] == "erlang,-file"
 
 
 def test_other_lock_files_are_still_scanned_directly(tmp_path, monkeypatch):

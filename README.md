@@ -428,6 +428,9 @@ When uploading to Dependency Track (`UPLOAD_DESTINATIONS=dependency-track`), con
 | Scala      | `build.sbt`                                                                    |
 | C++        | `conan.lock`                                                                   |
 | Terraform  | `.terraform.lock.hcl`                                                          |
+| Haskell    | `stack.yaml.lock`, `stack.yaml`, `cabal.project.freeze`                        |
+| Erlang     | `rebar.lock` (rebar3 projects; erlang.mk has no equivalent)                     |
+| Clojure    | `deps.edn`, `project.clj`                                                      |
 
 ### Directory scanning (`SOURCE_DIR`) — last resort
 
@@ -1099,9 +1102,9 @@ Generators are tried in priority order. Native tools (optimized for specific eco
 | 10       | **cyclonedx-gradle** | Java (`build.gradle`, `build.gradle.kts`)                                                     | CycloneDX 1.4–1.6, SPDX 2.3     |
 | 10       | **cyclonedx-sbt**    | Scala (`build.sbt`)                                                                           | CycloneDX 1.4–1.6, SPDX 2.3     |
 | 10       | **gradle-lockfile**  | Java (`gradle.lockfile`) — read directly, no Gradle run                                       | CycloneDX 1.2–1.7, SPDX 2.2–2.3 |
-| 20       | **cdxgen**           | JavaScript, Ruby, Dart, C++, PHP, .NET, Elixir, and Python/Go/Java where no native tool wins   | CycloneDX 1.4–1.7               |
+| 20       | **cdxgen**           | JavaScript, Ruby, Dart, C++, PHP, .NET, Elixir, Clojure, and Python/Go/Java where no native tool wins | CycloneDX 1.4–1.7        |
 | ~~30~~   | ~~**Trivy**~~        | ~~Temporarily disabled due to security vulnerabilities~~                                       | ~~CycloneDX 1.6, SPDX 2.3~~     |
-| 35       | **Syft**             | Swift, Terraform, Docker images, and SPDX wherever no native tool emits it                     | CycloneDX 1.2–1.6, SPDX 2.2–2.3 |
+| 35       | **Syft**             | Swift, Terraform, Haskell, Erlang, Docker images, and SPDX wherever no native tool emits it    | CycloneDX 1.2–1.6, SPDX 2.2–2.3 |
 
 The native generators at priority 10 resolve dependencies the way the
 ecosystem itself does, which is why they outrank the scanners. Several emit
