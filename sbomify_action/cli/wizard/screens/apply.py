@@ -29,13 +29,25 @@ _COLOR_BY_KIND = {
 class ApplyScreen(WizardScreen):
     """Phase 6b — actually do the work, log line by line as it happens."""
 
-    step_index = 8
+    step_index = 9
     step_title = "Apply"
     step_subtitle = "Creating components and writing the workflow…"
 
     BINDINGS = [
-        Binding("escape", "back_if_done", "", show=False, priority=True),
+        # Both are gated by ``check_action`` on ``_worker_done``: during the
+        # apply neither is offered (bailing part-way through API mutations
+        # leaves the workspace half-written), and once it finishes both
+        # appear in the footer. They used to be permanently hidden, which
+        # left the finished screen showing a focused "Continue ▸" button and
+        # a footer with no Enter or Escape hint at all.
+        Binding("enter", "continue_if_done", "Continue ▸", show=True, priority=True),
+        Binding("escape", "back_if_done", "Back", show=True, priority=True),
     ]
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action in ("continue_if_done", "back_if_done"):
+            return self._worker_done
+        return True
 
     def __init__(self) -> None:
         super().__init__()
@@ -73,6 +85,8 @@ class ApplyScreen(WizardScreen):
         with panel:
             yield error_banner
             yield RichLog(id="apply-log", wrap=True, markup=True, highlight=False)
+
+    def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):
             # Back is disabled during apply (you can't bail mid-API-
             # mutation) and enabled by on_worker_state_changed when
@@ -94,6 +108,22 @@ class ApplyScreen(WizardScreen):
         """Escape goes back, but only once the apply worker has finished —
         bailing mid-apply could leave the sbomify workspace half-mutated."""
         self._go_back()
+
+    def action_continue_if_done(self) -> None:
+        """Enter presses whatever Continue currently means — advance to Done,
+        or (after a plan limit) reuse the existing product and retry.
+
+        Routed through ``route_enter`` so Enter on a focused Back button
+        still goes back, matching every other screen.
+        """
+        if not self._worker_done:
+            return
+        self.route_enter(self._activate_continue)
+
+    def _activate_continue(self) -> None:
+        button = self.query_one("#continue", Button)
+        if not button.disabled:
+            button.press()
 
     def _go_back(self) -> None:
         """Navigate back after the worker has finished.
@@ -158,6 +188,9 @@ class ApplyScreen(WizardScreen):
             return
         if event.state == WorkerState.SUCCESS:
             self._worker_done = True
+            # ``check_action`` results are cached, so the Enter/Escape hints
+            # stay hidden until we explicitly invalidate them.
+            self.refresh_bindings()
             result = event.worker.result
             back_btn = self.query_one("#back", Button)
             continue_btn = self.query_one("#continue", Button)
@@ -181,9 +214,11 @@ class ApplyScreen(WizardScreen):
         elif event.state == WorkerState.ERROR:
             self._worker_done = True
             self._worker_error = True
+            self.refresh_bindings()
             back_btn = self.query_one("#back", Button)
             continue_btn = self.query_one("#continue", Button)
             error_text = strip_status_codes(str(event.worker.error))
+            self._mark_panel_failed()
             self._show_error_banner(error_text)
             # ``RichLog`` is markup=True; escape the worker-error message so a
             # `[` in the exception text doesn't collide with the color tags.
@@ -194,10 +229,25 @@ class ApplyScreen(WizardScreen):
             back_btn.disabled = False
             back_btn.focus()
 
+    def _mark_panel_failed(self) -> None:
+        """Swap the panel's in-progress title for a failure marker.
+
+        Same reasoning as the success case: leaving the hourglass hovering
+        over an operation that has already finished — and failed — reads as
+        "still working" while the user is being asked to choose a recovery.
+        """
+        try:
+            panel = self.query_one("#apply-panel", Vertical)
+            panel.border_title = "✗  Apply failed"
+            panel.border_subtitle = "see the error above"
+        except Exception:  # noqa: BLE001
+            pass
+
     def _on_apply_failed(self, error: Exception, back_btn: Button, continue_btn: Button) -> None:
         """Render the failure state: tailored recovery for plan limits,
         generic Back-and-retry for everything else."""
         self._worker_error = True
+        self._mark_panel_failed()
         if isinstance(error, PlanLimitError):
             self._plan_limit = error
             self._show_plan_limit_banner(error)
@@ -294,6 +344,8 @@ class ApplyScreen(WizardScreen):
         self._worker_error = False
         self._plan_limit = None
         self._reuse_product = None
+        # Back in flight — withdraw the Enter/Escape hints again.
+        self.refresh_bindings()
         try:
             banner = self.query_one("#apply-error-banner", Static)
             banner.display = False

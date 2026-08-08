@@ -28,6 +28,8 @@ from ..result import GenerationResult
 from ..utils import (
     CDXGEN_LOCK_FILES,
     DEFAULT_TIMEOUT,
+    DOTNET_LOCK_FILES,
+    DOTNET_PROJECT_SUFFIXES,
     ensure_dotnet_installed,
     ensure_go_installed,
     ensure_java_maven_installed,
@@ -126,8 +128,12 @@ class CdxgenFsGenerator:
         if not input.is_lock_file:
             return False
 
-        # Check if it's a supported lock file for cdxgen
-        if input.lock_file_name not in CDXGEN_LOCK_FILES:
+        # Check if it's a supported lock file for cdxgen. .NET project files
+        # are matched by extension: their names are the project's own, so
+        # there is no fixed name to list. cdxgen reads the PackageReference
+        # set out of one directly, without the SDK and without a lock file.
+        name = input.lock_file_name or ""
+        if name not in CDXGEN_LOCK_FILES and not name.endswith(DOTNET_PROJECT_SUFFIXES):
             return False
 
         # Some lock files need their project manifest beside them. Without
@@ -181,7 +187,15 @@ class CdxgenFsGenerator:
 
         # The .NET SDK, for the same reason: cdxgen invokes `dotnet` to read
         # packages.lock.json and fails without it.
-        if ecosystem == "dotnet":
+        #
+        # A project file is the exception, so the test is the file name and not
+        # the ecosystem. cdxgen parses the PackageReference set straight out of
+        # the XML, and measured on a three-package .csproj and the .sln naming
+        # it, the SBOM is identical with the SDK absent from the image, from
+        # the cache and from PATH. Fetching it anyway would cost a 289MB
+        # download to reach the same three components -- and would make the
+        # whole ecosystem unusable wherever no SDK build exists for the host.
+        if lock_file_name in DOTNET_LOCK_FILES:
             ensure_dotnet_installed()
 
         cmd = [

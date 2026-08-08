@@ -50,13 +50,67 @@ Footer > .footer--key {
     text-style: bold;
 }
 
+/* Notifications. Textual docks the toast rack bottom-right, which is
+ * exactly where the pinned action row lives — at 80x24 a toast covered the
+ * Cancel button outright and clipped Next, so the message telling you what
+ * happened hid the control you needed to respond to it. Dock the rack to
+ * the top instead: the header is the one band of the screen with nothing
+ * interactive in it. Narrower toasts too, so they don't span a wide
+ * terminal for a one-line message. */
+ToastRack {
+    dock: top;
+    align: right top;
+    margin-top: 1;
+    margin-bottom: 0;
+}
+
+Toast {
+    width: 48;
+    max-width: 60%;
+}
+
 /* ---------------------------------------------------------------------
  * Wizard layout — applied by WizardScreen.compose
  * --------------------------------------------------------------------- */
 
+/* Centre the body so the max-width below leaves even gutters on wide
+ * terminals rather than pinning everything to the left edge. Header and
+ * Footer are docked, so they're unaffected. */
+Screen {
+    align-horizontal: center;
+}
+
 .wizard-body {
     padding: 1 2;
     height: 1fr;
+    width: 100%;
+    /* Cap the measure. Without this every panel stretched to the full
+     * terminal width — at 250 columns the rationale prose ran 220+
+     * characters per line and a two-entry picker drew a 240-column box.
+     * ~110 cells is a comfortable reading measure and still wide enough
+     * for the Review diff and the components table. */
+    max-width: 110;
+}
+
+/* The scrolling region: everything a screen yields from ``compose_body``.
+ * Taking 1fr here (with the crumb/subtitle above and the action row below
+ * at auto height) is what pins Back/Next on screen at any terminal size —
+ * overflowing content scrolls instead of being clipped away. */
+.wizard-scroll {
+    height: 1fr;
+    width: 100%;
+    scrollbar-size-vertical: 1;
+    scrollbar-background: $sbom-primary;
+    scrollbar-color: $sbom-primary-600;
+    scrollbar-color-hover: $sbom-purple;
+    scrollbar-color-active: $sbom-purple;
+}
+
+/* The region is only a tab stop when it can scroll (see WizardScroll), and
+ * it has no border to light up — so brighten the scrollbar to show that
+ * arrow keys now pan the body rather than move a selection. */
+.wizard-scroll:focus {
+    scrollbar-color: $sbom-purple;
 }
 
 .wizard-step-crumb {
@@ -359,17 +413,23 @@ PickOrCreate > OptionList {
     color: $sbom-text-muted;
 }
 
-/* Review screen — the diff panel is the screen's flexible region: it
- * takes 1fr so it soaks up whatever vertical space is left after the
- * (fixed-height) plan summary, components table, and button row, and
- * the RichLog inside scrolls. This pins Apply / Back on screen at any
- * terminal height without the page itself ever scrolling. */
+/* Review screen — the diff panel is the screen's flexible region: it takes
+ * 1fr so it soaks up whatever vertical space is left after the plan summary
+ * and components table, and the RichLog inside scrolls.
+ *
+ * min-height is the important half: 1fr of "whatever's left" resolved to
+ * ZERO rows on a short terminal, so the panel rendered as an empty box
+ * still captioned "preview of what apply will write" — reading as "no
+ * changes" immediately before the wizard writes a file. The minimum
+ * guarantees a usable diff; if that doesn't fit, the body scrolls. */
 #diff-panel {
     height: 1fr;
+    min-height: 12;
 }
 
 #workflow-diff {
     height: 1fr;
+    min-height: 8;
 }
 
 /* Apply screen — live log of apply_plan's progress. Same problem as
@@ -570,6 +630,15 @@ RichLog {
  * controls fit. Warnings and status lines stay (they're ``wizard-muted``,
  * not ``wizard-help``). The full copy returns on roomy terminals. */
 .-compact .wizard-help {
+    display: none;
+}
+
+/* Cards whose entire contents are ``wizard-help`` prose — the Components
+ * and form intros. Hiding just the prose left a titled, subtitled, empty
+ * two-row box, which reads as a rendering bug rather than as intentional
+ * compaction. Hide the whole card instead. Screens tag it explicitly, so a
+ * card that also carries a warning keeps rendering. */
+.-compact .wizard-panel-help-only {
     display: none;
 }
 

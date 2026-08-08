@@ -69,7 +69,12 @@ class ConfigureSbomifyJsonScreen(PagedFormScreen):
             yield from self._compose_lifecycle_page()
 
     def _compose_supplier_page(self) -> ComposeResult:
-        intro = Vertical(classes="wizard-panel")
+        # Tagged help-only (and so hidden in compact mode) unless the
+        # ownership warning below is also going in it — that warning is
+        # never expendable, since without it the user's edits silently
+        # don't get written.
+        hand_authored = self._existing_file_is_hand_authored()
+        intro = Vertical(classes="wizard-panel" if hand_authored else "wizard-panel wizard-panel-help-only")
         intro.border_title = "◆  sbomify.json fields"
         intro.border_subtitle = "saved to the repository root"
         with intro:
@@ -87,7 +92,7 @@ class ConfigureSbomifyJsonScreen(PagedFormScreen):
             # files don't surface a warning (apply rewrites them as part of
             # the normal flow, with a .bak fallback). This is a warning, not
             # help text, so it keeps the ``wizard-muted`` class (never hidden).
-            if self._existing_file_is_hand_authored():
+            if hand_authored:
                 yield Static(
                     "[#F4B57F]⚠ Heads up:[/] [b]sbomify.json[/] already exists in this "
                     "repository and was not created by the wizard. Apply will "

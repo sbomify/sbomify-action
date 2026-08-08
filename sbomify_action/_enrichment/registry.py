@@ -12,6 +12,33 @@ from .exceptions import TransientSourceError
 from .metadata import NormalizedMetadata
 from .protocol import DataSource
 
+#: Fields the early-stop treats as the point of enrichment. A source that can
+#: fill none of the ones still missing is not worth a network round trip.
+_CORE_FIELDS = ("description", "licenses", "supplier")
+
+
+def _still_missing(result: Optional[NormalizedMetadata]) -> set[str]:
+    """Which NormalizedMetadata fields are not yet populated."""
+    if result is None:
+        return set(_CORE_FIELDS) | {"homepage", "repository_url", "license_texts"}
+    missing = set()
+    for field_name in (*_CORE_FIELDS, "homepage", "repository_url", "license_texts"):
+        if not getattr(result, field_name, None):
+            missing.add(field_name)
+    return missing
+
+
+def _can_contribute(source: object, missing: set[str]) -> bool:
+    """Whether this source can fill anything still absent.
+
+    A source that does not declare `provides` is assumed to be able to fill
+    anything, which is how every source behaved before the field existed.
+    """
+    provides = getattr(source, "provides", None)
+    if not provides:
+        return True
+    return bool(set(provides) & missing)
+
 
 class SourceRegistry:
     """
@@ -96,6 +123,23 @@ class SourceRegistry:
             if result and result.description and result.licenses and result.supplier:
                 logger.debug(f"Skipping {source.name} - already have sufficient data for {purl.name}")
                 break
+
+            # And skip a source whose whole contribution is already present.
+            # The stop above needs *all three* core fields, so a source that
+            # fills only one of them was consulted whenever any of the others
+            # was missing, and what it returned arrived redundant. A source
+            # that declares nothing is unaffected: it is assumed to be able to
+            # fill anything, which is how every source behaved before
+            # `provides` existed.
+            #
+            # A skipped call is not merely a saved round trip. Sources cost
+            # real time on a cold coordinate and several give up on
+            # themselves after consecutive failures, so consulting one that
+            # cannot help spends a budget that should still be there when it
+            # can -- see ProvidesFields for the case this was measured on.
+            if not _can_contribute(source, _still_missing(result)):
+                logger.debug(f"Skipping {source.name} for {purl.name}: it supplies only fields we already have")
+                continue
 
             try:
                 # Persistent cache sits here rather than in each source: this is

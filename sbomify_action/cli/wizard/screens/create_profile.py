@@ -60,7 +60,7 @@ class CreateProfileScreen(PagedFormScreen):
             yield from self._compose_contacts_page()
 
     def _compose_org_page(self) -> ComposeResult:
-        intro = Vertical(classes="wizard-panel")
+        intro = Vertical(classes="wizard-panel wizard-panel-help-only")
         intro.border_title = "◆  New contact profile"
         intro.border_subtitle = "saved to your sbomify workspace"
         with intro:

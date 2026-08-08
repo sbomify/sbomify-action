@@ -108,6 +108,18 @@ class PlanLimitError(APIError):
         self.resource = resource
 
 
+class DuplicateArtifactError(APIError):
+    """Raised when every upload failure was "this version already exists".
+
+    An expected outcome, not a defect: re-running a workflow on the same
+    commit, or two triggers racing on one push, both land here. The run
+    still fails so the user knows nothing new was published, but it is
+    filtered out of telemetry the same way the other user-side conditions
+    are — see ``initialize_sentry``. It accounted for ~10% of all reported
+    events before being classified.
+    """
+
+
 class OIDCError(APIError):
     """Base exception for OIDC trusted-publishing failures."""
 

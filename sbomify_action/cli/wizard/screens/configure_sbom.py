@@ -187,6 +187,7 @@ class ConfigureSbomScreen(WizardScreen):
                     value=not attest_default_yes,
                 )
 
+    def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")

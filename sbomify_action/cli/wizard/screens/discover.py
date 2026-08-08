@@ -28,7 +28,13 @@ class DiscoverScreen(WizardScreen):
         Binding("enter", "submit", "Next ▸", show=True, priority=True),
         # priority so the SelectionList can't swallow Escape.
         Binding("escape", "app.pop_screen", "Back", show=True, priority=True),
-        Binding("space", "toggle_selection", "Toggle", show=True),
+        # priority=True so this wins over SelectionList's own Space binding.
+        # Not for behaviour — ``action_toggle_selection`` calls straight
+        # through to ``SelectionList.action_select`` — but for the footer:
+        # a binding shadowed by the focused widget is never rendered, so
+        # without priority the screen's primary interaction had no hint at
+        # any terminal width, while the secondary "a / n" bulk keys did.
+        Binding("space", "toggle_selection", "Toggle", show=True, priority=True),
         # Bulk operations for users with many lockfiles — Tab-and-Space
         # through 20 rows gets old fast.
         Binding("a", "select_all", "All", show=True),
@@ -46,21 +52,62 @@ class DiscoverScreen(WizardScreen):
                 classes="wizard-help",
             )
             if any(lf.nested_repo for lf in self.wizard.state.discovered):
+                # ``wizard-muted``, not ``wizard-help``: this is the only
+                # explanation for why some rows arrive pre-deselected, so
+                # dropping it in compact mode left those rows looking
+                # arbitrary. Help prose is expendable on small terminals;
+                # the reason a default was chosen for the user is not.
                 yield Static(
                     "[#F4B57F]Lockfiles inside submodules or vendored repos are deselected "
                     "by default — they belong to another repository, so set up SBOMs there "
                     "instead.[/]",
                     id="nested-repo-note",
-                    classes="wizard-help",
+                    classes="wizard-muted",
                 )
             yield SelectionList[int](id="lockfile-list")
-            yield Static("", id="discover-status", markup=True)
+
+    def compose_actions(self) -> ComposeResult:
+        # The "pick at least one" validation message lives with the buttons,
+        # not inside the scrolling panel — it fires in response to pressing
+        # Next, so it has to be visible from wherever Next is.
+        yield Static("", id="discover-status", markup=True)
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")
 
+    def _default_selected(self) -> set[int]:
+        """Indices to tick on arrival.
+
+        Everything used to be ticked, which is fine for the median repo --
+        six lockfiles -- and wrong for the ones that matter. Measured across
+        251 repositories the mean was 31.8, forty-two had more than fifty,
+        and nine hit the discovery cap of 200: vite, next.js, spring-boot,
+        rust-lang/rust, deno. Pressing Enter on vite created two hundred
+        sbomify components, most of them scaffolding templates
+        (`packages/create-vite/template-lit/package.json`) that are not
+        dependencies of vite at all.
+
+        So: tick the shallowest depth that has anything selectable, and
+        leave the rest listed but unticked. A polyglot root still gets both
+        of its lockfiles; a monorepo gets its top-level one instead of every
+        package underneath.
+
+        Depth rather than "root only", which was the first idea and is
+        wrong: thirty of those repositories have no lockfile at the root at
+        all, and ticking nothing leaves the user on a screen that refuses to
+        advance. Replayed over the same corpus this rule takes the mean from
+        31.8 to 1.5 and the worst case from 200 to 52, and never selects
+        nothing.
+        """
+        selectable = [(idx, lf) for idx, lf in enumerate(self.wizard.state.discovered) if lf.nested_repo is None]
+        if not selectable:
+            return set()
+        shallowest = min(len(lf.rel_path.parts) for _idx, lf in selectable)
+        return {idx for idx, lf in selectable if len(lf.rel_path.parts) == shallowest}
+
     def on_mount(self) -> None:
         sel = self.query_one("#lockfile-list", SelectionList)
+        default = self._default_selected()
         for idx, lf in enumerate(self.wizard.state.discovered):
             label = f"{lf.rel_path}  [#5E5E5E]({lf.ecosystem})[/]"
             if lf.nested_repo:
@@ -69,9 +116,12 @@ class DiscoverScreen(WizardScreen):
                 # than claiming "vendored".
                 kind = _NESTED_REPO_LABELS.get(lf.nested_repo_kind, "nested repo")
                 label += f"  [#F4B57F]({kind}: {lf.nested_repo})[/]"
-            # Nested-repo lockfiles default to deselected — they belong to
-            # another repository and are better tracked from there.
-            sel.add_option((label, idx, lf.nested_repo is None))
+            # What starts ticked is decided by _default_selected: the
+            # shallowest depth that has anything selectable, with nested-repo
+            # lockfiles excluded entirely because they belong to another
+            # repository. So a deeper lockfile of this repo's own is listed
+            # and left unticked too, not only a vendored one.
+            sel.add_option((label, idx, idx in default))
         sel.focus()
 
     def action_toggle_selection(self) -> None:

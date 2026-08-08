@@ -73,7 +73,10 @@ class ComponentsScreen(WizardScreen):
             str(c.get("name") or c.get("id") or "(unnamed)"): str(c.get("id")) for c in existing if c.get("id")
         }
 
-        intro = Vertical(classes="wizard-panel")
+        # id so the responsive layer can hide the whole card in compact mode.
+        # Its only child is ``wizard-help`` prose, so hiding just the prose
+        # left a titled-but-empty two-row box on small terminals.
+        intro = Vertical(classes="wizard-panel wizard-panel-help-only", id="components-intro")
         intro.border_title = "◆  Components"
         intro.border_subtitle = f"{len(self.wizard.state.selected)} lockfile(s) · {len(existing_pairs)} existing"
         with intro:
@@ -120,6 +123,12 @@ class ComponentsScreen(WizardScreen):
                     pre_select_id=pre_select,
                     id=f"component-{idx}",
                 )
+
+    def compose_actions(self) -> ComposeResult:
+        # Reload status ("Reloaded — 2 new component(s)") pins with the
+        # buttons: with one card per lockfile the card stack is the tallest
+        # body in the wizard, and a status line at the end of it would sit
+        # far below the fold on a monorepo.
         yield Static("", id="components-status", markup=True)
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
