@@ -43,6 +43,7 @@ from ..exceptions import (
     APIError,
     ConfigurationError,
     DockerImageNotFoundError,
+    DuplicateArtifactError,
     FileProcessingError,
     OIDCError,
     SBOMGenerationError,
@@ -832,6 +833,9 @@ def initialize_sentry() -> None:
                     # OIDC errors are user/setup issues (missing binding, wrong audience,
                     # rate limit) — not actionable Sentry events.
                     OIDCError,
+                    # "This version is already published" — the normal outcome of
+                    # re-running a workflow on the same commit, not a defect.
+                    DuplicateArtifactError,
                 ),
             ):
                 return None
@@ -1023,6 +1027,28 @@ def resolve_working_dir(working_dir: str) -> Path:
     return resolved
 
 
+def _format_search_locations(*candidates: Path) -> str:
+    """Render the locations a lookup tried, de-duplicated, in order.
+
+    Inside the action's container the working directory *is*
+    ``/github/workspace``, so "relative to cwd" and "relative to the
+    workspace" resolve to the same path. The old message listed both
+    unconditionally and produced
+
+        Searched in: '/github/workspace/unpacked', '/github/workspace/unpacked'
+
+    -- which reads like a bug in the tool and, worse, omitted the bare
+    relative path that is actually tried first. Report each distinct
+    location exactly once.
+    """
+    seen: list[str] = []
+    for candidate in candidates:
+        rendered = str(candidate)
+        if rendered not in seen:
+            seen.append(rendered)
+    return ", ".join(f"'{location}'" for location in seen)
+
+
 def path_expansion(path: str) -> str:
     """
     Takes a path/file and returns an absolute path.
@@ -1067,7 +1093,8 @@ def path_expansion(path: str) -> str:
         return str(workspace_relative_path)
     else:
         raise FileProcessingError(
-            f"Specified input file '{path}' not found. Searched in: '{relative_path}', '{workspace_relative_path}'"
+            f"Specified input file '{path}' not found. "
+            f"Searched in: {_format_search_locations(Path(path), relative_path, workspace_relative_path)}"
         )
 
 
@@ -1102,7 +1129,8 @@ def directory_expansion(path: str) -> str:
             return str(candidate if candidate.is_absolute() else current_dir / candidate)
 
     raise FileProcessingError(
-        f"Specified source directory '{path}' not found. Searched in: '{relative_path}', '{workspace_relative_path}'"
+        f"Specified source directory '{path}' not found. "
+        f"Searched in: {_format_search_locations(Path(path), relative_path, workspace_relative_path)}"
     )
 
 
@@ -2087,6 +2115,9 @@ def run_pipeline(config: Config) -> None:
             logger.info(f"Upload destinations: {config.upload_destinations}")
 
             failed_destinations: list[str] = []
+            # Subset of failed_destinations whose only problem was that the
+            # version is already published — see DuplicateArtifactError.
+            duplicate_destinations: list[str] = []
             for destination in config.upload_destinations or []:
                 logger.info(f"Uploading to: {destination}")
 
@@ -2126,11 +2157,17 @@ def run_pipeline(config: Config) -> None:
 
                 if not upload_result.success:
                     if upload_result.error_code == "DUPLICATE_ARTIFACT":
-                        logger.error(
+                        # warning, not error: Sentry's logging integration turns
+                        # error-level records into events, and this one embeds
+                        # the component_id — so every affected component became
+                        # its own issue for a condition that is simply "already
+                        # published". The user-facing panel below is unchanged.
+                        logger.warning(
                             f"Upload to {destination} failed with duplicate SBOM: "
                             f"component_id={config.component_id}, format={FORMAT}, "
                             f"version={config.component_version}"
                         )
+                        duplicate_destinations.append(destination)
                         print_duplicate_sbom_error(
                             config.component_id, FORMAT, config.component_version, artifact_kind=artifact_label
                         )
@@ -2150,12 +2187,27 @@ def run_pipeline(config: Config) -> None:
 
             # Fail if any upload failed
             if failed_destinations:
-                raise APIError(f"Upload failed for destination(s): {', '.join(failed_destinations)}")
+                message = f"Upload failed for destination(s): {', '.join(failed_destinations)}"
+                # When *every* failure was a duplicate the run still fails —
+                # nothing new was published, and the user should know — but it
+                # is an expected condition rather than a defect, so raise the
+                # type ``before_send`` filters instead of a bare APIError.
+                if set(failed_destinations) == set(duplicate_destinations):
+                    raise DuplicateArtifactError(message)
+                raise APIError(message)
 
             _log_step_end(5)
 
         except (APIError, FileProcessingError) as e:
-            logger.error(f"Step 5 (upload) failed: {e}")
+            # The step-level echo is a second Sentry event for the same
+            # occurrence — the logging integration turns any error record into
+            # one, regardless of the exception type below it. Log the expected
+            # duplicate case at warning so a re-run publishes nothing and
+            # reports nothing, while still failing the job.
+            if isinstance(e, DuplicateArtifactError):
+                logger.warning(f"Step 5 (upload) failed: {e}")
+            else:
+                logger.error(f"Step 5 (upload) failed: {e}")
             _log_step_end(5, success=False)
             sys.exit(1)
     else:

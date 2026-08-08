@@ -1,0 +1,215 @@
+"""Regressions for failures observed in production telemetry.
+
+Each test here reproduces a specific issue from the `github-action` Sentry
+project. The Sentry short-id is quoted so the issue can be found again; the
+payloads are the ones from the real events, not invented equivalents.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from sbomify_action._generation.utils import error_signature
+from sbomify_action.cli.main import _format_search_locations, path_expansion
+from sbomify_action.exceptions import APIError, DuplicateArtifactError, FileProcessingError
+from sbomify_action.serialization import (
+    _canonical_spdx_license_id,
+    _is_valid_spdx_license_id,
+    sanitize_cyclonedx_licenses,
+)
+from sbomify_action.validation import validate_sbom_data
+
+
+class TestNonSpdxLicenseIds:
+    """GITHUB-ACTION-F0 / F1 / F2 — a run died on an unlisted license id.
+
+    Enrichment emitted ``{'license': {'id': 'Libselinux-1.0'}}``; CycloneDX
+    rejected it and step 3 aborted. The sanitizer that exists to move bad ids
+    to ``license.name`` had passed it, because it asked
+    ``license-expression`` (2447 keys, ScanCode's superset) rather than the
+    SPDX license list the schema actually validates against (811 ids).
+    """
+
+    def test_scancode_only_key_is_not_a_valid_license_id(self) -> None:
+        # ScanCode knows it; the SPDX list does not, under this spelling.
+        assert _is_valid_spdx_license_id("LicenseRef-scancode-abrms") is False
+
+    def test_licenseref_belongs_in_name_not_id(self) -> None:
+        # Valid inside an SPDX *expression*, never a member of the id enum.
+        assert _is_valid_spdx_license_id("LicenseRef-Liferay-DXP-EULA-2.0.0-2023-06") is False
+
+    def test_real_spdx_ids_still_pass(self) -> None:
+        for value in ("MIT", "Apache-2.0", "GPL-2.0-only", "BSD-3-Clause"):
+            assert _is_valid_spdx_license_id(value) is True, value
+
+    def test_wrong_casing_is_corrected_not_discarded(self) -> None:
+        # 83 SPDX ids start lowercase, so casing is load-bearing. Demoting
+        # these to license.name would lose a perfectly good identifier.
+        assert _canonical_spdx_license_id("apache-2.0") == "Apache-2.0"
+        assert _canonical_spdx_license_id("Libselinux-1.0") == "libselinux-1.0"
+
+    def test_the_reported_payload_now_validates(self) -> None:
+        sbom = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "version": 1,
+            "components": [
+                {
+                    "type": "library",
+                    "name": "libselinux",
+                    "version": "3.8-3",
+                    "licenses": [
+                        {
+                            "license": {
+                                "id": "Libselinux-1.0",
+                                "url": "https://sources.debian.org/src/libselinux/3.8-3/LICENSE/",
+                            }
+                        }
+                    ],
+                }
+            ],
+        }
+        # Precondition: unsanitized, this is exactly the reported failure.
+        assert validate_sbom_data(sbom, "cyclonedx", "1.6").valid is False
+
+        sanitize_cyclonedx_licenses(sbom)
+        assert validate_sbom_data(sbom, "cyclonedx", "1.6").valid is True
+        # The id survives as the real SPDX identifier rather than being
+        # demoted to a free-text name.
+        licence = sbom["components"][0]["licenses"][0]["license"]
+        assert licence["id"] == "libselinux-1.0"
+        assert "name" not in licence
+
+    def test_genuinely_unlisted_license_moves_to_name(self) -> None:
+        sbom = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "version": 1,
+            "components": [
+                {
+                    "type": "library",
+                    "name": "thing",
+                    "version": "1",
+                    "licenses": [{"license": {"id": "Totally-Made-Up-1.0"}}],
+                }
+            ],
+        }
+        sanitize_cyclonedx_licenses(sbom)
+        licence = sbom["components"][0]["licenses"][0]["license"]
+        assert "id" not in licence
+        assert licence["name"] == "Totally-Made-Up-1.0"
+        assert validate_sbom_data(sbom, "cyclonedx", "1.6").valid is True
+
+
+class TestSearchLocationMessage:
+    """GITHUB-ACTION-DP — "Searched in: '/github/workspace/unpacked',
+    '/github/workspace/unpacked'".
+
+    Inside the container the working directory *is* /github/workspace, so the
+    two locations the message reported were the same one twice — and the bare
+    relative path, which is tried first, was never mentioned.
+    """
+
+    def test_identical_locations_are_reported_once(self) -> None:
+        rendered = _format_search_locations(
+            Path("unpacked"),
+            Path("/github/workspace/unpacked"),
+            Path("/github/workspace/unpacked"),
+        )
+        assert rendered.count("/github/workspace/unpacked") == 1
+        assert "'unpacked'" in rendered
+
+    def test_distinct_locations_are_all_reported(self) -> None:
+        rendered = _format_search_locations(
+            Path("unpacked"),
+            Path("/somewhere/unpacked"),
+            Path("/github/workspace/unpacked"),
+        )
+        assert rendered.count("'") == 6  # three quoted paths
+
+    def test_missing_file_error_lists_each_location_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Reproduce the container's layout, where cwd IS the workspace and the
+        # two "different" candidate locations collapse onto each other.
+        import pathlib
+
+        monkeypatch.setattr(pathlib.Path, "cwd", classmethod(lambda cls: pathlib.Path("/github/workspace")))
+        with pytest.raises(FileProcessingError) as excinfo:
+            path_expansion("unpacked")
+        message = str(excinfo.value)
+        assert message.count("/github/workspace/unpacked") == 1, message
+        assert "'unpacked'" in message
+
+
+class TestToolErrorGrouping:
+    """23 Sentry issues for one cdxgen complaint.
+
+    Log-derived events group by message, and the message was raw tool stderr
+    — colour codes, paths and line numbers included — so each variant became
+    its own issue.
+    """
+
+    SECURE_MODE_VARIANTS = [
+        "\x1b[1;35mSECURE MODE: DO NOT run cdxgen with root privileges.\x1b[0m",
+        "SECURE MODE: DO NOT run cdxgen with root privileges.",
+        "\x1b[1;35mSECURE MODE: DO NOT run cdxgen with root privileges.\x1b[0m\nat /github/workspace/x",
+    ]
+
+    def test_ansi_and_volatile_variants_share_a_signature(self) -> None:
+        signatures = {error_signature(variant) for variant in self.SECURE_MODE_VARIANTS}
+        assert len(signatures) == 1, signatures
+
+    def test_paths_and_line_numbers_do_not_split_a_group(self) -> None:
+        first = error_signature("cdxgen failed at /github/workspace/a/b.json line 45")
+        second = error_signature("cdxgen failed at /github/workspace/c/d.json line 912")
+        assert first == second
+
+    def test_genuinely_different_errors_stay_apart(self) -> None:
+        assert error_signature("SECURE MODE: DO NOT run cdxgen with root privileges.") != error_signature(
+            "Ensure docker/podman service or Docker for Desktop is running."
+        )
+
+    def test_empty_output_has_no_signature(self) -> None:
+        assert error_signature("") == ""
+        assert error_signature("\n  \n") == ""
+
+
+class TestDuplicateArtifactClassification:
+    """~10% of all reported events were "this version already exists".
+
+    Re-running a workflow on the same commit lands here. The run should still
+    fail — nothing new was published — but it is an expected outcome, so it
+    is typed to be filtered from telemetry alongside the other user-side
+    conditions.
+    """
+
+    def test_is_an_api_error_so_existing_handlers_still_catch_it(self) -> None:
+        assert issubclass(DuplicateArtifactError, APIError)
+
+    def test_is_filtered_by_before_send(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # before_send is defined inside initialize_sentry; capture it by
+        # intercepting the init call rather than duplicating the predicate.
+        captured: dict[str, object] = {}
+
+        def fake_init(**kwargs: object) -> None:
+            captured.update(kwargs)
+
+        monkeypatch.setattr("sentry_sdk.init", fake_init)
+        monkeypatch.setattr("sentry_sdk.set_tag", lambda *a, **k: None)
+        monkeypatch.setattr("sentry_sdk.set_context", lambda *a, **k: None)
+        monkeypatch.delenv("TELEMETRY", raising=False)
+
+        from sbomify_action.cli.main import initialize_sentry
+
+        initialize_sentry()
+        before_send = captured["before_send"]
+        assert callable(before_send)
+
+        event: dict[str, object] = {"message": "Upload failed for destination(s): sbomify"}
+        duplicate_hint = {"exc_info": (DuplicateArtifactError, DuplicateArtifactError("dup"), None)}
+        assert before_send(event, duplicate_hint) is None
+
+        # A real API failure still reaches Sentry.
+        api_hint = {"exc_info": (APIError, APIError("boom"), None)}
+        assert before_send(event, api_hint) is event
