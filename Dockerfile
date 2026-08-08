@@ -9,10 +9,6 @@ FROM python:3.14-slim-trixie AS builder
 
 ARG VERSION=0.0.0
 
-# Install build dependencies
-RUN apt-get update && \
-    apt-get install -y build-essential libxml2-dev libxslt-dev
-
 COPY --from=uv-fetcher /uv /uvx /usr/local/bin/
 
 WORKDIR /app
