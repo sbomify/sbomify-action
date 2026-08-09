@@ -41,6 +41,19 @@ purl = "pkg:github/sbomify/sbom-tools@{release}#jvm"
 provides = ["dotnet"]
 purl = "pkg:github/sbomify/sbom-tools@{release}#dotnet"
 
+# sbom-tools has built and published this bundle for a while; nothing here
+# declared it, so bundle_for("composer") returned None, can_provide said no,
+# and every PHP project that had no committed composer.lock fell through to
+# syft and got a document with zero components -- exit code 0, no warning.
+#
+# Like the jvm bundle, it carries its own cdxgen alongside the runtime, so
+# `provides` names only the ecosystem tools: listing cdxgen or syft here would
+# be a second provider for a tool [bundle.cdxgen] already claims, which
+# load_bundles rejects outright.
+[bundle.php]
+provides = ["php", "composer"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#php"
+
 [bundle.cdxgen]
 provides = ["cdxgen"]
 purl = "pkg:github/sbomify/sbom-tools@{release}#cdxgen"

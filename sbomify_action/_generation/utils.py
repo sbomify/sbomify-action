@@ -728,6 +728,22 @@ def ensure_dotnet_installed() -> None:
     ensure_runtime("dotnet")
 
 
+def ensure_php_installed() -> None:
+    """Make PHP and Composer available for composer.json resolution.
+
+    Without Composer, cdxgen cannot read a composer.json at all: it stops with
+    "No composer version found. Check if composer is installed and available
+    in PATH", falls through to syft, and syft writes a document with no
+    components -- while still exiting 0. A silent empty SBOM, which is the
+    worst of the three possible outcomes.
+
+    This is squarely the manifest case, and PHP is where it bites hardest:
+    libraries gitignore composer.lock because the consuming application
+    resolves it, so most PHP on GitHub arrives as a manifest and nothing else.
+    """
+    ensure_runtime("composer")
+
+
 def ensure_go_installed() -> None:
     """Make the Go toolchain available for Go dependency resolution.
 
