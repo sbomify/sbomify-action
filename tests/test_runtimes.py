@@ -527,7 +527,7 @@ class TestBundleFileLock:
     """F19: materialising a bundle has to be safe between processes."""
 
     def test_the_lock_is_held_exclusively_and_released(self, tmp_path, monkeypatch):
-        import fcntl
+        fcntl = pytest.importorskip("fcntl", reason="POSIX only")
 
         monkeypatch.setenv("SBOMIFY_TOOL_CACHE", str(tmp_path / "cache"))
         reset_runtime_cache()
@@ -547,6 +547,7 @@ class TestBundleFileLock:
 
     def test_an_unlockable_cache_degrades_rather_than_failing(self, tmp_path, monkeypatch):
         """Some network filesystems have no flock. Unsynchronised beats refusing to run."""
+        pytest.importorskip("fcntl", reason="POSIX only")
 
         def _no_flock(*_args, **_kwargs):
             raise OSError("flock not supported")
@@ -555,3 +556,20 @@ class TestBundleFileLock:
 
         with runtimes._bundle_file_lock("jvm"):
             pass
+
+    def test_a_platform_without_fcntl_degrades_rather_than_crashing(self, monkeypatch):
+        """Windows has no fcntl at all.
+
+        The module is imported defensively because this package is published
+        as OS Independent and every generator imports runtimes -- an
+        unconditional `import fcntl` would take the whole library down on
+        import, not just the locking. Losing cross-process locking is a
+        degradation; losing the library is not.
+        """
+        monkeypatch.setattr(runtimes, "fcntl", None)
+
+        entered = False
+        with runtimes._bundle_file_lock("jvm"):
+            entered = True
+
+        assert entered, "the context manager must still yield without fcntl"

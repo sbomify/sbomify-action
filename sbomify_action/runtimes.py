@@ -36,7 +36,6 @@ for a tool whose output is a provenance document.
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import hashlib
 import os
 import platform
@@ -58,6 +57,16 @@ import requests
 from .exceptions import SBOMGenerationError
 from .logging_config import logger
 from .tool_manifest import STAGE_RUNTIME, Bundle, bundle_for, tools_for_stage
+
+# POSIX only, and this package is published as OS Independent -- importing it
+# at the top would make `import sbomify_action.runtimes` raise on Windows and
+# take the whole package with it, since every generator imports this module.
+# Its absence costs cross-process locking, which is a degradation; its import
+# costs the entire library, which is not.
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised only off POSIX
+    fcntl = None  # type: ignore[assignment]
 
 # Download tuning. Runtimes range from ~12MB (crane) to ~190MB (a full JDK),
 # so the read timeout is generous while the connect timeout stays short.
@@ -602,8 +611,12 @@ def _bundle_file_lock(name: str) -> Iterator[None]:
 
     A cache on a filesystem without ``flock`` (some network mounts) degrades to
     the previous behaviour rather than refusing to run: unsynchronised, but no
-    worse than it was.
+    worse than it was. So does a platform with no ``fcntl`` at all.
     """
+    if fcntl is None:
+        yield
+        return
+
     root = cache_root()
     try:
         root.mkdir(parents=True, exist_ok=True)
@@ -661,10 +674,11 @@ def _apply_bundle_manifest(prefix: Path) -> Path:
     manifest = prefix / "bundle.toml"
     if not manifest.exists():
         raise SBOMGenerationError(f"{prefix.name} has no bundle.toml; it is not a bundle we can use")
-    body = tomllib.loads(manifest.read_text()).get("bundle") or {}
+    declared = tomllib.loads(manifest.read_text())
+    body = declared.get("bundle") or {}
     bin_dirs = [str(d) for d in (body.get("bin_dirs") or ["bin"])]
 
-    for key, value in (tomllib.loads(manifest.read_text()).get("env") or {}).items():
+    for key, value in (declared.get("env") or {}).items():
         resolved = str(value).replace("{prefix}", str(prefix))
         if str(key) in _CALLER_OVERRIDABLE_ENV and os.environ.get(str(key)):
             logger.debug(f"Keeping the caller's {key} instead of the {prefix.name} default")
