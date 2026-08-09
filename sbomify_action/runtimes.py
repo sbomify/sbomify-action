@@ -35,6 +35,8 @@ for a tool whose output is a provenance document.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import os
 import platform
@@ -46,6 +48,7 @@ import tempfile
 import threading
 import tomllib
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -581,6 +584,71 @@ def _bundle_lock(name: str) -> threading.Lock:
         return _bundle_locks.setdefault(name, threading.Lock())
 
 
+@contextlib.contextmanager
+def _bundle_file_lock(name: str) -> Iterator[None]:
+    """Serialise bundle materialisation across processes, not just threads.
+
+    ``_bundle_lock`` is a ``threading.Lock``, which coordinates threads inside
+    one interpreter and nothing else. Two *processes* sharing a cache -- two
+    jobs on one CI runner, or two steps of the same workflow -- would both find
+    the prefix missing and both start unpacking into it. The loser of the race
+    then hit ``ENOTEMPTY`` renaming its staging directory over the winner's
+    finished prefix, and the run failed with an error naming neither cause nor
+    remedy, because from inside one process nothing looked wrong.
+
+    ``flock`` is released by the kernel when the process exits, so a crash
+    mid-fetch cannot leave the lock held -- which matters more here than it
+    would for a lock file we would have to reap ourselves.
+
+    A cache on a filesystem without ``flock`` (some network mounts) degrades to
+    the previous behaviour rather than refusing to run: unsynchronised, but no
+    worse than it was.
+    """
+    root = cache_root()
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        handle = (root / f".bundle-{name}.lock").open("w")
+    except OSError:
+        yield
+        return
+
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            yield
+            return
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+#: Bundle environment variables a caller is allowed to set for itself.
+#:
+#: The jvm bundle points these at directories inside the shared runtime cache,
+#: and assigning them unconditionally is what makes two concurrent JVM builds
+#: on one machine unsafe: they share a Gradle journal, an Ivy home and a local
+#: Maven repository, and corrupt each other. Because the assignment happened
+#: after the caller's environment was read, exporting GRADLE_USER_HOME did
+#: nothing -- the only fix from outside was to stop running two builds at once.
+#:
+#: Deliberately a list of *cache locations*, not every variable in the [env]
+#: block. JAVA_HOME must keep pointing into the prefix: a runner with its own
+#: JDK installed almost always has JAVA_HOME set already, and honouring it
+#: would silently build against a different Java than the one we pinned and
+#: attested. Getting a wrong answer quietly is worse than the contention.
+_CALLER_OVERRIDABLE_ENV = frozenset(
+    {
+        "GRADLE_USER_HOME",
+        "MAVEN_ARGS",
+        "SBT_OPTS",
+    }
+)
+
+
 def _apply_bundle_manifest(prefix: Path) -> Path:
     """Read the bundle's own description and make it usable.
 
@@ -597,7 +665,11 @@ def _apply_bundle_manifest(prefix: Path) -> Path:
     bin_dirs = [str(d) for d in (body.get("bin_dirs") or ["bin"])]
 
     for key, value in (tomllib.loads(manifest.read_text()).get("env") or {}).items():
-        os.environ[str(key)] = str(value).replace("{prefix}", str(prefix))
+        resolved = str(value).replace("{prefix}", str(prefix))
+        if str(key) in _CALLER_OVERRIDABLE_ENV and os.environ.get(str(key)):
+            logger.debug(f"Keeping the caller's {key} instead of the {prefix.name} default")
+            continue
+        os.environ[str(key)] = resolved
 
     first: Path | None = None
     for relative in bin_dirs:
@@ -616,13 +688,17 @@ def ensure_bundle(bundle: Bundle) -> Path:
     if cached := _bundles_ready.get(bundle.name):
         return cached
 
-    with _bundle_lock(bundle.name):
+    with _bundle_lock(bundle.name), _bundle_file_lock(bundle.name):
         if cached := _bundles_ready.get(bundle.name):
             return cached
 
         arch = current_arch()
         prefix = cache_root() / f"bundle-{bundle.name}-{bundle.release}-{arch}"
         marker = prefix / _READY
+        # Re-read under the file lock. Another process may have finished this
+        # bundle while we waited for it, in which case there is nothing to do
+        # -- and, more to the point, the rmtree below would otherwise delete a
+        # prefix that process is about to use.
         if not marker.exists():
             if prefix.exists():
                 shutil.rmtree(prefix, ignore_errors=True)
@@ -649,7 +725,15 @@ def ensure_bundle(bundle: Bundle) -> Path:
                     tar.extractall(unpacked)  # noqa: S202 - every member checked above
                 archive.unlink()
                 (unpacked / _READY).write_text(f"{bundle.name} {bundle.release} {arch}\n")
-                unpacked.rename(prefix)
+                # Belt and braces behind the file lock, for the cache that
+                # could not take one. Losing this race is not an error: both
+                # prefixes were unpacked from the same pinned, attested
+                # archive, so the winner's is as good as ours.
+                try:
+                    unpacked.rename(prefix)
+                except OSError:
+                    if not marker.exists():
+                        raise
             finally:
                 shutil.rmtree(staging, ignore_errors=True)
             logger.info(f"  ✓ {bundle.name} bundle ready")

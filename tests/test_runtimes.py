@@ -451,3 +451,107 @@ class TestAttestationVerification:
         """The bootstrap: verifying cosign would require cosign."""
         for asset in runtimes.RUNTIMES["cosign"].assets["amd64"]:
             assert asset.attestation is None, "cosign cannot verify its own download on a cold cache"
+
+
+class TestBundleEnvironment:
+    """The [env] block a bundle declares, and who is allowed to win."""
+
+    @staticmethod
+    def _bundle(tmp_path: Path, env: str) -> Path:
+        prefix = tmp_path / "bundle-jvm-tools-rolling-amd64"
+        (prefix / "bin").mkdir(parents=True)
+        (prefix / "bundle.toml").write_text('[bundle]\nname = "jvm"\nbin_dirs = ["bin"]\n\n[env]\n' + env)
+        return prefix
+
+    def test_bundle_env_is_applied_with_the_prefix_substituted(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("GRADLE_USER_HOME", raising=False)
+        prefix = self._bundle(tmp_path, 'GRADLE_USER_HOME = "{prefix}/.gradle"\n')
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ["GRADLE_USER_HOME"] == str(prefix / ".gradle")
+
+    def test_a_caller_can_isolate_its_own_gradle_home(self, tmp_path, monkeypatch):
+        """F16: two concurrent JVM builds shared one Gradle journal.
+
+        The bundle pins GRADLE_USER_HOME into the shared runtime cache and used
+        to assign it unconditionally, after the caller's environment was read.
+        Exporting it did nothing, so the only way to stop two builds corrupting
+        each other was to stop running two builds.
+        """
+        monkeypatch.setenv("GRADLE_USER_HOME", "/tmp/mine")
+        prefix = self._bundle(tmp_path, 'GRADLE_USER_HOME = "{prefix}/.gradle"\n')
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ["GRADLE_USER_HOME"] == "/tmp/mine"
+
+    def test_maven_and_sbt_are_overridable_too(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MAVEN_ARGS", "-Dmaven.repo.local=/tmp/m2")
+        monkeypatch.setenv("SBT_OPTS", "-Dsbt.global.base=/tmp/sbt")
+        prefix = self._bundle(
+            tmp_path,
+            'MAVEN_ARGS = "-Dmaven.repo.local={prefix}/repository"\nSBT_OPTS = "-Dsbt.global.base={prefix}/.sbt"\n',
+        )
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ["MAVEN_ARGS"] == "-Dmaven.repo.local=/tmp/m2"
+        assert os.environ["SBT_OPTS"] == "-Dsbt.global.base=/tmp/sbt"
+
+    def test_java_home_is_not_overridable(self, tmp_path, monkeypatch):
+        """A runner's own JDK must not displace the one we pinned and attested.
+
+        JAVA_HOME is set on most CI images, so honouring it would quietly build
+        against a different Java than the bundle provides -- a wrong answer,
+        where the contention it would avoid is merely slow.
+        """
+        monkeypatch.setenv("JAVA_HOME", "/usr/lib/jvm/some-other-jdk")
+        prefix = self._bundle(tmp_path, 'JAVA_HOME = "{prefix}/jdk"\n')
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ["JAVA_HOME"] == str(prefix / "jdk")
+
+    def test_an_empty_override_does_not_count_as_set(self, tmp_path, monkeypatch):
+        """GRADLE_USER_HOME= in a workflow is an accident, not an isolation request."""
+        monkeypatch.setenv("GRADLE_USER_HOME", "")
+        prefix = self._bundle(tmp_path, 'GRADLE_USER_HOME = "{prefix}/.gradle"\n')
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ["GRADLE_USER_HOME"] == str(prefix / ".gradle")
+
+
+class TestBundleFileLock:
+    """F19: materialising a bundle has to be safe between processes."""
+
+    def test_the_lock_is_held_exclusively_and_released(self, tmp_path, monkeypatch):
+        import fcntl
+
+        monkeypatch.setenv("SBOMIFY_TOOL_CACHE", str(tmp_path / "cache"))
+        reset_runtime_cache()
+
+        with runtimes._bundle_file_lock("jvm"):
+            path = cache_root() / ".bundle-jvm.lock"
+            assert path.exists()
+            # A second handle must not be able to take it while we hold it.
+            with path.open("w") as rival:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(rival.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        # ...and must be able to once we let go.
+        with (cache_root() / ".bundle-jvm.lock").open("w") as after:
+            fcntl.flock(after.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(after.fileno(), fcntl.LOCK_UN)
+
+    def test_an_unlockable_cache_degrades_rather_than_failing(self, tmp_path, monkeypatch):
+        """Some network filesystems have no flock. Unsynchronised beats refusing to run."""
+
+        def _no_flock(*_args, **_kwargs):
+            raise OSError("flock not supported")
+
+        monkeypatch.setattr(runtimes.fcntl, "flock", _no_flock)
+
+        with runtimes._bundle_file_lock("jvm"):
+            pass
