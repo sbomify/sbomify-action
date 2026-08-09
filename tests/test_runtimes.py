@@ -557,6 +557,47 @@ class TestBundleFileLock:
         with runtimes._bundle_file_lock("jvm"):
             pass
 
+    def test_a_symlinked_lock_file_is_refused_not_followed(self, tmp_path, monkeypatch):
+        """cache_root() can be a world-writable tempdir.
+
+        A container with no writable HOME falls back to one, so the lock file
+        is not always somewhere only we can create things. Following a symlink
+        there -- or opening it with "w" -- would let anyone who can plant
+        .bundle-jvm.lock have us truncate whatever it points at.
+        """
+        pytest.importorskip("fcntl", reason="POSIX only")
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        monkeypatch.setenv("SBOMIFY_TOOL_CACHE", str(cache))
+        reset_runtime_cache()
+
+        victim = tmp_path / "precious"
+        victim.write_text("do not truncate me")
+        (cache / ".bundle-jvm.lock").symlink_to(victim)
+
+        # Degrades to unsynchronised rather than raising, and above all does
+        # not touch the target.
+        with runtimes._bundle_file_lock("jvm"):
+            pass
+
+        assert victim.read_text() == "do not truncate me"
+
+    def test_an_existing_lock_file_is_reused_without_truncation(self, tmp_path, monkeypatch):
+        """Nothing reads the file, but nothing should destroy it either."""
+        pytest.importorskip("fcntl", reason="POSIX only")
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        monkeypatch.setenv("SBOMIFY_TOOL_CACHE", str(cache))
+        reset_runtime_cache()
+
+        lock = cache / ".bundle-jvm.lock"
+        lock.write_text("existing")
+
+        with runtimes._bundle_file_lock("jvm"):
+            pass
+
+        assert lock.read_text() == "existing"
+
     def test_a_platform_without_fcntl_degrades_rather_than_crashing(self, monkeypatch):
         """Windows has no fcntl at all.
 

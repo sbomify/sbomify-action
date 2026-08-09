@@ -620,23 +620,31 @@ def _bundle_file_lock(name: str) -> Iterator[None]:
     root = cache_root()
     try:
         root.mkdir(parents=True, exist_ok=True)
-        handle = (root / f".bundle-{name}.lock").open("w")
+        # O_NOFOLLOW and no truncation, because the cache is not always a
+        # directory we own: cache_root() falls back to a world-writable
+        # tempdir when there is no HOME to write to, which is the normal case
+        # for a container running as an unprivileged uid. Opening with "w"
+        # there would let anyone who can create .bundle-<name>.lock as a
+        # symlink have us truncate whatever it points at. The file's contents
+        # are never read -- flock only needs a descriptor -- so there is
+        # nothing to gain from truncating it either.
+        fd = os.open(root / f".bundle-{name}.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
     except OSError:
         yield
         return
 
     try:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(fd, fcntl.LOCK_EX)
         except OSError:
             yield
             return
         try:
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
-        handle.close()
+        os.close(fd)
 
 
 #: Bundle environment variables a caller is allowed to set for itself.
