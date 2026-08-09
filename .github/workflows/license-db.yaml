@@ -45,7 +45,11 @@ jobs:
           DISTROS: ${{ github.event.inputs.distros || 'all' }}
         run: |
           MATRIX="$(uv run python scripts/license_db_matrix.py --distros "$DISTROS")"
-          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          {
+            echo "matrix<<GHA_MATRIX_EOF"
+            echo "$MATRIX"
+            echo "GHA_MATRIX_EOF"
+          } >> "$GITHUB_OUTPUT"
           uv run python scripts/license_db_matrix.py --distros "$DISTROS" --pretty
 
   generate-databases:
