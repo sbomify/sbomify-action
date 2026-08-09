@@ -33,6 +33,7 @@ from ..utils import (
     ensure_dotnet_installed,
     ensure_go_installed,
     ensure_java_maven_installed,
+    ensure_php_installed,
     get_lock_file_ecosystem,
     has_required_manifest,
     run_command,
@@ -198,6 +199,17 @@ class CdxgenFsGenerator:
         # whole ecosystem unusable wherever no SDK build exists for the host.
         if lock_file_name in DOTNET_LOCK_FILES:
             ensure_dotnet_installed()
+
+        # PHP, and the same distinction: the manifest needs resolving, the
+        # lock file does not. cdxgen parses a committed composer.lock as data
+        # and never shells out, but for a composer.json with no lock beside it
+        # it stops with "No composer version found" -- and the chain then
+        # hands the input to syft, which writes zero components and exits 0.
+        #
+        # That is the common case rather than the corner: PHP libraries
+        # gitignore composer.lock, leaving the application to resolve it.
+        if lock_file_name == "composer.json":
+            ensure_php_installed()
 
         cmd = [
             "cdxgen",
