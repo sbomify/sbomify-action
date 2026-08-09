@@ -2017,6 +2017,13 @@ def run_pipeline(config: Config) -> None:
                 override_sbom_metadata=config.override_sbom_metadata,
                 component_name=config.component_name,
                 component_version=config.component_version,
+                # Where to look for a tag or commit when the generator left a
+                # placeholder root version and none was configured. The lock
+                # file's directory rather than the lock file itself, and
+                # SOURCE_DIR when that is what we were given.
+                source_dir=(
+                    config.source_dir or (str(Path(config.lock_file).resolve().parent) if config.lock_file else None)
+                ),
             )
 
             logger.info(f"{format_display_name(sbom_format)} SBOM augmentation completed")
