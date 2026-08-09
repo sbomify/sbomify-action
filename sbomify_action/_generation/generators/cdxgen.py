@@ -208,6 +208,12 @@ class CdxgenFsGenerator:
         #
         # That is the common case rather than the corner: PHP libraries
         # gitignore composer.lock, leaving the application to resolve it.
+        #
+        # Like the jvm bundle above, this one carries its own cdxgen, and
+        # prepending its bin_dirs shadows the copy from [bundle.cdxgen]. That
+        # is how the JVM path has always worked, and it is version-neutral:
+        # both come from the same tools_release pin, and all three bundles
+        # currently ship cdxgen 12.8.2 on Bun 1.3.14 -- checked, not assumed.
         if lock_file_name == "composer.json":
             ensure_php_installed()
 

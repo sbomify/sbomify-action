@@ -30,9 +30,21 @@ class TestTheBundleIsDeclared:
         assert bundle is not None
         assert bundle.name == "php"
 
-    def test_the_generator_can_say_it_is_able_to_provide_composer(self):
-        """can_provide is what a generator asks before claiming an input."""
+    def test_the_generator_can_say_it_is_able_to_provide_composer(self, monkeypatch):
+        """can_provide is what a generator asks before claiming an input.
+
+        Pinned rather than inherited: can_provide is also false when fetching
+        is opted out, so a suite run with SBOMIFY_FETCH_RUNTIMES=0 -- an
+        air-gapped build, say -- would fail here for a reason that has nothing
+        to do with whether the bundle is declared, which is what this asserts.
+        """
+        monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
         assert can_provide("composer")
+
+    def test_nothing_is_fetched_when_fetching_is_opted_out(self, monkeypatch):
+        """The other half: opting out still means opting out."""
+        monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "0")
+        assert not can_provide("composer")
 
     def test_the_bundle_does_not_re_provide_cdxgen_or_syft(self):
         """It carries both, but [bundle.cdxgen] already claims cdxgen.
