@@ -5,15 +5,18 @@ validates them against SPDX, and outputs a JSON database keyed by PURL
 for easy lookups during SBOM enrichment.
 
 Supported distros:
-- Alpine Linux (3.13-3.21)
+- Alpine Linux (3.13-3.24)
 - Wolfi (Chainguard) - rolling release
 - Amazon Linux (2, 2023)
-- CentOS Stream (8, 9)
+- CentOS Stream (8, 9, 10)
 - Debian (11, 12, 13)
-- Ubuntu (20.04, 22.04, 24.04)
-- Rocky Linux (8, 9)
-- AlmaLinux (8, 9)
-- Fedora (39, 40, 41, 42)
+- Ubuntu (20.04, 22.04, 24.04, 26.04)
+- Rocky Linux (8, 9, 10)
+- AlmaLinux (8, 9, 10)
+- Fedora (39-44)
+
+The set of versions here is the same set tracked in lifecycle_data.py --
+scripts/check_lifecycle_staleness.py verifies the two do not drift apart.
 
 Usage:
     sbomify-license-db --distro alpine --version 3.20 --output alpine-3.20.json.gz
@@ -450,6 +453,7 @@ UBUNTU_CODENAMES = {
     "20.04": "focal",
     "22.04": "jammy",
     "24.04": "noble",
+    "26.04": "resolute",
 }
 UBUNTU_COMPONENTS = ["main", "universe", "restricted", "multiverse"]
 UBUNTU_POCKETS = ["-security", "-updates", ""]
@@ -821,6 +825,10 @@ RPM_DISTRO_REPOS = {
             "https://download.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/",
             "https://download.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/",
         ],
+        "10": [
+            "https://download.rockylinux.org/pub/rocky/10/BaseOS/x86_64/os/",
+            "https://download.rockylinux.org/pub/rocky/10/AppStream/x86_64/os/",
+        ],
     },
     "almalinux": {
         "8": [
@@ -830,6 +838,10 @@ RPM_DISTRO_REPOS = {
         "9": [
             "https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/",
             "https://repo.almalinux.org/almalinux/9/AppStream/x86_64/os/",
+        ],
+        "10": [
+            "https://repo.almalinux.org/almalinux/10/BaseOS/x86_64/os/",
+            "https://repo.almalinux.org/almalinux/10/AppStream/x86_64/os/",
         ],
     },
     "amazonlinux": {
@@ -851,6 +863,10 @@ RPM_DISTRO_REPOS = {
             "https://mirror.stream.centos.org/9-stream/BaseOS/x86_64/os/",
             "https://mirror.stream.centos.org/9-stream/AppStream/x86_64/os/",
         ],
+        "stream10": [
+            "https://mirror.stream.centos.org/10-stream/BaseOS/x86_64/os/",
+            "https://mirror.stream.centos.org/10-stream/AppStream/x86_64/os/",
+        ],
     },
     "fedora": {
         # Fedora keeps only currently supported releases on the main download server;
@@ -862,7 +878,10 @@ RPM_DISTRO_REPOS = {
         "39": ["https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/39/Everything/x86_64/os/"],
         "40": ["https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/40/Everything/x86_64/os/"],
         "41": ["https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/41/Everything/x86_64/os/"],
-        "42": ["https://dl.fedoraproject.org/pub/fedora/linux/releases/42/Everything/x86_64/os/"],
+        # Fedora 42 went EOL on 2026-05-27 and has moved to the archives.
+        "42": ["https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/42/Everything/x86_64/os/"],
+        "43": ["https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Everything/x86_64/os/"],
+        "44": ["https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/os/"],
     },
 }
 

@@ -11,7 +11,22 @@ CLE fields follow ECMA-428 specification:
 
 See: https://sbomify.com/compliance/cle/
 
-Data last updated: 2026-01-18
+Data last updated: 2026-08-08
+
+SOURCING RULE
+-------------
+Every date in this module MUST come from the vendor's own published lifecycle
+page, and the URL it came from MUST be recorded in the block comment above the
+entry. Third-party aggregators (endoflife.date, distrowatch, vendor-neutral
+"EOL" sites) are NOT acceptable as the source of a date -- they are useful only
+for *noticing* that we are out of date, which is what
+`scripts/check_lifecycle_staleness.py` uses them for.
+
+Where a vendor publishes a policy rather than a date (for example "supported for
+24 months", or Go's "supported until there are two newer releases"), the value
+is derived from that policy plus a vendor-published release date, and the
+derivation is stated explicitly in the comment. Where a vendor has not published
+a date at all, the field is None -- never a guess.
 """
 
 from typing import Dict, List, Optional, TypedDict
@@ -64,10 +79,11 @@ DISTRO_LIFECYCLE: Dict[str, Dict[str, LifecycleDates]] = {
     },
     # -------------------------------------------------------------------------
     # Alpine Linux
-    # Source: https://alpinelinux.org/releases/
+    # Source: https://alpinelinux.org/releases/ (verified 2026-08-08)
     # Note: Alpine publishes a single per-branch end date. Alpine does not
     # separately publish EOS vs EOL for the branch, so the published end date
     # is used as both end_of_support and end_of_life.
+    # Cadence: a release branch is cut from edge each May and November.
     # -------------------------------------------------------------------------
     "alpine": {
         "3.13": {
@@ -115,30 +131,51 @@ DISTRO_LIFECYCLE: Dict[str, Dict[str, LifecycleDates]] = {
             "end_of_support": "2026-11-01",
             "end_of_life": "2026-11-01",
         },
+        "3.22": {
+            "release_date": "2025-05-30",
+            "end_of_support": "2027-05-01",
+            "end_of_life": "2027-05-01",
+        },
+        "3.23": {
+            "release_date": "2025-12-03",
+            "end_of_support": "2027-11-01",
+            "end_of_life": "2027-11-01",
+        },
+        "3.24": {
+            "release_date": "2026-06-09",
+            "end_of_support": "2028-06-01",
+            "end_of_life": "2028-06-01",
+        },
     },
     # -------------------------------------------------------------------------
     # Rocky Linux
-    # Source: https://docs.rockylinux.org/
-    # Note: Rocky publishes both 'general support until' (EOS) and 'security
-    # support through' (EOL) dates.
+    # Source: https://wiki.rockylinux.org/rocky/version/ (verified 2026-08-08)
+    # Note: Rocky publishes 'Active Support Ends' (EOS) and 'End of Life' (EOL)
+    # per major version: 10 years total, the first 5 being active support.
     # -------------------------------------------------------------------------
     "rocky": {
         "8": {
-            "release_date": "2021-06-21",
-            "end_of_support": "2024-05-01",  # General support end
-            "end_of_life": "2029-05-01",  # Security support end
+            "release_date": "2021-05-01",
+            "end_of_support": "2024-05-31",  # Active support end
+            "end_of_life": "2029-05-31",  # End of life
         },
         "9": {
             "release_date": "2022-07-14",
-            "end_of_support": "2027-05-31",  # General support end
-            "end_of_life": "2032-05-31",  # Security support end
+            "end_of_support": "2027-05-31",  # Active support end
+            "end_of_life": "2032-05-31",  # End of life
+        },
+        "10": {
+            "release_date": "2025-06-11",
+            "end_of_support": "2030-05-31",  # Active support end
+            "end_of_life": "2035-05-31",  # End of life
         },
     },
     # -------------------------------------------------------------------------
     # AlmaLinux
-    # Source: https://wiki.almalinux.org/release-notes/
+    # Source: https://wiki.almalinux.org/release-notes/ (verified 2026-08-08)
     # Note: AlmaLinux publishes 'active support until' (EOS) and 'security
-    # support until' (EOL) dates.
+    # support until' (EOL) dates. release_date is the major version's first
+    # stable release.
     # -------------------------------------------------------------------------
     "almalinux": {
         "8": {
@@ -151,13 +188,21 @@ DISTRO_LIFECYCLE: Dict[str, Dict[str, LifecycleDates]] = {
             "end_of_support": "2027-05-31",  # Active support end
             "end_of_life": "2032-05-31",  # Security support end
         },
+        "10": {
+            "release_date": "2025-05-27",  # AlmaLinux 10.0
+            "end_of_support": "2030-05-31",  # Active support end
+            "end_of_life": "2035-05-31",  # Security support end
+        },
     },
     # -------------------------------------------------------------------------
     # Amazon Linux
-    # Source: https://aws.amazon.com/amazon-linux-2/faqs/
-    # Note: AWS publishes an explicit end-of-support date but does not publish
-    # separate EOS vs EOL semantics, so the published date is used for both.
-    # AL2023 only specifies month ("until June 2029").
+    # Sources:
+    #   AL2:     https://aws.amazon.com/amazon-linux-2/faqs/
+    #   AL2023:  https://docs.aws.amazon.com/linux/al2023/ug/release-cadence.html
+    #            (verified 2026-08-08)
+    # Note: AL2023 has two explicitly published phases -- standard support
+    # (quarterly minor updates) ending 2027-06-30, then maintenance
+    # (security-only) ending 2029-06-30. AL2 publishes a single end date.
     # -------------------------------------------------------------------------
     "amazonlinux": {
         "2": {
@@ -166,16 +211,26 @@ DISTRO_LIFECYCLE: Dict[str, Dict[str, LifecycleDates]] = {
             "end_of_life": "2026-06-30",
         },
         "2023": {
-            "release_date": None,  # Not explicitly published
-            "end_of_support": "2029-06",  # Month precision only
-            "end_of_life": "2029-06",
+            "release_date": "2023-03",  # "released in March 2023", month precision
+            "end_of_support": "2027-06-30",  # Standard support phase end
+            "end_of_life": "2029-06-30",  # Maintenance phase end
         },
     },
     # -------------------------------------------------------------------------
     # CentOS Stream
-    # Source: https://www.centos.org/cl-vs-cs/
+    # Sources:
+    #   Stream 8/9:  https://www.centos.org/cl-vs-cs/
+    #   Stream 10:   https://blog.centos.org/2024/12/introducing-centos-stream-10/
+    #                https://www.centos.org/centos10/  (verified 2026-08-08)
     # Note: CentOS publishes an 'expected end of life (EOL)' date. No separate
     # EOS date is published, so EOL is used for both.
+    # Stream 10: CentOS states only "roughly a five year lifecycle ... maintained
+    # until 2030", and that "the exact date will be contingent on the end of the
+    # Full Support phase of RHEL 10". RHEL 10 reached GA in May 2025 and Red Hat's
+    # Full Support phase runs 5 years, so this is recorded at month precision as
+    # 2030-05 rather than inventing a day. Red Hat additionally notes that future
+    # lifecycle dates are "close approximations, non definitive, and subject to
+    # change".
     # -------------------------------------------------------------------------
     "centos": {
         "stream8": {
@@ -188,22 +243,33 @@ DISTRO_LIFECYCLE: Dict[str, Dict[str, LifecycleDates]] = {
             "end_of_support": "2027-05-31",
             "end_of_life": "2027-05-31",
         },
+        "stream10": {
+            "release_date": "2024-12-12",
+            "end_of_support": "2030-05",  # Month precision, see note above
+            "end_of_life": "2030-05",
+        },
     },
     # -------------------------------------------------------------------------
     # Fedora
-    # Source: https://fedorapeople.org/groups/schedule/
-    # Note: Fedora schedules publish explicit EOL dates. Fedora publishes only
-    # one end date per release, so it's used for both EOS and EOL.
-    # Release dates are from 'Current Final Target date' in the schedule.
+    # Sources:
+    #   EOL table:  https://docs.fedoraproject.org/en-US/releases/eol/
+    #   F43 GA:     https://fedoramagazine.org/announcing-fedora-linux-43/
+    #   F44 GA:     https://fedoramagazine.org/announcing-fedora-linux-44/
+    #               (verified 2026-08-08)
+    # Note: Fedora publishes only one end date per release, so it is used for
+    # both EOS and EOL. A release goes EOL roughly four weeks after the second
+    # subsequent release ships, so the EOL of a still-supported release is not
+    # a published date -- it is left as None until Fedora lists it in the EOL
+    # table above. That is why F43 and F44 carry a release date but no EOL.
     # -------------------------------------------------------------------------
     "fedora": {
         "39": {
-            "release_date": None,  # Not captured
+            "release_date": "2023-11-07",
             "end_of_support": "2024-11-26",
             "end_of_life": "2024-11-26",
         },
         "40": {
-            "release_date": None,  # Not captured
+            "release_date": "2024-04-23",
             "end_of_support": "2025-05-13",
             "end_of_life": "2025-05-13",
         },
@@ -214,16 +280,33 @@ DISTRO_LIFECYCLE: Dict[str, Dict[str, LifecycleDates]] = {
         },
         "42": {
             "release_date": "2025-04-15",
-            # EOL date not yet captured from Fedora sources
-            # See: https://fedorapeople.org/groups/schedule/f-42/f-42-key-tasks.html
-            "end_of_support": None,
+            "end_of_support": "2026-05-27",
+            "end_of_life": "2026-05-27",
+        },
+        "43": {
+            "release_date": "2025-10-28",
+            "end_of_support": None,  # Still supported; EOL not yet published
+            "end_of_life": None,
+        },
+        "44": {
+            "release_date": "2026-04-28",
+            "end_of_support": None,  # Still supported; EOL not yet published
             "end_of_life": None,
         },
     },
     # -------------------------------------------------------------------------
     # openSUSE Leap
-    # Source: https://en.opensuse.org/Lifetime
-    # Note: openSUSE Leap has ~18 months support per release.
+    # Sources:
+    #   Support policy:  https://news.opensuse.org/2025/09/03/leap-16-doubles-support/
+    #   Leap 16.0 GA:    https://news.opensuse.org/2025/10/01/next-chapter-opens-with-leap-release/
+    #                    (verified 2026-08-08)
+    # Note: there is no Leap 15.7. SUSE shipped SLES 15 SP7 without a matching
+    # Leap release and the lifetime of Leap 15.6 was extended instead, to
+    # 2026-04-30, closing out the Leap 15 line.
+    # From Leap 16.0 onward each point release gets 24 months of maintenance and
+    # security updates. openSUSE has not published a per-release EOL date for
+    # 16.0, so its end dates are derived from the published 24-month commitment
+    # applied to the published GA date, recorded at month precision.
     # -------------------------------------------------------------------------
     "opensuse-leap": {
         "15.5": {
@@ -233,32 +316,64 @@ DISTRO_LIFECYCLE: Dict[str, Dict[str, LifecycleDates]] = {
         },
         "15.6": {
             "release_date": "2024-06-12",
-            "end_of_support": "2025-12-31",
-            "end_of_life": "2025-12-31",
+            "end_of_support": "2026-04-30",
+            "end_of_life": "2026-04-30",
+        },
+        "16.0": {
+            "release_date": "2025-10-01",
+            "end_of_support": "2027-10",  # GA + 24 months, month precision
+            "end_of_life": "2027-10",
         },
     },
     # -------------------------------------------------------------------------
     # Oracle Linux
     # Source: https://www.oracle.com/a/ocom/docs/elsp-lifetime-069338.pdf
-    # Note: Oracle Linux follows RHEL lifecycle with extended support.
+    #         ("Lifetime Support Policy: Coverage for Oracle Open Source Service
+    #         Offerings", Oracle Linux Releases table, verified 2026-08-08)
+    # Note: Oracle publishes its own lifecycle -- Premier Support for 10 years
+    # from GA, then Extended Support, then indefinite Sustaining Support (which
+    # carries no new security fixes and so is not an EOL extension). Oracle
+    # Linux does NOT inherit Red Hat's dates; the values here previously mirrored
+    # RHEL/Rocky and understated Oracle's Extended Support end by ~3 years.
+    # Oracle publishes month precision only, so that is what is recorded.
+    #   Release  GA        Premier ends  Extended ends
+    #   OL8      Jul 2019  Jul 2029      Jul 2032
+    #   OL9      Jun 2022  Jun 2032      Jun 2035
+    #   OL10     Jun 2025  Jun 2035      Jun 2038
     # -------------------------------------------------------------------------
     "oracle": {
         "8": {
-            "release_date": "2019-07-18",
-            "end_of_support": "2024-05-01",  # Premier support end
-            "end_of_life": "2029-07-01",  # Extended support end
+            "release_date": "2019-07",
+            "end_of_support": "2029-07",  # Premier Support ends
+            "end_of_life": "2032-07",  # Extended Support ends
         },
         "9": {
-            "release_date": "2022-07-06",
-            "end_of_support": "2027-05-31",  # Premier support end
-            "end_of_life": "2032-05-31",  # Extended support end
+            "release_date": "2022-06",
+            "end_of_support": "2032-06",  # Premier Support ends
+            "end_of_life": "2035-06",  # Extended Support ends
+        },
+        "10": {
+            "release_date": "2025-06",
+            "end_of_support": "2035-06",  # Premier Support ends
+            "end_of_life": "2038-06",  # Extended Support ends
         },
     },
     # -------------------------------------------------------------------------
     # Ubuntu
-    # Source: https://ubuntu.com/about/release-cycle
-    # Note: Ubuntu publishes 'Standard security maintenance' (EOS) and
-    # 'Expanded security maintenance' (EOL) dates at month precision.
+    # Sources: https://ubuntu.com/about/release-cycle
+    #          https://ubuntu.com/pro  (verified 2026-08-08)
+    # Note: Canonical now documents THREE tiers for an LTS release:
+    #   1. Standard security maintenance  -- 5 years, free
+    #   2. Expanded Security Maintenance  -- to 10 years, requires Ubuntu Pro
+    #   3. Legacy add-on                  -- to 15 years, further paid add-on
+    # The two CLE slots here map to tiers 1 and 2: end_of_support is the end of
+    # free standard security maintenance, and end_of_life is the end of ESM
+    # (release + 10 years). The 15-year Legacy figure that ubuntu.com/about/
+    # release-cycle now headlines is deliberately NOT used, because it is a
+    # second paid add-on beyond ESM rather than the baseline commitment.
+    # Only LTS releases are tracked; interim releases (24.10, 25.04, 25.10, ...)
+    # get 9 months of support and are not represented here.
+    # Canonical publishes month precision, so that is what is recorded.
     # -------------------------------------------------------------------------
     "ubuntu": {
         "20.04": {
@@ -268,18 +383,23 @@ DISTRO_LIFECYCLE: Dict[str, Dict[str, LifecycleDates]] = {
         },
         "22.04": {
             "release_date": "2022-04",
-            "end_of_support": "2027-06",
-            "end_of_life": "2032-04",
+            "end_of_support": "2027-05",  # Standard security maintenance end
+            "end_of_life": "2032-04",  # Expanded security maintenance end
         },
         "24.04": {
             "release_date": "2024-04",
             "end_of_support": "2029-05",
             "end_of_life": "2034-04",
         },
+        "26.04": {
+            "release_date": "2026-04",
+            "end_of_support": "2031-05",
+            "end_of_life": "2036-04",
+        },
     },
     # -------------------------------------------------------------------------
     # Debian
-    # Source: https://wiki.debian.org/LTS
+    # Source: https://wiki.debian.org/LTS (LTS schedule table, verified 2026-08-08)
     # Note: Debian publishes 'Regular security support' (EOS) and 'Long Term
     # Support' (EOL/LTS) dates.
     # -------------------------------------------------------------------------
@@ -291,17 +411,17 @@ DISTRO_LIFECYCLE: Dict[str, Dict[str, LifecycleDates]] = {
         },
         "11": {
             "release_date": "2021-08-14",
-            "end_of_support": "2024-08-14",  # Regular security support end
+            "end_of_support": "2024-08-15",  # Regular security support end
             "end_of_life": "2026-08-31",  # LTS end
         },
         "12": {
             "release_date": "2023-06-10",
-            "end_of_support": "2026-06-10",  # Regular security support end
+            "end_of_support": "2026-06-11",  # Regular security support end
             "end_of_life": "2028-06-30",  # LTS end
         },
         "13": {
             "release_date": "2025-08-09",
-            "end_of_support": "2028-08-09",  # Full Debian support end
+            "end_of_support": "2028-08-09",  # Regular security support end
             "end_of_life": "2030-06-30",  # LTS end
         },
     },
@@ -331,9 +451,114 @@ DISTRO_LIFECYCLE: Dict[str, Dict[str, LifecycleDates]] = {
 #   end_of_life: End of security support / extended support; after this, upstream
 #                no longer provides security fixes
 #
-# Data as of: 2026-01-18
+# Data as of: 2026-08-08. The sourcing rule in the module docstring applies here
+# too: vendor-published dates only, with the source URL recorded per entry.
 
 PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
+    # -------------------------------------------------------------------------
+    # Node.js
+    # Source: https://github.com/nodejs/Release/blob/main/schedule.json
+    #         (the Release Working Group's machine-readable schedule, which is
+    #         what nodejs.org/en/about/previous-releases renders)
+    #         Verified 2026-08-08.
+    # Note: Node's schedule has four dates per line -- start, lts, maintenance,
+    # end. Mapped here as:
+    #   release_date    <- start        (initial release of the major line)
+    #   end_of_support  <- maintenance  (drops to security/critical fixes only)
+    #   end_of_life     <- end          (no further releases of any kind)
+    # Odd-numbered lines never become LTS and get a short maintenance window.
+    # Only released lines are listed; scheduled-but-unreleased lines are omitted.
+    #
+    # Common PURLs across ecosystems:
+    #   npm:      pkg:npm/node@22.11.0 (rare -- npm packages pin the runtime via
+    #             engines, they are not the runtime)
+    #   Alpine:   pkg:apk/alpine/nodejs@22.11.0
+    #   Debian:   pkg:deb/debian/nodejs@22.11.0, pkg:deb/debian/libnode115@22.11.0
+    #   Ubuntu:   pkg:deb/ubuntu/nodejs@22.11.0
+    #   Fedora:   pkg:rpm/fedora/nodejs@22.11.0, pkg:rpm/fedora/nodejs-libs@22.11.0
+    #   Docker:   node:22, node:22-alpine, node:22-slim
+    #
+    # IMPORTANT: name_patterns must not use a bare "node-*" or "nodejs-*" glob.
+    # Distros package thousands of npm libraries as node-<libname> (node-tar,
+    # node-gyp, ...) whose versions are library versions, not runtime versions;
+    # matching those would attach wildly wrong lifecycle dates. Only the specific
+    # runtime subpackages are listed.
+    # -------------------------------------------------------------------------
+    "nodejs": {
+        "name_patterns": [
+            "node",
+            "nodejs",
+            "nodejs-libs",  # Fedora/RHEL runtime split
+            "nodejs-full-i18n",
+            "nodejs-devel",
+            "nodejs-doc",
+            "nodejs-docs",
+            "libnode*",  # Debian/Ubuntu shared library (libnode109, libnode115, ...)
+        ],
+        "purl_types": None,  # Match all types (deb, rpm, apk, npm, docker, ...)
+        "version_extract": "major",
+        "references": [
+            "https://github.com/nodejs/Release/blob/main/schedule.json",
+            "https://nodejs.org/en/about/previous-releases",
+        ],
+        "cycles": {
+            "14": {
+                "release_date": "2020-04-21",
+                "end_of_support": "2021-10-19",
+                "end_of_life": "2023-04-30",
+            },
+            "16": {
+                "release_date": "2021-04-20",
+                "end_of_support": "2022-10-18",
+                "end_of_life": "2023-09-11",
+            },
+            "18": {
+                "release_date": "2022-04-19",
+                "end_of_support": "2023-10-18",
+                "end_of_life": "2025-04-30",
+            },
+            "19": {
+                "release_date": "2022-10-18",
+                "end_of_support": "2023-04-01",
+                "end_of_life": "2023-06-01",
+            },
+            "20": {
+                "release_date": "2023-04-18",
+                "end_of_support": "2024-10-22",
+                "end_of_life": "2026-04-30",
+            },
+            "21": {
+                "release_date": "2023-10-17",
+                "end_of_support": "2024-04-01",
+                "end_of_life": "2024-06-01",
+            },
+            "22": {
+                "release_date": "2024-04-24",
+                "end_of_support": "2025-10-21",
+                "end_of_life": "2027-04-30",
+            },
+            "23": {
+                "release_date": "2024-10-16",
+                "end_of_support": "2025-04-01",
+                "end_of_life": "2025-06-01",
+            },
+            "24": {
+                "release_date": "2025-05-06",
+                "end_of_support": "2026-10-20",
+                "end_of_life": "2028-04-30",
+            },
+            "25": {
+                "release_date": "2025-10-15",
+                "end_of_support": "2026-04-01",
+                "end_of_life": "2026-06-01",
+            },
+            "26": {
+                "release_date": "2026-05-05",
+                "end_of_support": "2027-10-20",
+                "end_of_life": "2029-04-30",
+            },
+        },
+    },
     # -------------------------------------------------------------------------
     # Python
     # Source: https://devguide.python.org/versions/
@@ -374,6 +599,18 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
                 "end_of_support": "2020-01-01",
                 "end_of_life": "2020-04-20",
             },
+            # 3.8 and 3.9 are past EOL; the devguide table lists their release
+            # and EOL dates but no separate end-of-bugfix date, so EOS is None.
+            "3.8": {
+                "release_date": "2019-10-14",
+                "end_of_support": None,
+                "end_of_life": "2024-10-07",
+            },
+            "3.9": {
+                "release_date": "2020-10-05",
+                "end_of_support": None,
+                "end_of_life": "2025-10-31",
+            },
             "3.10": {
                 "release_date": "2021-10-04",
                 "end_of_support": "2023-04-04",
@@ -403,9 +640,16 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
     },
     # -------------------------------------------------------------------------
     # Django
-    # Source: https://www.djangoproject.com/download/
-    # Note: Django provides bugfix support until EOS, then security-only
-    # until EOL. LTS releases have extended support windows.
+    # Source: https://www.djangoproject.com/download/ ("Supported Versions" and
+    #         the release roadmap, verified 2026-08-08)
+    # Note: Django provides mainstream (bugfix) support until EOS, then
+    # security-only until EOL. LTS releases (4.2, 5.2, ...) get a 3-year
+    # extended support window.
+    # The download page publishes support end dates but not initial release
+    # dates, so release_date stays None rather than being sourced elsewhere.
+    # Future dates are published at month precision and recorded that way.
+    # 5.0 and 5.1 were previously missing entirely, so anything on those lines
+    # silently received no lifecycle data at all.
     # -------------------------------------------------------------------------
     "django": {
         "name_patterns": ["django", "Django"],
@@ -415,20 +659,35 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
             "https://www.djangoproject.com/download/",
         ],
         "cycles": {
-            "4.2": {
+            "4.2": {  # LTS
                 "release_date": None,
                 "end_of_support": "2023-12-04",
-                "end_of_life": "2026-04-30",
+                "end_of_life": "2026-04-07",
             },
-            "5.2": {
+            "5.0": {
+                "release_date": None,
+                "end_of_support": "2024-08-07",
+                "end_of_life": "2025-04-02",
+            },
+            "5.1": {
+                "release_date": None,
+                "end_of_support": "2025-04-02",
+                "end_of_life": "2025-12-03",
+            },
+            "5.2": {  # LTS
                 "release_date": None,
                 "end_of_support": "2025-12-03",
-                "end_of_life": "2028-04-30",
+                "end_of_life": "2028-04",  # "April 2028", month precision
             },
             "6.0": {
                 "release_date": None,
-                "end_of_support": "2026-08-31",
-                "end_of_life": "2027-04-30",
+                "end_of_support": "2026-08-04",
+                "end_of_life": "2027-04",  # "April 2027", month precision
+            },
+            "6.1": {
+                "release_date": None,
+                "end_of_support": "2027-04",  # "April 2027", month precision
+                "end_of_life": "2027-12",  # "December 2027", month precision
             },
         },
     },
@@ -466,6 +725,7 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
         "purl_types": ["gem"],
         "version_extract": "major.minor",
         "references": [
+            "https://rubyonrails.org/maintenance",
             "https://rubyonrails.org/2025/10/29/new-rails-releases-and-end-of-support-announcement",
         ],
         "cycles": {
@@ -480,8 +740,10 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
                 "end_of_life": "2025-10-29",
             },
             "7.2": {
-                "release_date": None,
-                "end_of_support": None,
+                # Per https://rubyonrails.org/maintenance : bug fixes for one
+                # year from release, security fixes for two.
+                "release_date": "2024-08-09",
+                "end_of_support": "2025-08-09",
                 "end_of_life": "2026-08-09",
             },
             "8.0": {
@@ -498,22 +760,28 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
     },
     # -------------------------------------------------------------------------
     # Laravel
-    # Source: https://laravel.com/docs/12.x/releases
-    # Note: Laravel provides ~6 months bugfix support, ~12 months security.
-    # Quarter strings preserved for future releases.
+    # Source: https://laravel.com/docs/13.x/releases (Support Policy table,
+    #         verified 2026-08-08)
+    # Note: Laravel's stated policy is bug fixes for 18 months and security
+    # fixes for 2 years from release. end_of_support is the "Bug Fixes Until"
+    # column, end_of_life is "Security Fixes Until".
+    # The previous values here were shifted by roughly a release cycle -- e.g.
+    # Laravel 10 was recorded as EOL 2026-02-04 when Laravel's own table says
+    # security fixes ended 2025-02-04, and Laravel 13's EOL was a placeholder
+    # quarter string ("2027-Q1") almost a year before the published 2028-03-17.
     # -------------------------------------------------------------------------
     "laravel": {
         "name_patterns": ["laravel/framework", "laravel"],
         "purl_types": ["composer"],
         "version_extract": "major",
         "references": [
-            "https://laravel.com/docs/12.x/releases",
+            "https://laravel.com/docs/13.x/releases",
         ],
         "cycles": {
             "10": {
                 "release_date": "2023-02-14",
-                "end_of_support": "2025-02-06",
-                "end_of_life": "2026-02-04",
+                "end_of_support": "2024-08-06",
+                "end_of_life": "2025-02-04",
             },
             "11": {
                 "release_date": "2024-03-12",
@@ -522,13 +790,15 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
             },
             "12": {
                 "release_date": "2025-02-24",
-                "end_of_support": "2026-09-03",
-                "end_of_life": "2027-03-12",
+                "end_of_support": "2026-08-13",
+                "end_of_life": "2027-02-24",
             },
             "13": {
-                "release_date": "2026-Q1",
-                "end_of_support": "2026-Q3",
-                "end_of_life": "2027-Q1",
+                "release_date": "2026-03-17",
+                # Laravel publishes "Q3 2027" for this one; the security date is
+                # a firm published date.
+                "end_of_support": "2027-Q3",
+                "end_of_life": "2028-03-17",
             },
         },
     },
@@ -625,8 +895,11 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
     # -------------------------------------------------------------------------
     # Go (Golang)
     # Source: https://go.dev/doc/devel/release
-    # Note: Go's release policy supports a major release until there are two
-    # newer major releases. EOS/EOL are the same date (when support ends).
+    # Note: Go's release policy (https://go.dev/doc/devel/release) is that "each
+    # major Go release is supported until there are two newer major releases".
+    # Go does not publish EOL dates directly, so a cycle's EOS/EOL is derived as
+    # the published release date of the release two ahead of it; a cycle that is
+    # still supported carries None. EOS and EOL are the same date.
     #
     # Common PURLs across ecosystems:
     #   Go modules: pkg:golang/golang.org/x/text@1.23.0 (libraries, not runtime)
@@ -667,12 +940,19 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
                 "end_of_life": "2025-08-12",
             },
             "1.24": {
+                # Superseded by the Go 1.26 release on 2026-02-10.
                 "release_date": "2025-02-11",
+                "end_of_support": "2026-02-10",
+                "end_of_life": "2026-02-10",
+            },
+            "1.25": {
+                # Still supported: Go 1.27 has not shipped.
+                "release_date": "2025-08-12",
                 "end_of_support": None,
                 "end_of_life": None,
             },
-            "1.25": {
-                "release_date": "2025-08-12",
+            "1.26": {
+                "release_date": "2026-02-10",
                 "end_of_support": None,
                 "end_of_life": None,
             },
@@ -683,8 +963,13 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
     # Source: https://rust-lang.org/policies/security/
     #         https://blog.rust-lang.org/releases/
     # Note: Rust only supports the most recent stable release. When a new stable
-    # is released, the previous version is immediately unsupported. EOS/EOL are
-    # the same date (next stable release date).
+    # is released, the previous version is immediately unsupported, so a cycle's
+    # EOS/EOL is the published release date of the following stable, and the
+    # current stable carries None. EOS and EOL are the same date.
+    # Rust ships every 6 weeks, so this table goes stale faster than any other
+    # entry here -- the staleness checker exists largely because of it.
+    # Release dates are from the official release announcements index at
+    # https://blog.rust-lang.org/releases/ (verified 2026-08-08).
     #
     # Common PURLs across ecosystems:
     #   Cargo:    pkg:cargo/serde@1.91.0 (crates, not runtime itself)
@@ -718,6 +1003,11 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
             "https://blog.rust-lang.org/releases/",
         ],
         "cycles": {
+            "1.89": {
+                "release_date": "2025-08-07",
+                "end_of_support": "2025-09-18",
+                "end_of_life": "2025-09-18",
+            },
             "1.90": {
                 "release_date": "2025-09-18",
                 "end_of_support": "2025-10-30",
@@ -730,6 +1020,32 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
             },
             "1.92": {
                 "release_date": "2025-12-11",
+                "end_of_support": "2026-01-22",
+                "end_of_life": "2026-01-22",
+            },
+            "1.93": {
+                "release_date": "2026-01-22",
+                "end_of_support": "2026-03-05",
+                "end_of_life": "2026-03-05",
+            },
+            "1.94": {
+                "release_date": "2026-03-05",
+                "end_of_support": "2026-04-16",
+                "end_of_life": "2026-04-16",
+            },
+            "1.95": {
+                "release_date": "2026-04-16",
+                "end_of_support": "2026-05-28",
+                "end_of_life": "2026-05-28",
+            },
+            "1.96": {
+                "release_date": "2026-05-28",
+                "end_of_support": "2026-07-09",
+                "end_of_life": "2026-07-09",
+            },
+            "1.97": {
+                # Current stable as of 2026-08-08.
+                "release_date": "2026-07-09",
                 "end_of_support": None,
                 "end_of_life": None,
             },
@@ -811,6 +1127,260 @@ PACKAGE_LIFECYCLE: Dict[str, PackageLifecycleEntry] = {
                 "end_of_support": None,
                 "end_of_life": None,
             },
+        },
+    },
+    # -------------------------------------------------------------------------
+    # Dart
+    # Sources:
+    #   Support policy:  https://dart.dev/tools/sdk#support-policy
+    #   Release dates:   https://storage.googleapis.com/dart-archive/channels/stable/release/
+    #                    (the official dart-archive bucket; each release carries a
+    #                    VERSION file with its publication date)
+    #                    Verified 2026-08-08.
+    # Note: Dart publishes NO end-of-life dates. Its policy is explicitly
+    # rolling -- "the Dart team supports only the latest stable release", and
+    # "when a new major or minor version is released, older versions are no
+    # longer supported". EOS/EOL are therefore derived the same way as Rust and
+    # Go: a cycle ends when the next minor ships, and the current stable carries
+    # None. Dart ships a stable roughly every 3 months.
+    #
+    # Common PURLs:
+    #   Docker:   dart:3.12, dart:stable
+    #   Alpine:   pkg:apk/alpine/dart@3.12.0
+    # Note pkg:pub/... identifies Dart *packages*, not the SDK, so a pub-hosted
+    # package coincidentally named "dart" would not carry SDK versions.
+    # -------------------------------------------------------------------------
+    "dart": {
+        "name_patterns": [
+            "dart",
+            "dart-sdk",
+            "dartsdk",
+        ],
+        "purl_types": None,
+        "version_extract": "major.minor",
+        "references": [
+            "https://dart.dev/tools/sdk#support-policy",
+            "https://dart.dev/get-dart/archive",
+        ],
+        "cycles": {
+            "2.17": {
+                "release_date": "2022-05-09",
+                "end_of_support": "2022-08-26",
+                "end_of_life": "2022-08-26",
+            },
+            "2.18": {
+                "release_date": "2022-08-26",
+                "end_of_support": "2023-01-23",
+                "end_of_life": "2023-01-23",
+            },
+            "2.19": {
+                "release_date": "2023-01-23",
+                "end_of_support": "2023-05-04",
+                "end_of_life": "2023-05-04",
+            },
+            "3.0": {
+                "release_date": "2023-05-04",
+                "end_of_support": "2023-08-15",
+                "end_of_life": "2023-08-15",
+            },
+            "3.1": {
+                "release_date": "2023-08-15",
+                "end_of_support": "2023-11-14",
+                "end_of_life": "2023-11-14",
+            },
+            "3.2": {
+                "release_date": "2023-11-14",
+                "end_of_support": "2024-02-13",
+                "end_of_life": "2024-02-13",
+            },
+            "3.3": {
+                "release_date": "2024-02-13",
+                "end_of_support": "2024-05-06",
+                "end_of_life": "2024-05-06",
+            },
+            "3.4": {
+                "release_date": "2024-05-06",
+                "end_of_support": "2024-07-30",
+                "end_of_life": "2024-07-30",
+            },
+            "3.5": {
+                "release_date": "2024-07-30",
+                "end_of_support": "2024-12-05",
+                "end_of_life": "2024-12-05",
+            },
+            "3.6": {
+                "release_date": "2024-12-05",
+                "end_of_support": "2025-02-05",
+                "end_of_life": "2025-02-05",
+            },
+            "3.7": {
+                "release_date": "2025-02-05",
+                "end_of_support": "2025-05-14",
+                "end_of_life": "2025-05-14",
+            },
+            "3.8": {
+                "release_date": "2025-05-14",
+                "end_of_support": "2025-08-11",
+                "end_of_life": "2025-08-11",
+            },
+            "3.9": {
+                "release_date": "2025-08-11",
+                "end_of_support": "2025-11-06",
+                "end_of_life": "2025-11-06",
+            },
+            "3.10": {
+                "release_date": "2025-11-06",
+                "end_of_support": "2026-02-09",
+                "end_of_life": "2026-02-09",
+            },
+            "3.11": {
+                "release_date": "2026-02-09",
+                "end_of_support": "2026-05-08",
+                "end_of_life": "2026-05-08",
+            },
+            "3.12": {
+                # Current stable as of 2026-08-08.
+                "release_date": "2026-05-08",
+                "end_of_support": None,
+                "end_of_life": None,
+            },
+        },
+    },
+    # -------------------------------------------------------------------------
+    # Flutter
+    # Source: https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json
+    #         (Flutter's official release manifest, verified 2026-08-08)
+    # Note: Flutter publishes NO support policy and NO end-of-life dates. Its
+    # compatibility policy covers breaking API changes and deprecations only,
+    # and says nothing about how long a stable release is maintained. Unlike
+    # Dart, Flutter has not published a "latest stable only" statement either,
+    # so there is no policy to derive an EOL from and EOS/EOL are left None
+    # rather than guessed. Only the release date -- which maps to the CLE
+    # generalAvailability milestone -- is recorded.
+    # Flutter promotes roughly every third beta to stable, about quarterly.
+    # -------------------------------------------------------------------------
+    "flutter": {
+        "name_patterns": [
+            "flutter",
+            "flutter-sdk",
+        ],
+        "purl_types": None,
+        "version_extract": "major.minor",
+        "references": [
+            "https://docs.flutter.dev/release/archive",
+        ],
+        "cycles": {
+            "3.0": {"release_date": "2022-05-11", "end_of_support": None, "end_of_life": None},
+            "3.3": {"release_date": "2022-08-30", "end_of_support": None, "end_of_life": None},
+            "3.7": {"release_date": "2023-01-24", "end_of_support": None, "end_of_life": None},
+            "3.10": {"release_date": "2023-05-10", "end_of_support": None, "end_of_life": None},
+            "3.13": {"release_date": "2023-08-16", "end_of_support": None, "end_of_life": None},
+            "3.16": {"release_date": "2023-11-15", "end_of_support": None, "end_of_life": None},
+            "3.19": {"release_date": "2024-02-15", "end_of_support": None, "end_of_life": None},
+            "3.22": {"release_date": "2024-05-13", "end_of_support": None, "end_of_life": None},
+            "3.24": {"release_date": "2024-08-06", "end_of_support": None, "end_of_life": None},
+            "3.27": {"release_date": "2024-12-11", "end_of_support": None, "end_of_life": None},
+            "3.29": {"release_date": "2025-02-12", "end_of_support": None, "end_of_life": None},
+            "3.32": {"release_date": "2025-05-20", "end_of_support": None, "end_of_life": None},
+            "3.35": {"release_date": "2025-08-14", "end_of_support": None, "end_of_life": None},
+            "3.38": {"release_date": "2025-11-12", "end_of_support": None, "end_of_life": None},
+            "3.41": {"release_date": "2026-02-11", "end_of_support": None, "end_of_life": None},
+            "3.44": {"release_date": "2026-05-18", "end_of_support": None, "end_of_life": None},
+        },
+    },
+    # -------------------------------------------------------------------------
+    # Scala
+    # Sources:
+    #   Release dates:  https://github.com/scala/scala3/releases (Scala 3)
+    #                   https://www.scala-lang.org/download/all.html (Scala 2)
+    #   LTS policy:     https://www.scala-lang.org/blog/2022/08/17/long-term-compatibility-plans.html
+    #                   Verified 2026-08-08.
+    # Note: Scala publishes NO firm end-of-life dates. The 3.3.x LTS line is
+    # documented as maintained "for at least three years" and then "at least
+    # another year after the release of the next LTS", which are floors and
+    # estimates rather than dates -- so EOS/EOL are left None. Scala is also not
+    # a rolling line like Dart/Rust: 3.3.x LTS is still maintained alongside the
+    # current 3.8.x, so a newer release does NOT end the previous one and the
+    # derivation used for Dart/Rust/Go would be wrong here.
+    #
+    # Common PURLs:
+    #   Maven:  pkg:maven/org.scala-lang/scala-library@2.13.18
+    #           pkg:maven/org.scala-lang/scala3-library_3@3.3.8
+    # -------------------------------------------------------------------------
+    "scala": {
+        "name_patterns": [
+            "scala",
+            "scala3",
+            "scala-library",
+            "scala-compiler",
+            "scala-reflect",
+            "scala3-library*",
+            "scala3-compiler*",
+        ],
+        "purl_types": None,
+        "version_extract": "major.minor",
+        "references": [
+            "https://www.scala-lang.org/download/all.html",
+            "https://www.scala-lang.org/blog/2022/08/17/long-term-compatibility-plans.html",
+        ],
+        "cycles": {
+            "2.11": {"release_date": None, "end_of_support": None, "end_of_life": None},
+            "2.12": {"release_date": None, "end_of_support": None, "end_of_life": None},
+            "2.13": {"release_date": None, "end_of_support": None, "end_of_life": None},
+            "3.0": {"release_date": "2021-05-13", "end_of_support": None, "end_of_life": None},
+            "3.1": {"release_date": "2021-10-18", "end_of_support": None, "end_of_life": None},
+            "3.2": {"release_date": "2022-09-01", "end_of_support": None, "end_of_life": None},
+            # 3.3.x is the current LTS line.
+            "3.3": {"release_date": "2023-05-30", "end_of_support": None, "end_of_life": None},
+            "3.4": {"release_date": "2024-02-29", "end_of_support": None, "end_of_life": None},
+            "3.5": {"release_date": "2024-08-22", "end_of_support": None, "end_of_life": None},
+            "3.6": {"release_date": "2024-12-10", "end_of_support": None, "end_of_life": None},
+            "3.7": {"release_date": "2025-05-07", "end_of_support": None, "end_of_life": None},
+            "3.8": {"release_date": "2026-01-22", "end_of_support": None, "end_of_life": None},
+        },
+    },
+    # -------------------------------------------------------------------------
+    # Swift
+    # Source: https://github.com/swiftlang/swift/releases (the official Swift
+    #         toolchain repo; swift-X.Y-RELEASE tags), verified 2026-08-08.
+    # Note: Swift.org publishes NO support policy and NO end-of-life dates for
+    # older toolchains, so only release dates are recorded here.
+    #
+    # NAME COLLISION WARNING: "swift" is also the name of OpenStack Swift, the
+    # object storage service, published as pkg:pypi/swift and packaged by most
+    # distros. Its versions (2.x) do not overlap the Swift language cycles
+    # listed here, so a lookup for OpenStack Swift falls through to None rather
+    # than picking up a wrong date -- but do not add 2.x cycles here without
+    # first narrowing purl_types.
+    # -------------------------------------------------------------------------
+    "swift": {
+        "name_patterns": [
+            "swift",
+            "swift-lang",
+            "swiftlang",
+        ],
+        "purl_types": None,
+        "version_extract": "major.minor",
+        "references": [
+            "https://www.swift.org/install/",
+            "https://github.com/swiftlang/swift/releases",
+        ],
+        "cycles": {
+            "5.0": {"release_date": "2019-04-03", "end_of_support": None, "end_of_life": None},
+            "5.1": {"release_date": "2019-09-23", "end_of_support": None, "end_of_life": None},
+            "5.2": {"release_date": "2020-03-24", "end_of_support": None, "end_of_life": None},
+            "5.3": {"release_date": "2020-09-16", "end_of_support": None, "end_of_life": None},
+            "5.4": {"release_date": "2021-04-26", "end_of_support": None, "end_of_life": None},
+            "5.5": {"release_date": "2021-09-21", "end_of_support": None, "end_of_life": None},
+            "5.6": {"release_date": "2022-03-14", "end_of_support": None, "end_of_life": None},
+            "5.7": {"release_date": "2022-09-12", "end_of_support": None, "end_of_life": None},
+            "5.8": {"release_date": "2023-03-30", "end_of_support": None, "end_of_life": None},
+            "5.9": {"release_date": "2023-09-18", "end_of_support": None, "end_of_life": None},
+            "5.10": {"release_date": "2024-03-05", "end_of_support": None, "end_of_life": None},
+            "6.0": {"release_date": "2024-09-17", "end_of_support": None, "end_of_life": None},
+            "6.1": {"release_date": "2025-04-01", "end_of_support": None, "end_of_life": None},
+            "6.2": {"release_date": "2025-09-17", "end_of_support": None, "end_of_life": None},
+            "6.3": {"release_date": "2026-03-27", "end_of_support": None, "end_of_life": None},
         },
     },
 }

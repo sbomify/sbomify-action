@@ -1558,7 +1558,7 @@ class TestOSComponentEnrichment:
         # Check lifecycle milestone properties
         props = {p.name: p.value for p in component.properties}
         assert props.get("cdx:lifecycle:milestone:generalAvailability") == "2023-06-10"
-        assert props.get("cdx:lifecycle:milestone:endOfSupport") == "2026-06-10"
+        assert props.get("cdx:lifecycle:milestone:endOfSupport") == "2026-06-11"
         assert props.get("cdx:lifecycle:milestone:endOfLife") == "2028-06-30"
 
     def test_enrich_debian_os_with_point_release(self):
@@ -1582,7 +1582,7 @@ class TestOSComponentEnrichment:
         # Check lifecycle milestone properties
         props = {p.name: p.value for p in component.properties}
         assert props.get("cdx:lifecycle:milestone:generalAvailability") == "2022-04"
-        assert props.get("cdx:lifecycle:milestone:endOfSupport") == "2027-06"
+        assert props.get("cdx:lifecycle:milestone:endOfSupport") == "2027-05"
         assert props.get("cdx:lifecycle:milestone:endOfLife") == "2032-04"
 
     def test_enrich_alpine_os(self):

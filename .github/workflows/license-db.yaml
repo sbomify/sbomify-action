@@ -12,80 +12,55 @@ on:
         default: 'all'
 
 jobs:
+  # The matrix is derived from the generator's own configuration rather than
+  # duplicated here, so a new distro release cannot be added to the code and
+  # silently never get a database built. See scripts/license_db_matrix.py.
+  prepare-matrix:
+    name: Resolve Distro Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Extract tool versions
+        run: |
+          source ./scripts/generate_additional_packages.sh
+          echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "${{ env.UV_VERSION }}"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Resolve matrix
+        id: resolve
+        env:
+          DISTROS: ${{ github.event.inputs.distros || 'all' }}
+        run: |
+          MATRIX="$(uv run python scripts/license_db_matrix.py --distros "$DISTROS")"
+          {
+            echo "matrix<<GHA_MATRIX_EOF"
+            echo "$MATRIX"
+            echo "GHA_MATRIX_EOF"
+          } >> "$GITHUB_OUTPUT"
+          uv run python scripts/license_db_matrix.py --distros "$DISTROS" --pretty
+
   generate-databases:
     name: Generate License Databases
+    needs: prepare-matrix
     runs-on: ubuntu-latest
     permissions:
       contents: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # Alpine versions (APK)
-          - distro: alpine
-            version: "3.13"
-          - distro: alpine
-            version: "3.14"
-          - distro: alpine
-            version: "3.15"
-          - distro: alpine
-            version: "3.16"
-          - distro: alpine
-            version: "3.17"
-          - distro: alpine
-            version: "3.18"
-          - distro: alpine
-            version: "3.19"
-          - distro: alpine
-            version: "3.20"
-          - distro: alpine
-            version: "3.21"
-          # Wolfi (rolling release)
-          - distro: wolfi
-            version: "rolling"
-          # Amazon Linux (RPM)
-          - distro: amazonlinux
-            version: "2"
-          - distro: amazonlinux
-            version: "2023"
-          # CentOS Stream (RPM)
-          - distro: centos
-            version: "stream8"
-          - distro: centos
-            version: "stream9"
-          # Rocky Linux (RPM)
-          - distro: rocky
-            version: "8"
-          - distro: rocky
-            version: "9"
-          # AlmaLinux (RPM)
-          - distro: almalinux
-            version: "8"
-          - distro: almalinux
-            version: "9"
-          # Fedora (RPM)
-          - distro: fedora
-            version: "39"
-          - distro: fedora
-            version: "40"
-          - distro: fedora
-            version: "41"
-          - distro: fedora
-            version: "42"
-          # Ubuntu (DEB) - these take longer
-          - distro: ubuntu
-            version: "20.04"
-          - distro: ubuntu
-            version: "22.04"
-          - distro: ubuntu
-            version: "24.04"
-          # Debian (DEB)
-          - distro: debian
-            version: "11"
-          - distro: debian
-            version: "12"
-          - distro: debian
-            version: "13"
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
 
     steps:
       - name: Checkout code
