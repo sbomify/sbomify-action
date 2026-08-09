@@ -25,6 +25,12 @@ import pytest
 from sbomify_action._generation.generators import cyclonedx_jvm as jvm
 from sbomify_action.exceptions import SBOMGenerationError
 
+#: As the jvm bundle declares them. Spelled out rather than read from
+#: _WRAPPER_DEFAULTS so that a change to the defaults has to be made twice --
+#: once in the code and once here, deliberately.
+GRADLE = {"script": "gradlew", "tool": "gradle", "needs": "gradle/wrapper/gradle-wrapper.jar"}
+MAVEN = {"script": "mvnw", "tool": "mvn"}
+
 
 class TestWrapperSelection:
     def test_a_wrapper_with_its_jar_is_preferred(self, tmp_path):
@@ -34,7 +40,7 @@ class TestWrapperSelection:
         jar.parent.mkdir(parents=True)
         jar.write_bytes(b"jar")
 
-        chosen = jvm._wrapper_or(tmp_path, "gradlew", "gradle", needs="gradle/wrapper/gradle-wrapper.jar")
+        chosen = jvm._wrapper_or(tmp_path, GRADLE)
 
         assert chosen == str(tmp_path / "gradlew")
 
@@ -42,18 +48,63 @@ class TestWrapperSelection:
         """apache/kafka. The script is there; the thing it needs is not."""
         (tmp_path / "gradlew").write_text("#!/bin/sh\n")
 
-        chosen = jvm._wrapper_or(tmp_path, "gradlew", "gradle", needs="gradle/wrapper/gradle-wrapper.jar")
+        chosen = jvm._wrapper_or(tmp_path, GRADLE)
 
         assert chosen == "gradle"
 
     def test_no_wrapper_at_all_uses_the_pinned_tool(self, tmp_path):
-        assert jvm._wrapper_or(tmp_path, "gradlew", "gradle") == "gradle"
+        assert jvm._wrapper_or(tmp_path, GRADLE) == "gradle"
 
     def test_needs_is_optional(self, tmp_path):
         """Maven keeps the pre-flight check off, having no observed case for it."""
         (tmp_path / "mvnw").write_text("#!/bin/sh\n")
 
-        assert jvm._wrapper_or(tmp_path, "mvnw", "mvn") == str(tmp_path / "mvnw")
+        assert jvm._wrapper_or(tmp_path, MAVEN) == str(tmp_path / "mvnw")
+
+
+class TestTheBundleOwnsTheseFacts:
+    """Which wrapper maps to which tool is the bundle's to state, not ours.
+
+    The plugin pins made this case already: they lived in both repositories
+    and disagreed within hours of the split, sbom-tools saying 2.9.3 while
+    this one still said 2.9.1. Reading the wrapper map off the bundle keeps
+    one source of truth in the repository that decides what the bundle holds.
+    """
+
+    def test_what_the_bundle_declares_is_used(self, monkeypatch):
+        """A bundle that renames its tool is followed, not overruled."""
+        monkeypatch.setattr(
+            jvm,
+            "bundle_wrappers",
+            lambda _provider: {"gradle": {"script": "gradlew", "tool": "gradle-9", "needs": "somewhere/else.jar"}},
+        )
+
+        assert jvm._wrapper_spec("gradle", "gradle") == {
+            "script": "gradlew",
+            "tool": "gradle-9",
+            "needs": "somewhere/else.jar",
+        }
+
+    def test_a_bundle_predating_the_block_falls_back_to_defaults(self, monkeypatch):
+        """An older bundle should still build, so silence is not fatal."""
+        monkeypatch.setattr(jvm, "bundle_wrappers", lambda _provider: {})
+
+        assert jvm._wrapper_spec("gradle", "gradle") == GRADLE
+        assert jvm._wrapper_spec("maven", "maven") == MAVEN
+
+    def test_an_unreadable_bundle_falls_back_to_defaults(self, monkeypatch):
+        """Not being able to ask must not cost more than being told nothing."""
+
+        def _unavailable(_provider):
+            raise SBOMGenerationError("no bundle here")
+
+        monkeypatch.setattr(jvm, "bundle_wrappers", _unavailable)
+
+        assert jvm._wrapper_spec("maven", "maven") == MAVEN
+
+    def test_the_defaults_match_what_the_bundle_ships(self):
+        """The floor and the bundle should not have drifted apart silently."""
+        assert jvm._WRAPPER_DEFAULTS == {"gradle": GRADLE, "maven": MAVEN}
 
 
 class TestRetryAfterAWrapperFails:
@@ -108,7 +159,19 @@ class TestRetryAfterAWrapperFails:
         assert [c[0] for c in calls] == [wrapper, "gradle"]
 
 
-def test_the_gradle_generator_declines_a_jarless_wrapper(tmp_path, monkeypatch):
+@pytest.fixture
+def declared_wrappers(monkeypatch):
+    """Answer for the bundle without going and fetching one.
+
+    generate() calls ensure_runtime before _run, so in production the manifest
+    read is free -- the bundle is already on disk and the result memoised.
+    A test that calls _run directly skips that, and would otherwise download a
+    190MB JDK to find out what "gradlew" maps to.
+    """
+    monkeypatch.setattr(jvm, "bundle_wrappers", lambda _provider: {"gradle": GRADLE, "maven": MAVEN})
+
+
+def test_the_gradle_generator_declines_a_jarless_wrapper(tmp_path, monkeypatch, declared_wrappers):
     """End to end through the generator, not just the helper."""
     (tmp_path / "build.gradle").write_text("")
     (tmp_path / "gradlew").write_text("#!/bin/sh\n")
@@ -123,7 +186,7 @@ def test_the_gradle_generator_declines_a_jarless_wrapper(tmp_path, monkeypatch):
     assert not (tmp_path / ".sbomify-cyclonedx.init.gradle").exists(), "scaffolding left behind"
 
 
-def test_the_init_script_is_removed_even_when_both_attempts_fail(tmp_path, monkeypatch):
+def test_the_init_script_is_removed_even_when_both_attempts_fail(tmp_path, monkeypatch, declared_wrappers):
     """Both attempts, so the wrapper has to be usable enough to be chosen.
 
     Without a gradlew and its jar, `_wrapper_or` picks the pinned tool
@@ -155,7 +218,7 @@ def test_the_init_script_is_removed_even_when_both_attempts_fail(tmp_path, monke
 def test_path_helpers_do_not_mind_a_missing_directory(tmp_path):
     """needs pointing into a directory that does not exist must not raise."""
     (tmp_path / "gradlew").write_text("#!/bin/sh\n")
-    assert jvm._wrapper_or(tmp_path, "gradlew", "gradle", needs="a/b/c.jar") == "gradle"
+    assert jvm._wrapper_or(tmp_path, {**GRADLE, "needs": "a/b/c.jar"}) == "gradle"
 
 
 def test_wrapper_is_made_executable(tmp_path):
@@ -164,6 +227,6 @@ def test_wrapper_is_made_executable(tmp_path):
     wrapper.write_text("#!/bin/sh\n")
     wrapper.chmod(0o644)
 
-    jvm._wrapper_or(tmp_path, "gradlew", "gradle")
+    jvm._wrapper_or(tmp_path, {"script": "gradlew", "tool": "gradle"})
 
     assert Path(wrapper).stat().st_mode & 0o111, "wrapper was not made executable"

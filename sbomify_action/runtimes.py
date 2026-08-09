@@ -686,6 +686,35 @@ def bundle_plugin_version(tool: str, plugin: str) -> str:
     return str(version)
 
 
+def bundle_wrappers(tool: str) -> dict[str, dict[str, str]]:
+    """The build-tool wrappers the bundle providing ``tool`` stands in for.
+
+    Keyed by wrapper name, each entry carrying ``script`` (what a project
+    commits), ``tool`` (the executable here that replaces it) and optionally
+    ``needs`` (a path the wrapper cannot bootstrap without).
+
+    Same reasoning as :func:`bundle_plugin_version`: which wrapper maps to
+    which tool is a fact about the toolchain, so it belongs in the repository
+    that decides what the bundle contains rather than in a copy here that is
+    free to disagree with it.
+
+    Returns ``{}`` rather than raising when the bundle predates the block.
+    A missing plugin version is fatal because there is no sensible default to
+    apply, but a missing wrapper map only costs the caller its own defaults --
+    and a bundle that cannot describe its wrappers should still build.
+    """
+    prefix = ensure_runtime(tool).parent
+    manifest = prefix / "bundle.toml"
+    if not manifest.exists():
+        return {}
+    declared = tomllib.loads(manifest.read_text()).get("wrappers") or {}
+    return {
+        str(name): {str(key): str(value) for key, value in body.items()}
+        for name, body in declared.items()
+        if isinstance(body, dict) and body.get("script") and body.get("tool")
+    }
+
+
 def ensure_runtime(name: str) -> Path:
     """Make a pinned runtime available and return the directory holding it.
 
