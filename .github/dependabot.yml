@@ -5,6 +5,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    exclude-paths:
+      - "tests/test-data/**"
     groups:
       github-actions:
         patterns:
