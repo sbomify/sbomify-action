@@ -105,13 +105,57 @@ allprojects {{ apply plugin: org.cyclonedx.gradle.CyclonedxPlugin }}
 """
 
 
-def _wrapper_or(project_dir: Path, wrapper: str, fallback: str) -> str:
-    """Prefer the project's own build-tool wrapper."""
+def _wrapper_or(project_dir: Path, wrapper: str, fallback: str, *, needs: str | None = None) -> str:
+    """Prefer the project's own build-tool wrapper -- if it can actually run.
+
+    ``needs`` names a file the wrapper cannot bootstrap without. A wrapper
+    script is small; the jar that does the work is a binary, and projects that
+    refuse to commit binaries gitignore it and let the script fetch it on
+    first run. That fetch shells out to curl, which this image does not carry
+    and deliberately does not want to: apache/kafka fails with
+    ``/workspace/gradlew: 207: curl: not found`` three times over, then
+    ``Unable to access jarfile gradle/wrapper/gradle-wrapper.jar``.
+
+    Falling back to the pinned tool is strictly better than what happened
+    before, which was to fail the native generator and hand the project to
+    cdxgen -- measured elsewhere in this module as 288 components against 34.
+    A pinned Gradle that runs beats a project-pinned Gradle that cannot.
+    """
     candidate = project_dir / wrapper
-    if candidate.is_file():
-        candidate.chmod(0o755)
-        return str(candidate)
-    return fallback
+    if not candidate.is_file():
+        return fallback
+    if needs and not (project_dir / needs).is_file():
+        logger.info(f"{wrapper} cannot bootstrap without {needs}; using the pinned {fallback}")
+        return fallback
+    candidate.chmod(0o755)
+    return str(candidate)
+
+
+def _run_build(cmd: list[str], tool_name: str, project_dir: Path, fallback: str, timeout: int) -> None:
+    """Run the build, retrying with the pinned tool if the wrapper fails.
+
+    Not every broken wrapper can be spotted in advance. apache/flink ships its
+    maven-wrapper.jar and the wrapper rejects it at run time -- "Failed to
+    validate Maven wrapper SHA-256, your Maven wrapper might be compromised"
+    -- which no pre-flight check here could have predicted.
+
+    The old behaviour in both cases was to give up on the native generator and
+    fall through to cdxgen, so the cost of a project's wrapper being unusable
+    was paid in SBOM quality. Retrying with the tool we ship is cheap by
+    comparison: it only happens after a failure, on a path that was about to
+    run a whole other generator anyway.
+
+    The retry deliberately does not happen when the wrapper was never used --
+    then cmd[0] is already the pinned tool and the failure is the build's own.
+    """
+    try:
+        run_command(cmd, tool_name, timeout=timeout, cwd=str(project_dir))
+        return
+    except SBOMGenerationError as first_failure:
+        if cmd[0] == fallback:
+            raise
+        logger.warning(f"The project's wrapper failed ({first_failure}); retrying with the pinned {fallback}")
+        run_command([fallback, *cmd[1:]], tool_name, timeout=timeout, cwd=str(project_dir))
 
 
 def _largest_bom(candidates: list[Path]) -> Path | None:
@@ -269,7 +313,7 @@ class CycloneDXMavenGenerator(_JvmGenerator):
             "-DoutputName=bom",
         ]
         logger.info(f"Running the CycloneDX Maven plugin in {project_dir.name}")
-        run_command(cmd, "cyclonedx-maven", timeout=2400, cwd=str(project_dir))
+        _run_build(cmd, "cyclonedx-maven", project_dir, "mvn", 2400)
         produced = project_dir / "target" / "bom.json"
         if produced.exists():
             shutil.copy(produced, output)
@@ -296,11 +340,11 @@ class CycloneDXGradleGenerator(_JvmGenerator):
     def _run(self, project_dir: Path, output: Path) -> None:
         init_script = project_dir / ".sbomify-cyclonedx.init.gradle"
         init_script.write_text(gradle_init_script())
-        gradle = _wrapper_or(project_dir, "gradlew", "gradle")
+        gradle = _wrapper_or(project_dir, "gradlew", "gradle", needs="gradle/wrapper/gradle-wrapper.jar")
         try:
             cmd = [gradle, "--no-daemon", "-I", str(init_script), "cyclonedxBom"]
             logger.info(f"Running the CycloneDX Gradle plugin in {project_dir.name}")
-            run_command(cmd, "cyclonedx-gradle", timeout=2400, cwd=str(project_dir))
+            _run_build(cmd, "cyclonedx-gradle", project_dir, "gradle", 2400)
             found = _largest_bom(sorted(project_dir.rglob("*bom.json")))
             if found:
                 shutil.copy(found, output)
