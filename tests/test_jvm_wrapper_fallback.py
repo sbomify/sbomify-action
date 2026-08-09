@@ -124,9 +124,22 @@ def test_the_gradle_generator_declines_a_jarless_wrapper(tmp_path, monkeypatch):
 
 
 def test_the_init_script_is_removed_even_when_both_attempts_fail(tmp_path, monkeypatch):
+    """Both attempts, so the wrapper has to be usable enough to be chosen.
+
+    Without a gradlew and its jar, `_wrapper_or` picks the pinned tool
+    straight away and there is only ever one attempt -- the retry path this
+    is named for never runs.
+    """
     (tmp_path / "build.gradle").write_text("")
+    (tmp_path / "gradlew").write_text("#!/bin/sh\n")
+    jar = tmp_path / "gradle" / "wrapper" / "gradle-wrapper.jar"
+    jar.parent.mkdir(parents=True)
+    jar.write_bytes(b"jar")
+
+    attempts: list[str] = []
 
     def always_fails(cmd, name, **kwargs):
+        attempts.append(cmd[0])
         raise SBOMGenerationError("no")
 
     monkeypatch.setattr(jvm, "run_command", always_fails)
@@ -135,6 +148,7 @@ def test_the_init_script_is_removed_even_when_both_attempts_fail(tmp_path, monke
     with pytest.raises(SBOMGenerationError):
         jvm.CycloneDXGradleGenerator()._run(tmp_path, tmp_path / "out.json")
 
+    assert attempts == [str(tmp_path / "gradlew"), "gradle"], f"expected both attempts, got {attempts}"
     assert not (tmp_path / ".sbomify-cyclonedx.init.gradle").exists()
 
 
