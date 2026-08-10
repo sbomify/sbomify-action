@@ -1,5 +1,6 @@
 """Shared utilities for SBOM generation."""
 
+import os
 import re
 import subprocess
 import threading
@@ -8,6 +9,7 @@ from typing import Optional
 
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.release_version import normalize_release_version, tag_from_ci
 from sbomify_action.runtimes import ensure_runtime
 
 # Track whether Java/Maven has been installed on-demand
@@ -317,6 +319,38 @@ def _log_error_grouped(command_name: str, output: str, message: str) -> None:
         logger.error(message)
 
 
+def combined_output(stderr: str | None, stdout: str | None) -> str:
+    """Both streams of a failed command, in the order a terminal would show them.
+
+    Was ``stderr or stdout``, which reads as "prefer stderr, fall back to
+    stdout" but is really "if stderr has *anything at all*, discard stdout".
+    cdxgen is the case that exposes it: on a composer failure it writes 24
+    bytes to stderr --
+
+        Error running composer:
+
+    -- and the 3,410 bytes that say *why* to stdout. stderr was non-empty, so
+    the fallback never fired, and every PHP resolution failure was reported as
+    that bare colon with nothing after it. The answer was in hand the whole
+    time and was being thrown away.
+
+    Joining is right rather than reordering: neither stream is reliably the
+    interesting one, and a tool that splits a single message across both is
+    only readable if both are kept.
+
+    Only blank lines are trimmed from the front, not indentation. Composer
+    says what is wrong in the shape of the text --
+
+        Problem 1
+          - laravel/framework is present at version 1.0.0+no-version-set
+
+    -- and a plain ``strip()`` would flatten the first line of that against
+    the left margin. Trailing whitespace goes entirely; nothing reads it.
+    """
+    parts = [part.lstrip("\r\n").rstrip() for part in (stderr, stdout) if part and part.strip()]
+    return "\n".join(parts)
+
+
 def log_command_error(command_name: str, stderr: str, stdout: str, level: str = "error") -> None:
     """
     Log command errors with a standardized format.
@@ -330,8 +364,7 @@ def log_command_error(command_name: str, stderr: str, stdout: str, level: str = 
             chain where a later generator is expected to succeed, so the
             failure is benign noise on the happy path.
     """
-    # Prefer stderr, fall back to stdout (some tools like cdxgen output errors to stdout)
-    output = stderr or stdout
+    output = combined_output(stderr, stdout)
     if not output:
         return
     # Strip ANSI so the escape bytes don't land in the log (or the issue title).
@@ -468,6 +501,7 @@ def run_command(
     cwd: str | None = None,
     docker_image: str | None = None,
     log_errors: bool = True,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """
     Run a command and handle common error cases.
@@ -491,6 +525,9 @@ def run_command(
             ``SBOMGenerationError`` is still raised either way; the
             orchestrator surfaces the real ERROR only if *every* generator
             in the chain fails.
+        env: Extra environment variables for the child, layered over the
+            current environment rather than replacing it — the generators need
+            PATH, HOME and the proxy settings they were started with.
 
     Returns:
         CompletedProcess result
@@ -536,6 +573,7 @@ def run_command(
             shell=False,
             timeout=timeout,
             cwd=cwd,
+            env={**os.environ, **env} if env else None,
         )
         return result
     except subprocess.CalledProcessError as e:
@@ -572,7 +610,7 @@ def run_command(
             log_command_error(command_name, stderr, stdout, level="debug")
 
         # Include error summary in the exception message for better diagnostics
-        error_summary = extract_error_summary(stderr or stdout)
+        error_summary = extract_error_summary(combined_output(stderr, stdout))
         message = f"{command_name} command failed with return code {e.returncode}"
         if error_summary:
             message += f": {error_summary}"
@@ -742,6 +780,64 @@ def ensure_php_installed() -> None:
     resolves it, so most PHP on GitHub arrives as a manifest and nothing else.
     """
     ensure_runtime("composer")
+
+
+#: A version Composer will accept as the root package's: a numeric core, with
+#: whatever the project appends to it. Anything else -- "latest", a commit SHA,
+#: a branch name -- would be worse than saying nothing, because Composer feeds
+#: the root version into resolution rather than merely recording it.
+_COMPOSER_VERSION = re.compile(r"^v?\d+(?:\.\d+)*(?:[-+.].*)?$", re.IGNORECASE)
+
+
+def composer_root_version() -> str | None:
+    """The version Composer should treat this repository's own package as.
+
+    Composer works this out by asking git for the tag at HEAD. That fails
+    whenever the workspace is bind-mounted into the container under a
+    different UID: git refuses the repository with "detected dubious
+    ownership", Composer falls back to ``1.0.0+no-version-set``, and any
+    project that depends on its own version stops resolving. Measured on
+    ``laravel/framework`` v13.24.0, whose ``require-dev`` names
+    ``orchestra/testbench-core``, which in turn conflicts with
+    ``laravel/framework <13``:
+
+        Root composer.json requires orchestra/testbench-core ^11.0.0
+        - orchestra/testbench-core[...] conflict with laravel/framework <13.23.0
+
+    cdxgen then exits 1 having written nothing, the chain falls through to
+    syft, and syft writes a document with no components and exit code 0.
+    Telling Composer the version directly takes that repository from 0 to 72
+    components. It is the same failure for ``symfony/symfony`` (which requires
+    its own subpackages at an exact version) and ``Seldaek/monolog`` (whose
+    ``rollbar/rollbar`` dev dependency requires ``monolog/monolog ^2 || ^3``).
+
+    The repository's git config is deliberately left alone -- it belongs to
+    whoever is running this, not to us -- so the version comes from what the
+    build already knows: an explicit ``COMPONENT_VERSION``, or the tag the
+    release was triggered by.
+
+    Returns None when neither source yields something Composer would accept,
+    in which case the caller passes nothing and Composer behaves as before.
+    """
+    for candidate in (os.environ.get("COMPONENT_VERSION"), _version_from_tag()):
+        if not candidate:
+            continue
+        candidate = candidate.strip()
+        if _COMPOSER_VERSION.match(candidate):
+            return candidate.lstrip("vV")
+        logger.debug(f"Not usable as a Composer root version: {candidate!r}")
+    return None
+
+
+def _version_from_tag() -> str | None:
+    """The release tag this build was triggered by, reduced to a version."""
+    tag = tag_from_ci()
+    if not tag:
+        return None
+    # repo_name is not passed: the foreign-package check belongs to the SBOM's
+    # own version, and getting a monorepo's per-package tag slightly wrong here
+    # only affects how Composer resolves, never what the document claims.
+    return normalize_release_version(tag) or tag
 
 
 def ensure_go_installed() -> None:
