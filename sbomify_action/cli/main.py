@@ -234,7 +234,7 @@ class Config:
     component_version_source: Optional[str] = None
     """Where ``component_version`` came from, when it was not simply
     configured -- ``"release tag"``, or the same with a note that it was
-    normalised or that the tag names another package.
+    normalized or that the tag names another package.
 
     Carried rather than recorded at the point of decision because that point
     is ``build_config``, which is pure construction: it runs in tests and in
@@ -494,9 +494,9 @@ class Config:
                 # Keep the release version and the SBOM's version in step.
                 #
                 # The wizard emits PRODUCT_RELEASE from the raw tag while
-                # COMPONENT_VERSION is normalised inside the action, so with
-                # normalisation on they diverge: the SBOM says 8.21.0 and the
-                # release it is attached to is called curl-8_21_0. Normalising
+                # COMPONENT_VERSION is normalized inside the action, so with
+                # normalization on they diverge: the SBOM says 8.21.0 and the
+                # release it is attached to is called curl-8_21_0. Normalizing
                 # both keeps a release and its contents describing the same
                 # thing.
                 #
@@ -511,7 +511,7 @@ class Config:
                         if tag and version == tag and not names_another_package(tag, _repository_name()):
                             if normalized := normalize_release_version(version, _repository_name()):
                                 if normalized != version:
-                                    logger.info(f"Normalised product release {version!r} to {normalized!r}")
+                                    logger.info(f"Normalized product release {version!r} to {normalized!r}")
                                     release = f"{product_id}:{normalized}"
                         rewritten.append(release)
                     product_releases_list = rewritten
@@ -742,14 +742,14 @@ def build_config(
         # about the tag would otherwise be skipped.
         #
         # Routed through the same decision as the derived path rather than
-        # only normalising, because the checks are not separable. An earlier
+        # only normalizing, because the checks are not separable. An earlier
         # version of this called normalize_release_version directly and turned
         # `meta-v1.3.0` -- a per-package tag in dart-lang/sdk -- into a clean
         # `1.3.0` stamped on the whole repository, with no warning. Laundering
         # a foreign tag into something authoritative-looking is worse than
         # leaving it alone, which is what the foreign-tag check is for.
         #
-        # Matching against the tag, rather than normalising anything
+        # Matching against the tag, rather than normalizing anything
         # tag-shaped, is what keeps a deliberate COMPONENT_VERSION safe: a
         # build labelled "my-build-42" is not a curl-8_21_0.
         if final_component_version == tag_from_ci():
@@ -761,8 +761,8 @@ def build_config(
                 logger.warning(warning)
                 version_source = "release tag (names another package)"
             elif resolved and resolved != final_component_version:
-                logger.info(f"Normalised the release tag {final_component_version!r} to version {resolved!r}")
-                version_source = f"release tag {final_component_version!r}, normalised"
+                logger.info(f"Normalized the release tag {final_component_version!r} to version {resolved!r}")
+                version_source = f"release tag {final_component_version!r}, normalized"
                 final_component_version = resolved
             else:
                 version_source = "release tag"
@@ -781,7 +781,7 @@ def build_config(
             final_component_version = derived
             logger.info(f"Using component version {derived} from the release tag")
             tag = tag_from_ci()
-            version_source = f"release tag {tag!r}, normalised" if derived != tag else "release tag"
+            version_source = f"release tag {tag!r}, normalized" if derived != tag else "release tag"
         else:
             logger.info("No component version specified (COMPONENT_VERSION not set)")
     else:

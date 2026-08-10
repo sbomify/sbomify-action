@@ -17,7 +17,7 @@ Three things happen here, and they are deliberately separable:
 
 * **Reading the tag.** No invention: if the build is not tag-triggered there is
   no version to take, and this returns nothing rather than fabricating one.
-* **Normalising it.** ``curl-8_21_0`` into ``8.21.0``. Opt-in, because it
+* **Normalizing it.** ``curl-8_21_0`` into ``8.21.0``. Opt-in, because it
   rewrites what the project itself called the release, and some users would
   rather their SBOM say exactly what the tag said.
 * **Noticing the tag names something else.** A monorepo that tags per package
@@ -99,7 +99,7 @@ def _parse(tag: str) -> tuple[str, str, str] | None:
 
     Both halves of that rule were learned the hard way. A single regex with a
     non-greedy prefix stopped at the *first digit anywhere*, so ``bzip2-1.0.8``
-    parsed as prefix "bzip", core "2", suffix "-1.0.8" -- which normalised to
+    parsed as prefix "bzip", core "2", suffix "-1.0.8" -- which normalized to
     "2-1.0.8" and, because "bzip" is not "bzip2", was refused as a release of
     a different package. Every project with a digit in its name was affected:
     log4j, libxml2, sqlite3, s2n-tls.
@@ -228,5 +228,5 @@ def version_from_release_tag(repo_name: str | None, normalize: bool) -> tuple[st
         logger.debug(f"No version could be extracted from the tag {tag!r}; using it as-is")
         return tag, None
     if normalized != tag:
-        logger.info(f"Normalised the release tag {tag!r} to version {normalized!r}")
+        logger.info(f"Normalized the release tag {tag!r} to version {normalized!r}")
     return normalized, None
