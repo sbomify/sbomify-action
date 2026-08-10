@@ -262,6 +262,143 @@ requests==2.31.0
             assert dep.depth == 1
 
 
+class TestEnvironmentVerification:
+    """The guard that stops expansion reading an unrelated environment.
+
+    pipdeptree reports whatever the running interpreter has installed.
+    Under pipx/uvx (and in the Docker image) that interpreter holds
+    sbomify-action's own dependencies rather than the scanned project's,
+    and because this tool depends on requests, the lookups still resolve
+    — so the expansion silently reports our versions as the project's.
+    """
+
+    #: A tree pipdeptree would return if it were allowed to run. Its
+    #: presence in these tests proves the guard, not an empty tree, is
+    #: what suppresses discovery.
+    TREE = [
+        {
+            "package_name": "requests",
+            "installed_version": "2.34.2",
+            "dependencies": [
+                {"package_name": "urllib3", "installed_version": "2.7.0", "dependencies": []},
+            ],
+        }
+    ]
+
+    def _requirements(self, tmp_path, body: str) -> Path:
+        req_file = tmp_path / "requirements.txt"
+        req_file.write_text(body)
+        return req_file
+
+    def test_skips_when_pinned_versions_disagree(self, tmp_path):
+        """The reported bug: right package names, wrong environment."""
+        req_file = self._requirements(tmp_path, "click==8.1.7\nrequests==2.32.3\n")
+        expander = PipdeptreeExpander()
+
+        with (
+            patch.object(expander, "_installed_versions", return_value={"click": "8.4.2", "requests": "2.34.2"}),
+            patch.object(expander, "_run_pipdeptree", return_value=self.TREE) as run_tree,
+        ):
+            assert expander.expand(req_file) == []
+            # The expensive query is never reached — the guard runs first.
+            run_tree.assert_not_called()
+
+    def test_skips_when_a_direct_dependency_is_not_installed(self, tmp_path):
+        """A lockfile whose packages are largely absent is another project."""
+        req_file = self._requirements(tmp_path, "click==8.1.7\nrequests==2.32.3\ndjango==5.0\n")
+        expander = PipdeptreeExpander()
+
+        with (
+            patch.object(expander, "_installed_versions", return_value={"click": "8.1.7", "requests": "2.32.3"}),
+            patch.object(expander, "_run_pipdeptree", return_value=self.TREE),
+        ):
+            assert expander.expand(req_file) == []
+
+    def test_skips_when_nothing_is_pinned(self, tmp_path):
+        """Without an == pin there is no evidence the environment matches."""
+        req_file = self._requirements(tmp_path, "click\nrequests>=2.0\n")
+        expander = PipdeptreeExpander()
+
+        with (
+            patch.object(expander, "_installed_versions", return_value={"click": "8.4.2", "requests": "2.34.2"}),
+            patch.object(expander, "_run_pipdeptree", return_value=self.TREE),
+        ):
+            assert expander.expand(req_file) == []
+
+    def test_expands_when_environment_matches(self, tmp_path):
+        """A genuinely shared environment must still be expanded."""
+        req_file = self._requirements(tmp_path, "requests==2.34.2\n")
+        expander = PipdeptreeExpander()
+
+        with (
+            patch.object(expander, "_installed_versions", return_value={"requests": "2.34.2"}),
+            patch.object(expander, "_run_pipdeptree", return_value=self.TREE),
+        ):
+            discovered = expander.expand(req_file)
+
+        assert [d.purl for d in discovered] == ["pkg:pypi/urllib3@2.7.0"]
+
+    def test_normalized_names_match_across_spellings(self, tmp_path):
+        """A pin and its installed metadata may spell the name differently."""
+        req_file = self._requirements(tmp_path, "charset-normalizer==3.4.9\n")
+        expander = PipdeptreeExpander()
+
+        with (
+            patch.object(expander, "_installed_versions", return_value={"charset_normalizer": "3.4.9"}),
+            patch.object(expander, "_run_pipdeptree", return_value=[]),
+        ):
+            # Verification passes (so we reach the tree query and its
+            # empty result), rather than failing as a missing package.
+            assert expander.expand(req_file) == []
+
+    def test_skips_when_installed_versions_unavailable(self, tmp_path):
+        """pipdeptree unreadable — expand rather than guess."""
+        req_file = self._requirements(tmp_path, "requests==2.34.2\n")
+        expander = PipdeptreeExpander()
+
+        with (
+            patch.object(expander, "_installed_versions", return_value=None),
+            patch.object(expander, "_run_pipdeptree", return_value=self.TREE) as run_tree,
+        ):
+            assert expander.expand(req_file) == []
+            run_tree.assert_not_called()
+
+    def test_installed_versions_parses_flat_json(self):
+        """The flat --json shape, which nests versions under 'package'."""
+        payload = json.dumps(
+            [
+                {"package": {"key": "requests", "package_name": "requests", "installed_version": "2.34.2"}},
+                {
+                    "package": {
+                        "key": "charset-normalizer",
+                        "package_name": "charset-normalizer",
+                        "installed_version": "3.4.9",
+                    }
+                },
+            ]
+        )
+        expander = PipdeptreeExpander()
+
+        with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=payload, stderr="")):
+            versions = expander._installed_versions()
+
+        assert versions == {"requests": "2.34.2", "charset_normalizer": "3.4.9"}
+
+    def test_installed_versions_returns_none_on_bad_json(self):
+        """Unparseable output is reported as unknown, not as 'nothing installed'."""
+        expander = PipdeptreeExpander()
+
+        with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="", stderr="")):
+            assert expander._installed_versions() is None
+
+    def test_installed_versions_returns_none_on_failure(self):
+        """A nonzero exit is reported as unknown too."""
+        expander = PipdeptreeExpander()
+
+        with patch("subprocess.run", return_value=MagicMock(returncode=1, stdout="", stderr="boom")):
+            assert expander._installed_versions() is None
+
+
 class TestExpanderRegistry:
     """Tests for ExpanderRegistry class."""
 
