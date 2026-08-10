@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import PurePath
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -15,6 +17,46 @@ _NESTED_REPO_LABELS: dict[NestedRepoKind | None, str] = {
     "submodule": "submodule",
     "vendored": "vendored repo",
 }
+
+#: Top-level directories whose lockfiles describe how the project is built,
+#: tested or documented rather than what it ships.
+#:
+#: Matched only at the top level, deliberately. A `docs/` directory beside the
+#: root is the project's documentation; a `packages/web/docs/` inside a
+#: monorepo may be a published component, and a rule that skipped both would
+#: hide real dependencies to avoid a nuisance.
+_TOOLING_DIRS = frozenset(
+    {
+        ".ci",
+        ".github",
+        ".gitlab",
+        "bench",
+        "benchmark",
+        "benchmarks",
+        "ci",
+        "contrib",
+        "demo",
+        "demos",
+        "doc",
+        "docs",
+        "e2e",
+        "example",
+        "examples",
+        "samples",
+        "script",
+        "scripts",
+        "test",
+        "testing",
+        "tests",
+        "tools",
+    }
+)
+
+
+def _is_tooling(rel_path: PurePath) -> bool:
+    """Whether this input describes the project's tooling rather than the project."""
+    parts = rel_path.parts
+    return len(parts) > 1 and parts[0].lower() in _TOOLING_DIRS
 
 
 class DiscoverScreen(WizardScreen):
@@ -64,6 +106,8 @@ class DiscoverScreen(WizardScreen):
                     id="nested-repo-note",
                     classes="wizard-muted",
                 )
+            if note := self._tooling_note():
+                yield Static(note[1], id=note[0], classes="wizard-muted")
             yield SelectionList[int](id="lockfile-list")
 
     def compose_actions(self) -> ComposeResult:
@@ -74,6 +118,48 @@ class DiscoverScreen(WizardScreen):
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")
+
+    def _tooling_note(self) -> tuple[str, str] | None:
+        """The id and text of the note explaining what happened to tooling rows.
+
+        Same reasoning as the nested-repo note: a row whose state was decided
+        for the user needs the reason stated, and this is the only place it
+        appears. Which reason depends on what happened, and getting that wrong
+        is worse than saying nothing -- when *everything* found is tooling the
+        invariant ticks it, and "deselected by default" would then describe the
+        opposite of what the user is looking at.
+
+        Separate from compose_body so it can be tested without a running app.
+        """
+        discovered = self.wizard.state.discovered
+        tooling = [i for i, lf in enumerate(discovered) if _is_tooling(lf.rel_path)]
+        if not tooling:
+            return None
+
+        # Which note depends on whether anything that is *not* tooling was
+        # selectable -- not on whether every tooling row happens to be ticked.
+        #
+        # Those come apart when a repository is all tooling at mixed depths.
+        # `tests/requirements.txt` alongside `docs/sub/requirements.txt` ticks
+        # only the shallower one, so some tooling is deselected and the first
+        # test would report "deselected by default" -- implying a real input
+        # was preferred, when there was never one to prefer. The user needs
+        # the warning in that case, which is the whole reason it exists.
+        has_real_input = any(lf.nested_repo is None and not _is_tooling(lf.rel_path) for lf in discovered)
+        if has_real_input:
+            return (
+                "tooling-note",
+                "[#F4B57F]Lockfiles under tests/, docs/, examples/ and similar are "
+                "deselected by default — they describe how this project is built or "
+                "tested, not what it ships.[/]",
+            )
+        return (
+            "tooling-only-note",
+            "[#F4B57F]Everything found is under tests/, docs/, examples/ or similar — "
+            "this project has no lockfile of its own that we recognise. The SBOM will "
+            "describe how it is built or tested rather than what it ships, so check the "
+            "selection before continuing.[/]",
+        )
 
     def _default_selected(self) -> set[int]:
         """Indices to tick on arrival.
@@ -102,8 +188,32 @@ class DiscoverScreen(WizardScreen):
         selectable = [(idx, lf) for idx, lf in enumerate(self.wizard.state.discovered) if lf.nested_repo is None]
         if not selectable:
             return set()
-        shallowest = min(len(lf.rel_path.parts) for _idx, lf in selectable)
-        return {idx for idx, lf in selectable if len(lf.rel_path.parts) == shallowest}
+
+        # Tooling is skipped for the same reason nested repos are: it is not
+        # what this project ships. The difference is that it only bites when
+        # there is nothing at the root, which is exactly when the fallthrough
+        # is invisible -- a C project has no lockfile we support, so the
+        # shallowest thing left is whatever its CI installs.
+        #
+        # curl is the case that named this. At curl-8_21_0 the candidates are
+        # .github/scripts/requirements.txt, tests/requirements.txt,
+        # tests/http/requirements.txt and a Windows solution template; the
+        # shallowest is tests/requirements.txt, and the run produces a
+        # one-component SBOM called "curl" that describes curl's test harness.
+        #
+        # Measured over 353 repositories: 60 have no root-level input at all,
+        # and 29 of those default to a tooling directory. Homebrew/brew to
+        # docs/Gemfile.lock, NixOS/nixpkgs to ci/github-script/package-lock.json,
+        # ocaml/dune to doc/requirements.txt, and emqx/emqx to
+        # scripts/sbom/requirements.txt.
+        real = [(idx, lf) for idx, lf in selectable if not _is_tooling(lf.rel_path)]
+
+        # Never select nothing -- the invariant above. A repository that is
+        # *only* tooling still has to advance, and the user can see what was
+        # ticked and untick it.
+        tier = real or selectable
+        shallowest = min(len(lf.rel_path.parts) for _idx, lf in tier)
+        return {idx for idx, lf in tier if len(lf.rel_path.parts) == shallowest}
 
     def on_mount(self) -> None:
         sel = self.query_one("#lockfile-list", SelectionList)
