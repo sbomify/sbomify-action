@@ -396,6 +396,69 @@ class TestCLIEnvVarFallback(unittest.TestCase):
                 self.assertFalse(config.upload)
 
 
+class TestTokenEnvVarPrecedence(unittest.TestCase):
+    """$SBOMIFY_TOKEN must authenticate the pipeline, not just the wizard.
+
+    The root group used to bind $TOKEN alone, so a local (pipx/uvx) user
+    exporting the name the docs, the emitted workflow and the GitLab /
+    Bitbucket templates all reference got "token is not defined".
+    """
+
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def _invoke(self, args, env):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            lock_file = Path(tmp_dir) / "requirements.txt"
+            lock_file.write_text("requests==2.28.0")
+            return self.runner.invoke(
+                cli,
+                ["--lock-file", str(lock_file), "--component-id", "test-id", *args],
+                env=env,
+            )
+
+    @patch.object(cli_main_module, "run_pipeline")
+    @patch.object(cli_main_module, "setup_dependencies")
+    @patch.object(cli_main_module, "initialize_sentry")
+    def test_sbomify_token_is_honoured(self, mock_sentry, mock_deps, mock_run):
+        result = self._invoke([], {"SBOMIFY_TOKEN": "sbomify-token"})
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(mock_run.call_args[0][0].token, "sbomify-token")
+
+    @patch.object(cli_main_module, "run_pipeline")
+    @patch.object(cli_main_module, "setup_dependencies")
+    @patch.object(cli_main_module, "initialize_sentry")
+    def test_sbomify_token_outranks_token(self, mock_sentry, mock_deps, mock_run):
+        """Documented precedence: $SBOMIFY_TOKEN before $TOKEN."""
+        result = self._invoke([], {"SBOMIFY_TOKEN": "sbomify-token", "TOKEN": "legacy-token"})
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(mock_run.call_args[0][0].token, "sbomify-token")
+
+    @patch.object(cli_main_module, "run_pipeline")
+    @patch.object(cli_main_module, "setup_dependencies")
+    @patch.object(cli_main_module, "initialize_sentry")
+    def test_token_still_works(self, mock_sentry, mock_deps, mock_run):
+        """The GitHub Action maps its secret onto $TOKEN — keep it working."""
+        result = self._invoke([], {"TOKEN": "legacy-token"})
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(mock_run.call_args[0][0].token, "legacy-token")
+
+    @patch.object(cli_main_module, "run_pipeline")
+    @patch.object(cli_main_module, "setup_dependencies")
+    @patch.object(cli_main_module, "initialize_sentry")
+    def test_cli_flag_outranks_both(self, mock_sentry, mock_deps, mock_run):
+        result = self._invoke(
+            ["--token", "cli-token"],
+            {"SBOMIFY_TOKEN": "sbomify-token", "TOKEN": "legacy-token"},
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(mock_run.call_args[0][0].token, "cli-token")
+
+
 class TestBooleanEnvVarVocabulary(unittest.TestCase):
     """One vocabulary across every boolean env var, and no silent typos."""
 

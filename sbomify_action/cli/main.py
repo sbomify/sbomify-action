@@ -302,9 +302,10 @@ class Config:
                     reason = " or ".join(operations)
                     raise ConfigurationError(
                         f"sbomify API token is not defined (required when {reason}). "
-                        "Either set TOKEN, or in GitHub Actions enable trusted publishing by "
-                        "granting `permissions: id-token: write` in the workflow (and create "
-                        "an OIDC binding for the component in the sbomify UI)."
+                        "Either set SBOMIFY_TOKEN (or TOKEN), pass --token, or in GitHub Actions "
+                        "enable trusted publishing by granting `permissions: id-token: write` in "
+                        "the workflow (and create an OIDC binding for the component in the "
+                        "sbomify UI)."
                     )
             if not self.component_id:
                 operations = []
@@ -2488,8 +2489,13 @@ def _parse_upload_destinations_callback(
 @click.group(invoke_without_command=True, context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--token",
-    envvar="TOKEN",
-    help="sbomify API token (required for upload/augment).",
+    # First match wins, so this is the documented precedence:
+    # $SBOMIFY_TOKEN outranks $TOKEN. Both are honoured because the
+    # GitHub Action, GitLab and Bitbucket templates all map the
+    # SBOMIFY_TOKEN secret onto a TOKEN env var, while a local
+    # pipx/uvx user naturally exports SBOMIFY_TOKEN itself.
+    envvar=["SBOMIFY_TOKEN", "TOKEN"],
+    help="sbomify API token (required for upload/augment). [env: SBOMIFY_TOKEN, TOKEN]",
 )
 @click.option(
     "--component-id",
@@ -3136,15 +3142,15 @@ def init_cmd(
 def _inherit_root_token(ctx: click.Context, token: Optional[str]) -> Optional[str]:
     """Resolve the token for the wizard / init subcommand.
 
-    The wizard's own --token wins when the user typed it. Otherwise,
-    inherit the root group's --token ONLY when the root saw the value
-    on the command line (``sbomify-action --token X wizard``) — not when
-    Click pulled it from the root's ``envvar="TOKEN"``. The root group
-    binds $TOKEN as the GitHub-Action-style env var, but the wizard
-    subcommand documents (and ``_resolve_token`` implements)
-    ``$SBOMIFY_TOKEN`` as the higher-precedence env source. Without
-    this distinction, $TOKEN would silently outrank $SBOMIFY_TOKEN any
-    time the wizard ran with both env vars set, contradicting the help
+    The subcommand's own --token wins when the user typed it; otherwise
+    inherit whatever the root group resolved, whether it came from the
+    command line or the environment.
+
+    Inheriting an env-derived value is only safe because the root binds
+    ``envvar=["SBOMIFY_TOKEN", "TOKEN"]`` — the same precedence
+    ``_resolve_token`` implements. While the root bound $TOKEN alone,
+    this function had to refuse env-derived values, since inheriting one
+    would have let $TOKEN outrank $SBOMIFY_TOKEN and contradict the help
     text on ``--token``.
     """
     if token:
@@ -3152,14 +3158,8 @@ def _inherit_root_token(ctx: click.Context, token: Optional[str]) -> Optional[st
     if ctx.parent is None:
         return None
     parent_token = ctx.parent.params.get("token")
-    if not isinstance(parent_token, str) or not parent_token:
-        return None
-    source = ctx.parent.get_parameter_source("token")
-    if source is click.core.ParameterSource.COMMANDLINE:
+    if isinstance(parent_token, str) and parent_token:
         return parent_token
-    # Root populated --token from $TOKEN — let _resolve_token apply the
-    # documented env precedence ($SBOMIFY_TOKEN before $TOKEN) instead of
-    # treating the env-derived value as an explicit override.
     return None
 
 
