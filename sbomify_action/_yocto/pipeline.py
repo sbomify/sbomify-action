@@ -12,6 +12,7 @@ from sbomify_action.console import console
 from sbomify_action.enrichment import enrich_sbom
 from sbomify_action.exceptions import APIError, ConfigurationError, PlanLimitError
 from sbomify_action.logging_config import logger
+from sbomify_action.release_version import is_prerelease
 from sbomify_action.spdx3 import is_spdx3
 from sbomify_action.upload import upload_sbom
 
@@ -20,6 +21,16 @@ from .archive import extract_archive
 from .models import YoctoConfig, YoctoPipelineResult
 from .parser import discover_packages
 from .purl import inject_yocto_purls_spdx3, inject_yocto_purls_spdx22
+
+
+def _prerelease_flag(version: str) -> bool | None:
+    """``True`` for a prerelease, ``None`` otherwise.
+
+    None rather than False, matching the releases processor: the client omits
+    the field when it is None, leaving the backend's own default, where False
+    would assert "this is final" about a version nothing has judged.
+    """
+    return True if is_prerelease(version) else None
 
 
 def _process_single_package(
@@ -166,7 +177,13 @@ def _run_spdx3_pipeline(config: YoctoConfig, data: dict[str, Any]) -> YoctoPipel
             result.sboms_uploaded = 1
 
             console.print(f"\n[bold]Creating release:[/bold] {config.product_id}:{config.release_version}")
-            release_id = create_release(config.api_base_url, config.token, config.product_id, config.release_version)
+            release_id = create_release(
+                config.api_base_url,
+                config.token,
+                config.product_id,
+                config.release_version,
+                is_prerelease=_prerelease_flag(config.release_version),
+            )
             if release_id:
                 result.release_id = release_id
                 tag_sbom_with_release(config.api_base_url, config.token, sbom_id, release_id)
@@ -282,7 +299,11 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
             console.print(f"\n[bold]Creating release:[/bold] {config.product_id}:{config.release_version}")
             try:
                 release_id = create_release(
-                    config.api_base_url, config.token, config.product_id, config.release_version
+                    config.api_base_url,
+                    config.token,
+                    config.product_id,
+                    config.release_version,
+                    is_prerelease=_prerelease_flag(config.release_version),
                 )
                 if release_id:
                     result.release_id = release_id

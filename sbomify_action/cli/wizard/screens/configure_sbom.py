@@ -187,6 +187,40 @@ class ConfigureSbomScreen(WizardScreen):
                     value=not attest_default_yes,
                 )
 
+        # Only worth asking when the workflow will actually be tag-triggered.
+        #
+        # Gating on has_release_tags alone was not enough: a repository that
+        # has tags but runs on trunk gets a workflow whose version always comes
+        # from a short SHA, so the setting could never fire and would sit in
+        # the generated file misleading whoever read it next.
+        if self.wizard.state.plan.release_strategy == "tag":
+            version = Vertical(classes="wizard-panel")
+            version.border_title = "◆  Release version"
+            version.border_subtitle = "how a tag becomes the component version"
+            with version:
+                yield Static(
+                    "On a tag-triggered run the SBOM takes its version from the tag.",
+                    classes="wizard-muted",
+                )
+                # Concrete, because the abstract version of this question is
+                # unanswerable. These are real tags from real projects.
+                yield Static(
+                    "Some projects tag a plain version, others do not: "
+                    "[b]curl-8_21_0[/], [b]rel/release-3.5.0[/], [b]svelte@5.56.8[/]. "
+                    "A CVE feed knows 8.21.0, not curl-8_21_0.",
+                    classes="wizard-help",
+                )
+                with RadioSet(id="normalize-version"):
+                    yield StatefulRadioButton(
+                        "Use the tag exactly as written  [#86EFAC]✓ default[/]",
+                        id="normver-no",
+                        value=True,
+                    )
+                    yield StatefulRadioButton(
+                        "Normalise it to a plain version (curl-8_21_0 → 8.21.0)",
+                        id="normver-yes",
+                    )
+
     def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
@@ -443,6 +477,7 @@ class ConfigureSbomScreen(WizardScreen):
         plan.augmentation = self._selected_augmentation()
         plan.sbom_formats = self._selected_formats()
         plan.attestation = self._selected_attestation()
+        plan.normalize_version = self._selected_normalize_version()
 
         # contact_profile_id / sbomify_json_data are only meaningful
         # when we're actually using that strategy; clear stale state
@@ -589,3 +624,13 @@ class ConfigureSbomScreen(WizardScreen):
     def _selected_attestation(self) -> bool:
         pressed = self.query_one("#attestation", RadioSet).pressed_button
         return pressed is not None and pressed.id == "attest-yes"
+
+    def _selected_normalize_version(self) -> bool:
+        # The panel is only composed when the repository has release tags, so
+        # a missing RadioSet means the question was never asked -- not that the
+        # user declined it.
+        found = self.query(RadioSet).filter("#normalize-version")
+        if not found:
+            return False
+        pressed = found.first(RadioSet).pressed_button
+        return pressed is not None and pressed.id == "normver-yes"

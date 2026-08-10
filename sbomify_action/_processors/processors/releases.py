@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from sbomify_action.exceptions import APIError
 from sbomify_action.logging_config import logger
+from sbomify_action.release_version import is_prerelease
 
 from ..protocol import ProcessorInput
 from ..releases_api import (
@@ -162,8 +163,27 @@ class SbomifyReleasesProcessor:
                 logger.warning(f"Could not get release details for logging: {e}")
                 logger.info(f"Release {version} already exists for product {product_id}")
         else:
-            logger.info(f"Creating release {version} for product {product_id}")
-            created_release_id = create_release(api_base_url, token, product_id, version)
+            # sbomify keeps is_prerelease as its own indexed field, so an
+            # alpha recorded as a final release is not merely mislabelled --
+            # it is indexed and queried alongside every genuine one, and it
+            # can become the release a customer is pointed at.
+            #
+            # Only sent when the version says so. Passing False for everything
+            # unrecognised would assert "this is final" about versions we have
+            # simply not been able to read, so an unparseable version leaves
+            # the backend's own default in place.
+            prerelease = is_prerelease(version)
+            if prerelease:
+                logger.info(f"Creating release {version} for product {product_id} (prerelease)")
+            else:
+                logger.info(f"Creating release {version} for product {product_id}")
+            created_release_id = create_release(
+                api_base_url,
+                token,
+                product_id,
+                version,
+                is_prerelease=True if prerelease else None,
+            )
             if created_release_id:
                 release_id = created_release_id
             # Get details after creation for consistent logging
