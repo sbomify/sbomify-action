@@ -30,6 +30,7 @@ from ..utils import (
     DEFAULT_TIMEOUT,
     DOTNET_LOCK_FILES,
     DOTNET_PROJECT_SUFFIXES,
+    composer_root_version,
     ensure_dotnet_installed,
     ensure_go_installed,
     ensure_java_maven_installed,
@@ -214,8 +215,18 @@ class CdxgenFsGenerator:
         # is how the JVM path has always worked, and it is version-neutral:
         # both come from the same tools_release pin, and all three bundles
         # currently ship cdxgen 12.8.2 on Bun 1.3.14 -- checked, not assumed.
+        # Composer resolves the manifest against Packagist, and to do that it
+        # has to know what version *this* package is -- a project that depends
+        # on its own version otherwise fails to resolve entirely. It normally
+        # asks git, which refuses a workspace owned by another UID. See
+        # composer_root_version() for what that costs and where the value
+        # comes from instead.
+        env: dict[str, str] | None = None
         if lock_file_name == "composer.json":
             ensure_php_installed()
+            if root_version := composer_root_version():
+                logger.info(f"Telling Composer this package is version {root_version}")
+                env = {"COMPOSER_ROOT_VERSION": root_version}
 
         cmd = [
             "cdxgen",
@@ -261,7 +272,7 @@ class CdxgenFsGenerator:
             # cyclonedx-py/syft take over). Its failure is benign on the happy
             # path, so log it at DEBUG rather than spamming ERROR; the
             # orchestrator surfaces a real ERROR only if every generator fails.
-            run_command(cmd, "cdxgen", timeout=DEFAULT_TIMEOUT, cwd=str(lock_file_directory), log_errors=False)
+            run_command(cmd, "cdxgen", timeout=DEFAULT_TIMEOUT, cwd=str(lock_file_directory), log_errors=False, env=env)
 
             # Verify output file was created
             if not Path(output_file_abs).exists():
