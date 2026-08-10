@@ -58,7 +58,12 @@ from ..generation import (
     process_lock_file,
 )
 from ..logging_config import logger
-from ..release_version import tag_from_ci, version_from_release_tag
+from ..release_version import (
+    names_another_package,
+    normalize_release_version,
+    tag_from_ci,
+    version_from_release_tag,
+)
 from ..serialization import (
     _add_compositions_if_missing,
     _fix_purl_encoding_bugs_in_json,
@@ -486,6 +491,31 @@ class Config:
                             f"Invalid version in PRODUCT_RELEASE: '{release}'. Version cannot be empty."
                         )
 
+                # Keep the release version and the SBOM's version in step.
+                #
+                # The wizard emits PRODUCT_RELEASE from the raw tag while
+                # COMPONENT_VERSION is normalised inside the action, so with
+                # normalisation on they diverge: the SBOM says 8.21.0 and the
+                # release it is attached to is called curl-8_21_0. Normalising
+                # both keeps a release and its contents describing the same
+                # thing.
+                #
+                # Only when the version *is* the tag, on the same reasoning as
+                # the component version: a deliberately-chosen release name is
+                # not ours to rewrite.
+                if _normalize_version_enabled():
+                    tag = tag_from_ci()
+                    rewritten = []
+                    for release in product_releases_list:
+                        product_id, version = release.split(":", 1)
+                        if tag and version == tag and not names_another_package(tag, _repository_name()):
+                            if normalized := normalize_release_version(version, _repository_name()):
+                                if normalized != version:
+                                    logger.info(f"Normalised product release {version!r} to {normalized!r}")
+                                    release = f"{product_id}:{normalized}"
+                        rewritten.append(release)
+                    product_releases_list = rewritten
+
                 # Store the parsed list back for later use
                 self.product_releases = product_releases_list
                 logger.info(f"Validated product releases: {self.product_releases}")
@@ -543,6 +573,32 @@ def _repository_name() -> Optional[str]:
     return None
 
 
+def _flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _version_from_tag_enabled() -> bool:
+    """Whether an unset COMPONENT_VERSION may be filled in from the release tag.
+
+    Off by default, and that is a deliberate reversal.
+
+    The first version of this derived the version whenever a tag-triggered
+    build left COMPONENT_VERSION unset, on the reasoning that the tag is
+    better than nothing. It is not always better than what is already there.
+    A project whose lockfile already yields a correct root version of
+    ``1.2.3`` would have had it overwritten with the literal tag ``v1.2.3``,
+    rebuilding the root PURL as ``pkg:pypi/foo@v1.2.3`` -- which no registry
+    or CVE feed resolves. For curl the SBOM would have claimed
+    ``curl-8_21_0``.
+
+    Silently changing the version of every existing tag-triggered user's SBOM
+    is not a thing to do by default, particularly on the strength of a finding
+    that was withdrawn once already for being measured against the wrong
+    checkout. Opt in, and the wizard asks.
+    """
+    return _flag("VERSION_FROM_RELEASE_TAG")
+
+
 def _normalize_version_enabled() -> bool:
     """Whether to reduce a release tag to the version a registry would know.
 
@@ -551,7 +607,7 @@ def _normalize_version_enabled() -> bool:
     release -- which is the sort of thing that should be asked for rather than
     done quietly. The wizard offers it; this is the switch it writes.
     """
-    return os.getenv("NORMALIZE_VERSION", "").strip().lower() in ("1", "true", "yes", "on")
+    return _flag("NORMALIZE_VERSION")
 
 
 def _handle_deprecated_version(component_version: Optional[str], sbom_version: Optional[str]) -> Optional[str]:
@@ -711,11 +767,10 @@ def build_config(
             else:
                 version_source = "release tag"
         logger.info(f"Using component version: {final_component_version}")
-    else:
-        # Nothing configured, but a tag-triggered build already knows which
-        # release this is -- it is in the environment, and until now nothing
-        # read it. A branch build still yields nothing, because there is no
-        # released version to claim and inventing one would be worse.
+    elif _version_from_tag_enabled():
+        # Nothing configured, and the user asked for the tag to fill the gap.
+        # A branch build still yields nothing, because there is no released
+        # version to claim and inventing one would be worse.
         derived, warning = version_from_release_tag(
             repo_name=_repository_name(),
             normalize=_normalize_version_enabled(),
@@ -729,6 +784,8 @@ def build_config(
             version_source = f"release tag {tag!r}, normalised" if derived != tag else "release tag"
         else:
             logger.info("No component version specified (COMPONENT_VERSION not set)")
+    else:
+        logger.info("No component version specified (COMPONENT_VERSION not set)")
 
     # Handle deprecated OVERRIDE_NAME env var
     override_name_env = os.getenv("OVERRIDE_NAME")

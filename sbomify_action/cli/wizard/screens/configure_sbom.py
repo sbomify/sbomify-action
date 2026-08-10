@@ -187,10 +187,13 @@ class ConfigureSbomScreen(WizardScreen):
                     value=not attest_default_yes,
                 )
 
-        # Only worth asking when releases are tagged, since the tag is where
-        # the version comes from. A repository with no release tags would be
-        # answering a question that never fires.
-        if self.wizard.state.facts.has_release_tags:
+        # Only worth asking when the workflow will actually be tag-triggered.
+        #
+        # Gating on has_release_tags alone was not enough: a repository that
+        # has tags but runs on trunk gets a workflow whose version always comes
+        # from a short SHA, so the setting could never fire and would sit in
+        # the generated file misleading whoever read it next.
+        if self.wizard.state.plan.release_strategy == "tag":
             version = Vertical(classes="wizard-panel")
             version.border_title = "◆  Release version"
             version.border_subtitle = "how a tag becomes the component version"

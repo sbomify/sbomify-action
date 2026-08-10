@@ -30,11 +30,21 @@ class TestSeparatedMarkers:
             "v1.0.0-nightly",
             "4.0.0-canary.5",
             "1.0.0-milestone2",
-            "2.0.0+preview",
         ],
     )
     def test_recognised(self, version):
         assert is_prerelease(version)
+
+    def test_a_marker_in_build_metadata_does_not_count(self):
+        """`2.0.0+preview` is version 2.0.0.
+
+        This case was on the wrong side of the list when it was written. SemVer
+        is explicit that build metadata is ignored for precedence, so a marker
+        after the `+` describes the build, not the release. Reading it as a
+        prerelease would demote a GA release over the contents of a field that
+        is defined not to affect ordering.
+        """
+        assert not is_prerelease("2.0.0+preview")
 
 
 class TestWeldedMarkers:
@@ -111,11 +121,13 @@ class TestItReachesTheBackend:
 
         assert seen["is_prerelease"] is True
 
-    def test_omitted_when_not_a_prerelease(self, monkeypatch):
+    def test_none_when_not_a_prerelease(self, monkeypatch):
         """None, not False -- the backend's own default should stand.
 
-        Sending False would assert "this is final" about every version we
-        could not read, which is a claim rather than an absence.
+        The client omits the field entirely when it is None, so None is how a
+        caller says nothing. False would assert "this is final" about every
+        version we merely failed to read, which is a claim rather than an
+        absence.
         """
         from sbomify_action._processors import releases_api
 
@@ -131,3 +143,30 @@ class TestItReachesTheBackend:
         releases_api.create_release("https://api", "tok", "prod_1", "1.2.3")
 
         assert seen["is_prerelease"] is None
+
+
+class TestBuildMetadataIsNotAPrerelease:
+    """SemVer build metadata is ignored for precedence, and is where hex lives.
+
+    `\\d(?:a|b|rc|m)\\d+$` matched the tail of ordinary build metadata, so a GA
+    release carrying a short SHA was recorded as a prerelease and vanished from
+    any view filtering prereleases out -- the mirror of the bug this fixes.
+    """
+
+    @pytest.mark.parametrize(
+        "version",
+        [
+            "1.0.0+build.9a12",
+            "1.2.3+sha.1b234",
+            "0.0.0+g1a234",
+            "2.0.0+20130313144700",
+            "1.0.0+exp.sha.5114f85",
+        ],
+    )
+    def test_metadata_does_not_make_it_a_prerelease(self, version):
+        assert not is_prerelease(version)
+
+    def test_a_real_prerelease_with_metadata_still_counts(self):
+        """The marker is in the release part, where it belongs."""
+        assert is_prerelease("1.0.0-rc.1+build.9a12")
+        assert is_prerelease("6.1a1+g1234")

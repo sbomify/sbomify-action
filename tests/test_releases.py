@@ -66,9 +66,9 @@ def test_get_release_details_delegates(stub_client: MagicMock) -> None:
 def test_create_release_delegates(stub_client: MagicMock) -> None:
     stub_client.create_release.return_value = "rel-new"
     assert create_release(API_BASE, TOKEN, "prod-1", "v1.0.0") == "rel-new"
-    # is_prerelease=None rather than omitted: the client distinguishes "not a
-    # prerelease" from "we could not tell", and only the second should leave
-    # the backend's own default in place.
+    # None rather than False. The client omits the field entirely when it is
+    # None, so the backend keeps its own default; False would assert "this is
+    # a final release" about a version nothing has judged.
     stub_client.create_release.assert_called_once_with("prod-1", "v1.0.0", is_prerelease=None)
 
 

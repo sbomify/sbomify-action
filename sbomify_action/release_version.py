@@ -35,7 +35,12 @@ from .logging_config import logger
 
 #: Prefixes that carry no information about which project this is, so a tag
 #: wearing one is still a release of the repository it lives in.
-_GENERIC_PREFIXES = ("releases", "release", "rel", "version", "ver", "tags", "tag", "v")
+#:
+#: ``parent`` is here for Maven, which tags a project's aggregator POM
+#: ``<project>-parent-<version>``. Gson's newer tags are all
+#: ``gson-parent-2.9.1``, and without it every one of them reads as a release
+#: of some other package.
+_GENERIC_PREFIXES = ("releases", "release", "rel", "version", "ver", "tags", "tag", "v", "parent")
 
 #: A prerelease marker separated from the number: -rc.1, .dev, -alpha2,
 #: +preview. The separator matters -- without it, "beta" would match the "b"
@@ -74,17 +79,12 @@ def tag_from_ci() -> str | None:
     return os.environ.get("CI_COMMIT_TAG") or os.environ.get("BITBUCKET_TAG") or None
 
 
-#: One parse for both questions: what is the version, and whose release is it?
-#:
-#: The prefix is non-greedy so it stops at the first place a version can start,
-#: and the optional ``v`` is consumed outside the prefix so ``v1.2.3`` has no
-#: prefix at all rather than a prefix of ``v``. Everything after the numeric
-#: core is kept, because a suffix a project chose -- ``.Final``, ``-stable`` --
-#: is part of how it names the artifact.
-_TAG = re.compile(
-    r"^(?P<prefix>.*?)v?(?P<core>\d+(?:[._]\d+)*)(?P<suffix>.*)$",
-    re.IGNORECASE,
-)
+#: Separators a project may put between its name and the version.
+_SEPARATORS = "-_@./"
+
+#: A version, once we know where it starts: an optional ``v``, a numeric core,
+#: and whatever the project chose to append -- ``.Final``, ``-stable``.
+_VERSION_AT = re.compile(r"^v?(?P<core>\d+(?:[._]\d+)*)(?P<suffix>.*)$", re.IGNORECASE)
 
 
 def _squash(name: str) -> str:
@@ -92,14 +92,35 @@ def _squash(name: str) -> str:
 
 
 def _parse(tag: str) -> tuple[str, str, str] | None:
-    """Split a tag into (prefix, numeric core, suffix), or None if it has no version."""
+    """Split a tag into (prefix, numeric core, suffix), or None if it has no version.
+
+    A version may only begin at the start of the tag or immediately after a
+    separator, and the earliest such position wins.
+
+    Both halves of that rule were learned the hard way. A single regex with a
+    non-greedy prefix stopped at the *first digit anywhere*, so ``bzip2-1.0.8``
+    parsed as prefix "bzip", core "2", suffix "-1.0.8" -- which normalised to
+    "2-1.0.8" and, because "bzip" is not "bzip2", was refused as a release of
+    a different package. Every project with a digit in its name was affected:
+    log4j, libxml2, sqlite3, s2n-tls.
+
+    And the path is kept rather than discarded. Taking only the last segment
+    made ``otelhttp/v1.20.0`` look like a bare version with no prefix, so a Go
+    submodule's tag sailed past the foreign-package check and stamped its
+    version on the whole repository. That is the Go multi-module convention,
+    not a corner case.
+    """
     if not tag:
         return None
-    match = _TAG.match(tag.split("/")[-1])
-    if not match:
-        return None
-    prefix = match.group("prefix").rstrip("-_@./")
-    return prefix, match.group("core"), match.group("suffix")
+
+    starts = [0] + [i + 1 for i, ch in enumerate(tag) if ch in _SEPARATORS]
+    for start in starts:
+        match = _VERSION_AT.match(tag[start:])
+        if not match:
+            continue
+        prefix = tag[:start].rstrip(_SEPARATORS)
+        return prefix, match.group("core"), match.group("suffix")
+    return None
 
 
 def names_another_package(tag: str, repo_name: str | None) -> bool:
@@ -122,7 +143,13 @@ def names_another_package(tag: str, repo_name: str | None) -> bool:
     prefix = parsed[0]
     if not prefix:
         return False
-    return prefix.lower() not in _GENERIC_PREFIXES and _squash(prefix) != _squash(repo_name)
+
+    # The prefix may be several segments -- `rel/release`, `releases/lucene`,
+    # `gson-parent`. It names this project only if every segment is either a
+    # generic word or the repository itself; one foreign segment is enough to
+    # make the tag someone else's, which is what catches `packages/meta`.
+    segments = [s for s in re.split(r"[-_@./]", prefix) if s]
+    return not all(s.lower() in _GENERIC_PREFIXES or _squash(s) == _squash(repo_name) for s in segments)
 
 
 def is_prerelease(version: str | None) -> bool:
@@ -147,7 +174,14 @@ def is_prerelease(version: str | None) -> bool:
     if not version:
         return False
     text = version.strip()
-    return bool(_PRERELEASE.search(text) or _WELDED_PRERELEASE.search(text))
+
+    # Build metadata is not part of the release identity -- SemVer says it is
+    # ignored for precedence -- and it is where hex lives. `1.0.0+build.9a12`
+    # and `0.0.0+g1a234` both end in digit-letter-digits and were being
+    # recorded as prereleases: a GA release vanishing from any view that
+    # filters prereleases out, which is the mirror of the bug this fixes.
+    release_part = text.split("+", 1)[0]
+    return bool(_PRERELEASE.search(release_part) or _WELDED_PRERELEASE.search(release_part))
 
 
 def normalize_release_version(tag: str, repo_name: str | None = None) -> str | None:

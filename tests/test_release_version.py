@@ -208,3 +208,69 @@ class TestAConfiguredVersionThatIsTheTag:
         monkeypatch.setenv("GITHUB_REF_NAME", "curl-8_21_0")
 
         assert version_from_release_tag("curl", normalize=True) == ("8.21.0", None)
+
+
+class TestProjectNamesContainingDigits:
+    """A digit in the project's name used to split the tag in the wrong place.
+
+    `_TAG`'s non-greedy prefix stopped at the first digit *anywhere*, so
+    bzip2-1.0.8 parsed as prefix "bzip", core "2", suffix "-1.0.8". That
+    normalised to "2-1.0.8" and, because "bzip" is not "bzip2", was refused as
+    a release of a different package -- on the project's own tag, and with
+    normalisation off, since the refusal path runs either way.
+    """
+
+    @pytest.mark.parametrize(
+        ("tag", "repo", "expected"),
+        [
+            ("bzip2-1.0.8", "bzip2", "1.0.8"),
+            ("log4j-2.25.0", "log4j", "2.25.0"),
+            ("libxml2-2.13.0", "libxml2", "2.13.0"),
+            ("sqlite3-3.45.0", "sqlite3", "3.45.0"),
+            ("s2n-tls-1.5.0", "s2n-tls", "1.5.0"),
+            ("socket.io@4.8.3", "socket.io", "4.8.3"),
+        ],
+    )
+    def test_the_version_is_the_version(self, tag, repo, expected):
+        assert normalize_release_version(tag, repo) == expected
+
+    @pytest.mark.parametrize(
+        ("tag", "repo"),
+        [
+            ("bzip2-1.0.8", "bzip2"),
+            ("log4j-2.25.0", "log4j"),
+            ("sqlite3-3.45.0", "sqlite3"),
+        ],
+    )
+    def test_not_mistaken_for_another_package(self, tag, repo):
+        assert not names_another_package(tag, repo)
+
+
+class TestPathScopedTags:
+    """Taking only the last path segment let monorepo tags past the guard.
+
+    `otelhttp/v1.20.0` is the Go multi-module convention, not a corner case,
+    and it looked like a bare version with no prefix at all.
+    """
+
+    @pytest.mark.parametrize(
+        ("tag", "repo"),
+        [
+            ("otelhttp/v1.20.0", "opentelemetry-go-contrib"),
+            ("packages/meta/v1.3.0", "sdk"),
+            ("bridges/otelslog/v0.5.0", "opentelemetry-go-contrib"),
+        ],
+    )
+    def test_a_submodule_tag_is_another_package(self, tag, repo):
+        assert names_another_package(tag, repo)
+
+    @pytest.mark.parametrize(
+        ("tag", "repo"),
+        [
+            ("rel/release-3.5.0", "hadoop"),
+            ("releases/lucene/10.5.0", "lucene"),
+            ("gson-parent-2.9.1", "gson"),
+        ],
+    )
+    def test_a_generic_or_own_path_is_not(self, tag, repo):
+        assert not names_another_package(tag, repo)
