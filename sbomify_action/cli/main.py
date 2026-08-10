@@ -537,7 +537,7 @@ def _handle_deprecated_name(
     Returns:
         Tuple of (final_component_name, final_override_name)
     """
-    override_name = evaluate_boolean(override_name_env) if override_name_env else False
+    override_name = evaluate_boolean(override_name_env, source="OVERRIDE_NAME") if override_name_env else False
 
     if component_name and override_name:
         logger.warning(
@@ -719,11 +719,13 @@ def load_config() -> Config:
         docker_image=os.getenv("DOCKER_IMAGE"),
         lock_file=os.getenv("LOCK_FILE"),
         output_file=os.getenv("OUTPUT_FILE", "sbom_output.json"),
-        upload=evaluate_boolean(os.getenv("UPLOAD", "True")),
+        upload=evaluate_boolean(os.getenv("UPLOAD", "True"), source="UPLOAD"),
         upload_destinations=upload_destinations,
-        augment=evaluate_boolean(os.getenv("AUGMENT", "False")),
-        enrich=evaluate_boolean(os.getenv("ENRICH", "False")),
-        override_sbom_metadata=evaluate_boolean(os.getenv("OVERRIDE_SBOM_METADATA", "False")),
+        augment=evaluate_boolean(os.getenv("AUGMENT", "False"), source="AUGMENT"),
+        enrich=evaluate_boolean(os.getenv("ENRICH", "False"), source="ENRICH"),
+        override_sbom_metadata=evaluate_boolean(
+            os.getenv("OVERRIDE_SBOM_METADATA", "False"), source="OVERRIDE_SBOM_METADATA"
+        ),
         component_version=os.getenv("COMPONENT_VERSION"),
         component_name=os.getenv("COMPONENT_NAME"),
         component_purl=os.getenv("COMPONENT_PURL"),
@@ -763,11 +765,17 @@ def setup_dependencies() -> None:
 def initialize_sentry() -> None:
     """Initialize Sentry for error tracking.
 
-    Can be disabled by setting TELEMETRY to 'false', '0', or 'no'.
+    Can be disabled by setting TELEMETRY to any recognised false value
+    (``false``, ``0``, ``no``, ``off``, ``disabled``, …).
+
+    The CLI already gates this call on ``--telemetry/--no-telemetry``,
+    which resolves TELEMETRY itself, so this re-check only matters when
+    the function is called directly. It shares the one boolean
+    vocabulary either way — previously it accepted ``disabled`` while
+    the option layer rejected the same string outright.
     """
     # Allow users to opt-out of telemetry
-    telemetry_enabled = os.getenv("TELEMETRY", "true").lower()
-    if telemetry_enabled in ("false", "0", "no", "off", "disabled"):
+    if not evaluate_boolean(os.getenv("TELEMETRY", "true"), source="TELEMETRY"):
         logger.debug("Sentry telemetry disabled via TELEMETRY environment variable")
         return
 
@@ -1047,17 +1055,48 @@ def get_last_sbom_from_last_step() -> Optional[str]:
     return None
 
 
-def evaluate_boolean(value: str) -> bool:
+#: The one boolean vocabulary every env var and flag in this CLI shares.
+#: It is Click's own ``BOOL`` set (so ``--telemetry``'s long-standing
+#: behaviour is preserved) plus the spellings this project already
+#: accepted (``yeah``) or documented elsewhere (``enabled``/``disabled``,
+#: which ``initialize_sentry`` describes as valid telemetry opt-outs).
+_TRUE_VALUES = frozenset({"1", "true", "t", "yes", "y", "yeah", "on", "enable", "enabled"})
+_FALSE_VALUES = frozenset({"0", "false", "f", "no", "n", "off", "", "disable", "disabled"})
+
+
+def evaluate_boolean(value: str, source: str = "value") -> bool:
     """
-    Evaluate string values as boolean.
+    Evaluate a string as a boolean, rejecting anything ambiguous.
+
+    Surrounding whitespace is stripped and case is ignored, so values
+    that arrive with a trailing newline from a YAML block scalar, a
+    ``.env`` file, or ``$(command)`` substitution behave as written.
+
+    Unrecognised input raises rather than evaluating to ``False``. That
+    matters most for ``UPLOAD``, which defaults to *true*: treating a
+    typo as "off" silently skipped the upload while the run still
+    reported success, so the user believed they had published when they
+    had not. A typo must never be indistinguishable from a deliberate
+    opt-out.
 
     Args:
         value: String value to evaluate
+        source: What produced the value (an env var or option name),
+            used to make the error actionable.
 
     Returns:
         Boolean result
+
+    Raises:
+        ConfigurationError: If the value is not a recognised boolean.
     """
-    return value.lower() in ["true", "yes", "yeah", "1"]
+    normalized = value.strip().lower()
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES:
+        return False
+    accepted = ", ".join(sorted(_TRUE_VALUES | (_FALSE_VALUES - {""})))
+    raise ConfigurationError(f"Invalid boolean for {source}: {value!r}. Accepted values: {accepted}.")
 
 
 def validate_sbom(file_path: str) -> str:
@@ -2405,7 +2444,13 @@ def _make_bool_envvar_callback(
         # Check environment variable with string-to-bool conversion
         env_value = os.getenv(envvar)
         if env_value is not None:
-            return evaluate_boolean(env_value)
+            try:
+                return evaluate_boolean(env_value, source=envvar)
+            except ConfigurationError as exc:
+                # Surface as a parse-time usage error (exit 2) so a bad
+                # value stops the run instead of silently selecting the
+                # option's default.
+                raise click.BadParameter(str(exc), ctx=ctx, param=param) from exc
 
         # Fall back to default
         return default
@@ -2576,10 +2621,11 @@ def _parse_upload_destinations_callback(
 )
 @click.option(
     "--telemetry/--no-telemetry",
-    envvar="TELEMETRY",
     default=True,
     show_default=True,
-    help="Enable/disable error telemetry (Sentry).",
+    callback=_make_bool_envvar_callback("TELEMETRY", True),
+    is_eager=True,
+    help="Enable/disable error telemetry (Sentry). [env: TELEMETRY]",
 )
 @click.option(
     "--working-dir",
