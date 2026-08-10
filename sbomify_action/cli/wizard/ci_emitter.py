@@ -402,6 +402,7 @@ def _env_block(
     release_strategy: ReleaseStrategy,
     product_id: str | None,
     has_submodules: bool = False,
+    normalize_version: bool = False,
 ) -> str:
     """The ``env:`` block under the action step.
 
@@ -425,6 +426,11 @@ def _env_block(
             "          UPLOAD: 'true'",
             f"          AUGMENT: '{augmentation_to_env(augmentation)}'",
             f"          ENRICH: '{'true' if enrich else 'false'}'",
+            # Only emitted when asked for. The version step above hands over
+            # the tag exactly as the project wrote it, so this is what turns
+            # curl-8_21_0 into 8.21.0 -- and its absence is what leaves the
+            # tag alone for everyone who did not ask.
+            *(["          NORMALIZE_VERSION: 'true'"] if normalize_version else []),
             "          SBOM_FORMAT: ${{ matrix.sbom_format }}",
             "          OUTPUT_FILE: ${{ matrix.output_file }}",
             f"          API_BASE_URL: {api_base_url}",
@@ -579,6 +585,7 @@ def emit_workflow(
         release_strategy=plan.release_strategy,
         product_id=product_id or plan.use_product_id,
         has_submodules=has_submodules,
+        normalize_version=plan.normalize_version,
     )
     matrix = _matrix_block(plan.create_components, formats, component_ids, attestation=plan.attestation)
     attest_step = _attest_step() if plan.attestation else ""

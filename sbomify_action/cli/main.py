@@ -58,6 +58,7 @@ from ..generation import (
     process_lock_file,
 )
 from ..logging_config import logger
+from ..release_version import normalize_release_version, tag_from_ci, version_from_release_tag
 from ..serialization import (
     _add_compositions_if_missing,
     _fix_purl_encoding_bugs_in_json,
@@ -521,6 +522,29 @@ class Config:
             self.api_base_url = self.api_base_url.rstrip("/")
 
 
+def _repository_name() -> Optional[str]:
+    """The repository this build belongs to, for spotting a foreign tag.
+
+    Only used to answer "does this tag name a different package", so a missing
+    value means the check is skipped rather than guessed at.
+    """
+    for var in ("GITHUB_REPOSITORY", "CI_PROJECT_PATH", "BITBUCKET_REPO_FULL_NAME"):
+        if value := os.getenv(var):
+            return value.split("/")[-1]
+    return None
+
+
+def _normalize_version_enabled() -> bool:
+    """Whether to reduce a release tag to the version a registry would know.
+
+    Off by default. Turning ``curl-8_21_0`` into ``8.21.0`` makes it matchable
+    against a CVE feed, and also rewrites what the project itself called the
+    release -- which is the sort of thing that should be asked for rather than
+    done quietly. The wizard offers it; this is the switch it writes.
+    """
+    return os.getenv("NORMALIZE_VERSION", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _handle_deprecated_version(component_version: Optional[str], sbom_version: Optional[str]) -> Optional[str]:
     """
     Handle component version with deprecation support for SBOM_VERSION.
@@ -640,9 +664,38 @@ def build_config(
 
     # Log component version
     if final_component_version:
+        # A configured version is normally left exactly as configured. The one
+        # exception is when it *is* the release tag: the wizard's generated
+        # workflow computes COMPONENT_VERSION by stripping refs/tags/, so a
+        # user who asked for normalisation would otherwise never get it,
+        # because the version arrives configured rather than derived.
+        #
+        # Matching against the tag rather than normalising anything that looks
+        # tag-shaped is what keeps a deliberate COMPONENT_VERSION safe: a build
+        # labelled "my-build-42" is not a curl-8_21_0, and reducing it to "42"
+        # would be the tool overruling the user.
+        if _normalize_version_enabled() and final_component_version == tag_from_ci():
+            if normalized := normalize_release_version(final_component_version, _repository_name()):
+                if normalized != final_component_version:
+                    logger.info(f"Normalised the release tag {final_component_version!r} to version {normalized!r}")
+                    final_component_version = normalized
         logger.info(f"Using component version: {final_component_version}")
     else:
-        logger.info("No component version specified (COMPONENT_VERSION not set)")
+        # Nothing configured, but a tag-triggered build already knows which
+        # release this is -- it is in the environment, and until now nothing
+        # read it. A branch build still yields nothing, because there is no
+        # released version to claim and inventing one would be worse.
+        derived, warning = version_from_release_tag(
+            repo_name=_repository_name(),
+            normalize=_normalize_version_enabled(),
+        )
+        if warning:
+            logger.warning(warning)
+        if derived:
+            final_component_version = derived
+            logger.info(f"Using component version {derived} from the release tag")
+        else:
+            logger.info("No component version specified (COMPONENT_VERSION not set)")
 
     # Handle deprecated OVERRIDE_NAME env var
     override_name_env = os.getenv("OVERRIDE_NAME")
