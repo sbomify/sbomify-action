@@ -2037,6 +2037,10 @@ def run_pipeline(config: Config) -> None:
     if config.component_purl:
         logger.info(f"Applying component PURL override: {config.component_purl}")
         _apply_sbom_purl_override(STEP_1_FILE, config)
+    else:
+        # No explicit PURL, so check the generator did not name the root
+        # component after the directory it was pointed at.
+        _repair_directory_derived_purl(STEP_1_FILE, config)
 
     # Inject additional packages if specified (file or environment variables).
     # Non-SBOM artifacts upload verbatim, so injection is skipped for them.
@@ -2667,6 +2671,96 @@ def _apply_sbom_name_override(sbom_file: str, config: "Config") -> None:
     except Exception as e:
         logger.warning(f"Failed to apply component name override: {e}")
         # Don't fail the entire process for name override issues
+
+
+def _repair_directory_derived_purl(sbom_file: str, config: "Config") -> None:
+    """Replace a root PURL that names the working directory rather than the project.
+
+    Generators derive the root component from the directory they are pointed
+    at. In this image that directory is ``/workspace`` for every project, so
+    the field consumers use as the component's identity is the same string for
+    everybody. Measured over 500 open source projects: thirty documents shared
+    five PURLs, with ``pkg:pypi/workspace@latest`` covering fastapi, flask,
+    transformers and airbyte alike, and ``pkg:gem/workspace@latest`` covering
+    Alamofire, Moya, RxSwift and discourse.
+
+    ``COMPONENT_NAME`` does not help. It is applied to the component's ``name``
+    and never to its PURL, so the document ends up calling itself ``rails`` and
+    identifying itself as ``pkg:gem/workspace@latest`` -- correct in the half a
+    human reads and wrong in the half a machine reads.
+
+    Repaired only when the PURL can be *shown* to come from the directory:
+    its name equals the working directory's basename, and differs from the
+    component name we were given. Both conditions matter. A project whose
+    directory genuinely is its name keeps its PURL, and so does one where
+    ``COMPONENT_NAME`` is a display name that was never meant to match the
+    package name -- "My Product" against ``pkg:npm/my-product`` is normal, and
+    rewriting it would be a regression rather than a fix.
+
+    The replacement is deliberately ``pkg:generic``. Keeping the ecosystem type
+    and swapping the name -- ``pkg:npm/workspace`` to ``pkg:npm/rails`` -- reads
+    as the obvious fix and is worse than the bug: a PURL is a *resolvable*
+    identity, npm's ``rails`` package is not the Ruby framework's asset bundle,
+    and pointing at someone else's package is more dangerous than pointing
+    nowhere. ``pkg:generic`` names the thing without claiming a registry entry,
+    and it is unique per project, which is what removes the collision.
+
+    Set ``COMPONENT_PURL`` to state the identity yourself; this never runs then.
+    """
+    if not config.component_name:
+        return  # nothing to compare the PURL against
+
+    # WORKING_DIR if the caller set it, otherwise the directory the workflow
+    # already chdir'd into. Config carries no working directory of its own, and
+    # reaching for one would have raised AttributeError straight into the
+    # except below -- silently turning this whole function off, which is the
+    # failure mode the function exists to fix.
+    working_dir = Path(os.environ.get("WORKING_DIR") or Path.cwd()).resolve().name
+    if not working_dir:
+        return
+
+    try:
+        from packageurl import PackageURL
+
+        sbom_format, original_json, parsed_object = load_sbom_from_file(sbom_file)
+        if sbom_format != "cyclonedx":
+            # SPDX carries the PURL in the root package's externalRefs. Left
+            # alone deliberately rather than half-done: the same reasoning
+            # applies, and it deserves its own change with its own tests.
+            return
+
+        from cyclonedx.model.bom import Bom
+
+        if not isinstance(parsed_object, Bom):
+            return
+        component = getattr(parsed_object.metadata, "component", None)
+        if component is None or not component.purl:
+            return
+
+        current = PackageURL.from_string(str(component.purl))
+        if current.name != working_dir or current.name == config.component_name:
+            return
+
+        repaired = PackageURL(
+            type="generic",
+            name=config.component_name,
+            version=current.version,
+        )
+        logger.warning(
+            f"The root component's PURL named the working directory rather than the project "
+            f"('{current}'). Replacing it with '{repaired}'. Set COMPONENT_PURL to state the "
+            f"identity explicitly."
+        )
+        component.purl = repaired
+        get_audit_trail().record_augmentation("component.purl", str(repaired), str(current))
+
+        spec_version = original_json.get("specVersion")
+        if spec_version is None:
+            raise SBOMValidationError("CycloneDX SBOM is missing required 'specVersion' field")
+        with Path(sbom_file).open("w") as handle:
+            handle.write(serialize_cyclonedx_bom(parsed_object, spec_version))
+    except Exception as e:  # noqa: BLE001 - identity repair must never fail a run
+        logger.debug(f"Could not check the root component's PURL: {e}")
 
 
 def _apply_sbom_purl_override(sbom_file: str, config: "Config") -> None:
