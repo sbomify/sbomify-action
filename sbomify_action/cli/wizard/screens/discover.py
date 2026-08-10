@@ -136,8 +136,17 @@ class DiscoverScreen(WizardScreen):
         if not tooling:
             return None
 
-        selected = self._default_selected()
-        if any(i not in selected for i in tooling):
+        # Which note depends on whether anything that is *not* tooling was
+        # selectable -- not on whether every tooling row happens to be ticked.
+        #
+        # Those come apart when a repository is all tooling at mixed depths.
+        # `tests/requirements.txt` alongside `docs/sub/requirements.txt` ticks
+        # only the shallower one, so some tooling is deselected and the first
+        # test would report "deselected by default" -- implying a real input
+        # was preferred, when there was never one to prefer. The user needs
+        # the warning in that case, which is the whole reason it exists.
+        has_real_input = any(lf.nested_repo is None and not _is_tooling(lf.rel_path) for lf in discovered)
+        if has_real_input:
             return (
                 "tooling-note",
                 "[#F4B57F]Lockfiles under tests/, docs/, examples/ and similar are "

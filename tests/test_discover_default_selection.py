@@ -173,6 +173,17 @@ class TestTheNoteMatchesWhatIsTicked:
 
         return _Stubbed.__new__(_Stubbed)._tooling_note()
 
+    @staticmethod
+    def _note_with(*lockfiles) -> tuple[str, str] | None:
+        """Same as _note, for cases that need nested_repo set."""
+
+        class _Stubbed(DiscoverScreen):
+            @property
+            def wizard(self):  # type: ignore[override]
+                return SimpleNamespace(state=SimpleNamespace(discovered=list(lockfiles)))
+
+        return _Stubbed.__new__(_Stubbed)._tooling_note()
+
     def test_some_tooling_skipped_explains_the_skip(self):
         note = self._note("uv.lock", "docs/requirements.txt")
         assert note is not None
@@ -197,3 +208,32 @@ class TestTheNoteMatchesWhatIsTicked:
             "tests/requirements.txt",
         )
         assert note is not None and note[0] == "tooling-note"
+
+    def test_only_tooling_at_mixed_depths_still_warns(self):
+        """The case the first version got wrong.
+
+        `tests/requirements.txt` and `docs/sub/requirements.txt` are both
+        tooling, but at different depths, so only the shallower one is ticked.
+        Deciding on "is every tooling row selected?" then reported "deselected
+        by default" -- implying a real input was preferred, when there was
+        never one to prefer.
+        """
+        note = self._note("tests/requirements.txt", "docs/sub/requirements.txt")
+
+        assert note is not None
+        assert note[0] == "tooling-only-note", "claimed a real input won when everything is tooling"
+
+    def test_a_real_input_at_a_deeper_level_still_gets_the_skip_note(self):
+        """The mirror: a real input exists, so the skip note is the right one."""
+        note = self._note("tests/requirements.txt", "src/a/b/uv.lock")
+
+        assert note is not None and note[0] == "tooling-note"
+
+    def test_nested_repos_do_not_count_as_a_real_input(self):
+        """A vendored lockfile is not this project's either."""
+        note = self._note_with(
+            _lf("vendor/thing/go.mod", nested="vendored"),
+            _lf("tests/requirements.txt"),
+        )
+
+        assert note is not None and note[0] == "tooling-only-note"
