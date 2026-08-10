@@ -177,3 +177,34 @@ class TestTheDecision:
 
         assert version == "milestone"
         assert warning is None
+
+
+class TestAConfiguredVersionThatIsTheTag:
+    """The wizard's workflow strips refs/tags/ into COMPONENT_VERSION, so the
+    version arrives *configured* and every judgement about the tag would
+    otherwise be skipped.
+
+    An earlier version of this called normalize_release_version directly on
+    that path and turned `meta-v1.3.0` -- a per-package tag in dart-lang/sdk --
+    into a clean `1.3.0` stamped on the whole repository, with no warning.
+    Laundering a foreign tag into something authoritative-looking is worse
+    than leaving it alone.
+    """
+
+    def test_a_foreign_tag_is_refused_not_laundered(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_REF_TYPE", "tag")
+        monkeypatch.setenv("GITHUB_REF_NAME", "meta-v1.3.0")
+
+        version, warning = version_from_release_tag("sdk", normalize=True)
+
+        assert version is None, "a per-package tag must not become the repo's version"
+        assert warning is not None
+        # The dangerous outcome specifically: a clean-looking version.
+        assert normalize_release_version("meta-v1.3.0", "sdk") == "1.3.0"
+        assert version != "1.3.0", "normalisation must not run on a foreign tag"
+
+    def test_the_project_s_own_tag_still_normalises(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_REF_TYPE", "tag")
+        monkeypatch.setenv("GITHUB_REF_NAME", "curl-8_21_0")
+
+        assert version_from_release_tag("curl", normalize=True) == ("8.21.0", None)

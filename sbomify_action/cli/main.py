@@ -58,7 +58,7 @@ from ..generation import (
     process_lock_file,
 )
 from ..logging_config import logger
-from ..release_version import normalize_release_version, tag_from_ci, version_from_release_tag
+from ..release_version import tag_from_ci, version_from_release_tag
 from ..serialization import (
     _add_compositions_if_missing,
     _fix_purl_encoding_bugs_in_json,
@@ -226,6 +226,15 @@ class Config:
     override_sbom_metadata: bool = False
     override_name: bool = False
     component_version: Optional[str] = None
+    component_version_source: Optional[str] = None
+    """Where ``component_version`` came from, when it was not simply
+    configured -- ``"release tag"``, or the same with a note that it was
+    normalised or that the tag names another package.
+
+    Carried rather than recorded at the point of decision because that point
+    is ``build_config``, which is pure construction: it runs in tests and in
+    ``--dry-run``, and an audit trail filled during config building would
+    describe runs that never happened. ``run_sbom_workflow`` records it."""
     component_name: Optional[str] = None
     component_purl: Optional[str] = None
     product_releases: Optional[str | list[str]] = None
@@ -662,23 +671,45 @@ def build_config(
     sbom_version_env = os.getenv("SBOM_VERSION")
     final_component_version = _handle_deprecated_version(component_version, sbom_version_env)
 
+    # Where the version came from, for the audit trail. Recorded there rather
+    # than here because build_config is pure construction -- it runs in tests
+    # and in --dry-run, and a trail that fills up during config building would
+    # describe runs that never happened.
+    version_source: Optional[str] = None
+
     # Log component version
     if final_component_version:
         # A configured version is normally left exactly as configured. The one
         # exception is when it *is* the release tag: the wizard's generated
-        # workflow computes COMPONENT_VERSION by stripping refs/tags/, so a
-        # user who asked for normalisation would otherwise never get it,
-        # because the version arrives configured rather than derived.
+        # workflow computes COMPONENT_VERSION by stripping refs/tags/, so the
+        # version arrives configured rather than derived and every judgement
+        # about the tag would otherwise be skipped.
         #
-        # Matching against the tag rather than normalising anything that looks
-        # tag-shaped is what keeps a deliberate COMPONENT_VERSION safe: a build
-        # labelled "my-build-42" is not a curl-8_21_0, and reducing it to "42"
-        # would be the tool overruling the user.
-        if _normalize_version_enabled() and final_component_version == tag_from_ci():
-            if normalized := normalize_release_version(final_component_version, _repository_name()):
-                if normalized != final_component_version:
-                    logger.info(f"Normalised the release tag {final_component_version!r} to version {normalized!r}")
-                    final_component_version = normalized
+        # Routed through the same decision as the derived path rather than
+        # only normalising, because the checks are not separable. An earlier
+        # version of this called normalize_release_version directly and turned
+        # `meta-v1.3.0` -- a per-package tag in dart-lang/sdk -- into a clean
+        # `1.3.0` stamped on the whole repository, with no warning. Laundering
+        # a foreign tag into something authoritative-looking is worse than
+        # leaving it alone, which is what the foreign-tag check is for.
+        #
+        # Matching against the tag, rather than normalising anything
+        # tag-shaped, is what keeps a deliberate COMPONENT_VERSION safe: a
+        # build labelled "my-build-42" is not a curl-8_21_0.
+        if final_component_version == tag_from_ci():
+            resolved, warning = version_from_release_tag(
+                repo_name=_repository_name(),
+                normalize=_normalize_version_enabled(),
+            )
+            if warning:
+                logger.warning(warning)
+                version_source = "release tag (names another package)"
+            elif resolved and resolved != final_component_version:
+                logger.info(f"Normalised the release tag {final_component_version!r} to version {resolved!r}")
+                version_source = f"release tag {final_component_version!r}, normalised"
+                final_component_version = resolved
+            else:
+                version_source = "release tag"
         logger.info(f"Using component version: {final_component_version}")
     else:
         # Nothing configured, but a tag-triggered build already knows which
@@ -694,6 +725,8 @@ def build_config(
         if derived:
             final_component_version = derived
             logger.info(f"Using component version {derived} from the release tag")
+            tag = tag_from_ci()
+            version_source = f"release tag {tag!r}, normalised" if derived != tag else "release tag"
         else:
             logger.info("No component version specified (COMPONENT_VERSION not set)")
 
@@ -766,6 +799,7 @@ def build_config(
         override_sbom_metadata=override_sbom_metadata,
         override_name=final_override_name,
         component_version=final_component_version,
+        component_version_source=version_source,
         component_name=final_component_name,
         component_purl=component_purl,
         product_releases=product_releases,
@@ -1637,6 +1671,17 @@ def run_pipeline(config: Config) -> None:
         audit_trail.input_file = config.lock_file
     elif config.docker_image:
         audit_trail.input_file = f"docker:{config.docker_image}"
+
+    # A version the run derived rather than was handed is exactly what an audit
+    # trail is for: "8.21.0" on its own says nothing about whether a human
+    # chose it or a tag supplied it, and the two carry very different weight
+    # for anyone auditing the document later.
+    if config.component_version and config.component_version_source:
+        audit_trail.record_augmentation(
+            "component.version",
+            config.component_version,
+            source=config.component_version_source,
+        )
 
     # Log the API base URL being used for transparency
     if config.api_base_url != SBOMIFY_PRODUCTION_API:
