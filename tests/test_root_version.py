@@ -9,6 +9,7 @@ import subprocess
 
 import pytest
 
+from sbomify_action._augmentation import root_version
 from sbomify_action._augmentation.root_version import (
     is_placeholder_version,
     resolve_root_version,
@@ -35,6 +36,7 @@ def _no_ambient_ci(monkeypatch):
 
 def _repo(tmp_path, *, tag: str | None = None):
     """A real git repository, because the code shells out to a real git."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     run = lambda *a: subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)  # noqa: E731
     run("init", "-q")
     run("config", "user.email", "t@example.invalid")
@@ -134,3 +136,83 @@ class TestResolution:
 
         monkeypatch.setattr(subprocess, "run", boom)
         assert resolve_root_version(tmp_path) is None
+
+
+class TestAHostileCheckoutCannotRunCode:
+    """The checkout is the subject of the scan, so it is not trusted input.
+
+    git reads the repository's own .git/config, and core.fsmonitor names a
+    command git executes. The honest position, measured rather than asserted:
+    the two commands this module runs do *not* refresh the index and so never
+    invoke it. The guard exists because `git describe --dirty` -- one plausible
+    edit away -- does refresh the index, and would turn a version lookup into
+    code execution with nothing else changing.
+
+    So these tests pin the guard itself, and prove on a command that *does*
+    refresh the index that the guard is what stops it.
+    """
+
+    @staticmethod
+    def _armed(tmp_path):
+        """A repository whose own config runs a payload on index refresh."""
+        repo = _repo(tmp_path / "repo")
+        canary = tmp_path / "PWNED"
+        payload = tmp_path / "payload.sh"
+        payload.write_text(f"#!/bin/sh\ntouch {canary}\nexit 0\n")
+        payload.chmod(0o755)
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "core.fsmonitor", str(payload)],
+            check=True,
+            capture_output=True,
+        )
+        return repo, canary
+
+    def test_the_payload_really_does_fire_without_the_guard(self, tmp_path):
+        """Establishes the threat is real before asserting we stop it.
+
+        Without this, the test below would pass just as happily against a
+        payload that never runs under any circumstances.
+        """
+        repo, canary = self._armed(tmp_path)
+
+        subprocess.run(["git", "-C", str(repo), "status", "--porcelain"], capture_output=True)
+
+        assert canary.exists(), "the scenario is not a threat, so the next test proves nothing"
+
+    def test_the_guard_stops_it_on_a_command_that_refreshes_the_index(self, tmp_path):
+        repo, canary = self._armed(tmp_path)
+
+        root_version._git(repo, "status", "--porcelain")
+
+        assert not canary.exists(), "the repository's own config executed a command"
+
+    def test_every_git_call_carries_the_guard(self, tmp_path, monkeypatch):
+        """The two commands used today are safe; this is what keeps them so."""
+        seen: list[list[str]] = []
+
+        def capture(cmd, **kwargs):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(subprocess, "run", capture)
+        resolve_root_version(tmp_path)
+
+        assert seen, "no git call was made"
+        for cmd in seen:
+            assert "core.fsmonitor=" in cmd, cmd
+            assert "--no-optional-locks" in cmd, cmd
+
+    def test_the_version_is_still_derived_from_such_a_repo(self, tmp_path):
+        """Hardening must not cost the answer -- degrading to None would do."""
+        repo, _ = self._armed(tmp_path)
+
+        got = resolve_root_version(repo)
+
+        assert got is not None and got.startswith("0.0.0+g")
+
+    def test_no_index_lock_is_left_in_someone_elses_tree(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+
+        resolve_root_version(repo)
+
+        assert not (repo / ".git" / "index.lock").exists()

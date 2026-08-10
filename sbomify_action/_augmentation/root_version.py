@@ -73,6 +73,39 @@ def _ci_sha() -> str | None:
     return os.getenv("GITHUB_SHA") or os.getenv("CI_COMMIT_SHA") or os.getenv("BITBUCKET_COMMIT") or None
 
 
+#: Repository-local settings that make git run a program, neutralised before
+#: we run anything inside a checkout we did not create.
+#:
+#: The directory is the *subject* of the scan, not something we authored: for
+#: a GitHub Action it is whatever the workflow checked out, and for this
+#: project's own evaluation it is a clone of an arbitrary third-party
+#: repository. git reads that repository's own `.git/config`, and
+#: `core.fsmonitor` names a command git executes.
+#:
+#: Measured, because the tempting claim here is stronger than the truth: the
+#: two commands below do **not** trigger it. `core.fsmonitor` runs when the
+#: index is refreshed, which `git status` does and which `rev-parse HEAD` and
+#: `describe --exact-match` do not. A payload wired into a test repository
+#: fires on `status` and stays cold for both of ours.
+#:
+#: It is set anyway, because the distance between safe and unsafe here is one
+#: plausible edit. `git describe --dirty` -- the obvious way to notice a
+#: modified tree -- refreshes the index, and would turn a version lookup into
+#: code execution with no other change. `-c` outranks repository config, so
+#: this makes that edit safe by construction rather than by review.
+#:
+#: The user's *global* config is deliberately left alone: wiping it would also
+#: discard any safe.directory entries, and without those git refuses to read a
+#: checkout owned by another uid -- the normal case in a container -- turning a
+#: working lookup into "cannot tell".
+_GIT_SAFE_CONFIG = (
+    "-c",
+    "core.fsmonitor=",
+    "-c",
+    "core.hooksPath=/dev/null",
+)
+
+
 def _git(source_dir: Path, *args: str) -> str | None:
     """Ask git, and treat every way of not knowing as the same answer.
 
@@ -81,10 +114,13 @@ def _git(source_dir: Path, *args: str) -> str | None:
     uid -- which is the normal case in a container. None of those is an error
     worth surfacing: they all mean "git cannot tell us", and the caller has a
     fallback.
+
+    ``--no-optional-locks`` because this is someone else's working tree and a
+    question should not write an index.lock into it.
     """
     try:
         done = subprocess.run(
-            ["git", "-C", str(source_dir), *args],
+            ["git", "--no-optional-locks", *_GIT_SAFE_CONFIG, "-C", str(source_dir), *args],
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT,
