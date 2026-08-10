@@ -37,6 +37,25 @@ from .logging_config import logger
 #: wearing one is still a release of the repository it lives in.
 _GENERIC_PREFIXES = ("releases", "release", "rel", "version", "ver", "tags", "tag", "v")
 
+#: A prerelease marker separated from the number: -rc.1, .dev, -alpha2,
+#: +preview. The separator matters -- without it, "beta" would match the "b"
+#: in a hash and "m" would match half the words in English.
+#: ``\d*(?![A-Za-z])`` rather than ``\b``: there is no word boundary between
+#: "preview" and the 3 in ``v1.0.0-preview3``, so a plain ``\b`` misses every
+#: numbered marker. The trailing lookahead is what keeps "beta" from matching
+#: inside a longer word.
+_PRERELEASE = re.compile(
+    r"(?:^|[-._+])(?:alpha|beta|rc|dev|pre|preview|snapshot|nightly|canary|milestone"
+    r"|unstable|experimental|next|edge|insiders?)\d*(?![A-Za-z])",
+    re.IGNORECASE,
+)
+
+#: The same thing welded to the number, which is the form that gets missed.
+#: Django tags alphas ``6.1a1`` and Hadoop tagged ``0.92RC0``; both sort above
+#: every stable release of their project under a numeric comparison, and both
+#: read as stable to anything checking for a hyphen.
+_WELDED_PRERELEASE = re.compile(r"\d(?:a|b|rc|m)\d+$", re.IGNORECASE)
+
 
 def tag_from_ci() -> str | None:
     """The tag this build was triggered by, according to the CI system.
@@ -104,6 +123,31 @@ def names_another_package(tag: str, repo_name: str | None) -> bool:
     if not prefix:
         return False
     return prefix.lower() not in _GENERIC_PREFIXES and _squash(prefix) != _squash(repo_name)
+
+
+def is_prerelease(version: str | None) -> bool:
+    """Whether this version names a prerelease rather than a shipped release.
+
+    sbomify's Release model carries ``is_prerelease`` as a first-class,
+    indexed field, and the action never set it -- so an alpha tagged into a
+    product release was recorded as the product's current release, indexed
+    alongside every genuine one.
+
+    Both spellings are checked because only one of them is obvious. A
+    separated marker (``v2.0.0-rc.1``) reads as a prerelease to anyone; a
+    welded one does not. Django tags alphas ``6.1a1``, Hadoop tagged
+    ``0.92RC0``, and Dart ships ``3.14.0-110.0.dev`` -- all prereleases, none
+    of them matching a naive check for a hyphen.
+
+    Deliberately conservative about what counts as a marker. Requiring a
+    separator or a digit on both sides keeps ``1.2.3b`` out of it: a trailing
+    letter with no number after it is a revision suffix in several ecosystems,
+    not a beta.
+    """
+    if not version:
+        return False
+    text = version.strip()
+    return bool(_PRERELEASE.search(text) or _WELDED_PRERELEASE.search(text))
 
 
 def normalize_release_version(tag: str, repo_name: str | None = None) -> str | None:

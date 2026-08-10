@@ -66,7 +66,19 @@ def test_get_release_details_delegates(stub_client: MagicMock) -> None:
 def test_create_release_delegates(stub_client: MagicMock) -> None:
     stub_client.create_release.return_value = "rel-new"
     assert create_release(API_BASE, TOKEN, "prod-1", "v1.0.0") == "rel-new"
-    stub_client.create_release.assert_called_once_with("prod-1", "v1.0.0")
+    # is_prerelease=None rather than omitted: the client distinguishes "not a
+    # prerelease" from "we could not tell", and only the second should leave
+    # the backend's own default in place.
+    stub_client.create_release.assert_called_once_with("prod-1", "v1.0.0", is_prerelease=None)
+
+
+def test_create_release_forwards_prerelease(stub_client: MagicMock) -> None:
+    """The wrapper used to drop this, so every alpha was recorded as final."""
+    stub_client.create_release.return_value = "rel-new"
+
+    create_release(API_BASE, TOKEN, "prod-1", "6.1a1", is_prerelease=True)
+
+    stub_client.create_release.assert_called_once_with("prod-1", "6.1a1", is_prerelease=True)
 
 
 def test_create_release_error_propagates(stub_client: MagicMock) -> None:

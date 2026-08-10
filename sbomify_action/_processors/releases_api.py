@@ -38,14 +38,26 @@ def get_release_details(api_base_url: str, token: str, product_id: str, version:
     return _client(api_base_url, token).get_release_details(product_id, version)
 
 
-def create_release(api_base_url: str, token: str, product_id: str, version: str) -> Optional[str]:
+def create_release(
+    api_base_url: str,
+    token: str,
+    product_id: str,
+    version: str,
+    *,
+    is_prerelease: Optional[bool] = None,
+) -> Optional[str]:
     """Create a release (or recover an existing one on DUPLICATE_NAME).
 
     Returns the release ID. ``Optional[str]`` keeps the historical
     signature even though the client now raises ``APIError`` on
     failures that used to return ``None``.
+
+    ``is_prerelease`` reaches the backend's own field of that name. The client
+    has accepted it since releases were added; this wrapper did not pass it
+    on, so every release the action created was recorded as a final one --
+    alphas and release candidates included.
     """
-    return _client(api_base_url, token).create_release(product_id, version)
+    return _client(api_base_url, token).create_release(product_id, version, is_prerelease=is_prerelease)
 
 
 def tag_sbom_with_release(api_base_url: str, token: str, sbom_id: str, release_id: str) -> None:
