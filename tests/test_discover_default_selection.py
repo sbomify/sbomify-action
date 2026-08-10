@@ -153,3 +153,47 @@ class TestDefaultSelection:
 
     def test_no_discovery_at_all(self):
         assert _ticked() == set()
+
+
+class TestTheNoteMatchesWhatIsTicked:
+    """A note that contradicts the screen is worse than no note.
+
+    When everything found is tooling, the invariant ticks it -- so saying
+    "deselected by default" would describe the opposite of what the user sees.
+    """
+
+    @staticmethod
+    def _note(*paths) -> tuple[str, str] | None:
+        discovered = [_lf(p) for p in paths]
+
+        class _Stubbed(DiscoverScreen):
+            @property
+            def wizard(self):  # type: ignore[override]
+                return SimpleNamespace(state=SimpleNamespace(discovered=discovered))
+
+        return _Stubbed.__new__(_Stubbed)._tooling_note()
+
+    def test_some_tooling_skipped_explains_the_skip(self):
+        note = self._note("uv.lock", "docs/requirements.txt")
+        assert note is not None
+        assert note[0] == "tooling-note"
+        assert "deselected by default" in note[1]
+
+    def test_only_tooling_warns_instead(self):
+        note = self._note("tests/requirements.txt", "docs/package.json")
+        assert note is not None
+        assert note[0] == "tooling-only-note", "would claim rows are deselected when they are ticked"
+        assert "deselected by default" not in note[1]
+        assert "check the selection" in note[1]
+
+    def test_no_tooling_says_nothing(self):
+        assert self._note("uv.lock", "src/package.json") is None
+
+    def test_curl_gets_the_skip_note_not_the_warning(self):
+        """curl has a real input, so its tooling really is deselected."""
+        note = self._note(
+            ".github/scripts/requirements.txt",
+            "projects/Windows/tmpl/curl.sln",
+            "tests/requirements.txt",
+        )
+        assert note is not None and note[0] == "tooling-note"

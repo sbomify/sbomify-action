@@ -106,17 +106,8 @@ class DiscoverScreen(WizardScreen):
                     id="nested-repo-note",
                     classes="wizard-muted",
                 )
-            # Same reasoning as the nested-repo note: a row that arrives
-            # unticked without an explanation looks arbitrary, and this is the
-            # only place the reason appears.
-            if any(_is_tooling(lf.rel_path) for lf in self.wizard.state.discovered):
-                yield Static(
-                    "[#F4B57F]Lockfiles under tests/, docs/, examples/ and similar are "
-                    "deselected by default — they describe how this project is built or "
-                    "tested, not what it ships.[/]",
-                    id="tooling-note",
-                    classes="wizard-muted",
-                )
+            if note := self._tooling_note():
+                yield Static(note[1], id=note[0], classes="wizard-muted")
             yield SelectionList[int](id="lockfile-list")
 
     def compose_actions(self) -> ComposeResult:
@@ -127,6 +118,39 @@ class DiscoverScreen(WizardScreen):
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Next  ▸", id="next", variant="primary")
+
+    def _tooling_note(self) -> tuple[str, str] | None:
+        """The id and text of the note explaining what happened to tooling rows.
+
+        Same reasoning as the nested-repo note: a row whose state was decided
+        for the user needs the reason stated, and this is the only place it
+        appears. Which reason depends on what happened, and getting that wrong
+        is worse than saying nothing -- when *everything* found is tooling the
+        invariant ticks it, and "deselected by default" would then describe the
+        opposite of what the user is looking at.
+
+        Separate from compose_body so it can be tested without a running app.
+        """
+        discovered = self.wizard.state.discovered
+        tooling = [i for i, lf in enumerate(discovered) if _is_tooling(lf.rel_path)]
+        if not tooling:
+            return None
+
+        selected = self._default_selected()
+        if any(i not in selected for i in tooling):
+            return (
+                "tooling-note",
+                "[#F4B57F]Lockfiles under tests/, docs/, examples/ and similar are "
+                "deselected by default — they describe how this project is built or "
+                "tested, not what it ships.[/]",
+            )
+        return (
+            "tooling-only-note",
+            "[#F4B57F]Everything found is under tests/, docs/, examples/ or similar — "
+            "this project has no lockfile of its own that we recognise. The SBOM will "
+            "describe how it is built or tested rather than what it ships, so check the "
+            "selection before continuing.[/]",
+        )
 
     def _default_selected(self) -> set[int]:
         """Indices to tick on arrival.
