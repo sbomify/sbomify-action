@@ -33,7 +33,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import bundle_plugin_version, ensure_runtime, fetching_is_enabled
+from sbomify_action.runtimes import bundle_plugin_version, bundle_wrappers, ensure_runtime, fetching_is_enabled
 
 from ..protocol import FormatVersion, GenerationInput
 from ..result import GenerationResult
@@ -105,13 +105,97 @@ allprojects {{ apply plugin: org.cyclonedx.gradle.CyclonedxPlugin }}
 """
 
 
-def _wrapper_or(project_dir: Path, wrapper: str, fallback: str) -> str:
-    """Prefer the project's own build-tool wrapper."""
+#: Used only when the bundle predates the ``[wrappers]`` block.
+#:
+#: The bundle is the source of truth for these -- which wrapper stands in for
+#: which tool, and what the wrapper cannot bootstrap without, are facts about
+#: the JVM toolchain, and sbom-tools owns that. Keeping a second copy here is
+#: exactly what went wrong with the plugin pins, which drifted to 2.9.1 against
+#: the bundle's 2.9.3 within hours of the split.
+#:
+#: These remain as a floor rather than a second opinion: an older bundle should
+#: still build, and being wrong about a fallback costs a retry, where refusing
+#: to run costs the whole SBOM.
+_WRAPPER_DEFAULTS: dict[str, dict[str, str]] = {
+    "gradle": {"script": "gradlew", "tool": "gradle", "needs": "gradle/wrapper/gradle-wrapper.jar"},
+    "maven": {"script": "mvnw", "tool": "mvn"},
+}
+
+
+def _wrapper_spec(name: str, provider: str) -> dict[str, str]:
+    """What the bundle says about one wrapper, falling back to our defaults.
+
+    ``provider`` is the tool whose bundle is asked -- the name this repository
+    knows it by, which is not always the executable: the jvm bundle provides
+    "maven" and the thing you run is "mvn".
+    """
+    try:
+        declared = bundle_wrappers(provider).get(name)
+    except SBOMGenerationError as unavailable:
+        logger.debug(f"Could not read the {provider} bundle's wrappers ({unavailable}); using defaults")
+        return _WRAPPER_DEFAULTS[name]
+    if not declared:
+        logger.debug(f"The {provider} bundle declares no {name} wrapper; using defaults")
+        return _WRAPPER_DEFAULTS[name]
+    return declared
+
+
+def _wrapper_or(project_dir: Path, spec: dict[str, str]) -> str:
+    """Prefer the project's own build-tool wrapper -- if it can actually run.
+
+    ``spec`` comes from the bundle: the ``script`` a project commits, the
+    ``tool`` here that stands in for it, and optionally ``needs``, a file the
+    wrapper cannot bootstrap without.
+
+    That last one exists because a wrapper script is small while the jar that
+    does the work is a binary, and projects that refuse to commit binaries
+    gitignore it and let the script fetch it on first run. That fetch shells
+    out to curl, which this image does not carry and deliberately does not
+    want to: apache/kafka fails with ``/workspace/gradlew: 207: curl: not
+    found`` three times over, then ``Unable to access jarfile
+    gradle/wrapper/gradle-wrapper.jar``.
+
+    Falling back to the pinned tool is strictly better than what happened
+    before, which was to fail the native generator and hand the project to
+    cdxgen -- measured elsewhere in this module as 288 components against 34.
+    A pinned Gradle that runs beats a project-pinned Gradle that cannot.
+    """
+    wrapper, fallback, needs = spec["script"], spec["tool"], spec.get("needs")
     candidate = project_dir / wrapper
-    if candidate.is_file():
-        candidate.chmod(0o755)
-        return str(candidate)
-    return fallback
+    if not candidate.is_file():
+        return fallback
+    if needs and not (project_dir / needs).is_file():
+        logger.info(f"{wrapper} cannot bootstrap without {needs}; using the pinned {fallback}")
+        return fallback
+    candidate.chmod(0o755)
+    return str(candidate)
+
+
+def _run_build(cmd: list[str], tool_name: str, project_dir: Path, fallback: str, timeout: int) -> None:
+    """Run the build, retrying with the pinned tool if the wrapper fails.
+
+    Not every broken wrapper can be spotted in advance. apache/flink ships its
+    maven-wrapper.jar and the wrapper rejects it at run time -- "Failed to
+    validate Maven wrapper SHA-256, your Maven wrapper might be compromised"
+    -- which no pre-flight check here could have predicted.
+
+    The old behaviour in both cases was to give up on the native generator and
+    fall through to cdxgen, so the cost of a project's wrapper being unusable
+    was paid in SBOM quality. Retrying with the tool we ship is cheap by
+    comparison: it only happens after a failure, on a path that was about to
+    run a whole other generator anyway.
+
+    The retry deliberately does not happen when the wrapper was never used --
+    then cmd[0] is already the pinned tool and the failure is the build's own.
+    """
+    try:
+        run_command(cmd, tool_name, timeout=timeout, cwd=str(project_dir))
+        return
+    except SBOMGenerationError as first_failure:
+        if cmd[0] == fallback:
+            raise
+        logger.warning(f"The project's wrapper failed ({first_failure}); retrying with the pinned {fallback}")
+        run_command([fallback, *cmd[1:]], tool_name, timeout=timeout, cwd=str(project_dir))
 
 
 def _largest_bom(candidates: list[Path]) -> Path | None:
@@ -243,7 +327,8 @@ class CycloneDXMavenGenerator(_JvmGenerator):
     runtime = "maven"
 
     def _run(self, project_dir: Path, output: Path) -> None:
-        mvn = _wrapper_or(project_dir, "mvnw", "mvn")
+        wrapper = _wrapper_spec("maven", self.runtime)
+        mvn = _wrapper_or(project_dir, wrapper)
         cmd = [
             mvn,
             "-B",
@@ -269,7 +354,7 @@ class CycloneDXMavenGenerator(_JvmGenerator):
             "-DoutputName=bom",
         ]
         logger.info(f"Running the CycloneDX Maven plugin in {project_dir.name}")
-        run_command(cmd, "cyclonedx-maven", timeout=2400, cwd=str(project_dir))
+        _run_build(cmd, "cyclonedx-maven", project_dir, wrapper["tool"], 2400)
         produced = project_dir / "target" / "bom.json"
         if produced.exists():
             shutil.copy(produced, output)
@@ -296,11 +381,12 @@ class CycloneDXGradleGenerator(_JvmGenerator):
     def _run(self, project_dir: Path, output: Path) -> None:
         init_script = project_dir / ".sbomify-cyclonedx.init.gradle"
         init_script.write_text(gradle_init_script())
-        gradle = _wrapper_or(project_dir, "gradlew", "gradle")
+        wrapper = _wrapper_spec("gradle", self.runtime)
+        gradle = _wrapper_or(project_dir, wrapper)
         try:
             cmd = [gradle, "--no-daemon", "-I", str(init_script), "cyclonedxBom"]
             logger.info(f"Running the CycloneDX Gradle plugin in {project_dir.name}")
-            run_command(cmd, "cyclonedx-gradle", timeout=2400, cwd=str(project_dir))
+            _run_build(cmd, "cyclonedx-gradle", project_dir, wrapper["tool"], 2400)
             found = _largest_bom(sorted(project_dir.rglob("*bom.json")))
             if found:
                 shutil.copy(found, output)

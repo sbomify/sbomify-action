@@ -322,3 +322,70 @@ class TestJvmPluginsComeFromTheBundle:
         monkeypatch.setattr(runtimes, "ensure_runtime", lambda _tool: prefix / "bin")
         with pytest.raises(SBOMGenerationError, match="declares no version"):
             runtimes.bundle_plugin_version("mvn", "cyclonedx-maven")
+
+
+class TestJvmWrappersComeFromTheBundle:
+    """Which wrapper stands in for which tool is the bundle's fact too.
+
+    Same reasoning as the plugin pins above, and the same failure avoided: a
+    copy here would be a second repository describing that one's toolchain.
+    Unlike the plugin pins, silence is not fatal -- see below.
+    """
+
+    @staticmethod
+    def _bundle(monkeypatch, tmp_path, body: str):
+        from sbomify_action import runtimes
+
+        prefix = tmp_path / "bundle-jvm"
+        (prefix / "bin").mkdir(parents=True)
+        (prefix / "bundle.toml").write_text(body)
+        monkeypatch.setattr(runtimes, "ensure_runtime", lambda _tool: prefix / "bin")
+        return runtimes
+
+    def test_the_wrappers_are_read_from_the_bundle(self, monkeypatch, tmp_path):
+        runtimes = self._bundle(
+            monkeypatch,
+            tmp_path,
+            '[bundle]\nname = "jvm"\n\n'
+            '[wrappers.gradle]\nscript = "gradlew"\ntool = "gradle"\n'
+            'needs = "gradle/wrapper/gradle-wrapper.jar"\n\n'
+            '[wrappers.maven]\nscript = "mvnw"\ntool = "mvn"\n',
+        )
+
+        assert runtimes.bundle_wrappers("gradle") == {
+            "gradle": {"script": "gradlew", "tool": "gradle", "needs": "gradle/wrapper/gradle-wrapper.jar"},
+            "maven": {"script": "mvnw", "tool": "mvn"},
+        }
+
+    def test_an_older_bundle_is_silent_rather_than_fatal(self, monkeypatch, tmp_path):
+        """Deliberately unlike [plugins], which raises.
+
+        A missing plugin version has no sensible default -- there is no
+        version to apply. A missing wrapper map only costs the caller its own
+        defaults, and a bundle that cannot describe its wrappers should still
+        build.
+        """
+        runtimes = self._bundle(monkeypatch, tmp_path, '[bundle]\nname = "jvm"\n')
+
+        assert runtimes.bundle_wrappers("gradle") == {}
+
+    def test_a_half_declared_wrapper_is_ignored(self, monkeypatch, tmp_path):
+        """Without both script and tool there is nothing to act on."""
+        runtimes = self._bundle(
+            monkeypatch,
+            tmp_path,
+            '[bundle]\nname = "jvm"\n\n'
+            '[wrappers.gradle]\nscript = "gradlew"\n\n'
+            '[wrappers.maven]\nscript = "mvnw"\ntool = "mvn"\n',
+        )
+
+        assert runtimes.bundle_wrappers("gradle") == {"maven": {"script": "mvnw", "tool": "mvn"}}
+
+    def test_a_bundle_without_a_manifest_says_nothing(self, monkeypatch, tmp_path):
+        from sbomify_action import runtimes
+
+        prefix = tmp_path / "bundle-jvm"
+        (prefix / "bin").mkdir(parents=True)
+        monkeypatch.setattr(runtimes, "ensure_runtime", lambda _tool: prefix / "bin")
+
+        assert runtimes.bundle_wrappers("gradle") == {}
