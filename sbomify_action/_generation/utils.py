@@ -337,8 +337,17 @@ def combined_output(stderr: str | None, stdout: str | None) -> str:
     Joining is right rather than reordering: neither stream is reliably the
     interesting one, and a tool that splits a single message across both is
     only readable if both are kept.
+
+    Only blank lines are trimmed from the front, not indentation. Composer
+    says what is wrong in the shape of the text --
+
+        Problem 1
+          - laravel/framework is present at version 1.0.0+no-version-set
+
+    -- and a plain ``strip()`` would flatten the first line of that against
+    the left margin. Trailing whitespace goes entirely; nothing reads it.
     """
-    parts = [part.strip() for part in (stderr, stdout) if part and part.strip()]
+    parts = [part.lstrip("\r\n").rstrip() for part in (stderr, stdout) if part and part.strip()]
     return "\n".join(parts)
 
 

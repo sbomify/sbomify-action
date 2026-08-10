@@ -197,6 +197,19 @@ class TestTheErrorSurvivesTheReport:
     def test_stdout_is_not_discarded_just_because_stderr_spoke(self):
         assert "the reason" in combined_output("a marker", "the reason")
 
+    def test_indentation_survives(self):
+        """Composer says what is wrong in the shape of the text, and the
+        first line of a stream is as entitled to its indent as any other."""
+        assert combined_output("marker", "    - ext-session is missing") == "marker\n    - ext-session is missing"
+
+    def test_leading_blank_lines_do_not(self):
+        """Trimming them is the whole reason not to leave the front alone:
+        joined streams otherwise open with a gap."""
+        assert combined_output("marker", "\n\n  Problem 1") == "marker\n  Problem 1"
+
+    def test_trailing_whitespace_goes(self):
+        assert combined_output("marker", "reason  \n\n") == "marker\nreason"
+
     @pytest.mark.parametrize(
         "stderr,stdout,expected",
         [
