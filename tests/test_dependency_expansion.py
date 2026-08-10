@@ -352,7 +352,12 @@ class TestEnvironmentVerification:
             assert expander.expand(req_file) == []
 
     def test_skips_when_installed_versions_unavailable(self, tmp_path):
-        """pipdeptree unreadable — expand rather than guess."""
+        """pipdeptree unreadable — skip rather than guess.
+
+        Without an installed-package inventory there is nothing to check
+        the lockfile against, which is the same position as an
+        unverifiable environment: skip, and don't spend the tree query.
+        """
         req_file = self._requirements(tmp_path, "requests==2.34.2\n")
         expander = PipdeptreeExpander()
 
