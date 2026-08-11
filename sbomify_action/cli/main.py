@@ -2831,6 +2831,26 @@ def _apply_sbom_name_override(sbom_file: str, config: "Config") -> None:
 _GENERIC_MOUNT_NAMES = frozenset({"workspace", "src", "app", "repo", "code", "project", "build", "data"})
 
 
+#: Ceiling for an identity we inferred. Not a measurement -- a statement that
+#: this is a guess, in the field designed to carry exactly that.
+_INFERRED_CONFIDENCE = 0.5
+
+
+def _capped_confidence(existing: object) -> float:
+    """Lower a confidence to the inferred ceiling, never raise it.
+
+    `existing or 0.5` looked equivalent and is not: 0 is a legitimate
+    confidence meaning "none at all", and it is falsy, so that spelling
+    replaced it with 0.5 -- raising the confidence of a component that claimed
+    none, inside the function whose whole purpose is to lower it.
+    """
+    try:
+        value = _INFERRED_CONFIDENCE if existing is None else float(existing)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        value = _INFERRED_CONFIDENCE
+    return min(value, _INFERRED_CONFIDENCE)
+
+
 def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
     """Say so, loudly and in the document, when the versions were inferred.
 
@@ -2942,10 +2962,10 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
                 cites_our_input = bool(concluded) and Path(str(concluded)).name == name
                 if concluded and not cites_our_input:
                     identity["concludedValue"] = name
-                    identity["confidence"] = min(float(identity.get("confidence") or 0.5), 0.5)
+                    identity["confidence"] = _capped_confidence(identity.get("confidence"))
                     for method in identity.get("methods") or []:
                         method["value"] = name
-                        method["confidence"] = min(float(method.get("confidence") or 0.5), 0.5)
+                        method["confidence"] = _capped_confidence(method.get("confidence"))
                     corrected += 1
         if corrected:
             logger.info(f"Corrected {corrected} component(s) that cited a lock file which was never committed")

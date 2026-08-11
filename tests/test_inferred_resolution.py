@@ -189,3 +189,54 @@ class TestTheRecommendedAction:
         props = json.loads(sbom.read_text())["metadata"]["properties"]
         remedy = [p for p in props if p["name"] == "sbomify:resolution:remedy"]
         assert remedy and "composer update" in remedy[0]["value"]
+
+
+class TestConfidenceIsOnlyEverLowered:
+    """The field says how sure we are. A function that downgrades it must not
+    have a path that raises it."""
+
+    @pytest.mark.parametrize(
+        ("existing", "expected"),
+        [
+            (1.0, 0.5),
+            (0.9, 0.5),
+            (0.5, 0.5),
+            (0.2, 0.2),
+            (0, 0),  # legitimate "no confidence" -- falsy, and must survive
+            (None, 0.5),
+            ("nonsense", 0.5),
+        ],
+    )
+    def test_it_never_raises_a_confidence(self, existing, expected):
+        from sbomify_action.cli.main import _capped_confidence
+
+        assert _capped_confidence(existing) == expected
+
+    def test_a_zero_confidence_component_is_not_promoted(self, tmp_path):
+        """`existing or 0.5` turned 0 into 0.5, raising the confidence of a
+        component that claimed none, inside the downgrade path."""
+        (tmp_path / "composer.json").write_text("{}")
+        sbom = tmp_path / "s.json"
+        write_sbom(
+            sbom,
+            components=[
+                {
+                    "name": "x",
+                    "evidence": {
+                        "identity": [
+                            {
+                                "concludedValue": "composer.lock",
+                                "confidence": 0,
+                                "methods": [{"value": "composer.lock", "confidence": 0}],
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+
+        _disclose(str(sbom), Cfg(lock_file=str(tmp_path / "composer.json")))
+
+        identity = json.loads(sbom.read_text())["components"][0]["evidence"]["identity"][0]
+        assert identity["confidence"] == 0
+        assert identity["methods"][0]["confidence"] == 0
