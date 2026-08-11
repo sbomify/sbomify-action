@@ -41,6 +41,11 @@ RUST_LOCK_FILES = ["Cargo.lock", "Cargo.toml"]
 JAVASCRIPT_LOCK_FILES = [
     "package.json",
     "package-lock.json",
+    # npm's older pinning file. It was known to resolve_npm_lockfile and to
+    # nothing else, so a repository holding only this was not discoverable as
+    # JavaScript at all, and pointing at its package.json skipped resolution
+    # (a lock file exists) to produce nothing (the pipeline could not read it).
+    "npm-shrinkwrap.json",
     "yarn.lock",
     "pnpm-lock.yaml",
     "bun.lock",
@@ -772,9 +777,17 @@ def ensure_dotnet_installed() -> None:
     ensure_runtime("dotnet")
 
 
-#: Lock files a JavaScript project may have committed. If any exists, the
-#: registry has already promoted the input to it and nothing here runs.
-_JS_LOCK_FILES = ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "npm-shrinkwrap.json")
+def _js_lock_files() -> tuple[str, ...]:
+    """Lock files a JavaScript project may have committed.
+
+    Read from the shared map rather than restated here. The private copy had
+    already drifted: it listed npm-shrinkwrap.json, which nothing else in the
+    pipeline recognised, so a repository holding one skipped resolution *and*
+    could not be read -- worse than either behaviour alone.
+    """
+    from .registry import COMMITTED_RESOLUTION_FOR
+
+    return COMMITTED_RESOLUTION_FOR["package.json"]
 
 
 def resolve_npm_lockfile(directory: Path) -> Path | None:
@@ -808,7 +821,7 @@ def resolve_npm_lockfile(directory: Path) -> Path | None:
     bun is unavailable, or when resolution fails -- all of which leave the
     previous behaviour untouched.
     """
-    if any((directory / name).is_file() for name in _JS_LOCK_FILES):
+    if any((directory / name).is_file() for name in _js_lock_files()):
         return None
 
     if not shutil.which("bun"):

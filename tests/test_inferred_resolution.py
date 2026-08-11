@@ -240,3 +240,38 @@ class TestConfidenceIsOnlyEverLowered:
         identity = json.loads(sbom.read_text())["components"][0]["evidence"]["identity"][0]
         assert identity["confidence"] == 0
         assert identity["methods"][0]["confidence"] == 0
+
+
+class TestACommittedResolutionIsRecognised:
+    """The map answering "is there a committed resolution" is not the map
+    answering "which file should we read". Go is the case that proves it:
+    go.sum beside go.mod means the resolution is recorded, while go.mod
+    remains the file cyclonedx-gomod wants."""
+
+    @pytest.mark.parametrize(
+        ("manifest", "lock"),
+        [
+            ("Cargo.toml", "Cargo.lock"),
+            ("go.mod", "go.sum"),
+            ("pyproject.toml", "uv.lock"),
+            ("pyproject.toml", "poetry.lock"),
+            ("package.json", "npm-shrinkwrap.json"),
+            ("package.json", "pnpm-lock.yaml"),
+            ("composer.json", "composer.lock"),
+            ("Package.swift", "Package.resolved"),
+            ("mix.exs", "mix.lock"),
+            ("stack.yaml", "stack.yaml.lock"),
+        ],
+    )
+    def test_a_committed_lock_file_is_not_an_inference(self, tmp_path, manifest, lock):
+        """Rust and Go were being told their versions had been inferred while
+        their lock file sat in the same directory."""
+        (tmp_path / manifest).write_text("")
+        (tmp_path / lock).write_text("")
+
+        assert not resolution_was_inferred(str(tmp_path / manifest))
+
+    @pytest.mark.parametrize("manifest", ["Cargo.toml", "go.mod", "mix.exs", "stack.yaml"])
+    def test_without_the_lock_file_it_is_still_an_inference(self, tmp_path, manifest):
+        (tmp_path / manifest).write_text("")
+        assert resolution_was_inferred(str(tmp_path / manifest))

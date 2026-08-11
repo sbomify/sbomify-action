@@ -63,8 +63,9 @@ def fallback_is_a_bug() -> bool:
 #: more precisely. Absent the sibling, nothing changes.
 LOCKFILE_FOR_MANIFEST = {
     "pyproject.toml": ("poetry.lock", "uv.lock", "Pipfile.lock"),
-    "package.json": ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"),
+    "package.json": ("package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"),
     "composer.json": ("composer.lock",),
+    "Cargo.toml": ("Cargo.lock",),
     "Package.swift": ("Package.resolved",),
     # go.sum records hashes for the whole module graph but is not itself a
     # manifest; cyclonedx-gomod wants the go.mod beside it.
@@ -142,6 +143,29 @@ RECOMMENDED_ACTION = {
 }
 
 
+#: Files whose presence means the resolution was recorded rather than guessed.
+#:
+#: Deliberately not LOCKFILE_FOR_MANIFEST, which answers a different question.
+#: That map says *which file to read* -- and for Go it points go.sum at go.mod,
+#: because cyclonedx-gomod wants the manifest. Reusing it here asked "is there
+#: a committed resolution" and got back "which file is better to parse", which
+#: are the same answer for Python and PHP and opposite for Go.
+#:
+#: The cost of conflating them was a false accusation: Cargo.toml and go.mod
+#: had no entry, so a Rust or Go project with its lock file committed right
+#: there was told its versions had been inferred.
+COMMITTED_RESOLUTION_FOR = {
+    "pyproject.toml": ("poetry.lock", "uv.lock", "Pipfile.lock"),
+    "package.json": ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "npm-shrinkwrap.json"),
+    "composer.json": ("composer.lock",),
+    "Cargo.toml": ("Cargo.lock",),
+    "go.mod": ("go.sum",),
+    "Package.swift": ("Package.resolved",),
+    "mix.exs": ("mix.lock",),
+    "stack.yaml": ("stack.yaml.lock",),
+}
+
+
 def recommended_action(lock_file: str | None) -> tuple[str, str] | None:
     """The command that would make this document authoritative, and what to commit."""
     if not lock_file:
@@ -165,7 +189,7 @@ def resolution_was_inferred(lock_file: str | None) -> bool:
         return False
     directory = os.path.dirname(lock_file)
     return not any(
-        os.path.isfile(os.path.join(directory, candidate)) for candidate in LOCKFILE_FOR_MANIFEST.get(name, ())
+        os.path.isfile(os.path.join(directory, candidate)) for candidate in COMMITTED_RESOLUTION_FOR.get(name, ())
     )
 
 
