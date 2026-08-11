@@ -107,6 +107,48 @@ UNRESOLVED_MANIFESTS = frozenset(
 )
 
 
+#: What to actually do about it, per manifest.
+#:
+#: "The versions were inferred" on its own is a complaint, not advice: it tells
+#: a reader their document is worse without telling them how to make it
+#: better, and the answer is different in every ecosystem. Each entry is the
+#: command that produces the missing lock file and the file to commit.
+#:
+#: The JVM entries are the honest exception. Maven and Gradle have no lock file
+#: by convention, so there is nothing to commit and the advice is to generate
+#: the SBOM from the build itself, where the resolved graph exists.
+RECOMMENDED_ACTION = {
+    "composer.json": ("composer update", "composer.lock"),
+    "package.json": ("npm install  (or pnpm/yarn/bun install)", "the lock file it writes"),
+    "pyproject.toml": ("uv lock  (or poetry lock)", "uv.lock or poetry.lock"),
+    "requirements.txt": ("pip-compile requirements.in", "a requirements.txt with every version pinned by =="),
+    "Cargo.toml": ("cargo generate-lockfile", "Cargo.lock"),
+    "go.mod": ("go mod tidy", "go.sum"),
+    "Package.swift": ("swift package resolve", "Package.resolved"),
+    "mix.exs": ("mix deps.get", "mix.lock"),
+    "stack.yaml": ("stack build --dry-run", "stack.yaml.lock"),
+    "deps.edn": ("clojure -Stree", "a pinned deps.edn, or generate from the build"),
+    "project.clj": ("lein deps :tree", "a pinned project.clj, or generate from the build"),
+    "pom.xml": ("", "Maven has no lock file; run the CycloneDX Maven plugin in your build instead"),
+    "build.gradle": (
+        "",
+        "Gradle has no lock file by default; enable dependency locking, or run the CycloneDX Gradle plugin in your build",
+    ),
+    "build.gradle.kts": (
+        "",
+        "Gradle has no lock file by default; enable dependency locking, or run the CycloneDX Gradle plugin in your build",
+    ),
+    "build.sbt": ("", "sbt has no lock file; generate from the build with sbt-sbom instead"),
+}
+
+
+def recommended_action(lock_file: str | None) -> tuple[str, str] | None:
+    """The command that would make this document authoritative, and what to commit."""
+    if not lock_file:
+        return None
+    return RECOMMENDED_ACTION.get(os.path.basename(lock_file))
+
+
 def resolution_was_inferred(lock_file: str | None) -> bool:
     """Whether the versions in the document were resolved rather than recorded.
 

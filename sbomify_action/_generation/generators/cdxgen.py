@@ -37,6 +37,7 @@ from ..utils import (
     ensure_php_installed,
     get_lock_file_ecosystem,
     has_required_manifest,
+    resolve_npm_lockfile,
     run_command,
 )
 
@@ -228,6 +229,10 @@ class CdxgenFsGenerator:
                 logger.info(f"Telling Composer this package is version {root_version}")
                 env = {"COMPOSER_ROOT_VERSION": root_version}
 
+        resolved_lockfile: Path | None = None
+        if lock_file_name == "package.json":
+            resolved_lockfile = resolve_npm_lockfile(lock_file_directory)
+
         cmd = [
             "cdxgen",
             "-o",
@@ -296,6 +301,12 @@ class CdxgenFsGenerator:
                 spec_version=input.spec_version or CDXGEN_CYCLONEDX_DEFAULT,
                 generator_name=self.name,
             )
+        finally:
+            # A lock file we created is ours to remove. It is a working file,
+            # not something the user asked for, and leaving it behind risks a
+            # later step committing a resolution nobody chose.
+            if resolved_lockfile is not None:
+                resolved_lockfile.unlink(missing_ok=True)
 
 
 class CdxgenImageGenerator:

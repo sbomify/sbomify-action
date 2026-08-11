@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from sbomify_action._generation.registry import resolution_was_inferred
+from sbomify_action._generation.registry import recommended_action, resolution_was_inferred
 from sbomify_action.cli.main import _disclose_inferred_resolution as _disclose
 
 
@@ -142,3 +142,50 @@ class TestWhatItSays:
         _disclose(str(sbom), Cfg(lock_file=str(tmp_path / "composer.json")))
 
         assert sbom.read_text() == "{ not json"
+
+
+class TestTheRecommendedAction:
+    """ "Your versions were inferred" tells a reader their document is worse
+    without telling them how to make it better. Every manifest gets the
+    command that fixes it, in its own ecosystem's terms."""
+
+    @pytest.mark.parametrize(
+        ("manifest", "expect_command", "expect_in_detail"),
+        [
+            ("composer.json", "composer update", "composer.lock"),
+            ("package.json", "npm install", "lock file"),
+            ("pyproject.toml", "uv lock", "uv.lock"),
+            ("Cargo.toml", "cargo generate-lockfile", "Cargo.lock"),
+            ("Package.swift", "swift package resolve", "Package.resolved"),
+            ("requirements.txt", "pip-compile", "=="),
+        ],
+    )
+    def test_each_manifest_gets_its_own_remedy(self, manifest, expect_command, expect_in_detail):
+        action = recommended_action(f"/w/{manifest}")
+        assert action is not None
+        assert expect_command in action[0]
+        assert expect_in_detail in action[1]
+
+    @pytest.mark.parametrize("manifest", ["pom.xml", "build.gradle", "build.gradle.kts", "build.sbt"])
+    def test_the_jvm_says_what_to_do_instead_of_naming_a_file(self, manifest):
+        """Maven, Gradle and sbt have no lock file by convention. Telling
+        someone to commit one would be advice they cannot follow."""
+        action = recommended_action(f"/w/{manifest}")
+        assert action is not None
+        assert action[0] == "", "there is no command that writes a lock file for these"
+        # What the four share is not a word but a direction: get the SBOM
+        # from the build, where the resolved graph actually exists.
+        assert "build" in action[1]
+
+    def test_the_remedy_is_written_into_the_document(self, tmp_path):
+        """The console is read by whoever generated it; the file is read by
+        whoever later asks why the versions do not match production."""
+        (tmp_path / "composer.json").write_text("{}")
+        sbom = tmp_path / "s.json"
+        write_sbom(sbom)
+
+        _disclose(str(sbom), Cfg(lock_file=str(tmp_path / "composer.json")))
+
+        props = json.loads(sbom.read_text())["metadata"]["properties"]
+        remedy = [p for p in props if p["name"] == "sbomify:resolution:remedy"]
+        assert remedy and "composer update" in remedy[0]["value"]

@@ -2,6 +2,7 @@
 
 import os
 import re
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -769,6 +770,75 @@ def ensure_dotnet_installed() -> None:
     long before anything fetched an SDK.
     """
     ensure_runtime("dotnet")
+
+
+#: Lock files a JavaScript project may have committed. If any exists, the
+#: registry has already promoted the input to it and nothing here runs.
+_JS_LOCK_FILES = ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "npm-shrinkwrap.json")
+
+
+def resolve_npm_lockfile(directory: Path) -> Path | None:
+    """Resolve a bare package.json into a lock file cdxgen can read.
+
+    cdxgen cannot read a package.json on its own. Measured on express v5.2.1,
+    whose 28 runtime dependencies are declared and whose lock file is
+    gitignored: cdxgen exits 0 and produces **zero** components, with or
+    without --required-only. Resolve the manifest first and the same command
+    returns 67 -- the transitive closure of those 28.
+
+    This is the common case rather than a corner. A JavaScript library
+    gitignores its lock file because the consuming application resolves it, so
+    most libraries on GitHub arrive as a manifest and nothing else. eslint and
+    express both produced empty documents for exactly this reason.
+
+    The versions this produces are a resolution performed now, not a record of
+    what the project committed to -- which is why every document built this
+    way carries the notice and the remedy from
+    ``_disclose_inferred_resolution``. Generating it is still worth doing: an
+    answer to "what would I install today" beats a document with nothing in
+    it, as long as it cannot be mistaken for the other thing.
+
+    bun is used because it is already in the cdxgen bundle -- no extra
+    toolchain, no extra download -- and ``--lockfile-only`` resolves without
+    fetching package contents. Measured at 368 packages in 846ms for express.
+
+    Returns the lock file created, so the caller can remove it: it is a
+    working file, and leaving it in a checkout invites someone to commit a
+    resolution nobody chose. Returns None when a lock file already exists, when
+    bun is unavailable, or when resolution fails -- all of which leave the
+    previous behaviour untouched.
+    """
+    if any((directory / name).is_file() for name in _JS_LOCK_FILES):
+        return None
+
+    if not shutil.which("bun"):
+        logger.debug("bun is not on PATH; cannot resolve package.json into a lock file")
+        return None
+
+    logger.info("No lock file beside package.json; resolving one so the manifest can be read")
+    try:
+        subprocess.run(
+            ["bun", "install", "--lockfile-only", "--ignore-scripts"],
+            cwd=str(directory),
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        # Offline, private registry, or a manifest bun will not resolve. The
+        # generator carries on and fails the way it did before, which is the
+        # right outcome: this is an improvement when it works and must not be
+        # a new way to break.
+        detail = getattr(e, "stderr", "") or str(e)
+        logger.debug(f"Could not resolve package.json into a lock file: {str(detail)[:300]}")
+        return None
+
+    created = directory / "bun.lock"
+    if not created.is_file():
+        return None
+    logger.info("Resolved package.json into a temporary bun.lock for this run only")
+    return created
 
 
 def ensure_php_installed() -> None:

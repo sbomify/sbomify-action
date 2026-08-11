@@ -832,7 +832,7 @@ def build_config(
     expanded_lock_file = (
         lock_file
         if (lock_file and lock_file.lower() == NONE_SENTINEL)
-        else (path_expansion(lock_file) if lock_file else None)
+        else (_expand_lock_file_or_substitute(lock_file) if lock_file else None)
     )
     # Expanded like the others, but by directory_expansion: path_expansion
     # tests is_file(), so a directory fails it with "Specified input file
@@ -1249,6 +1249,80 @@ def path_expansion(path: str) -> str:
             f"Specified input file '{path}' not found. "
             f"Searched in: {_format_search_locations(Path(path), relative_path, workspace_relative_path)}"
         )
+
+
+def _expand_lock_file_or_substitute(path: str) -> str:
+    """Resolve LOCK_FILE, or the ecosystem's lock file that is actually there.
+
+    LOCK_FILE names a file, and the file a project uses changes: a repository
+    moves from npm to pnpm, from poetry to uv, from Pipenv to either. The
+    workflow pinning the old name then fails outright with "Specified input
+    file not found", which is a true statement about a name and a useless one
+    about the project -- the dependencies are right there in the file next to
+    it.
+
+    So when the named file is gone and exactly one lock file for the same
+    ecosystem is present, that one is used and the substitution is announced
+    loudly. Silence would be worse than the error: the SBOM would come from an
+    input the caller never asked for and nothing would say so.
+
+    Deliberately only when it is unambiguous. A directory holding both
+    pnpm-lock.yaml and yarn.lock has no obvious winner, and guessing between
+    them is how a document ends up describing the wrong dependency tree; that
+    case keeps the original error, which now lists what it found.
+    """
+    from .._generation.utils import ALL_LOCK_FILES, get_lock_file_ecosystem
+
+    try:
+        return path_expansion(path)
+    except FileProcessingError as missing:
+        original = missing
+
+    named = Path(path)
+    ecosystem = get_lock_file_ecosystem(named.name)
+    if not ecosystem:
+        raise original
+
+    # Look beside the named file, and in the working directory, which is where
+    # path_expansion would have searched.
+    # Resolved, because the same file reached as "./x" and as an absolute
+    # path is one candidate and not two -- counting it twice made every
+    # substitution look ambiguous and refuse itself.
+    directories = {d.resolve() for d in (named.parent, Path.cwd()) if d.is_dir()}
+    siblings = sorted(
+        {
+            candidate.resolve()
+            for directory in directories
+            for name in ALL_LOCK_FILES
+            for candidate in [directory / name]
+            if candidate.is_file() and get_lock_file_ecosystem(name) == ecosystem and candidate.name != named.name
+        }
+    )
+
+    if len(siblings) != 1:
+        if siblings:
+            logger.error(
+                f"LOCK_FILE names '{named.name}', which is not here, and there is more than one "
+                f"{ecosystem} lock file to choose from: {', '.join(s.name for s in siblings)}. "
+                f"Set LOCK_FILE to the one you want rather than have this guess."
+            )
+        raise original
+
+    substitute = siblings[0]
+    logger.warning(
+        "\n"
+        "  ┌───────────────────────────────────────────────────────────────┐\n"
+        "  │  USING A DIFFERENT INPUT THAN THE ONE YOU CONFIGURED          │\n"
+        "  └───────────────────────────────────────────────────────────────┘\n"
+        f"  LOCK_FILE names '{named.name}', which is not in this repository.\n"
+        f"  '{substitute.name}' is, and it describes the same ecosystem\n"
+        f"  ({ecosystem}), so that is what this SBOM was built from.\n"
+        "\n"
+        "  This usually means the project changed package manager. Update\n"
+        f"  LOCK_FILE to '{substitute.name}' to make the choice explicit, or\n"
+        "  set it to the file you actually want."
+    )
+    return str(substitute)
 
 
 def directory_expansion(path: str) -> str:
@@ -2770,12 +2844,25 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
     for vulnerability scanning. It is only harmful when it cannot be told
     apart from the other kind.
     """
-    from .._generation.registry import resolution_was_inferred
+    from .._generation.registry import recommended_action, resolution_was_inferred
 
     if not resolution_was_inferred(config.lock_file):
         return
 
     name = Path(config.lock_file or "").name
+    action = recommended_action(config.lock_file)
+
+    # The fix, in this project's own terms. "Commit a lock file" is not advice
+    # if the reader does not know which one, and for Maven, Gradle and sbt
+    # there is no lock file to commit at all -- so those say what to do
+    # instead rather than recommending something that does not exist.
+    if action and action[0]:
+        remedy = f"  TO FIX THIS, run:\n      {action[0]}\n  then commit {action[1]} and point LOCK_FILE at it.\n"
+    elif action:
+        remedy = f"  TO FIX THIS: {action[1]}.\n"
+    else:
+        remedy = "  TO FIX THIS: commit the lock file your build produces and point LOCK_FILE at it.\n"
+
     logger.warning(
         "\n"
         "  ┌───────────────────────────────────────────────────────────────┐\n"
@@ -2786,13 +2873,11 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
         "  by resolving those constraints just now, against whatever the\n"
         "  registry currently offers.\n"
         "\n"
-        "  That means this document:\n"
+        "  This document therefore:\n"
         "    - describes today, not what the project ships or tested\n"
-        "    - will differ if generated again tomorrow\n"
-        "    - may be incomplete, and may name versions no user installs\n"
-        "\n"
-        "  Commit a lock file and point LOCK_FILE at it for an SBOM that\n"
-        "  describes the project rather than the moment."
+        "    - will differ if you generate it again tomorrow\n"
+        "    - may be incomplete, and may name versions nobody installs\n"
+        "\n" + remedy
     )
 
     try:
@@ -2809,6 +2894,17 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
                 "value": f"inferred-at-build-time from {name}; no lock file was committed",
             }
         )
+        # The remedy goes in the document as well as the log, because the two
+        # have different readers. Whoever generated this sees the console; the
+        # person who later asks why the versions do not match production sees
+        # only the file.
+        if action:
+            properties.append(
+                {
+                    "name": "sbomify:resolution:remedy",
+                    "value": f"run `{action[0]}` and commit {action[1]}" if action[0] else action[1],
+                }
+            )
 
         # Stop the components claiming a source that is not in the repository.
         #
