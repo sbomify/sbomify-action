@@ -18,6 +18,7 @@ Measured on laravel/framework v13.24.0 in the published image, changing only
 this: 0 components before, 72 after.
 """
 
+import json
 import os
 import shutil
 
@@ -53,25 +54,51 @@ class TestTheEnvironmentItBuilds:
         assert config_from(git_safe_directory_env()) == {"safe.directory": "*"}
 
 
+#: A child that reports every git setting it was handed, so the assertions can
+#: read the configuration the way git does -- by count -- instead of assuming
+#: ``safe.directory`` landed at index 0. It only lands there when the ambient
+#: environment declares no settings of its own, which is true of a developer's
+#: shell and of CI but is not something these tests get to require: appending
+#: to an existing count is the documented behaviour of the function under test.
+_REPORT_GIT_CONFIG = (
+    "import json, os; print(json.dumps({k: v for k, v in os.environ.items() if k.startswith('GIT_CONFIG_')}))"
+)
+
+
 class TestWhatChildrenActuallyReceive:
-    def test_a_child_sees_the_setting(self, tmp_path):
+    @staticmethod
+    def _child_config(tmp_path, **kwargs) -> dict[str, str]:
         script = tmp_path / "show.py"
-        script.write_text("import os; print(os.environ.get('GIT_CONFIG_VALUE_0', 'unset'))")
+        script.write_text(_REPORT_GIT_CONFIG)
+        result = run_command(["python3", str(script)], "show", **kwargs)
+        return config_from(json.loads(result.stdout))
 
-        result = run_command(["python3", str(script)], "show")
+    def test_a_child_sees_the_setting(self, tmp_path):
+        assert self._child_config(tmp_path)["safe.directory"] == "*"
 
-        assert result.stdout.strip() == "*"
+    def test_a_child_sees_it_alongside_what_the_caller_already_configured(self, tmp_path, monkeypatch):
+        """The append is only worth anything if it survives the trip: the
+        caller's settings and ours both have to reach the child."""
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+        monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.name")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", "someone")
 
-    def test_the_caller_keeps_the_last_word(self, tmp_path):
+        assert self._child_config(tmp_path) == {"user.name": "someone", "safe.directory": "*"}
+
+    def test_the_caller_keeps_the_last_word(self, tmp_path, monkeypatch):
         """An explicit env from the caller overrides the default rather than
         being overridden by it -- a generator that configures git deliberately
-        must stay in control."""
-        script = tmp_path / "show.py"
-        script.write_text("import os; print(os.environ['GIT_CONFIG_VALUE_0'])")
+        must stay in control.
 
-        result = run_command(["python3", str(script)], "show", env={"GIT_CONFIG_VALUE_0": "/only/this"})
+        The baseline is pinned because this one is unavoidably about a
+        particular slot: the caller is overriding index 0, so index 0 has to be
+        the slot the default would otherwise have taken.
+        """
+        monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
 
-        assert result.stdout.strip() == "/only/this"
+        assert self._child_config(tmp_path, env={"GIT_CONFIG_VALUE_0": "/only/this"}) == {
+            "safe.directory": "/only/this"
+        }
 
     def test_the_rest_of_the_environment_survives(self, tmp_path, monkeypatch):
         """Generators need the PATH, HOME and proxy settings they started with."""
