@@ -2746,9 +2746,28 @@ def _repair_directory_derived_purl(sbom_file: str, config: "Config") -> None:
         if current.name != working_dir or current.name == config.component_name:
             return
 
+        # COMPONENT_NAME is free text and reaches a field that is not.
+        #
+        # It does not raise, which is what makes it worth handling: PackageURL
+        # accepts almost anything and quietly reshapes it. "My Product"
+        # percent-encodes to My%20Product, and "owner/repo" is worse than ugly
+        # -- the slash is read as a namespace separator, so the identity comes
+        # out structured in a way nobody asked for.
+        #
+        # augmentation.py already has the rule for this and two other places
+        # already use it. Writing a third variant here is how a codebase ends
+        # up with three spellings of one identity, which is the failure this
+        # whole function exists to undo.
+        from sbomify_action.augmentation import _sanitize_name_for_purl
+
+        safe_name = _sanitize_name_for_purl(config.component_name)
+        if not safe_name:
+            logger.debug(f"COMPONENT_NAME {config.component_name!r} yields no usable PURL name; leaving the PURL")
+            return
+
         repaired = PackageURL(
             type="generic",
-            name=config.component_name,
+            name=safe_name,
             version=current.version,
         )
         logger.warning(

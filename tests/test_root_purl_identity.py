@@ -106,6 +106,33 @@ class TestItRepairs:
         assert root_purl(sbom) == "pkg:generic/rails@1.0.0"
         assert "pkg:npm/rails" != root_purl(sbom)
 
+    @pytest.mark.parametrize(
+        ("component_name", "expected"),
+        [
+            ("My Product", "pkg:generic/my-product@1.0.0"),
+            ("@scope/name", "pkg:generic/scope-name@1.0.0"),
+            ("Owner/Repo", "pkg:generic/repo@1.0.0"),
+            ("Trailing--Dashes--", "pkg:generic/trailing-dashes@1.0.0"),
+        ],
+    )
+    def test_an_awkward_component_name_still_produces_a_usable_purl(
+        self, tmp_path, workspace, component_name, expected
+    ):
+        """COMPONENT_NAME is free text reaching a field that is not.
+
+        PackageURL does not reject these, which is the point -- it reshapes
+        them silently. A space percent-encodes; a slash is read as a namespace
+        separator and restructures the identity. The repair runs the name
+        through the same sanitiser the rest of the codebase uses rather than
+        inventing a third spelling.
+        """
+        sbom = tmp_path / "s.json"
+        write_sbom(sbom, name=component_name, purl="pkg:gem/workspace@1.0.0")
+
+        _repair_directory_derived_purl(str(sbom), Cfg(component_name=component_name))
+
+        assert root_purl(sbom) == expected
+
 
 class TestItLeavesAlone:
     def test_a_purl_that_already_names_the_project(self, tmp_path, workspace):
