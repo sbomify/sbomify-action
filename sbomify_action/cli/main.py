@@ -320,9 +320,10 @@ class Config:
                     reason = " or ".join(operations)
                     raise ConfigurationError(
                         f"sbomify API token is not defined (required when {reason}). "
-                        "Either set TOKEN, or in GitHub Actions enable trusted publishing by "
-                        "granting `permissions: id-token: write` in the workflow (and create "
-                        "an OIDC binding for the component in the sbomify UI)."
+                        "Either set SBOMIFY_TOKEN (or TOKEN), pass --token, or in GitHub Actions "
+                        "enable trusted publishing by granting `permissions: id-token: write` in "
+                        "the workflow (and create an OIDC binding for the component in the "
+                        "sbomify UI)."
                     )
             if not self.component_id:
                 operations = []
@@ -646,7 +647,7 @@ def _handle_deprecated_name(
     Returns:
         Tuple of (final_component_name, final_override_name)
     """
-    override_name = evaluate_boolean(override_name_env) if override_name_env else False
+    override_name = evaluate_boolean(override_name_env, source="OVERRIDE_NAME") if override_name_env else False
 
     if component_name and override_name:
         logger.warning(
@@ -901,11 +902,13 @@ def load_config() -> Config:
         lock_file=os.getenv("LOCK_FILE"),
         source_dir=os.getenv("SOURCE_DIR"),
         output_file=os.getenv("OUTPUT_FILE", "sbom_output.json"),
-        upload=evaluate_boolean(os.getenv("UPLOAD", "True")),
+        upload=evaluate_boolean(os.getenv("UPLOAD", "True"), source="UPLOAD"),
         upload_destinations=upload_destinations,
-        augment=evaluate_boolean(os.getenv("AUGMENT", "False")),
-        enrich=evaluate_boolean(os.getenv("ENRICH", "False")),
-        override_sbom_metadata=evaluate_boolean(os.getenv("OVERRIDE_SBOM_METADATA", "False")),
+        augment=evaluate_boolean(os.getenv("AUGMENT", "False"), source="AUGMENT"),
+        enrich=evaluate_boolean(os.getenv("ENRICH", "False"), source="ENRICH"),
+        override_sbom_metadata=evaluate_boolean(
+            os.getenv("OVERRIDE_SBOM_METADATA", "False"), source="OVERRIDE_SBOM_METADATA"
+        ),
         component_version=os.getenv("COMPONENT_VERSION"),
         component_name=os.getenv("COMPONENT_NAME"),
         component_purl=os.getenv("COMPONENT_PURL"),
@@ -946,11 +949,17 @@ def setup_dependencies() -> None:
 def initialize_sentry() -> None:
     """Initialize Sentry for error tracking.
 
-    Can be disabled by setting TELEMETRY to 'false', '0', or 'no'.
+    Can be disabled by setting TELEMETRY to any recognised false value
+    (``false``, ``0``, ``no``, ``off``, ``disabled``, …).
+
+    The CLI already gates this call on ``--telemetry/--no-telemetry``,
+    which resolves TELEMETRY itself, so this re-check only matters when
+    the function is called directly. It shares the one boolean
+    vocabulary either way — previously it accepted ``disabled`` while
+    the option layer rejected the same string outright.
     """
     # Allow users to opt-out of telemetry
-    telemetry_enabled = os.getenv("TELEMETRY", "true").lower()
-    if telemetry_enabled in ("false", "0", "no", "off", "disabled"):
+    if not evaluate_boolean(os.getenv("TELEMETRY", "true"), source="TELEMETRY"):
         logger.debug("Sentry telemetry disabled via TELEMETRY environment variable")
         return
 
@@ -1292,17 +1301,48 @@ def get_last_sbom_from_last_step() -> Optional[str]:
     return None
 
 
-def evaluate_boolean(value: str) -> bool:
+#: The one boolean vocabulary every env var and flag in this CLI shares.
+#: It is Click's own ``BOOL`` set (so ``--telemetry``'s long-standing
+#: behaviour is preserved) plus the spellings this project already
+#: accepted (``yeah``) or documented elsewhere (``enabled``/``disabled``,
+#: which ``initialize_sentry`` describes as valid telemetry opt-outs).
+_TRUE_VALUES = frozenset({"1", "true", "t", "yes", "y", "yeah", "on", "enable", "enabled"})
+_FALSE_VALUES = frozenset({"0", "false", "f", "no", "n", "off", "", "disable", "disabled"})
+
+
+def evaluate_boolean(value: str, source: str = "value") -> bool:
     """
-    Evaluate string values as boolean.
+    Evaluate a string as a boolean, rejecting anything ambiguous.
+
+    Surrounding whitespace is stripped and case is ignored, so values
+    that arrive with a trailing newline from a YAML block scalar, a
+    ``.env`` file, or ``$(command)`` substitution behave as written.
+
+    Unrecognised input raises rather than evaluating to ``False``. That
+    matters most for ``UPLOAD``, which defaults to *true*: treating a
+    typo as "off" silently skipped the upload while the run still
+    reported success, so the user believed they had published when they
+    had not. A typo must never be indistinguishable from a deliberate
+    opt-out.
 
     Args:
         value: String value to evaluate
+        source: What produced the value (an env var or option name),
+            used to make the error actionable.
 
     Returns:
         Boolean result
+
+    Raises:
+        ConfigurationError: If the value is not a recognised boolean.
     """
-    return value.lower() in ["true", "yes", "yeah", "1"]
+    normalized = value.strip().lower()
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES:
+        return False
+    accepted = ", ".join(sorted(_TRUE_VALUES | (_FALSE_VALUES - {""})))
+    raise ConfigurationError(f"Invalid boolean for {source}: {value!r}. Accepted values: {accepted}.")
 
 
 def validate_sbom(file_path: str) -> str:
@@ -2835,7 +2875,13 @@ def _make_bool_envvar_callback(
         # Check environment variable with string-to-bool conversion
         env_value = os.getenv(envvar)
         if env_value is not None:
-            return evaluate_boolean(env_value)
+            try:
+                return evaluate_boolean(env_value, source=envvar)
+            except ConfigurationError as exc:
+                # Surface as a parse-time usage error (exit 2) so a bad
+                # value stops the run instead of silently selecting the
+                # option's default.
+                raise click.BadParameter(str(exc), ctx=ctx, param=param) from exc
 
         # Fall back to default
         return default
@@ -2873,8 +2919,13 @@ def _parse_upload_destinations_callback(
 @click.group(invoke_without_command=True, context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--token",
-    envvar="TOKEN",
-    help="sbomify API token (required for upload/augment).",
+    # First match wins, so this is the documented precedence:
+    # $SBOMIFY_TOKEN outranks $TOKEN. Both are honoured because the
+    # GitHub Action, GitLab and Bitbucket templates all map the
+    # SBOMIFY_TOKEN secret onto a TOKEN env var, while a local
+    # pipx/uvx user naturally exports SBOMIFY_TOKEN itself.
+    envvar=["SBOMIFY_TOKEN", "TOKEN"],
+    help="sbomify API token (required for upload/augment). [env: SBOMIFY_TOKEN, TOKEN]",
 )
 @click.option(
     "--component-id",
@@ -3027,10 +3078,11 @@ def _parse_upload_destinations_callback(
 )
 @click.option(
     "--telemetry/--no-telemetry",
-    envvar="TELEMETRY",
     default=True,
     show_default=True,
-    help="Enable/disable error telemetry (Sentry).",
+    callback=_make_bool_envvar_callback("TELEMETRY", True),
+    is_eager=True,
+    help="Enable/disable error telemetry (Sentry). [env: TELEMETRY]",
 )
 @click.option(
     "--working-dir",
@@ -3552,15 +3604,15 @@ def init_cmd(
 def _inherit_root_token(ctx: click.Context, token: Optional[str]) -> Optional[str]:
     """Resolve the token for the wizard / init subcommand.
 
-    The wizard's own --token wins when the user typed it. Otherwise,
-    inherit the root group's --token ONLY when the root saw the value
-    on the command line (``sbomify-action --token X wizard``) — not when
-    Click pulled it from the root's ``envvar="TOKEN"``. The root group
-    binds $TOKEN as the GitHub-Action-style env var, but the wizard
-    subcommand documents (and ``_resolve_token`` implements)
-    ``$SBOMIFY_TOKEN`` as the higher-precedence env source. Without
-    this distinction, $TOKEN would silently outrank $SBOMIFY_TOKEN any
-    time the wizard ran with both env vars set, contradicting the help
+    The subcommand's own --token wins when the user typed it; otherwise
+    inherit whatever the root group resolved, whether it came from the
+    command line or the environment.
+
+    Inheriting an env-derived value is only safe because the root binds
+    ``envvar=["SBOMIFY_TOKEN", "TOKEN"]`` — the same precedence
+    ``_resolve_token`` implements. While the root bound $TOKEN alone,
+    this function had to refuse env-derived values, since inheriting one
+    would have let $TOKEN outrank $SBOMIFY_TOKEN and contradict the help
     text on ``--token``.
     """
     if token:
@@ -3568,14 +3620,8 @@ def _inherit_root_token(ctx: click.Context, token: Optional[str]) -> Optional[st
     if ctx.parent is None:
         return None
     parent_token = ctx.parent.params.get("token")
-    if not isinstance(parent_token, str) or not parent_token:
-        return None
-    source = ctx.parent.get_parameter_source("token")
-    if source is click.core.ParameterSource.COMMANDLINE:
+    if isinstance(parent_token, str) and parent_token:
         return parent_token
-    # Root populated --token from $TOKEN — let _resolve_token apply the
-    # documented env precedence ($SBOMIFY_TOKEN before $TOKEN) instead of
-    # treating the env-derived value as an explicit override.
     return None
 
 
