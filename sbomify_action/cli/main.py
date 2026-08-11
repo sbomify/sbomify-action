@@ -2037,9 +2037,14 @@ def run_pipeline(config: Config) -> None:
     if config.component_purl:
         logger.info(f"Applying component PURL override: {config.component_purl}")
         _apply_sbom_purl_override(STEP_1_FILE, config)
-    else:
+    elif not config.bom_type or config.bom_type == "sbom":
         # No explicit PURL, so check the generator did not name the root
         # component after the directory it was pointed at.
+        #
+        # Only for actual SBOMs. A VEX, CBOM or HBOM is uploaded verbatim --
+        # the injection step below skips them for the same reason -- and
+        # reading one as CycloneDX would parse a document of the wrong shape
+        # on every run, fail, and be swallowed by the guard inside.
         _repair_directory_derived_purl(STEP_1_FILE, config)
 
     # Inject additional packages if specified (file or environment variables).
@@ -2752,7 +2757,11 @@ def _repair_directory_derived_purl(sbom_file: str, config: "Config") -> None:
             f"identity explicitly."
         )
         component.purl = repaired
-        get_audit_trail().record_augmentation("component.purl", str(repaired), str(current))
+        # source= matters: it defaults to "sbomify-api", and this change is
+        # made locally from COMPONENT_NAME with nothing fetched. An audit
+        # trail exists to say where a value came from, so letting it claim the
+        # API supplied this would be the one kind of wrong it cannot afford.
+        get_audit_trail().record_augmentation("component.purl", str(repaired), str(current), source="sbomify-action")
 
         spec_version = original_json.get("specVersion")
         if spec_version is None:

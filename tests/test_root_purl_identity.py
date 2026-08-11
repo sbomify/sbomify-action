@@ -11,11 +11,19 @@ leave alone.
 """
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 from sbomify_action.cli.main import _repair_directory_derived_purl
+
+#: The module object, fetched from sys.modules rather than imported.
+#: `sbomify_action.cli` re-exports the click command as `main`, so both
+#: `from sbomify_action.cli import main` and `import sbomify_action.cli.main
+#: as m` hand back the function -- the attribute lookup finds the export,
+#: not the submodule. Patching needs the module.
+cli_main = sys.modules["sbomify_action.cli.main"]
 
 
 class Cfg:
@@ -156,3 +164,31 @@ class TestItLeavesAlone:
         _repair_directory_derived_purl(str(sbom), Cfg(component_name="rails"))
 
         assert sbom.read_text() == "{ not json"
+
+
+class TestTheAuditTrail:
+    def test_the_change_is_attributed_to_the_action_not_the_api(self, tmp_path, workspace, monkeypatch):
+        """The value is derived locally from COMPONENT_NAME, and nothing is
+        fetched. record_augmentation defaults its source to "sbomify-api", so
+        leaving it unset would have the trail claim the API supplied this --
+        the one kind of wrong an audit trail cannot afford."""
+        recorded: list[dict] = []
+
+        class Trail:
+            def record_augmentation(self, field, value, old_value=None, source="sbomify-api"):
+                recorded.append({"field": field, "value": value, "old": old_value, "source": source})
+
+        monkeypatch.setattr(cli_main, "get_audit_trail", lambda: Trail())
+        sbom = tmp_path / "s.json"
+        write_sbom(sbom, name="rails", purl="pkg:gem/workspace@1.0.0")
+
+        _repair_directory_derived_purl(str(sbom), Cfg(component_name="rails"))
+
+        assert recorded == [
+            {
+                "field": "component.purl",
+                "value": "pkg:generic/rails@1.0.0",
+                "old": "pkg:gem/workspace@1.0.0",
+                "source": "sbomify-action",
+            }
+        ]
