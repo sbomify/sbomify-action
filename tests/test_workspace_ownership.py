@@ -19,7 +19,7 @@ this: 0 components before, 72 after.
 """
 
 import os
-import subprocess
+import shutil
 
 import pytest
 
@@ -84,10 +84,11 @@ class TestWhatChildrenActuallyReceive:
         assert result.stdout.strip() == "still-here"
 
 
-@pytest.mark.skipif(
-    subprocess.run(["which", "git"], capture_output=True).returncode != 0,
-    reason="git is not installed",
-)
+# shutil.which rather than shelling out to `which`: this is evaluated while
+# the module is being collected, so a `which` that is itself missing -- a
+# slim image, a non-POSIX host -- raises FileNotFoundError before skipif has
+# any say, and the whole module fails to collect instead of skipping.
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
 class TestAgainstRealGit:
     def test_git_reads_the_setting_from_the_environment(self, tmp_path):
         """The whole mechanism rests on git honouring GIT_CONFIG_COUNT, so read
