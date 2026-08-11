@@ -661,11 +661,39 @@ def _bundle_file_lock(name: str) -> Iterator[None]:
 #: JDK installed almost always has JAVA_HOME set already, and honouring it
 #: would silently build against a different Java than the one we pinned and
 #: attested. Getting a wrong answer quietly is worse than the contention.
+#:
+#: The go bundle has the same shape and was missed. It declares
+#:
+#:     GOCACHE    = "{prefix}/.gocache"
+#:     GOMODCACHE = "{prefix}/.gomodcache"
+#:     GOPATH     = "{prefix}/.gopath"
+#:
+#: so the module cache lands inside the bundle directory, and {prefix} is the
+#: only substitution a bundle gets -- there is nowhere else for it to point.
+#: Two consequences, both measured on a 500-project sweep:
+#:
+#:   * The directory grows without bound inside an artifact that is otherwise
+#:     fixed and Sigstore-attested. One prefix held 6.2 GB of .gomodcache
+#:     around 370 MB of toolchain. A fetched bundle is reused on the strength
+#:     of its .sbomify-runtime-ready marker without re-verification, so the
+#:     tree on disk and the tree that was attested simply drift apart.
+#:   * The cache is keyed to the toolchain, which is wrong: module contents do
+#:     not depend on the Go version. The release is `rolling`, and every roll
+#:     rmtree's the prefix, so each toolchain refresh silently discards a cache
+#:     that was still entirely valid.
+#:
+#: Adding them here does not move anything by itself -- the bundle's default
+#: is unchanged and nothing outside has to care. It restores the choice, so a
+#: caller with a persistent cache directory can put Go's caches somewhere that
+#: outlives the toolchain, exactly as the JVM trio above already allows.
 _CALLER_OVERRIDABLE_ENV = frozenset(
     {
         "GRADLE_USER_HOME",
         "MAVEN_ARGS",
         "SBT_OPTS",
+        "GOCACHE",
+        "GOMODCACHE",
+        "GOPATH",
     }
 )
 

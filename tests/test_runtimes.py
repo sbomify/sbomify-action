@@ -522,6 +522,34 @@ class TestBundleEnvironment:
 
         assert os.environ["GRADLE_USER_HOME"] == str(prefix / ".gradle")
 
+    @pytest.mark.parametrize("name", ["GOCACHE", "GOMODCACHE", "GOPATH"])
+    def test_the_go_caches_are_overridable(self, tmp_path, monkeypatch, name):
+        """The go bundle puts its caches inside the prefix, same as the JVM one.
+
+        {prefix} is the only substitution a bundle gets, so left unoverridable
+        the module cache has nowhere to live but inside a Sigstore-attested
+        directory: 6.2 GB of .gomodcache around 370 MB of toolchain, in a tree
+        that is reused on a marker file and never re-verified. The release is
+        `rolling`, so each toolchain refresh rmtree's the prefix and discards a
+        module cache that never depended on the Go version.
+        """
+        monkeypatch.setenv(name, "/tmp/mine")
+        prefix = self._bundle(tmp_path, f'{name} = "{{prefix}}/.default"\n')
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ[name] == "/tmp/mine"
+
+    @pytest.mark.parametrize("name", ["GOCACHE", "GOMODCACHE", "GOPATH"])
+    def test_the_go_caches_keep_the_bundle_default_when_unset(self, tmp_path, monkeypatch, name):
+        """Making them overridable must not move them for anyone who says nothing."""
+        monkeypatch.delenv(name, raising=False)
+        prefix = self._bundle(tmp_path, f'{name} = "{{prefix}}/.default"\n')
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ[name] == str(prefix / ".default")
+
 
 class TestBundleFileLock:
     """F19: materialising a bundle has to be safe between processes."""
