@@ -19,10 +19,15 @@ import pytest
 from sbomify_action.cli.main import _repair_directory_derived_purl
 
 #: The module object, fetched from sys.modules rather than imported.
-#: `sbomify_action.cli` re-exports the click command as `main`, so both
-#: `from sbomify_action.cli import main` and `import sbomify_action.cli.main
-#: as m` hand back the function -- the attribute lookup finds the export,
-#: not the submodule. Patching needs the module.
+#:
+#: `sbomify_action.cli` re-exports the click command under the name `main`,
+#: so the obvious spellings both hand back the function rather than the
+#: module -- the attribute lookup finds the export and stops:
+#:
+#:     from sbomify_action.cli import main
+#:     import sbomify_action.cli.main as m
+#:
+#: Patching needs the module, and sys.modules is the only place holding it.
 cli_main = sys.modules["sbomify_action.cli.main"]
 
 
