@@ -2128,6 +2128,13 @@ def run_pipeline(config: Config) -> None:
             sys.exit(1)
         except (FileProcessingError, SBOMGenerationError, ValueError) as e:
             logger.error(f"Step 1 failed: {e}")
+            # The remedy is worth more here than on the happy path. A run that
+            # produced nothing from a manifest is exactly the case where "no
+            # lock file was committed" is the likely cause and "here is the
+            # command that writes one" is the likely fix -- and until now the
+            # advice only appeared when generation had already succeeded, so
+            # the people who needed it never saw it.
+            _recommend_a_lock_file(config.lock_file)
             _log_step_end(1, success=False)
             sys.exit(1)
 
@@ -2849,6 +2856,29 @@ def _capped_confidence(existing: object) -> float:
     except (TypeError, ValueError):
         value = _INFERRED_CONFIDENCE
     return min(value, _INFERRED_CONFIDENCE)
+
+
+def _recommend_a_lock_file(lock_file: str | None) -> None:
+    """Point at the missing lock file after a run that produced nothing.
+
+    Same advice as the inference notice, minus the claims about a document
+    that does not exist. Kept separate rather than reusing that function so
+    neither has to ask whether it is being called before or after a failure.
+    """
+    from .._generation.registry import recommended_action, resolution_was_inferred
+
+    if not resolution_was_inferred(lock_file):
+        return
+    action = recommended_action(lock_file)
+    name = Path(lock_file or "").name
+    if action and action[0]:
+        logger.error(
+            f"'{name}' constrains dependencies without resolving them, and no lock file was "
+            f"committed beside it. That is a common reason for this to fail. Run `{action[0]}`, "
+            f"commit {action[1]}, and point LOCK_FILE at it."
+        )
+    elif action:
+        logger.error(f"'{name}' constrains dependencies without resolving them. {action[1]}.")
 
 
 def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:

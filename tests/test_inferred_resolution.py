@@ -275,3 +275,49 @@ class TestACommittedResolutionIsRecognised:
     def test_without_the_lock_file_it_is_still_an_inference(self, tmp_path, manifest):
         (tmp_path / manifest).write_text("")
         assert resolution_was_inferred(str(tmp_path / manifest))
+
+
+class TestAdviceAfterAFailedRun:
+    """The remedy is worth more after a failure than after a success. A run
+    that produced nothing from a manifest is exactly where "no lock file was
+    committed" is the likely cause -- and the advice used to appear only when
+    generation had already worked."""
+
+    def test_it_names_the_command_for_the_ecosystem(self, tmp_path, caplog):
+        from sbomify_action.cli.main import _recommend_a_lock_file
+
+        (tmp_path / "composer.json").write_text("{}")
+        with caplog.at_level("ERROR"):
+            _recommend_a_lock_file(str(tmp_path / "composer.json"))
+
+        assert "composer update" in caplog.text
+        assert "composer.lock" in caplog.text
+
+    def test_it_says_nothing_when_a_lock_file_was_committed(self, tmp_path, caplog):
+        from sbomify_action.cli.main import _recommend_a_lock_file
+
+        (tmp_path / "composer.json").write_text("{}")
+        (tmp_path / "composer.lock").write_text("{}")
+        with caplog.at_level("ERROR"):
+            _recommend_a_lock_file(str(tmp_path / "composer.json"))
+
+        assert caplog.text == ""
+
+    def test_the_jvm_gets_the_advice_that_applies_to_it(self, tmp_path, caplog):
+        """There is no command to recommend, so it must not invent one."""
+        from sbomify_action.cli.main import _recommend_a_lock_file
+
+        (tmp_path / "pom.xml").write_text("")
+        with caplog.at_level("ERROR"):
+            _recommend_a_lock_file(str(tmp_path / "pom.xml"))
+
+        assert "Maven has no lock file" in caplog.text
+
+    def test_a_lock_file_input_gets_no_advice(self, tmp_path, caplog):
+        from sbomify_action.cli.main import _recommend_a_lock_file
+
+        (tmp_path / "composer.lock").write_text("{}")
+        with caplog.at_level("ERROR"):
+            _recommend_a_lock_file(str(tmp_path / "composer.lock"))
+
+        assert caplog.text == ""
