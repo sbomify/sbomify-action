@@ -1271,6 +1271,7 @@ def _expand_lock_file_or_substitute(path: str) -> str:
     them is how a document ends up describing the wrong dependency tree; that
     case keeps the original error, which now lists what it found.
     """
+    from .._generation.registry import UNRESOLVED_MANIFESTS
     from .._generation.utils import ALL_LOCK_FILES, get_lock_file_ecosystem
 
     try:
@@ -1299,16 +1300,32 @@ def _expand_lock_file_or_substitute(path: str) -> str:
         }
     )
 
-    if len(siblings) != 1:
-        if siblings:
+    # A lock file, never a manifest, unless there is nothing else.
+    #
+    # ALL_LOCK_FILES contains both, so without this a missing
+    # package-lock.json could be "substituted" by package.json -- quietly
+    # trading a recorded resolution for an inferred one, which is the exact
+    # swap the rest of this change exists to make visible.
+    locks = [s for s in siblings if s.name not in UNRESOLVED_MANIFESTS]
+    manifests = [s for s in siblings if s.name in UNRESOLVED_MANIFESTS]
+    candidates = locks or manifests
+
+    if len(candidates) != 1:
+        if candidates:
             logger.error(
                 f"LOCK_FILE names '{named.name}', which is not here, and there is more than one "
-                f"{ecosystem} lock file to choose from: {', '.join(s.name for s in siblings)}. "
+                f"{ecosystem} lock file to choose from: {', '.join(c.name for c in candidates)}. "
                 f"Set LOCK_FILE to the one you want rather than have this guess."
             )
         raise original
 
-    substitute = siblings[0]
+    substitute = candidates[0]
+    downgrade = (
+        "\n  It is a manifest rather than a lock file, so the versions in this\n"
+        "  SBOM will be resolved now rather than read -- see the notice below.\n"
+        if not locks
+        else ""
+    )
     logger.warning(
         "\n"
         "  ┌───────────────────────────────────────────────────────────────┐\n"
@@ -1317,6 +1334,7 @@ def _expand_lock_file_or_substitute(path: str) -> str:
         f"  LOCK_FILE names '{named.name}', which is not in this repository.\n"
         f"  '{substitute.name}' is, and it describes the same ecosystem\n"
         f"  ({ecosystem}), so that is what this SBOM was built from.\n"
+        f"{downgrade}"
         "\n"
         "  This usually means the project changed package manager. Update\n"
         f"  LOCK_FILE to '{substitute.name}' to make the choice explicit, or\n"
@@ -2915,8 +2933,14 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
         corrected = 0
         for component in document.get("components") or []:
             for identity in (component.get("evidence") or {}).get("identity") or []:
+                # Basenames, not substrings. `concluded not in lock_file` is
+                # true for any string that happens to appear in the path --
+                # "json" inside "/w/composer.json" -- so it both missed real
+                # mismatches and spared fake ones. The question is only whether
+                # the identity names the file we were actually given.
                 concluded = identity.get("concludedValue")
-                if concluded and concluded != name and concluded not in (config.lock_file or ""):
+                cites_our_input = bool(concluded) and Path(str(concluded)).name == name
+                if concluded and not cites_our_input:
                     identity["concludedValue"] = name
                     identity["confidence"] = min(float(identity.get("confidence") or 0.5), 0.5)
                     for method in identity.get("methods") or []:

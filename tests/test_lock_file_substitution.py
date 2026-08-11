@@ -70,3 +70,34 @@ def test_the_substitution_is_announced(project, caplog):
         _expand_lock_file_or_substitute("package-lock.json")
     assert "USING A DIFFERENT INPUT THAN THE ONE YOU CONFIGURED" in caplog.text
     assert "pnpm-lock.yaml" in caplog.text
+
+
+def test_a_lock_file_is_preferred_over_a_manifest(project):
+    """ALL_LOCK_FILES contains manifests too, so without a preference a
+    missing package-lock.json could be "substituted" by package.json --
+    quietly trading a recorded resolution for an inferred one, which is the
+    exact swap this change exists to make visible."""
+    (project / "package.json").write_text("{}")
+    (project / "pnpm-lock.yaml").write_text("{}")
+
+    assert _expand_lock_file_or_substitute("package-lock.json").endswith("pnpm-lock.yaml")
+
+
+def test_falling_back_to_a_manifest_says_it_is_a_downgrade(project, caplog):
+    """When the manifest is all there is, substituting is still better than
+    failing -- but the reader has to be told the versions stopped being a
+    record."""
+    (project / "package.json").write_text("{}")
+
+    with caplog.at_level("WARNING"):
+        result = _expand_lock_file_or_substitute("package-lock.json")
+
+    assert result.endswith("package.json")
+    assert "manifest rather than a lock file" in caplog.text
+
+
+def test_two_manifests_are_still_ambiguous(project):
+    (project / "pyproject.toml").write_text("")
+    (project / "requirements.txt").write_text("")
+    with pytest.raises(FileProcessingError):
+        _expand_lock_file_or_substitute("poetry.lock")
