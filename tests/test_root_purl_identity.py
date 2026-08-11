@@ -172,6 +172,38 @@ class TestItLeavesAlone:
 
         assert root_purl(sbom) == "pkg:gem/rails@1.0.0"
 
+    def test_a_real_directory_with_a_display_name_keeps_its_purl(self, tmp_path, monkeypatch):
+        """The regression the first version shipped with.
+
+        A checkout in a directory called `rails` produces a correct
+        `pkg:gem/rails`, and COMPONENT_NAME is a display label. The PURL name
+        matches the directory and differs from the component name -- both of
+        the original conditions -- so the repair fired and overwrote a valid
+        identity with pkg:generic. Only a directory that names a mount point
+        rather than a project is evidence of anything.
+        """
+        d = tmp_path / "rails"
+        d.mkdir()
+        monkeypatch.setenv("WORKING_DIR", str(d))
+        sbom = tmp_path / "s.json"
+        write_sbom(sbom, name="Rails Framework", purl="pkg:gem/rails@1.0.0")
+
+        _repair_directory_derived_purl(str(sbom), Cfg(component_name="Rails Framework"))
+
+        assert root_purl(sbom) == "pkg:gem/rails@1.0.0"
+
+    @pytest.mark.parametrize("mount", ["workspace", "src", "app", "repo"])
+    def test_the_other_conventional_mount_points_are_covered(self, tmp_path, monkeypatch, mount):
+        d = tmp_path / mount
+        d.mkdir()
+        monkeypatch.setenv("WORKING_DIR", str(d))
+        sbom = tmp_path / "s.json"
+        write_sbom(sbom, name="rails", purl=f"pkg:gem/{mount}@1.0.0")
+
+        _repair_directory_derived_purl(str(sbom), Cfg(component_name="rails"))
+
+        assert root_purl(sbom) == "pkg:generic/rails@1.0.0"
+
     def test_a_document_with_no_root_purl(self, tmp_path, workspace):
         sbom = tmp_path / "s.json"
         write_sbom(sbom, name="rails", purl=None)

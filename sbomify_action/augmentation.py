@@ -184,6 +184,19 @@ def _sanitize_name_for_purl(name: str) -> str | None:
     return safe or None
 
 
+#: Public name for the above, because it is no longer only this module's
+#: business: cli/main.py needs the same rule when it repairs a root component
+#: whose PURL named the mount point instead of the project. A private helper
+#: reached across a module boundary is a smell, and the alternative -- a second
+#: implementation over there -- is the exact failure that repair exists to fix.
+#:
+#: An alias rather than a rename because several branches are in flight against
+#: this file, and churning three call sites to change a spelling would trade a
+#: cosmetic improvement for merge conflicts in other people's work. The rename
+#: is worth doing when the file is quiet.
+sanitize_name_for_purl = _sanitize_name_for_purl
+
+
 def _update_component_purl_version(component: Component, new_version: str) -> bool:
     """
     Update the version in a CycloneDX component's PURL and bom-ref if present.

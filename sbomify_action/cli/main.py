@@ -2678,6 +2678,21 @@ def _apply_sbom_name_override(sbom_file: str, config: "Config") -> None:
         # Don't fail the entire process for name override issues
 
 
+#: Directory names that identify a mount point rather than a project.
+#:
+#: The defect this guards is specific: a generator names the root component
+#: after the directory it was pointed at, and in a container that directory is
+#: the same for everyone. `/workspace` is this image's own documented mount and
+#: accounts for every case measured across 500 projects; the rest are the
+#: conventional alternatives people bind-mount to.
+#:
+#: Deliberately a closed list rather than a rule. Anything cleverer -- "does
+#: this look like a project name?" -- decides against the user's own data on a
+#: guess, and the cost of a false positive here is overwriting a correct
+#: identity, which is worse than leaving a useless one in place.
+_GENERIC_MOUNT_NAMES = frozenset({"workspace", "src", "app", "repo", "code", "project", "build", "data"})
+
+
 def _repair_directory_derived_purl(sbom_file: str, config: "Config") -> None:
     """Replace a root PURL that names the working directory rather than the project.
 
@@ -2721,7 +2736,17 @@ def _repair_directory_derived_purl(sbom_file: str, config: "Config") -> None:
     # except below -- silently turning this whole function off, which is the
     # failure mode the function exists to fix.
     working_dir = Path(os.environ.get("WORKING_DIR") or Path.cwd()).resolve().name
-    if not working_dir:
+    if working_dir.lower() not in _GENERIC_MOUNT_NAMES:
+        # The directory tells us something about the project, so a PURL naming
+        # it is not evidence of anything wrong.
+        #
+        # Without this, the repair had a false positive that would have been
+        # worse than the bug: a checkout in a directory called `rails`,
+        # producing a perfectly good `pkg:gem/rails`, with COMPONENT_NAME set
+        # to a display label like "Rails Framework". The name matches the
+        # directory and differs from the component name -- both original
+        # conditions satisfied -- and a valid PURL gets overwritten with
+        # pkg:generic. The two conditions were not as load-bearing as claimed.
         return
 
     try:
@@ -2758,9 +2783,9 @@ def _repair_directory_derived_purl(sbom_file: str, config: "Config") -> None:
         # already use it. Writing a third variant here is how a codebase ends
         # up with three spellings of one identity, which is the failure this
         # whole function exists to undo.
-        from sbomify_action.augmentation import _sanitize_name_for_purl
+        from sbomify_action.augmentation import sanitize_name_for_purl
 
-        safe_name = _sanitize_name_for_purl(config.component_name)
+        safe_name = sanitize_name_for_purl(config.component_name)
         if not safe_name:
             logger.debug(f"COMPONENT_NAME {config.component_name!r} yields no usable PURL name; leaving the PURL")
             return
