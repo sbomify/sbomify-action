@@ -72,6 +72,61 @@ LOCKFILE_FOR_MANIFEST = {
 }
 
 
+#: Inputs that constrain dependencies without resolving them.
+#:
+#: The distinction is the whole point: a lock file records the versions a
+#: project committed to, and a manifest records the versions it would accept.
+#: An SBOM built from the first is a statement about the project. An SBOM
+#: built from the second is a statement about the day it was generated --
+#: `^4.18.0` resolves to whatever the registry offers at that moment, which is
+#: not what the project shipped and not what a consumer will install.
+#:
+#: `requirements.txt` sits awkwardly here and is included deliberately. It can
+#: be fully pinned with `==`, or a list of bare names, or anything between, and
+#: nothing in the file says which. Treating a pinned one as inferred overstates
+#: the doubt slightly; treating an unpinned one as authoritative understates it
+#: badly, and only one of those errors puts fiction in a provenance document.
+UNRESOLVED_MANIFESTS = frozenset(
+    {
+        "pyproject.toml",
+        "requirements.txt",
+        "package.json",
+        "composer.json",
+        "Cargo.toml",
+        "go.mod",
+        "build.gradle",
+        "build.gradle.kts",
+        "pom.xml",
+        "build.sbt",
+        "deps.edn",
+        "project.clj",
+        "stack.yaml",
+        "mix.exs",
+        "Package.swift",
+    }
+)
+
+
+def resolution_was_inferred(lock_file: str | None) -> bool:
+    """Whether the versions in the document were resolved rather than recorded.
+
+    True when the input is a manifest and no lock file sits beside it, which
+    is exactly the case ``promote_to_lockfile`` could not improve on. The
+    caller has to say so: the versions are a snapshot of one moment, and a
+    reader who assumes otherwise is being misled by a document whose entire
+    job is to be trustworthy about provenance.
+    """
+    if not lock_file:
+        return False
+    name = os.path.basename(lock_file)
+    if name not in UNRESOLVED_MANIFESTS:
+        return False
+    directory = os.path.dirname(lock_file)
+    return not any(
+        os.path.isfile(os.path.join(directory, candidate)) for candidate in LOCKFILE_FOR_MANIFEST.get(name, ())
+    )
+
+
 def promote_to_lockfile(input: GenerationInput) -> GenerationInput:
     """Read the lock file when the caller named a manifest sitting beside one."""
     if not input.lock_file:

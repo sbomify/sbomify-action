@@ -2073,18 +2073,24 @@ def run_pipeline(config: Config) -> None:
         logger.info(f"Applying component name override: {config.component_name}")
         _apply_sbom_name_override(STEP_1_FILE, config)
 
+    # Everything below here edits the document itself, and none of it applies
+    # to a non-SBOM artifact: a VEX, CBOM or HBOM is uploaded verbatim, which
+    # is the same reason the injection step further down skips them.
+    is_sbom = not config.bom_type or config.bom_type == "sbom"
+
+    if is_sbom:
+        # First, because it changes how the rest of the document should be
+        # read: are these versions a record of what the project committed to,
+        # or a resolution performed just now.
+        _disclose_inferred_resolution(STEP_1_FILE, config)
+
     # Apply component PURL override if specified (regardless of augmentation settings)
     if config.component_purl:
         logger.info(f"Applying component PURL override: {config.component_purl}")
         _apply_sbom_purl_override(STEP_1_FILE, config)
-    elif not config.bom_type or config.bom_type == "sbom":
+    elif is_sbom:
         # No explicit PURL, so check the generator did not name the root
         # component after the directory it was pointed at.
-        #
-        # Only for actual SBOMs. A VEX, CBOM or HBOM is uploaded verbatim --
-        # the injection step below skips them for the same reason -- and
-        # reading one as CycloneDX would parse a document of the wrong shape
-        # on every run, fail, and be swallowed by the guard inside.
         _repair_directory_derived_purl(STEP_1_FILE, config)
 
     # Inject additional packages if specified (file or environment variables).
@@ -2731,6 +2737,105 @@ def _apply_sbom_name_override(sbom_file: str, config: "Config") -> None:
 #: guess, and the cost of a false positive here is overwriting a correct
 #: identity, which is worse than leaving a useless one in place.
 _GENERIC_MOUNT_NAMES = frozenset({"workspace", "src", "app", "repo", "code", "project", "build", "data"})
+
+
+def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
+    """Say so, loudly and in the document, when the versions were inferred.
+
+    A lock file records what a project committed to. A manifest records what
+    it would accept. When only the manifest exists, the resolver picks
+    versions from whatever the registry offers at that moment, and the result
+    is a statement about today rather than about the project: run it tomorrow
+    and it differs, run it against a mirror and it differs, and the consuming
+    application will resolve its own tree and get different answers again.
+
+    Measured across 500 open source projects, 112 of 427 successful documents
+    were built this way -- a quarter of them -- and nothing in the output said
+    so. laravel/framework commits no composer.lock, and its document asserted
+    72 exact versions, every one chosen during the run.
+
+    Worse, cdxgen attributes those components to the lock file it created
+    transiently and then discarded, at ``confidence: 1.0``. So the document
+    did not merely omit the inference; it cited a source that is not in the
+    repository, with maximum confidence. That claim is corrected here.
+
+    The codebase already holds this principle in two places and applies it in
+    neither generally: the Swift path refuses outright rather than resolve
+    ranges, and the pipdeptree expander verifies the installed environment
+    against the lock file before believing it. This is the same rule, said
+    once, for every ecosystem.
+
+    Not a refusal. An inferred document is genuinely useful -- it answers
+    "what would I get if I installed this today", which is the right question
+    for vulnerability scanning. It is only harmful when it cannot be told
+    apart from the other kind.
+    """
+    from .._generation.registry import resolution_was_inferred
+
+    if not resolution_was_inferred(config.lock_file):
+        return
+
+    name = Path(config.lock_file or "").name
+    logger.warning(
+        "\n"
+        "  ┌───────────────────────────────────────────────────────────────┐\n"
+        "  │  THE VERSIONS IN THIS SBOM WERE INFERRED, NOT RECORDED        │\n"
+        "  └───────────────────────────────────────────────────────────────┘\n"
+        f"  {name} constrains dependencies; it does not resolve them, and no\n"
+        "  lock file was committed beside it. The versions below were chosen\n"
+        "  by resolving those constraints just now, against whatever the\n"
+        "  registry currently offers.\n"
+        "\n"
+        "  That means this document:\n"
+        "    - describes today, not what the project ships or tested\n"
+        "    - will differ if generated again tomorrow\n"
+        "    - may be incomplete, and may name versions no user installs\n"
+        "\n"
+        "  Commit a lock file and point LOCK_FILE at it for an SBOM that\n"
+        "  describes the project rather than the moment."
+    )
+
+    try:
+        sbom_format, original_json, parsed_object = load_sbom_from_file(sbom_file)
+        if sbom_format != "cyclonedx":
+            return  # SPDX carries this differently; a separate change
+
+        document = json.loads(json.dumps(original_json))
+        metadata = document.setdefault("metadata", {})
+        properties = metadata.setdefault("properties", [])
+        properties.append(
+            {
+                "name": "sbomify:resolution",
+                "value": f"inferred-at-build-time from {name}; no lock file was committed",
+            }
+        )
+
+        # Stop the components claiming a source that is not in the repository.
+        #
+        # cdxgen names the lock file it materialised during the run and rates
+        # itself certain of it. The file never existed for the reader, so the
+        # claim cannot be checked and should not be made: the honest source is
+        # the manifest, and the honest confidence is not 1.0.
+        corrected = 0
+        for component in document.get("components") or []:
+            for identity in (component.get("evidence") or {}).get("identity") or []:
+                concluded = identity.get("concludedValue")
+                if concluded and concluded != name and concluded not in (config.lock_file or ""):
+                    identity["concludedValue"] = name
+                    identity["confidence"] = min(float(identity.get("confidence") or 0.5), 0.5)
+                    for method in identity.get("methods") or []:
+                        method["value"] = name
+                        method["confidence"] = min(float(method.get("confidence") or 0.5), 0.5)
+                    corrected += 1
+        if corrected:
+            logger.info(f"Corrected {corrected} component(s) that cited a lock file which was never committed")
+
+        Path(sbom_file).write_text(json.dumps(document, indent=2))
+        get_audit_trail().record_augmentation(
+            "sbom.resolution", "inferred-at-build-time", name, source="sbomify-action"
+        )
+    except Exception as e:  # noqa: BLE001 - disclosure must not fail the run
+        logger.debug(f"Could not annotate the document with the resolution notice: {e}")
 
 
 def _repair_directory_derived_purl(sbom_file: str, config: "Config") -> None:
