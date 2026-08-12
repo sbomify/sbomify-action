@@ -1279,7 +1279,7 @@ def _expand_lock_file_or_substitute(path: str) -> str:
     case keeps the original error, which now lists what it found.
     """
     from .._generation.registry import records_a_resolution
-    from .._generation.utils import ALL_LOCK_FILES, get_lock_file_ecosystem
+    from .._generation.utils import DOTNET_PROJECT_SUFFIXES, get_lock_file_ecosystem
 
     try:
         return path_expansion(path)
@@ -1317,13 +1317,29 @@ def _expand_lock_file_or_substitute(path: str) -> str:
     else:
         searched = (Path.cwd() / named.parent, Path(GITHUB_WORKSPACE) / named.parent)
     directories = {d.resolve() for d in searched if d.is_dir()}
+
+    # .NET project files are matched by suffix rather than by name, so a scan
+    # over fixed names alone could never substitute one -- a stale
+    # packages.lock.json failed even with exactly one .csproj beside it.
+    def _same_ecosystem(path: Path) -> bool:
+        if path.name == named.name:
+            return False
+        if get_lock_file_ecosystem(path.name) == ecosystem:
+            return True
+        return path.suffix in DOTNET_PROJECT_SUFFIXES and ecosystem == "dotnet"
+
+    # The candidate path is kept as found, not resolved. Dereferencing changes
+    # both the basename and the parent: a project-local `uv.lock ->
+    # shared/base.lock` would be handed to the generator as `shared/base.lock`,
+    # which scans the wrong directory and carries a name nothing recognises.
+    # The directories above are already resolved, which is what deduplicates
+    # the search roots.
     siblings = sorted(
         {
-            candidate.resolve()
+            candidate
             for directory in directories
-            for name in ALL_LOCK_FILES
-            for candidate in [directory / name]
-            if candidate.is_file() and get_lock_file_ecosystem(name) == ecosystem and candidate.name != named.name
+            for candidate in list(directory.iterdir())
+            if candidate.is_file() and _same_ecosystem(candidate)
         }
     )
 

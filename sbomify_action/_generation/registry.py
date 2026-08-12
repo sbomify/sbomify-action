@@ -211,14 +211,33 @@ def _requirements_txt_is_pinned(path: str) -> bool:
     except OSError:
         return False
 
-    requirements = [
-        line.split("#", 1)[0].split(";", 1)[0].strip()
-        for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith(("#", "-"))
-    ]
+    requirements = []
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+
+        # An include or an editable install defers the answer to a file this
+        # is not reading, so nothing here can call the result pinned. Dropping
+        # them meant `flask==3.1.0` beside `-r unpinned.txt` came back pinned
+        # and the disclosure was suppressed -- the one direction that matters.
+        if line.startswith(("-r", "--requirement", "-c", "--constraint", "-e", "--editable")):
+            return False
+
+        # Everything else beginning with a dash configures pip rather than
+        # requesting a package: --index-url, --find-links, --hash and friends.
+        if line.startswith("-"):
+            continue
+
+        requirements.append(line.split(";", 1)[0].strip())
+
     if not requirements:
         return False
-    return all("==" in requirement for requirement in requirements)
+
+    # `==` is necessary and not sufficient: `package==1.*` is an equality
+    # match against a wildcard, and pip still chooses the version at install
+    # time.
+    return all("==" in requirement and "*" not in requirement for requirement in requirements)
 
 
 def records_a_resolution(path: str) -> bool:

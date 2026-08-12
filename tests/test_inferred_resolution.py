@@ -563,3 +563,30 @@ class TestDecidedByContentNotByName:
         (tmp_path / "requirements.txt").write_text('tomli==2.0.1 ; python_version < "3.11"\n')
 
         assert not resolution_was_inferred(str(tmp_path / "requirements.txt"))
+
+
+class TestPinnedMeansEveryVersionIsDecided:
+    """`==` is necessary and not sufficient, and a file that defers to another
+    file has not decided anything."""
+
+    @pytest.mark.parametrize(
+        "contents",
+        [
+            "flask==3.1.0\n-r unpinned.txt\n",  # defers to a file we do not read
+            "flask==3.1.0\n-c constraints.txt\n",  # same, via constraints
+            "flask==3.1.0\n-e .\n",  # an editable install
+            "package==1.*\n",  # equality against a wildcard
+        ],
+    )
+    def test_these_are_not_pinned(self, tmp_path, contents):
+        (tmp_path / "requirements.txt").write_text(contents)
+
+        assert resolution_was_inferred(str(tmp_path / "requirements.txt"))
+
+    def test_pip_options_do_not_make_it_unpinned(self, tmp_path):
+        """--index-url and --hash configure pip; they do not request a package."""
+        (tmp_path / "requirements.txt").write_text(
+            "--index-url https://pypi.org/simple\nflask==3.1.0 --hash=sha256:abc\n"
+        )
+
+        assert not resolution_was_inferred(str(tmp_path / "requirements.txt"))

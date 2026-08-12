@@ -125,3 +125,35 @@ def test_it_searches_the_action_workspace_too(tmp_path, monkeypatch):
     monkeypatch.setattr(_m, "GITHUB_WORKSPACE", str(workspace))
 
     assert _expand_lock_file_or_substitute("package-lock.json").endswith("pnpm-lock.yaml")
+
+
+def test_a_symlinked_lockfile_keeps_its_own_path(project):
+    """Resolving the candidate rewrites both its name and its parent. A
+    project-local `uv.lock -> shared/base.lock` would reach the generator as
+    `shared/base.lock`, scanning the wrong directory under a name nothing
+    recognises."""
+    shared = project / "shared"
+    shared.mkdir()
+    (shared / "base.lock").write_text("")
+    (project / "uv.lock").symlink_to(shared / "base.lock")
+
+    result = _expand_lock_file_or_substitute("poetry.lock")
+
+    assert result.endswith("uv.lock"), "handed back the symlink target instead of the project's own path"
+
+
+def test_a_dotnet_project_file_can_substitute(project):
+    """.csproj and friends are matched by suffix, not by name, so a scan over
+    fixed names alone could never find one -- a stale packages.lock.json
+    failed even with exactly one project file beside it."""
+    (project / "Thing.csproj").write_text("<Project />")
+
+    assert _expand_lock_file_or_substitute("packages.lock.json").endswith("Thing.csproj")
+
+
+def test_two_dotnet_project_files_are_still_ambiguous(project):
+    (project / "One.csproj").write_text("<Project />")
+    (project / "Two.csproj").write_text("<Project />")
+
+    with pytest.raises(FileProcessingError):
+        _expand_lock_file_or_substitute("packages.lock.json")
