@@ -1297,14 +1297,26 @@ def _expand_lock_file_or_substitute(path: str) -> str:
     # inside a GitHub Action whose working directory is somewhere else --
     # precisely where LOCK_FILE is most likely to be pinned and stale.
     #
+    # A relative path keeps its own parent. `frontend/package-lock.json` names
+    # the frontend project, and path_expansion resolves it against each root
+    # *including* that subdirectory -- so widening the search to the roots
+    # themselves would let a missing nested lock file be replaced by an
+    # unrelated one at the top of the repository, and the SBOM would quietly
+    # describe a different project. That is the failure this whole exercise
+    # keeps finding, and it would have been introduced here.
+    #
+    # An absolute path has no such parent to preserve, so it keeps the roots
+    # as a fallback.
+    #
     # Resolved, because the same file reached as "./x" and as an absolute path
     # is one candidate and not two; counting it twice made every substitution
     # look ambiguous and refuse itself.
-    directories = {
-        d.resolve()
-        for d in (named.parent, Path.cwd(), Path(GITHUB_WORKSPACE), Path(GITHUB_WORKSPACE) / named.parent)
-        if d.is_dir()
-    }
+    searched: tuple[Path, ...]
+    if named.is_absolute():
+        searched = (named.parent, Path.cwd(), Path(GITHUB_WORKSPACE))
+    else:
+        searched = (Path.cwd() / named.parent, Path(GITHUB_WORKSPACE) / named.parent)
+    directories = {d.resolve() for d in searched if d.is_dir()}
     siblings = sorted(
         {
             candidate.resolve()
@@ -2873,6 +2885,46 @@ def _capped_confidence(existing: object) -> float:
     return min(value, _INFERRED_CONFIDENCE)
 
 
+#: Lock file names a generator may cite as evidence. Only these are candidates
+#: for correction -- everything else in concludedValue belongs to whatever
+#: technique put it there.
+_LOCK_FILE_EVIDENCE = frozenset(
+    {
+        "composer.lock",
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lock",
+        "poetry.lock",
+        "uv.lock",
+        "Pipfile.lock",
+        "Cargo.lock",
+        "go.sum",
+        "Package.resolved",
+        "mix.lock",
+        "stack.yaml.lock",
+    }
+)
+
+
+def _cites_a_phantom_lockfile(value: object, directory: Path) -> bool:
+    """Whether this evidence names a lock file that is not in the repository.
+
+    The narrow question worth acting on. A generator that resolved a manifest
+    by materialising a lock file names that file as its source, and the file
+    is gone by the time anyone reads the document -- so the claim cannot be
+    checked. Everything else in the field was put there by a technique that
+    knew what it meant, and is left alone.
+    """
+    if not value:
+        return False
+    base = Path(str(value)).name
+    if base not in _LOCK_FILE_EVIDENCE:
+        return False
+    return not (directory / base).is_file()
+
+
 def _recommend_a_lock_file(lock_file: str | None) -> None:
     """Point at the missing lock file after a run that produced nothing.
 
@@ -2996,6 +3048,7 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
         # claim cannot be checked and should not be made: the honest source is
         # the manifest, and the honest confidence is not 1.0.
         corrected = 0
+        directory = Path(config.lock_file or "").parent
         for component in document.get("components") or []:
             for identity in (component.get("evidence") or {}).get("identity") or []:
                 # Basenames, not substrings. `concluded not in lock_file` is
@@ -3003,15 +3056,26 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
                 # "json" inside "/w/composer.json" -- so it both missed real
                 # mismatches and spared fake ones. The question is only whether
                 # the identity names the file we were actually given.
+                # Only an identity citing a lock file that is not there.
+                #
+                # The first version rewrote every identity whose concludedValue
+                # was not the input, which is far more than the defect: cdxgen
+                # puts other things in this field -- file paths, and evidence
+                # from techniques that have nothing to do with lock files --
+                # and replacing those with "composer.json" destroys real
+                # evidence to correct a claim they were not making.
                 concluded = identity.get("concludedValue")
-                cites_our_input = bool(concluded) and Path(str(concluded)).name == name
-                if concluded and not cites_our_input:
-                    identity["concludedValue"] = name
-                    identity["confidence"] = _capped_confidence(identity.get("confidence"))
-                    for method in identity.get("methods") or []:
+                if not _cites_a_phantom_lockfile(concluded, directory):
+                    continue
+                identity["concludedValue"] = name
+                identity["confidence"] = _capped_confidence(identity.get("confidence"))
+                for method in identity.get("methods") or []:
+                    # Same restriction for the methods: only the ones pointing
+                    # at the vanished file, not every method on the identity.
+                    if _cites_a_phantom_lockfile(method.get("value"), directory):
                         method["value"] = name
                         method["confidence"] = _capped_confidence(method.get("confidence"))
-                    corrected += 1
+                corrected += 1
         if corrected:
             logger.info(f"Corrected {corrected} component(s) that cited a lock file which was never committed")
 
@@ -3020,7 +3084,11 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
             "sbom.resolution", "inferred-at-build-time", name, source="sbomify-action"
         )
     except Exception as e:  # noqa: BLE001 - disclosure must not fail the run
-        logger.debug(f"Could not annotate the document with the resolution notice: {e}")
+        # Warning, not debug. Swallowing this quietly is the failure mode the
+        # notice exists to prevent, one level up: the document silently loses
+        # the disclosure and nothing says so. It still must not abort the run,
+        # but it has to be visible when it happens.
+        logger.warning(f"Could not annotate the document with the resolution notice: {e}")
 
 
 def _repair_directory_derived_purl(sbom_file: str, config: "Config") -> None:

@@ -225,6 +225,7 @@ class TestConfidenceIsOnlyEverLowered:
                     "evidence": {
                         "identity": [
                             {
+                                "field": "purl",
                                 "concludedValue": "composer.lock",
                                 "confidence": 0,
                                 "methods": [{"value": "composer.lock", "confidence": 0}],
@@ -321,3 +322,99 @@ class TestAdviceAfterAFailedRun:
             _recommend_a_lock_file(str(tmp_path / "composer.lock"))
 
         assert caplog.text == ""
+
+
+class TestEvidenceIsCorrectedNarrowly:
+    """Only identities citing a lock file that is not in the repository. The
+    first version rewrote every identity whose value was not the input, which
+    replaced legitimate evidence -- file paths, other techniques -- with the
+    manifest name, destroying real information to correct a claim those
+    identities were not making."""
+
+    def test_evidence_from_another_technique_is_left_alone(self, tmp_path):
+        (tmp_path / "composer.json").write_text("{}")
+        sbom = tmp_path / "s.json"
+        write_sbom(
+            sbom,
+            components=[
+                {
+                    "name": "x",
+                    "evidence": {
+                        "identity": [
+                            {
+                                "field": "purl",
+                                "concludedValue": "src/vendor/thing/composer.json",
+                                "confidence": 0.9,
+                                "methods": [{"technique": "filename", "value": "thing.php", "confidence": 0.9}],
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+
+        _disclose(str(sbom), Cfg(lock_file=str(tmp_path / "composer.json")))
+
+        identity = json.loads(sbom.read_text())["components"][0]["evidence"]["identity"][0]
+        assert identity["concludedValue"] == "src/vendor/thing/composer.json"
+        assert identity["confidence"] == 0.9
+        assert identity["methods"][0]["value"] == "thing.php"
+
+    def test_a_lockfile_that_does_exist_is_left_alone(self, tmp_path):
+        """If the cited lock file is really there, the claim is checkable and
+        there is nothing to correct."""
+        (tmp_path / "composer.json").write_text("{}")
+        (tmp_path / "composer.lock").write_text("{}")
+        sbom = tmp_path / "s.json"
+        write_sbom(
+            sbom,
+            components=[
+                {
+                    "name": "x",
+                    "evidence": {
+                        "identity": [
+                            {"field": "purl", "concludedValue": "composer.lock", "confidence": 1.0, "methods": []}
+                        ]
+                    },
+                }
+            ],
+        )
+
+        # A committed lock file also means this is not an inferred run at all.
+        _disclose(str(sbom), Cfg(lock_file=str(tmp_path / "composer.json")))
+
+        identity = json.loads(sbom.read_text())["components"][0]["evidence"]["identity"][0]
+        assert identity["concludedValue"] == "composer.lock"
+        assert identity["confidence"] == 1.0
+
+    def test_only_the_methods_naming_the_phantom_are_touched(self, tmp_path):
+        (tmp_path / "composer.json").write_text("{}")
+        sbom = tmp_path / "s.json"
+        write_sbom(
+            sbom,
+            components=[
+                {
+                    "name": "x",
+                    "evidence": {
+                        "identity": [
+                            {
+                                "field": "purl",
+                                "concludedValue": "composer.lock",
+                                "confidence": 1.0,
+                                "methods": [
+                                    {"technique": "manifest-analysis", "value": "composer.lock", "confidence": 1.0},
+                                    {"technique": "filename", "value": "Thing.php", "confidence": 0.8},
+                                ],
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+
+        _disclose(str(sbom), Cfg(lock_file=str(tmp_path / "composer.json")))
+
+        methods = json.loads(sbom.read_text())["components"][0]["evidence"]["identity"][0]["methods"]
+        assert methods[0]["value"] == "composer.json"
+        assert methods[1]["value"] == "Thing.php", "an unrelated method was rewritten"
+        assert methods[1]["confidence"] == 0.8
