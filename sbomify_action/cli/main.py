@@ -832,7 +832,7 @@ def build_config(
     expanded_lock_file = (
         lock_file
         if (lock_file and lock_file.lower() == NONE_SENTINEL)
-        else (path_expansion(lock_file) if lock_file else None)
+        else (_expand_lock_file_or_substitute(lock_file) if lock_file else None)
     )
     # Expanded like the others, but by directory_expansion: path_expansion
     # tests is_file(), so a directory fails it with "Specified input file
@@ -1202,6 +1202,13 @@ def _format_search_locations(*candidates: Path) -> str:
     return ", ".join(f"'{location}'" for location in seen)
 
 
+#: Where a GitHub Action mounts the repository. path_expansion searches here
+#: as well as the working directory, because the two are not the same inside
+#: an action, and anything else that searches for an input has to look in the
+#: same places or it will refuse a file the caller can plainly see.
+GITHUB_WORKSPACE = "/github/workspace"
+
+
 def path_expansion(path: str) -> str:
     """
     Takes a path/file and returns an absolute path.
@@ -1227,7 +1234,7 @@ def path_expansion(path: str) -> str:
 
     current_dir = Path.cwd()
     relative_path = current_dir / path
-    workspace_relative_path = Path("/github/workspace") / path
+    workspace_relative_path = Path(GITHUB_WORKSPACE) / path
 
     # Log which paths we're checking for debugging
     logger.debug(f"Searching for file '{path}'...")
@@ -1249,6 +1256,138 @@ def path_expansion(path: str) -> str:
             f"Specified input file '{path}' not found. "
             f"Searched in: {_format_search_locations(Path(path), relative_path, workspace_relative_path)}"
         )
+
+
+def _expand_lock_file_or_substitute(path: str) -> str:
+    """Resolve LOCK_FILE, or the ecosystem's lock file that is actually there.
+
+    LOCK_FILE names a file, and the file a project uses changes: a repository
+    moves from npm to pnpm, from poetry to uv, from Pipenv to either. The
+    workflow pinning the old name then fails outright with "Specified input
+    file not found", which is a true statement about a name and a useless one
+    about the project -- the dependencies are right there in the file next to
+    it.
+
+    So when the named file is gone and exactly one lock file for the same
+    ecosystem is present, that one is used and the substitution is announced
+    loudly. Silence would be worse than the error: the SBOM would come from an
+    input the caller never asked for and nothing would say so.
+
+    Deliberately only when it is unambiguous. A directory holding both
+    pnpm-lock.yaml and yarn.lock has no obvious winner, and guessing between
+    them is how a document ends up describing the wrong dependency tree; that
+    case keeps the original error, which now lists what it found.
+    """
+    from .._generation.registry import records_a_resolution
+    from .._generation.utils import DOTNET_PROJECT_SUFFIXES, get_lock_file_ecosystem
+
+    try:
+        return path_expansion(path)
+    except FileProcessingError as missing:
+        original = missing
+
+    named = Path(path)
+    ecosystem = get_lock_file_ecosystem(named.name)
+    if not ecosystem:
+        raise original
+
+    # The same three places path_expansion searches, which is what the
+    # sentence above used to claim while checking only two of them. The third
+    # is /github/workspace, and omitting it meant a substitution could refuse
+    # inside a GitHub Action whose working directory is somewhere else --
+    # precisely where LOCK_FILE is most likely to be pinned and stale.
+    #
+    # A relative path keeps its own parent. `frontend/package-lock.json` names
+    # the frontend project, and path_expansion resolves it against each root
+    # *including* that subdirectory -- so widening the search to the roots
+    # themselves would let a missing nested lock file be replaced by an
+    # unrelated one at the top of the repository, and the SBOM would quietly
+    # describe a different project. That is the failure this whole exercise
+    # keeps finding, and it would have been introduced here.
+    #
+    # An absolute path has no such parent to preserve, so it keeps the roots
+    # as a fallback.
+    #
+    # Resolved, because the same file reached as "./x" and as an absolute path
+    # is one candidate and not two; counting it twice made every substitution
+    # look ambiguous and refuse itself.
+    searched: tuple[Path, ...]
+    if named.is_absolute():
+        searched = (named.parent, Path.cwd(), Path(GITHUB_WORKSPACE))
+    else:
+        searched = (Path.cwd() / named.parent, Path(GITHUB_WORKSPACE) / named.parent)
+    directories = {d.resolve() for d in searched if d.is_dir()}
+
+    # .NET project files are matched by suffix rather than by name, so a scan
+    # over fixed names alone could never substitute one -- a stale
+    # packages.lock.json failed even with exactly one .csproj beside it.
+    def _same_ecosystem(path: Path) -> bool:
+        if path.name == named.name:
+            return False
+        if get_lock_file_ecosystem(path.name) == ecosystem:
+            return True
+        return path.suffix in DOTNET_PROJECT_SUFFIXES and ecosystem == "dotnet"
+
+    # The candidate path is kept as found, not resolved. Dereferencing changes
+    # both the basename and the parent: a project-local `uv.lock ->
+    # shared/base.lock` would be handed to the generator as `shared/base.lock`,
+    # which scans the wrong directory and carries a name nothing recognises.
+    # The directories above are already resolved, which is what deduplicates
+    # the search roots.
+    siblings = sorted(
+        {
+            candidate
+            for directory in directories
+            for candidate in list(directory.iterdir())
+            if candidate.is_file() and _same_ecosystem(candidate)
+        }
+    )
+
+    # Prefer a candidate that records a resolution over one that only
+    # constrains it, and ask the same question the disclosure asks rather than
+    # a second approximation of it.
+    #
+    # Membership of UNRESOLVED_MANIFESTS was standing in for this, which made
+    # it answer two questions again: it says whether a *name* is a manifest,
+    # while what matters here is whether a *file* records anything. Those came
+    # apart the moment requirements.txt started being judged by its contents --
+    # a pinned one records a resolution and an unpinned one does not, and they
+    # share a filename.
+    locks = [s for s in siblings if records_a_resolution(str(s))]
+    manifests = [s for s in siblings if not records_a_resolution(str(s))]
+    candidates = locks or manifests
+
+    if len(candidates) != 1:
+        if candidates:
+            logger.error(
+                f"LOCK_FILE names '{named.name}', which is not here, and there is more than one "
+                f"{ecosystem} input to choose from: {', '.join(c.name for c in candidates)}. "
+                f"Set LOCK_FILE to the one you want rather than have this guess."
+            )
+        raise original
+
+    substitute = candidates[0]
+    downgrade = (
+        "\n  It is a manifest rather than a lock file, so the versions in this\n"
+        "  SBOM will be resolved now rather than read -- see the notice below.\n"
+        if not locks
+        else ""
+    )
+    logger.warning(
+        "\n"
+        "  ┌───────────────────────────────────────────────────────────────┐\n"
+        "  │  USING A DIFFERENT INPUT THAN THE ONE YOU CONFIGURED          │\n"
+        "  └───────────────────────────────────────────────────────────────┘\n"
+        f"  LOCK_FILE names '{named.name}', which is not in this repository.\n"
+        f"  '{substitute.name}' is, and it describes the same ecosystem\n"
+        f"  ({ecosystem}), so that is what this SBOM was built from.\n"
+        f"{downgrade}"
+        "\n"
+        "  This usually means the project changed package manager. Update\n"
+        f"  LOCK_FILE to '{substitute.name}' to make the choice explicit, or\n"
+        "  set it to the file you actually want."
+    )
+    return str(substitute)
 
 
 def directory_expansion(path: str) -> str:
@@ -1273,7 +1412,7 @@ def directory_expansion(path: str) -> str:
 
     current_dir = Path.cwd()
     relative_path = current_dir / path
-    workspace_relative_path = Path("/github/workspace") / path
+    workspace_relative_path = Path(GITHUB_WORKSPACE) / path
 
     logger.debug(f"Searching for directory '{path}'...")
     for candidate in (Path(path), relative_path, workspace_relative_path):
@@ -2036,6 +2175,13 @@ def run_pipeline(config: Config) -> None:
             sys.exit(1)
         except (FileProcessingError, SBOMGenerationError, ValueError) as e:
             logger.error(f"Step 1 failed: {e}")
+            # The remedy is worth more here than on the happy path. A run that
+            # produced nothing from a manifest is exactly the case where "no
+            # lock file was committed" is the likely cause and "here is the
+            # command that writes one" is the likely fix -- and until now the
+            # advice only appeared when generation had already succeeded, so
+            # the people who needed it never saw it.
+            _recommend_a_lock_file(config.lock_file)
             _log_step_end(1, success=False)
             sys.exit(1)
 
@@ -2073,18 +2219,24 @@ def run_pipeline(config: Config) -> None:
         logger.info(f"Applying component name override: {config.component_name}")
         _apply_sbom_name_override(STEP_1_FILE, config)
 
+    # Everything below here edits the document itself, and none of it applies
+    # to a non-SBOM artifact: a VEX, CBOM or HBOM is uploaded verbatim, which
+    # is the same reason the injection step further down skips them.
+    is_sbom = not config.bom_type or config.bom_type == "sbom"
+
+    if is_sbom:
+        # First, because it changes how the rest of the document should be
+        # read: are these versions a record of what the project committed to,
+        # or a resolution performed just now.
+        _disclose_inferred_resolution(STEP_1_FILE, config)
+
     # Apply component PURL override if specified (regardless of augmentation settings)
     if config.component_purl:
         logger.info(f"Applying component PURL override: {config.component_purl}")
         _apply_sbom_purl_override(STEP_1_FILE, config)
-    elif not config.bom_type or config.bom_type == "sbom":
+    elif is_sbom:
         # No explicit PURL, so check the generator did not name the root
         # component after the directory it was pointed at.
-        #
-        # Only for actual SBOMs. A VEX, CBOM or HBOM is uploaded verbatim --
-        # the injection step below skips them for the same reason -- and
-        # reading one as CycloneDX would parse a document of the wrong shape
-        # on every run, fail, and be swallowed by the guard inside.
         _repair_directory_derived_purl(STEP_1_FILE, config)
 
     # Inject additional packages if specified (file or environment variables).
@@ -2731,6 +2883,276 @@ def _apply_sbom_name_override(sbom_file: str, config: "Config") -> None:
 #: guess, and the cost of a false positive here is overwriting a correct
 #: identity, which is worse than leaving a useless one in place.
 _GENERIC_MOUNT_NAMES = frozenset({"workspace", "src", "app", "repo", "code", "project", "build", "data"})
+
+
+#: Ceiling for an identity we inferred. Not a measurement -- a statement that
+#: this is a guess, in the field designed to carry exactly that.
+_INFERRED_CONFIDENCE = 0.5
+
+
+def _capped_confidence(existing: object) -> float:
+    """Lower a confidence to the inferred ceiling, never raise it.
+
+    `existing or 0.5` looked equivalent and is not: 0 is a legitimate
+    confidence meaning "none at all", and it is falsy, so that spelling
+    replaced it with 0.5 -- raising the confidence of a component that claimed
+    none, inside the function whose whole purpose is to lower it.
+    """
+    try:
+        value = _INFERRED_CONFIDENCE if existing is None else float(existing)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        value = _INFERRED_CONFIDENCE
+    return min(value, _INFERRED_CONFIDENCE)
+
+
+#: Lock file names a generator may cite as evidence. Only these are candidates
+#: for correction -- everything else in concludedValue belongs to whatever
+#: technique put it there.
+_LOCK_FILE_EVIDENCE = frozenset(
+    {
+        "composer.lock",
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lock",
+        "poetry.lock",
+        "uv.lock",
+        "Pipfile.lock",
+        "Cargo.lock",
+        "go.sum",
+        "Package.resolved",
+        "mix.lock",
+        "stack.yaml.lock",
+    }
+)
+
+
+def _cites_a_phantom_lockfile(value: object, directory: Path) -> bool:
+    """Whether this evidence names a lock file that is not in the repository.
+
+    The narrow question worth acting on. A generator that resolved a manifest
+    by materialising a lock file names that file as its source, and the file
+    is gone by the time anyone reads the document -- so the claim cannot be
+    checked. Everything else in the field was put there by a technique that
+    knew what it meant, and is left alone.
+    """
+    if not value:
+        return False
+    cited = Path(str(value))
+    if cited.name not in _LOCK_FILE_EVIDENCE:
+        return False
+
+    # Where the citation actually points, not just what it is called.
+    #
+    # Taking the basename and looking only beside the input meant a component
+    # citing `frontend/composer.lock` -- a file that is really there -- was
+    # judged phantom because there is no composer.lock next to the manifest,
+    # and its correct evidence was overwritten. Same over-reach as before,
+    # wearing a different hat.
+    if cited.is_absolute():
+        return not cited.is_file()
+    return not (directory / cited).is_file() and not (Path(GITHUB_WORKSPACE) / cited).is_file()
+
+
+def _recommend_a_lock_file(lock_file: str | None) -> None:
+    """Point at the missing lock file after a run that produced nothing.
+
+    Same advice as the inference notice, minus the claims about a document
+    that does not exist. Kept separate rather than reusing that function so
+    neither has to ask whether it is being called before or after a failure.
+    """
+    from .._generation.registry import recommended_action, resolution_was_inferred
+
+    if not resolution_was_inferred(lock_file):
+        return
+    action = recommended_action(lock_file)
+    name = Path(lock_file or "").name
+    if action and action[0]:
+        logger.error(
+            f"'{name}' constrains dependencies without resolving them, and no lock file was "
+            f"committed beside it. That is a common reason for this to fail. Run `{action[0]}`, "
+            f"commit {action[1]}, and point LOCK_FILE at it."
+        )
+    elif action:
+        logger.error(f"'{name}' constrains dependencies without resolving them. {action[1]}.")
+
+
+def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
+    """Say so, loudly and in the document, when the versions were inferred.
+
+    A lock file records what a project committed to. A manifest records what
+    it would accept. When only the manifest exists, the resolver picks
+    versions from whatever the registry offers at that moment, and the result
+    is a statement about today rather than about the project: run it tomorrow
+    and it differs, run it against a mirror and it differs, and the consuming
+    application will resolve its own tree and get different answers again.
+
+    Measured across 500 open source projects, 112 of 427 successful documents
+    were built this way -- a quarter of them -- and nothing in the output said
+    so. laravel/framework commits no composer.lock, and its document asserted
+    72 exact versions, every one chosen during the run.
+
+    Worse, cdxgen attributes those components to the lock file it created
+    transiently and then discarded, at ``confidence: 1.0``. So the document
+    did not merely omit the inference; it cited a source that is not in the
+    repository, with maximum confidence. That claim is corrected here.
+
+    The codebase already holds this principle in two places and applies it in
+    neither generally: the Swift path refuses outright rather than resolve
+    ranges, and the pipdeptree expander verifies the installed environment
+    against the lock file before believing it. This is the same rule, said
+    once, for every ecosystem.
+
+    Not a refusal. An inferred document is genuinely useful -- it answers
+    "what would I get if I installed this today", which is the right question
+    for vulnerability scanning. It is only harmful when it cannot be told
+    apart from the other kind.
+    """
+    from .._generation.registry import recommended_action, resolution_was_inferred
+
+    if not resolution_was_inferred(config.lock_file):
+        return
+
+    name = Path(config.lock_file or "").name
+    action = recommended_action(config.lock_file)
+
+    # The fix, in this project's own terms. "Commit a lock file" is not advice
+    # if the reader does not know which one, and for Maven, Gradle and sbt
+    # there is no lock file to commit at all -- so those say what to do
+    # instead rather than recommending something that does not exist.
+    if action and action[0]:
+        remedy = f"  TO FIX THIS, run:\n      {action[0]}\n  then commit {action[1]} and point LOCK_FILE at it.\n"
+    elif action:
+        remedy = f"  TO FIX THIS: {action[1]}.\n"
+    else:
+        remedy = "  TO FIX THIS: commit the lock file your build produces and point LOCK_FILE at it.\n"
+
+    logger.warning(
+        "\n"
+        "  ┌───────────────────────────────────────────────────────────────┐\n"
+        "  │  THE VERSIONS IN THIS SBOM WERE INFERRED, NOT RECORDED        │\n"
+        "  └───────────────────────────────────────────────────────────────┘\n"
+        f"  {name} constrains dependencies; it does not resolve them, and no\n"
+        "  lock file was committed beside it. The versions below were chosen\n"
+        "  by resolving those constraints just now, against whatever the\n"
+        "  registry currently offers.\n"
+        "\n"
+        "  This document therefore:\n"
+        "    - describes today, not what the project ships or tested\n"
+        "    - will differ if you generate it again tomorrow\n"
+        "    - may be incomplete, and may name versions nobody installs\n"
+        "\n" + remedy
+    )
+
+    try:
+        sbom_format, document, _parsed = load_sbom_from_file(sbom_file)
+        if sbom_format != "cyclonedx":
+            # SPDX is generated for inferred inputs too -- go.mod among them --
+            # and this notice does not reach those documents. SPDX 2.3 could
+            # carry it as a document annotation, which is a change with its own
+            # tests rather than a line here. Until then the limitation is
+            # stated rather than left for a reader to discover.
+            logger.warning(
+                f"This {sbom_format.upper()} document cannot carry the inference notice yet, so it "
+                f"exists only in the log above. A reader of the file alone will not be told the "
+                f"versions were resolved rather than recorded."
+            )
+            return
+
+        # metadata.properties arrived in CycloneDX 1.3. Writing it into a 1.2
+        # document produces an artifact that fails its own schema -- and does
+        # so after validation has already passed, so nothing would catch it.
+        # The warning still reaches the console either way; only the in-document
+        # copy is unavailable.
+        spec = str(document.get("specVersion") or "")
+        # Compared as numbers. As strings "1.10" sorts below "1.3", so the day
+        # CycloneDX reaches a double-digit minor this would start refusing to
+        # write the notice into documents that support it perfectly well.
+        try:
+            spec_parts = tuple(int(part) for part in spec.split("."))
+        except ValueError:
+            spec_parts = ()
+        if spec_parts and spec_parts < (1, 3):
+            logger.warning(
+                f"CycloneDX {spec} has no metadata.properties, so the inference notice cannot be "
+                f"written into this document. It is in the log above; upgrade to 1.3 or later to "
+                f"have it travel with the file."
+            )
+            return
+
+        metadata = document.setdefault("metadata", {})
+        properties = metadata.setdefault("properties", [])
+        properties.append(
+            {
+                "name": "sbomify:resolution",
+                "value": f"inferred-at-build-time from {name}; no lock file was committed",
+            }
+        )
+        # The remedy goes in the document as well as the log, because the two
+        # have different readers. Whoever generated this sees the console; the
+        # person who later asks why the versions do not match production sees
+        # only the file.
+        if action:
+            properties.append(
+                {
+                    "name": "sbomify:resolution:remedy",
+                    "value": f"run `{action[0]}` and commit {action[1]}" if action[0] else action[1],
+                }
+            )
+
+        # Stop the components claiming a source that is not in the repository.
+        #
+        # cdxgen names the lock file it materialised during the run and rates
+        # itself certain of it. The file never existed for the reader, so the
+        # claim cannot be checked and should not be made: the honest source is
+        # the manifest, and the honest confidence is not 1.0.
+        corrected_identities = 0
+        directory = Path(config.lock_file or "").parent
+        for component in document.get("components") or []:
+            for identity in (component.get("evidence") or {}).get("identity") or []:
+                # Only an identity citing a lock file that is not there.
+                #
+                # The first version rewrote every identity whose concludedValue
+                # was not the input, which is far more than the defect: cdxgen
+                # puts other things in this field -- file paths, and evidence
+                # from techniques that have nothing to do with lock files --
+                # and replacing those with "composer.json" destroys real
+                # evidence to correct a claim they were not making.
+                concluded = identity.get("concludedValue")
+                if not _cites_a_phantom_lockfile(concluded, directory):
+                    continue
+                identity["concludedValue"] = name
+                identity["confidence"] = _capped_confidence(identity.get("confidence"))
+                for method in identity.get("methods") or []:
+                    # Same restriction for the methods: only the ones pointing
+                    # at the vanished file, not every method on the identity.
+                    if _cites_a_phantom_lockfile(method.get("value"), directory):
+                        method["value"] = name
+                        method["confidence"] = _capped_confidence(method.get("confidence"))
+                corrected_identities += 1
+        if corrected_identities:
+            # Identities, not components: one component can carry several, and
+            # calling them components overstated the reach of the correction.
+            logger.info(
+                f"Corrected {corrected_identities} identity claim(s) citing a lock file that was never committed"
+            )
+
+        # Compact rather than indented, but only because there is no reason to
+        # spend the bytes: this is an intermediate file and the augmentation
+        # and serialisation steps downstream rewrite it before anyone sees it.
+        # Checked, rather than assumed -- the shipped artifact is formatted by
+        # those later steps, so the choice here is invisible either way.
+        Path(sbom_file).write_text(json.dumps(document))
+        get_audit_trail().record_augmentation(
+            "sbom.resolution", "inferred-at-build-time", name, source="sbomify-action"
+        )
+    except Exception as e:  # noqa: BLE001 - disclosure must not fail the run
+        # Warning, not debug. Swallowing this quietly is the failure mode the
+        # notice exists to prevent, one level up: the document silently loses
+        # the disclosure and nothing says so. It still must not abort the run,
+        # but it has to be visible when it happens.
+        logger.warning(f"Could not annotate the document with the resolution notice: {e}")
 
 
 def _repair_directory_derived_purl(sbom_file: str, config: "Config") -> None:

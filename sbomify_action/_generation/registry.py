@@ -2,6 +2,7 @@
 
 import json
 import os
+import pathlib
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -63,13 +64,226 @@ def fallback_is_a_bug() -> bool:
 #: more precisely. Absent the sibling, nothing changes.
 LOCKFILE_FOR_MANIFEST = {
     "pyproject.toml": ("poetry.lock", "uv.lock", "Pipfile.lock"),
-    "package.json": ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"),
+    "package.json": ("package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"),
     "composer.json": ("composer.lock",),
+    "Cargo.toml": ("Cargo.lock",),
     "Package.swift": ("Package.resolved",),
     # go.sum records hashes for the whole module graph but is not itself a
     # manifest; cyclonedx-gomod wants the go.mod beside it.
     "go.sum": ("go.mod",),
 }
+
+
+#: Inputs that constrain dependencies without resolving them.
+#:
+#: The distinction is the whole point: a lock file records the versions a
+#: project committed to, and a manifest records the versions it would accept.
+#: An SBOM built from the first is a statement about the project. An SBOM
+#: built from the second is a statement about the day it was generated --
+#: `^4.18.0` resolves to whatever the registry offers at that moment, which is
+#: not what the project shipped and not what a consumer will install.
+#:
+#: Two names are deliberately absent, both decided by reading rather than by
+#: filename -- see `resolution_was_inferred`.
+#:
+#: `go.mod` cannot express a range: the format takes an exact version and Go
+#: resolves the graph by minimal version selection, which is deterministic
+#: against an immutable module proxy. Measured on kubernetes v1.35.1, 207 of
+#: 207 requires carry an exact semver and the file contains no range operator
+#: at all. Calling that inferred understated the strongest manifest in the
+#: corpus, and using go.sum as the signal for "recorded" was the wrong file for
+#: the job -- it verifies hashes, it does not decide versions.
+#:
+#: `requirements.txt` is the opposite: it can hold `==` pins, ranges, bare
+#: names or editable installs, in any mixture. Whether it resolves anything is
+#: a property of the contents, so the contents are what gets checked.
+UNRESOLVED_MANIFESTS = frozenset(
+    {
+        "pyproject.toml",
+        "package.json",
+        "composer.json",
+        "Cargo.toml",
+        "build.gradle",
+        "build.gradle.kts",
+        "pom.xml",
+        "build.sbt",
+        "deps.edn",
+        "project.clj",
+        "stack.yaml",
+        "mix.exs",
+        "Package.swift",
+    }
+)
+
+
+#: What to actually do about it, per manifest.
+#:
+#: "The versions were inferred" on its own is a complaint, not advice: it tells
+#: a reader their document is worse without telling them how to make it
+#: better, and the answer is different in every ecosystem. Each entry is the
+#: command that produces the missing lock file and the file to commit.
+#:
+#: The JVM entries are the honest exception. Maven and Gradle have no lock file
+#: by convention, so there is nothing to commit and the advice is to generate
+#: the SBOM from the build itself, where the resolved graph exists.
+RECOMMENDED_ACTION = {
+    "composer.json": ("composer update", "composer.lock"),
+    "package.json": ("npm install  (or pnpm/yarn/bun install)", "the lock file it writes"),
+    "pyproject.toml": ("uv lock  (or poetry lock)", "uv.lock or poetry.lock"),
+    "requirements.txt": ("pip-compile requirements.in", "a requirements.txt with every version pinned by =="),
+    "Cargo.toml": ("cargo generate-lockfile", "Cargo.lock"),
+    "Package.swift": ("swift package resolve", "Package.resolved"),
+    "mix.exs": ("mix deps.get", "mix.lock"),
+    "stack.yaml": ("stack build --dry-run", "stack.yaml.lock"),
+    "deps.edn": ("clojure -Stree", "a pinned deps.edn, or generate from the build"),
+    "project.clj": ("lein deps :tree", "a pinned project.clj, or generate from the build"),
+    "pom.xml": ("", "Maven has no lock file; run the CycloneDX Maven plugin in your build instead"),
+    "build.gradle": (
+        "",
+        "Gradle has no lock file by default; enable dependency locking, or run the CycloneDX Gradle plugin in your build",
+    ),
+    "build.gradle.kts": (
+        "",
+        "Gradle has no lock file by default; enable dependency locking, or run the CycloneDX Gradle plugin in your build",
+    ),
+    "build.sbt": ("", "sbt has no lock file; generate from the build with sbt-sbom instead"),
+}
+
+
+#: Files whose presence means the resolution was recorded rather than guessed.
+#:
+#: Deliberately not LOCKFILE_FOR_MANIFEST, which answers a different question.
+#: That map says *which file to read* -- and for Go it points go.sum at go.mod,
+#: because cyclonedx-gomod wants the manifest. Reusing it here asked "is there
+#: a committed resolution" and got back "which file is better to parse", which
+#: are the same answer for Python and PHP and opposite for Go.
+#:
+#: The cost of conflating them was a false accusation: Cargo.toml and go.mod
+#: had no entry, so a Rust or Go project with its lock file committed right
+#: there was told its versions had been inferred.
+COMMITTED_RESOLUTION_FOR = {
+    "pyproject.toml": ("poetry.lock", "uv.lock", "Pipfile.lock"),
+    "package.json": (
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lock",
+        # bun's older binary format. Omitting it meant a repository that had
+        # committed one was treated as having no lock file at all.
+        "bun.lockb",
+    ),
+    "composer.json": ("composer.lock",),
+    "Cargo.toml": ("Cargo.lock",),
+    "Package.swift": ("Package.resolved",),
+    "mix.exs": ("mix.lock",),
+    "stack.yaml": ("stack.yaml.lock",),
+    # Gradle has no lock file by default, but it has one when dependency
+    # locking is switched on, and gradle.lockfile is already a recognised
+    # input. Omitting it told projects that record their resolved graph
+    # that they had inferred it.
+    "build.gradle": ("gradle.lockfile",),
+    "build.gradle.kts": ("gradle.lockfile",),
+}
+
+
+def recommended_action(lock_file: str | None) -> tuple[str, str] | None:
+    """The command that would make this document authoritative, and what to commit."""
+    if not lock_file:
+        return None
+    return RECOMMENDED_ACTION.get(os.path.basename(lock_file))
+
+
+def _requirements_txt_is_pinned(path: str) -> bool:
+    """Whether every requirement in the file names an exact version.
+
+    A requirements.txt pinned throughout with `==` records a resolution as
+    firmly as any lock file. One with `flask` or `pytest>=2.8` in it records
+    nothing. The filename is identical either way, so the file is read.
+
+    Comments, blank lines, options (`-r`, `--index-url`) and environment
+    markers are skipped. Anything unreadable counts as not pinned: the cost of
+    being wrong that way is an unnecessary notice, and the cost of the other
+    way is a document that claims to be a record when it is a guess.
+    """
+    try:
+        text = pathlib.Path(path).read_text(errors="replace")
+    except OSError:
+        return False
+
+    requirements = []
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+
+        # An include or an editable install defers the answer to a file this
+        # is not reading, so nothing here can call the result pinned. Dropping
+        # them meant `flask==3.1.0` beside `-r unpinned.txt` came back pinned
+        # and the disclosure was suppressed -- the one direction that matters.
+        if line.startswith(("-r", "--requirement", "-c", "--constraint", "-e", "--editable")):
+            return False
+
+        # Everything else beginning with a dash configures pip rather than
+        # requesting a package: --index-url, --find-links, --hash and friends.
+        if line.startswith("-"):
+            continue
+
+        requirements.append(line.split(";", 1)[0].strip())
+
+    if not requirements:
+        return False
+
+    # `==` is necessary and not sufficient: `package==1.*` is an equality
+    # match against a wildcard, and pip still chooses the version at install
+    # time.
+    return all("==" in requirement and "*" not in requirement for requirement in requirements)
+
+
+def records_a_resolution(path: str) -> bool:
+    """Whether this file, by itself, records resolved versions.
+
+    Not the same question as ``resolution_was_inferred``, which asks what
+    would happen if we generated from a given input -- and answers "not
+    inferred" for a manifest whose lock file sits beside it, because the
+    generator would read the sibling instead. True of the input, false of the
+    file: package.json never records a resolution, however good its neighbour.
+
+    Conflating the two ranked package.json as highly as pnpm-lock.yaml when
+    choosing a substitute, which is exactly the downgrade the ranking exists
+    to prevent. Two questions, two functions, both named for what they ask.
+    """
+    name = os.path.basename(path)
+    if name == "requirements.txt":
+        return _requirements_txt_is_pinned(path)
+    return name not in UNRESOLVED_MANIFESTS
+
+
+def resolution_was_inferred(lock_file: str | None) -> bool:
+    """Whether the versions in the document were resolved rather than recorded.
+
+    True when the input is a manifest and no lock file sits beside it, which
+    is exactly the case ``promote_to_lockfile`` could not improve on. The
+    caller has to say so: the versions are a snapshot of one moment, and a
+    reader who assumes otherwise is being misled by a document whose entire
+    job is to be trustworthy about provenance.
+    """
+    if not lock_file:
+        return False
+    name = os.path.basename(lock_file)
+
+    # Decided by content, not by name: a fully pinned requirements.txt records
+    # its resolution, and an unpinned one records nothing, and they are the
+    # same filename.
+    if name == "requirements.txt":
+        return not _requirements_txt_is_pinned(lock_file)
+
+    if name not in UNRESOLVED_MANIFESTS:
+        return False
+    directory = os.path.dirname(lock_file)
+    return not any(
+        os.path.isfile(os.path.join(directory, candidate)) for candidate in COMMITTED_RESOLUTION_FOR.get(name, ())
+    )
 
 
 def promote_to_lockfile(input: GenerationInput) -> GenerationInput:

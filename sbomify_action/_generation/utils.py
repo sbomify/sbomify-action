@@ -2,6 +2,7 @@
 
 import os
 import re
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Optional
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
 from sbomify_action.release_version import normalize_release_version, tag_from_ci
-from sbomify_action.runtimes import ensure_runtime
+from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled
 
 # Track whether Java/Maven has been installed on-demand
 _java_maven_installed = False
@@ -40,6 +41,11 @@ RUST_LOCK_FILES = ["Cargo.lock", "Cargo.toml"]
 JAVASCRIPT_LOCK_FILES = [
     "package.json",
     "package-lock.json",
+    # npm's older pinning file. It was known to resolve_npm_lockfile and to
+    # nothing else, so a repository holding only this was not discoverable as
+    # JavaScript at all, and pointing at its package.json skipped resolution
+    # (a lock file exists) to produce nothing (the pipeline could not read it).
+    "npm-shrinkwrap.json",
     "yarn.lock",
     "pnpm-lock.yaml",
     "bun.lock",
@@ -769,6 +775,102 @@ def ensure_dotnet_installed() -> None:
     long before anything fetched an SDK.
     """
     ensure_runtime("dotnet")
+
+
+def _js_lock_files() -> tuple[str, ...]:
+    """Lock files a JavaScript project may have committed.
+
+    Read from the shared map rather than restated here. The private copy had
+    already drifted: it listed npm-shrinkwrap.json, which nothing else in the
+    pipeline recognised, so a repository holding one skipped resolution *and*
+    could not be read -- worse than either behaviour alone.
+    """
+    from .registry import COMMITTED_RESOLUTION_FOR
+
+    return COMMITTED_RESOLUTION_FOR["package.json"]
+
+
+def resolve_npm_lockfile(directory: Path) -> Path | None:
+    """Resolve a bare package.json into a lock file cdxgen can read.
+
+    cdxgen cannot read a package.json on its own. Measured on express v5.2.1,
+    whose 28 runtime dependencies are declared and whose lock file is
+    gitignored: cdxgen exits 0 and produces **zero** components, with or
+    without --required-only. Resolve the manifest first and the same command
+    returns 67 -- the transitive closure of those 28.
+
+    This is the common case rather than a corner. A JavaScript library
+    gitignores its lock file because the consuming application resolves it, so
+    most libraries on GitHub arrive as a manifest and nothing else. eslint and
+    express both produced empty documents for exactly this reason.
+
+    The versions this produces are a resolution performed now, not a record of
+    what the project committed to -- which is why every document built this
+    way carries the notice and the remedy from
+    ``_disclose_inferred_resolution``. Generating it is still worth doing: an
+    answer to "what would I install today" beats a document with nothing in
+    it, as long as it cannot be mistaken for the other thing.
+
+    bun is used because it is already in the cdxgen bundle -- no extra
+    toolchain, no extra download -- and ``--lockfile-only`` resolves without
+    fetching package contents. Measured at 368 packages in 846ms for express.
+
+    Returns the lock file created, so the caller can remove it: it is a
+    working file, and leaving it in a checkout invites someone to commit a
+    resolution nobody chose. Returns None when a lock file already exists, when
+    bun is unavailable, or when resolution fails -- all of which leave the
+    previous behaviour untouched.
+    """
+    if any((directory / name).is_file() for name in _js_lock_files()):
+        return None
+
+    # Resolving reaches the registry, so it honours the same opt-out as
+    # fetching a runtime does. Without this an air-gapped build waits out the
+    # full timeout on every JavaScript project to arrive where it started.
+    if not fetching_is_enabled():
+        logger.debug("Runtime fetching is disabled; not resolving package.json against the registry")
+        return None
+
+    if not shutil.which("bun"):
+        logger.debug("bun is not on PATH; cannot resolve package.json into a lock file")
+        return None
+
+    logger.info("No lock file beside package.json; resolving one so the manifest can be read")
+
+    # What is already here, before bun runs.
+    #
+    # The caller deletes whatever this returns, so returning a file we did not
+    # create deletes someone else's work. Recognising every lock file name is
+    # necessary and not sufficient: a name can be missed, and the cost of
+    # missing one is a committed file removed from a checkout. Ownership is
+    # recorded instead of inferred.
+    candidates = (directory / "bun.lock", directory / "bun.lockb")
+    pre_existing = {c for c in candidates if c.is_file()}
+
+    try:
+        subprocess.run(
+            ["bun", "install", "--lockfile-only", "--ignore-scripts"],
+            cwd=str(directory),
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        # Offline, private registry, or a manifest bun will not resolve. The
+        # generator carries on and fails the way it did before, which is the
+        # right outcome: this is an improvement when it works and must not be
+        # a new way to break.
+        detail = getattr(e, "stderr", "") or str(e)
+        logger.debug(f"Could not resolve package.json into a lock file: {str(detail)[:300]}")
+        return None
+
+    # Whichever bun actually wrote, and only if it was not there before.
+    for candidate in candidates:
+        if candidate.is_file() and candidate not in pre_existing:
+            logger.info(f"Resolved package.json into a temporary {candidate.name} for this run only")
+            return candidate
+    return None
 
 
 def ensure_php_installed() -> None:

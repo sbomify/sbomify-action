@@ -37,6 +37,7 @@ from ..utils import (
     ensure_php_installed,
     get_lock_file_ecosystem,
     has_required_manifest,
+    resolve_npm_lockfile,
     run_command,
 )
 
@@ -228,6 +229,8 @@ class CdxgenFsGenerator:
                 logger.info(f"Telling Composer this package is version {root_version}")
                 env = {"COMPOSER_ROOT_VERSION": root_version}
 
+        resolved_lockfile: Path | None = None
+
         cmd = [
             "cdxgen",
             "-o",
@@ -266,6 +269,13 @@ class CdxgenFsGenerator:
         logger.info(f"Running cdxgen for {input.lock_file_name} (CycloneDX {version}, type={cdxgen_type or 'auto'})")
 
         try:
+            # Inside the try, because the finally below is what removes it. It
+            # used to sit forty lines above, so anything raising in between --
+            # building the command, fetching a runtime -- left a lock file we
+            # created in someone else's checkout.
+            if lock_file_name == "package.json":
+                resolved_lockfile = resolve_npm_lockfile(lock_file_directory)
+
             # run_command raises SBOMGenerationError on failure (uses check=True).
             # log_errors=False: cdxgen is a priority-20 fallback that routinely
             # fails for ecosystems it doesn't handle (eg a Python uv.lock, where
@@ -296,6 +306,28 @@ class CdxgenFsGenerator:
                 spec_version=input.spec_version or CDXGEN_CYCLONEDX_DEFAULT,
                 generator_name=self.name,
             )
+        finally:
+            # A lock file we created is ours to remove. It is a working file,
+            # not something the user asked for, and leaving it behind risks a
+            # later step committing a resolution nobody chose.
+            if resolved_lockfile is not None:
+                try:
+                    resolved_lockfile.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    # Never from a finally without catching: an unlink that
+                    # raises here replaces whatever exception brought us in,
+                    # so a real generation failure would be reported as a
+                    # permissions problem.
+                    #
+                    # It also has to be said out loud. A surviving lock file is
+                    # read as a committed resolution by everything downstream,
+                    # which would suppress the very notice this change exists
+                    # to add -- silently, and in the one direction that matters.
+                    logger.warning(
+                        f"Could not remove {resolved_lockfile.name}, which this run created: "
+                        f"{cleanup_error}. It is not part of the project, and while it is there "
+                        f"the SBOM will not say its versions were inferred."
+                    )
 
 
 class CdxgenImageGenerator:
