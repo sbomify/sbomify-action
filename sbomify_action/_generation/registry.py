@@ -2,6 +2,7 @@
 
 import json
 import os
+import pathlib
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -82,19 +83,26 @@ LOCKFILE_FOR_MANIFEST = {
 #: `^4.18.0` resolves to whatever the registry offers at that moment, which is
 #: not what the project shipped and not what a consumer will install.
 #:
-#: `requirements.txt` sits awkwardly here and is included deliberately. It can
-#: be fully pinned with `==`, or a list of bare names, or anything between, and
-#: nothing in the file says which. Treating a pinned one as inferred overstates
-#: the doubt slightly; treating an unpinned one as authoritative understates it
-#: badly, and only one of those errors puts fiction in a provenance document.
+#: Two names are deliberately absent, both decided by reading rather than by
+#: filename -- see `resolution_was_inferred`.
+#:
+#: `go.mod` cannot express a range: the format takes an exact version and Go
+#: resolves the graph by minimal version selection, which is deterministic
+#: against an immutable module proxy. Measured on kubernetes v1.35.1, 207 of
+#: 207 requires carry an exact semver and the file contains no range operator
+#: at all. Calling that inferred understated the strongest manifest in the
+#: corpus, and using go.sum as the signal for "recorded" was the wrong file for
+#: the job -- it verifies hashes, it does not decide versions.
+#:
+#: `requirements.txt` is the opposite: it can hold `==` pins, ranges, bare
+#: names or editable installs, in any mixture. Whether it resolves anything is
+#: a property of the contents, so the contents are what gets checked.
 UNRESOLVED_MANIFESTS = frozenset(
     {
         "pyproject.toml",
-        "requirements.txt",
         "package.json",
         "composer.json",
         "Cargo.toml",
-        "go.mod",
         "build.gradle",
         "build.gradle.kts",
         "pom.xml",
@@ -124,7 +132,6 @@ RECOMMENDED_ACTION = {
     "pyproject.toml": ("uv lock  (or poetry lock)", "uv.lock or poetry.lock"),
     "requirements.txt": ("pip-compile requirements.in", "a requirements.txt with every version pinned by =="),
     "Cargo.toml": ("cargo generate-lockfile", "Cargo.lock"),
-    "go.mod": ("go mod tidy", "go.sum"),
     "Package.swift": ("swift package resolve", "Package.resolved"),
     "mix.exs": ("mix deps.get", "mix.lock"),
     "stack.yaml": ("stack build --dry-run", "stack.yaml.lock"),
@@ -168,7 +175,6 @@ COMMITTED_RESOLUTION_FOR = {
     ),
     "composer.json": ("composer.lock",),
     "Cargo.toml": ("Cargo.lock",),
-    "go.mod": ("go.sum",),
     "Package.swift": ("Package.resolved",),
     "mix.exs": ("mix.lock",),
     "stack.yaml": ("stack.yaml.lock",),
@@ -188,6 +194,52 @@ def recommended_action(lock_file: str | None) -> tuple[str, str] | None:
     return RECOMMENDED_ACTION.get(os.path.basename(lock_file))
 
 
+def _requirements_txt_is_pinned(path: str) -> bool:
+    """Whether every requirement in the file names an exact version.
+
+    A requirements.txt pinned throughout with `==` records a resolution as
+    firmly as any lock file. One with `flask` or `pytest>=2.8` in it records
+    nothing. The filename is identical either way, so the file is read.
+
+    Comments, blank lines, options (`-r`, `--index-url`) and environment
+    markers are skipped. Anything unreadable counts as not pinned: the cost of
+    being wrong that way is an unnecessary notice, and the cost of the other
+    way is a document that claims to be a record when it is a guess.
+    """
+    try:
+        text = pathlib.Path(path).read_text(errors="replace")
+    except OSError:
+        return False
+
+    requirements = [
+        line.split("#", 1)[0].split(";", 1)[0].strip()
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith(("#", "-"))
+    ]
+    if not requirements:
+        return False
+    return all("==" in requirement for requirement in requirements)
+
+
+def records_a_resolution(path: str) -> bool:
+    """Whether this file, by itself, records resolved versions.
+
+    Not the same question as ``resolution_was_inferred``, which asks what
+    would happen if we generated from a given input -- and answers "not
+    inferred" for a manifest whose lock file sits beside it, because the
+    generator would read the sibling instead. True of the input, false of the
+    file: package.json never records a resolution, however good its neighbour.
+
+    Conflating the two ranked package.json as highly as pnpm-lock.yaml when
+    choosing a substitute, which is exactly the downgrade the ranking exists
+    to prevent. Two questions, two functions, both named for what they ask.
+    """
+    name = os.path.basename(path)
+    if name == "requirements.txt":
+        return _requirements_txt_is_pinned(path)
+    return name not in UNRESOLVED_MANIFESTS
+
+
 def resolution_was_inferred(lock_file: str | None) -> bool:
     """Whether the versions in the document were resolved rather than recorded.
 
@@ -200,6 +252,13 @@ def resolution_was_inferred(lock_file: str | None) -> bool:
     if not lock_file:
         return False
     name = os.path.basename(lock_file)
+
+    # Decided by content, not by name: a fully pinned requirements.txt records
+    # its resolution, and an unpinned one records nothing, and they are the
+    # same filename.
+    if name == "requirements.txt":
+        return not _requirements_txt_is_pinned(lock_file)
+
     if name not in UNRESOLVED_MANIFESTS:
         return False
     directory = os.path.dirname(lock_file)

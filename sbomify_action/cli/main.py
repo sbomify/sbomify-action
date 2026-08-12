@@ -1278,7 +1278,7 @@ def _expand_lock_file_or_substitute(path: str) -> str:
     them is how a document ends up describing the wrong dependency tree; that
     case keeps the original error, which now lists what it found.
     """
-    from .._generation.registry import UNRESOLVED_MANIFESTS
+    from .._generation.registry import records_a_resolution
     from .._generation.utils import ALL_LOCK_FILES, get_lock_file_ecosystem
 
     try:
@@ -1327,14 +1327,18 @@ def _expand_lock_file_or_substitute(path: str) -> str:
         }
     )
 
-    # A lock file, never a manifest, unless there is nothing else.
+    # Prefer a candidate that records a resolution over one that only
+    # constrains it, and ask the same question the disclosure asks rather than
+    # a second approximation of it.
     #
-    # ALL_LOCK_FILES contains both, so without this a missing
-    # package-lock.json could be "substituted" by package.json -- quietly
-    # trading a recorded resolution for an inferred one, which is the exact
-    # swap the rest of this change exists to make visible.
-    locks = [s for s in siblings if s.name not in UNRESOLVED_MANIFESTS]
-    manifests = [s for s in siblings if s.name in UNRESOLVED_MANIFESTS]
+    # Membership of UNRESOLVED_MANIFESTS was standing in for this, which made
+    # it answer two questions again: it says whether a *name* is a manifest,
+    # while what matters here is whether a *file* records anything. Those came
+    # apart the moment requirements.txt started being judged by its contents --
+    # a pinned one records a resolution and an unpinned one does not, and they
+    # share a filename.
+    locks = [s for s in siblings if records_a_resolution(str(s))]
+    manifests = [s for s in siblings if not records_a_resolution(str(s))]
     candidates = locks or manifests
 
     if len(candidates) != 1:
