@@ -230,8 +230,6 @@ class CdxgenFsGenerator:
                 env = {"COMPOSER_ROOT_VERSION": root_version}
 
         resolved_lockfile: Path | None = None
-        if lock_file_name == "package.json":
-            resolved_lockfile = resolve_npm_lockfile(lock_file_directory)
 
         cmd = [
             "cdxgen",
@@ -271,6 +269,13 @@ class CdxgenFsGenerator:
         logger.info(f"Running cdxgen for {input.lock_file_name} (CycloneDX {version}, type={cdxgen_type or 'auto'})")
 
         try:
+            # Inside the try, because the finally below is what removes it. It
+            # used to sit forty lines above, so anything raising in between --
+            # building the command, fetching a runtime -- left a lock file we
+            # created in someone else's checkout.
+            if lock_file_name == "package.json":
+                resolved_lockfile = resolve_npm_lockfile(lock_file_directory)
+
             # run_command raises SBOMGenerationError on failure (uses check=True).
             # log_errors=False: cdxgen is a priority-20 fallback that routinely
             # fails for ecosystems it doesn't handle (eg a Python uv.lock, where

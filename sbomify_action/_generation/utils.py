@@ -11,7 +11,7 @@ from typing import Optional
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
 from sbomify_action.release_version import normalize_release_version, tag_from_ci
-from sbomify_action.runtimes import ensure_runtime
+from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled
 
 # Track whether Java/Maven has been installed on-demand
 _java_maven_installed = False
@@ -824,6 +824,13 @@ def resolve_npm_lockfile(directory: Path) -> Path | None:
     if any((directory / name).is_file() for name in _js_lock_files()):
         return None
 
+    # Resolving reaches the registry, so it honours the same opt-out as
+    # fetching a runtime does. Without this an air-gapped build waits out the
+    # full timeout on every JavaScript project to arrive where it started.
+    if not fetching_is_enabled():
+        logger.debug("Runtime fetching is disabled; not resolving package.json against the registry")
+        return None
+
     if not shutil.which("bun"):
         logger.debug("bun is not on PATH; cannot resolve package.json into a lock file")
         return None
@@ -847,11 +854,15 @@ def resolve_npm_lockfile(directory: Path) -> Path | None:
         logger.debug(f"Could not resolve package.json into a lock file: {str(detail)[:300]}")
         return None
 
-    created = directory / "bun.lock"
-    if not created.is_file():
-        return None
-    logger.info("Resolved package.json into a temporary bun.lock for this run only")
-    return created
+    # bun writes bun.lock, and older builds wrote the binary bun.lockb. Return
+    # whichever appeared: checking only for the text one meant a bun that wrote
+    # the binary left it in the caller's checkout, since the cleanup only
+    # removes what this returns.
+    for candidate in (directory / "bun.lock", directory / "bun.lockb"):
+        if candidate.is_file():
+            logger.info(f"Resolved package.json into a temporary {candidate.name} for this run only")
+            return candidate
+    return None
 
 
 def ensure_php_installed() -> None:

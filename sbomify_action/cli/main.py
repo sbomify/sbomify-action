@@ -1341,7 +1341,7 @@ def _expand_lock_file_or_substitute(path: str) -> str:
         if candidates:
             logger.error(
                 f"LOCK_FILE names '{named.name}', which is not here, and there is more than one "
-                f"{ecosystem} lock file to choose from: {', '.join(c.name for c in candidates)}. "
+                f"{ecosystem} input to choose from: {', '.join(c.name for c in candidates)}. "
                 f"Set LOCK_FILE to the one you want rather than have this guess."
             )
         raise original
@@ -3016,11 +3016,10 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
     )
 
     try:
-        sbom_format, original_json, parsed_object = load_sbom_from_file(sbom_file)
+        sbom_format, document, _parsed = load_sbom_from_file(sbom_file)
         if sbom_format != "cyclonedx":
             return  # SPDX carries this differently; a separate change
 
-        document = json.loads(json.dumps(original_json))
         metadata = document.setdefault("metadata", {})
         properties = metadata.setdefault("properties", [])
         properties.append(
@@ -3047,15 +3046,10 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
         # itself certain of it. The file never existed for the reader, so the
         # claim cannot be checked and should not be made: the honest source is
         # the manifest, and the honest confidence is not 1.0.
-        corrected = 0
+        corrected_identities = 0
         directory = Path(config.lock_file or "").parent
         for component in document.get("components") or []:
             for identity in (component.get("evidence") or {}).get("identity") or []:
-                # Basenames, not substrings. `concluded not in lock_file` is
-                # true for any string that happens to appear in the path --
-                # "json" inside "/w/composer.json" -- so it both missed real
-                # mismatches and spared fake ones. The question is only whether
-                # the identity names the file we were actually given.
                 # Only an identity citing a lock file that is not there.
                 #
                 # The first version rewrote every identity whose concludedValue
@@ -3075,11 +3069,20 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
                     if _cites_a_phantom_lockfile(method.get("value"), directory):
                         method["value"] = name
                         method["confidence"] = _capped_confidence(method.get("confidence"))
-                corrected += 1
-        if corrected:
-            logger.info(f"Corrected {corrected} component(s) that cited a lock file which was never committed")
+                corrected_identities += 1
+        if corrected_identities:
+            # Identities, not components: one component can carry several, and
+            # calling them components overstated the reach of the correction.
+            logger.info(
+                f"Corrected {corrected_identities} identity claim(s) citing a lock file that was never committed"
+            )
 
-        Path(sbom_file).write_text(json.dumps(document, indent=2))
+        # Compact rather than indented, but only because there is no reason to
+        # spend the bytes: this is an intermediate file and the augmentation
+        # and serialisation steps downstream rewrite it before anyone sees it.
+        # Checked, rather than assumed -- the shipped artifact is formatted by
+        # those later steps, so the choice here is invisible either way.
+        Path(sbom_file).write_text(json.dumps(document))
         get_audit_trail().record_augmentation(
             "sbom.resolution", "inferred-at-build-time", name, source="sbomify-action"
         )
