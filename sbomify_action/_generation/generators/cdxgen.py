@@ -311,7 +311,23 @@ class CdxgenFsGenerator:
             # not something the user asked for, and leaving it behind risks a
             # later step committing a resolution nobody chose.
             if resolved_lockfile is not None:
-                resolved_lockfile.unlink(missing_ok=True)
+                try:
+                    resolved_lockfile.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    # Never from a finally without catching: an unlink that
+                    # raises here replaces whatever exception brought us in,
+                    # so a real generation failure would be reported as a
+                    # permissions problem.
+                    #
+                    # It also has to be said out loud. A surviving lock file is
+                    # read as a committed resolution by everything downstream,
+                    # which would suppress the very notice this change exists
+                    # to add -- silently, and in the one direction that matters.
+                    logger.warning(
+                        f"Could not remove {resolved_lockfile.name}, which this run created: "
+                        f"{cleanup_error}. It is not part of the project, and while it is there "
+                        f"the SBOM will not say its versions were inferred."
+                    )
 
 
 class CdxgenImageGenerator:
