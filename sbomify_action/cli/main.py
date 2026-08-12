@@ -1202,6 +1202,13 @@ def _format_search_locations(*candidates: Path) -> str:
     return ", ".join(f"'{location}'" for location in seen)
 
 
+#: Where a GitHub Action mounts the repository. path_expansion searches here
+#: as well as the working directory, because the two are not the same inside
+#: an action, and anything else that searches for an input has to look in the
+#: same places or it will refuse a file the caller can plainly see.
+GITHUB_WORKSPACE = "/github/workspace"
+
+
 def path_expansion(path: str) -> str:
     """
     Takes a path/file and returns an absolute path.
@@ -1227,7 +1234,7 @@ def path_expansion(path: str) -> str:
 
     current_dir = Path.cwd()
     relative_path = current_dir / path
-    workspace_relative_path = Path("/github/workspace") / path
+    workspace_relative_path = Path(GITHUB_WORKSPACE) / path
 
     # Log which paths we're checking for debugging
     logger.debug(f"Searching for file '{path}'...")
@@ -1284,12 +1291,20 @@ def _expand_lock_file_or_substitute(path: str) -> str:
     if not ecosystem:
         raise original
 
-    # Look beside the named file, and in the working directory, which is where
-    # path_expansion would have searched.
-    # Resolved, because the same file reached as "./x" and as an absolute
-    # path is one candidate and not two -- counting it twice made every
-    # substitution look ambiguous and refuse itself.
-    directories = {d.resolve() for d in (named.parent, Path.cwd()) if d.is_dir()}
+    # The same three places path_expansion searches, which is what the
+    # sentence above used to claim while checking only two of them. The third
+    # is /github/workspace, and omitting it meant a substitution could refuse
+    # inside a GitHub Action whose working directory is somewhere else --
+    # precisely where LOCK_FILE is most likely to be pinned and stale.
+    #
+    # Resolved, because the same file reached as "./x" and as an absolute path
+    # is one candidate and not two; counting it twice made every substitution
+    # look ambiguous and refuse itself.
+    directories = {
+        d.resolve()
+        for d in (named.parent, Path.cwd(), Path(GITHUB_WORKSPACE), Path(GITHUB_WORKSPACE) / named.parent)
+        if d.is_dir()
+    }
     siblings = sorted(
         {
             candidate.resolve()
@@ -1365,7 +1380,7 @@ def directory_expansion(path: str) -> str:
 
     current_dir = Path.cwd()
     relative_path = current_dir / path
-    workspace_relative_path = Path("/github/workspace") / path
+    workspace_relative_path = Path(GITHUB_WORKSPACE) / path
 
     logger.debug(f"Searching for directory '{path}'...")
     for candidate in (Path(path), relative_path, workspace_relative_path):

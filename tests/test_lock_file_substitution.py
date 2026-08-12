@@ -101,3 +101,27 @@ def test_two_manifests_are_still_ambiguous(project):
     (project / "requirements.txt").write_text("")
     with pytest.raises(FileProcessingError):
         _expand_lock_file_or_substitute("poetry.lock")
+
+
+def test_it_searches_the_action_workspace_too(tmp_path, monkeypatch):
+    """path_expansion looks in /github/workspace as well as the working
+    directory, because inside a GitHub Action they are not the same. The
+    substitution claimed parity and checked only two of the three, so it could
+    refuse a file the caller could plainly see -- in exactly the environment
+    where LOCK_FILE is most likely to be pinned and stale."""
+    # sys.modules, because `sbomify_action.cli` re-exports the click
+    # command as `main` and shadows the submodule of the same name.
+    import sys
+
+    _m = sys.modules["sbomify_action.cli.main"]
+
+    workspace = tmp_path / "gh"
+    workspace.mkdir()
+    (workspace / "pnpm-lock.yaml").write_text("{}")
+
+    elsewhere = tmp_path / "somewhere-else"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setattr(_m, "GITHUB_WORKSPACE", str(workspace))
+
+    assert _expand_lock_file_or_substitute("package-lock.json").endswith("pnpm-lock.yaml")
