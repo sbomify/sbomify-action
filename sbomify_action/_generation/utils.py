@@ -836,6 +836,17 @@ def resolve_npm_lockfile(directory: Path) -> Path | None:
         return None
 
     logger.info("No lock file beside package.json; resolving one so the manifest can be read")
+
+    # What is already here, before bun runs.
+    #
+    # The caller deletes whatever this returns, so returning a file we did not
+    # create deletes someone else's work. Recognising every lock file name is
+    # necessary and not sufficient: a name can be missed, and the cost of
+    # missing one is a committed file removed from a checkout. Ownership is
+    # recorded instead of inferred.
+    candidates = (directory / "bun.lock", directory / "bun.lockb")
+    pre_existing = {c for c in candidates if c.is_file()}
+
     try:
         subprocess.run(
             ["bun", "install", "--lockfile-only", "--ignore-scripts"],
@@ -854,12 +865,9 @@ def resolve_npm_lockfile(directory: Path) -> Path | None:
         logger.debug(f"Could not resolve package.json into a lock file: {str(detail)[:300]}")
         return None
 
-    # bun writes bun.lock, and older builds wrote the binary bun.lockb. Return
-    # whichever appeared: checking only for the text one meant a bun that wrote
-    # the binary left it in the caller's checkout, since the cleanup only
-    # removes what this returns.
-    for candidate in (directory / "bun.lock", directory / "bun.lockb"):
-        if candidate.is_file():
+    # Whichever bun actually wrote, and only if it was not there before.
+    for candidate in candidates:
+        if candidate.is_file() and candidate not in pre_existing:
             logger.info(f"Resolved package.json into a temporary {candidate.name} for this run only")
             return candidate
     return None

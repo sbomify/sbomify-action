@@ -156,13 +156,28 @@ RECOMMENDED_ACTION = {
 #: there was told its versions had been inferred.
 COMMITTED_RESOLUTION_FOR = {
     "pyproject.toml": ("poetry.lock", "uv.lock", "Pipfile.lock"),
-    "package.json": ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "npm-shrinkwrap.json"),
+    "package.json": (
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lock",
+        # bun's older binary format. Omitting it meant a repository that had
+        # committed one was treated as having no lock file at all.
+        "bun.lockb",
+    ),
     "composer.json": ("composer.lock",),
     "Cargo.toml": ("Cargo.lock",),
     "go.mod": ("go.sum",),
     "Package.swift": ("Package.resolved",),
     "mix.exs": ("mix.lock",),
     "stack.yaml": ("stack.yaml.lock",),
+    # Gradle has no lock file by default, but it has one when dependency
+    # locking is switched on, and gradle.lockfile is already a recognised
+    # input. Omitting it told projects that record their resolved graph
+    # that they had inferred it.
+    "build.gradle": ("gradle.lockfile",),
+    "build.gradle.kts": ("gradle.lockfile",),
 }
 
 

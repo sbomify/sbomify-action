@@ -133,3 +133,39 @@ def test_the_generator_removes_what_it_created(tmp_path, monkeypatch):
         )
 
     assert not created.exists(), "a lock file we created was left behind after a failure"
+
+
+class TestItNeverDeletesSomeoneElsesFile:
+    """The caller unlinks whatever this returns, so returning a file it did not
+    create destroys a committed lock file."""
+
+    def test_a_committed_bun_lockb_stops_it_running(self, project, monkeypatch):
+        (project / "bun.lockb").write_bytes(b"binary lock")
+        monkeypatch.setattr(
+            utils.subprocess, "run", lambda *a, **k: pytest.fail("resolved despite a committed bun.lockb")
+        )
+
+        assert resolve_npm_lockfile(project) is None
+        assert (project / "bun.lockb").exists()
+
+    def test_a_pre_existing_file_is_never_returned_for_deletion(self, project, monkeypatch):
+        """Belt and braces for the name list being incomplete: even if the
+        early return is bypassed, ownership decides what may be removed."""
+        (project / "bun.lockb").write_bytes(b"binary lock")
+        monkeypatch.setattr(utils.shutil, "which", lambda n: "/usr/bin/bun")
+        monkeypatch.setattr(utils, "_js_lock_files", lambda: ("package-lock.json",))
+        monkeypatch.setattr(utils.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "", ""))
+
+        assert resolve_npm_lockfile(project) is None, "handed back a file it did not create"
+        assert (project / "bun.lockb").exists()
+
+    def test_a_file_it_did_create_is_returned(self, project, monkeypatch):
+        monkeypatch.setattr(utils.shutil, "which", lambda n: "/usr/bin/bun")
+
+        def writes_lock(cmd, **kwargs):
+            (project / "bun.lock").write_text("{}")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(utils.subprocess, "run", writes_lock)
+
+        assert resolve_npm_lockfile(project) == project / "bun.lock"

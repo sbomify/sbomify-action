@@ -3018,7 +3018,31 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
     try:
         sbom_format, document, _parsed = load_sbom_from_file(sbom_file)
         if sbom_format != "cyclonedx":
-            return  # SPDX carries this differently; a separate change
+            # SPDX is generated for inferred inputs too -- go.mod among them --
+            # and this notice does not reach those documents. SPDX 2.3 could
+            # carry it as a document annotation, which is a change with its own
+            # tests rather than a line here. Until then the limitation is
+            # stated rather than left for a reader to discover.
+            logger.warning(
+                f"This {sbom_format.upper()} document cannot carry the inference notice yet, so it "
+                f"exists only in the log above. A reader of the file alone will not be told the "
+                f"versions were resolved rather than recorded."
+            )
+            return
+
+        # metadata.properties arrived in CycloneDX 1.3. Writing it into a 1.2
+        # document produces an artifact that fails its own schema -- and does
+        # so after validation has already passed, so nothing would catch it.
+        # The warning still reaches the console either way; only the in-document
+        # copy is unavailable.
+        spec = str(document.get("specVersion") or "")
+        if spec and spec < "1.3":
+            logger.warning(
+                f"CycloneDX {spec} has no metadata.properties, so the inference notice cannot be "
+                f"written into this document. It is in the log above; upgrade to 1.3 or later to "
+                f"have it travel with the file."
+            )
+            return
 
         metadata = document.setdefault("metadata", {})
         properties = metadata.setdefault("properties", [])

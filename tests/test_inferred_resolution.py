@@ -418,3 +418,41 @@ class TestEvidenceIsCorrectedNarrowly:
         assert methods[0]["value"] == "composer.json"
         assert methods[1]["value"] == "Thing.php", "an unrelated method was rewritten"
         assert methods[1]["confidence"] == 0.8
+
+
+class TestFormatsThatCannotCarryTheNotice:
+    def test_a_gradle_lockfile_is_a_committed_resolution(self, tmp_path):
+        """Gradle has no lock file by default, but it has one when dependency
+        locking is on -- and gradle.lockfile was already a recognised input, so
+        omitting it told projects recording their graph that they had guessed."""
+        (tmp_path / "build.gradle").write_text("")
+        (tmp_path / "gradle.lockfile").write_text("")
+
+        assert not resolution_was_inferred(str(tmp_path / "build.gradle"))
+
+    def test_gradle_without_locking_is_still_inferred(self, tmp_path):
+        (tmp_path / "build.gradle.kts").write_text("")
+        assert resolution_was_inferred(str(tmp_path / "build.gradle.kts"))
+
+    def test_cyclonedx_1_2_is_left_valid(self, tmp_path, caplog):
+        """metadata.properties arrived in 1.3. Writing it into a 1.2 document
+        makes the artifact fail its own schema, after validation has passed."""
+        (tmp_path / "composer.json").write_text("{}")
+        sbom = tmp_path / "s.json"
+        sbom.write_text(
+            json.dumps(
+                {
+                    "bomFormat": "CycloneDX",
+                    "specVersion": "1.2",
+                    "version": 1,
+                    "metadata": {"component": {"type": "application", "name": "t"}},
+                    "components": [],
+                }
+            )
+        )
+
+        with caplog.at_level("WARNING"):
+            _disclose(str(sbom), Cfg(lock_file=str(tmp_path / "composer.json")))
+
+        assert (json.loads(sbom.read_text()).get("metadata") or {}).get("properties") is None
+        assert "1.2 has no metadata.properties" in caplog.text
