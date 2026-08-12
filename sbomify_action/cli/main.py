@@ -2919,10 +2919,20 @@ def _cites_a_phantom_lockfile(value: object, directory: Path) -> bool:
     """
     if not value:
         return False
-    base = Path(str(value)).name
-    if base not in _LOCK_FILE_EVIDENCE:
+    cited = Path(str(value))
+    if cited.name not in _LOCK_FILE_EVIDENCE:
         return False
-    return not (directory / base).is_file()
+
+    # Where the citation actually points, not just what it is called.
+    #
+    # Taking the basename and looking only beside the input meant a component
+    # citing `frontend/composer.lock` -- a file that is really there -- was
+    # judged phantom because there is no composer.lock next to the manifest,
+    # and its correct evidence was overwritten. Same over-reach as before,
+    # wearing a different hat.
+    if cited.is_absolute():
+        return not cited.is_file()
+    return not (directory / cited).is_file() and not (Path(GITHUB_WORKSPACE) / cited).is_file()
 
 
 def _recommend_a_lock_file(lock_file: str | None) -> None:
@@ -3036,7 +3046,14 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
         # The warning still reaches the console either way; only the in-document
         # copy is unavailable.
         spec = str(document.get("specVersion") or "")
-        if spec and spec < "1.3":
+        # Compared as numbers. As strings "1.10" sorts below "1.3", so the day
+        # CycloneDX reaches a double-digit minor this would start refusing to
+        # write the notice into documents that support it perfectly well.
+        try:
+            spec_parts = tuple(int(part) for part in spec.split("."))
+        except ValueError:
+            spec_parts = ()
+        if spec_parts and spec_parts < (1, 3):
             logger.warning(
                 f"CycloneDX {spec} has no metadata.properties, so the inference notice cannot be "
                 f"written into this document. It is in the log above; upgrade to 1.3 or later to "

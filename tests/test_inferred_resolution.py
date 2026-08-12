@@ -456,3 +456,59 @@ class TestFormatsThatCannotCarryTheNotice:
 
         assert (json.loads(sbom.read_text()).get("metadata") or {}).get("properties") is None
         assert "1.2 has no metadata.properties" in caplog.text
+
+
+class TestEvidencePathsAreResolvedNotFlattened:
+    def test_a_real_lockfile_in_another_directory_is_not_phantom(self, tmp_path):
+        """Taking the basename and looking only beside the input judged
+        `frontend/composer.lock` -- a file that is really there -- to be
+        phantom, and overwrote correct evidence."""
+        from sbomify_action.cli.main import _cites_a_phantom_lockfile
+
+        (tmp_path / "frontend").mkdir()
+        (tmp_path / "frontend" / "composer.lock").write_text("{}")
+
+        assert not _cites_a_phantom_lockfile("frontend/composer.lock", tmp_path)
+
+    def test_a_lockfile_that_is_genuinely_absent_is_phantom(self, tmp_path):
+        from sbomify_action.cli.main import _cites_a_phantom_lockfile
+
+        assert _cites_a_phantom_lockfile("composer.lock", tmp_path)
+
+    def test_an_absolute_citation_is_checked_where_it_points(self, tmp_path):
+        from sbomify_action.cli.main import _cites_a_phantom_lockfile
+
+        real = tmp_path / "elsewhere" / "composer.lock"
+        real.parent.mkdir()
+        real.write_text("{}")
+
+        assert not _cites_a_phantom_lockfile(str(real), tmp_path)
+        assert _cites_a_phantom_lockfile(str(tmp_path / "nope" / "composer.lock"), tmp_path)
+
+
+class TestSpecVersionsCompareAsNumbers:
+    @pytest.mark.parametrize(
+        ("spec", "can_carry"),
+        [("1.2", False), ("1.3", True), ("1.6", True), ("1.10", True), ("nonsense", True)],
+    )
+    def test_double_digit_minors_are_not_refused(self, tmp_path, spec, can_carry):
+        """As strings "1.10" sorts below "1.3", so a double-digit minor would
+        have been refused a notice it supports perfectly well."""
+        (tmp_path / "composer.json").write_text("{}")
+        sbom = tmp_path / "s.json"
+        sbom.write_text(
+            json.dumps(
+                {
+                    "bomFormat": "CycloneDX",
+                    "specVersion": spec,
+                    "version": 1,
+                    "metadata": {"component": {"type": "application", "name": "t"}},
+                    "components": [],
+                }
+            )
+        )
+
+        _disclose(str(sbom), Cfg(lock_file=str(tmp_path / "composer.json")))
+
+        props = (json.loads(sbom.read_text()).get("metadata") or {}).get("properties")
+        assert bool(props) is can_carry
