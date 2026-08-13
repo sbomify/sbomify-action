@@ -68,6 +68,7 @@ That's it! This generates a CycloneDX SBOM from your lockfile and enriches it wi
 - **Enrich** with package metadata from PyPI, pub.dev, crates.io, Conan Center, deps.dev, and more
 - **Audit Trail** — Every SBOM modification logged with timestamps for attestation and compliance
 - **Upload** to sbomify for collaboration and vulnerability management
+- **Pass through** pre-authored VEX, CBOM and HBOM artifacts verbatim, with no rewriting
 - **Tag** SBOMs with product releases
 - **Attest** with GitHub's build provenance
 
@@ -319,7 +320,7 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `OUTPUT_FILE`              | No       | Write final SBOM to this path                                                    |
 | `SBOM_FORMAT`              | No       | Output format: `cyclonedx` (default) or `spdx`                                   |
 | `SPEC_VERSION`             | No       | Spec version to **generate**, e.g. `1.7` (CycloneDX) or `2.2` (SPDX). Defaults to 1.6 for CycloneDX and 2.3 for SPDX. SPDX 3.0.1 cannot be generated — see [Format Support](#format-support) |
-| `BOM_TYPE`                 | No       | Artifact type: `sbom` (default), `vex`, `cbom` or `hbom`. Non-SBOM types upload verbatim to sbomify only (augmentation, enrichment, overrides, additional-package injection and the SBOM-specific finalization fixups are skipped; `dependency-track` in `UPLOAD_DESTINATIONS` and `PRODUCT_RELEASE` are rejected). Note: sbomify auto-classifies CycloneDX documents containing cryptographic assets as `cbom` |
+| `BOM_TYPE`                 | No       | Artifact type: `sbom` (default), `vex`, `cbom` or `hbom`. Non-SBOM types upload verbatim to sbomify only (augmentation, enrichment, overrides, additional-package injection and the SBOM-specific finalization fixups are skipped; `dependency-track` in `UPLOAD_DESTINATIONS` is rejected). Note: sbomify auto-classifies CycloneDX documents containing cryptographic assets as `cbom` |
 | `ENRICH`                   | No       | Add metadata from package registries                                             |
 | `TOKEN`                    | ‡        | sbomify API token                                                                |
 | `COMPONENT_ID`             | ‡        | sbomify component ID                                                             |
@@ -409,6 +410,28 @@ When uploading to Dependency Track (`UPLOAD_DESTINATIONS=dependency-track`), con
 ```
 
 </details>
+
+### Hardware BOM (HBOM)
+
+A hardware BOM lists the physical parts of a product: connectors, chips, PCBs. In CycloneDX it is a document whose components are `type: device`. An SBOM tells you what code ships; an HBOM tells you what is on the board.
+
+The action does not generate one. It uploads an HBOM you already have, byte for byte.
+
+```yaml
+- uses: sbomify/sbomify-action@master
+  env:
+    TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
+    COMPONENT_ID: 'your-component-id'
+    BOM_TYPE: 'hbom'
+    SBOM_FILE: 'hardware/mainboard.hbom.cdx.json'
+    PRODUCT_RELEASE: '["my-product:v1.2.3"]'
+```
+
+**Where an HBOM comes from.** Usually a hardware BOM export from your PLM or EDA tooling, converted to CycloneDX. The [cdx-hbom](https://github.com/cdxgen/cdx-hbom) project from the [cdxgen](https://github.com/cdxgen/cdxgen) authors can also produce one, though check its scope first: it inventories the machine it runs on (CPU, disks, PCI and USB devices), so you get an asset record of a host rather than a parts list for a product you manufacture. If you build hardware, the document comes from your own design data.
+
+**Verbatim upload.** sbomify stores an HBOM exactly as you authored it, the same as VEX and CBOM. The action skips augmentation, enrichment, name and version overrides, and additional-package injection; setting `AUGMENT` or `ENRICH` logs a warning and continues rather than failing the run. Part numbers are the document's whole value, and a rewritten one is a different parts list.
+
+SPDX has no device component type, so `BOM_TYPE=hbom` requires CycloneDX. The action refuses an SPDX file before it uploads.
 
 ## Supported Lockfiles
 
