@@ -73,7 +73,11 @@ LABEL com.sbomify.maintainer="sbomify <hello@sbomify.com>" \
 # branch, visibility) from the bind-mounted workspace, and slim images
 # don't ship it. Without it those facts silently degrade to folder-name
 # and "unknown" visibility.
+# dist-upgrade first: the base image digest lags the Debian security
+# archive, so packages preinstalled in the base (util-linux, openssl)
+# would otherwise ship at whatever patch level the digest froze.
 RUN apt-get update && \
+    apt-get dist-upgrade -y --no-install-recommends && \
     apt-get install -y --no-install-recommends git && \
     rm -rf /var/lib/apt/lists/*
 
