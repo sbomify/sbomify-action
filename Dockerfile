@@ -1,8 +1,8 @@
-ARG UV_VERSION=0.12.2
+ARG UV_VERSION=0.12.5
 
 
 # UV binary stage
-FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:069a51314a7bb6031777a9273205fe1b0b19e914ef418207d1338b268df641dd AS uv-fetcher
+FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 AS uv-fetcher
 
 # Python builder stage
 FROM python:3.14-slim-trixie AS builder
