@@ -339,7 +339,20 @@ def _is_transient(exc: requests.RequestException) -> bool:
     status = getattr(getattr(exc, "response", None), "status_code", None)
     if isinstance(status, int):
         return status == 429 or status >= 500
-    return isinstance(exc, (requests.ConnectionError, requests.Timeout))
+    # ChunkedEncodingError is the one that matters most here and is easy to
+    # miss: it is a direct RequestException, *not* a ConnectionError. A peer
+    # that drops before the response is a ConnectionError, but one that drops
+    # partway through a 190MB body -- the likelier failure -- surfaces as a
+    # broken chunked read instead.
+    return isinstance(
+        exc,
+        (
+            requests.ConnectionError,
+            requests.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ContentDecodingError,
+        ),
+    )
 
 
 def _with_retries(attempt: Callable[[], _T], what: str) -> _T:

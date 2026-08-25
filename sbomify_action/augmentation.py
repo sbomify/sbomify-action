@@ -1997,9 +1997,10 @@ def augment_sbom_from_file(
             if spec_version is None:
                 raise SBOMValidationError("CycloneDX SBOM is missing required 'specVersion' field")
 
-            # Repair what the deserializer would otherwise choke on. Enrichment
-            # and generation already do this; augmentation can be the first step
-            # to touch a third-party SBOM, so it has to do it too.
+            # Repair what the deserializer would otherwise choke on. Every
+            # other CycloneDX entry point does the same; this one parses its
+            # own copy of the document rather than reusing an already-loaded
+            # Bom, so it has to repair its own copy too.
             sanitize_cyclonedx_licenses(data)
 
             # Parse as CycloneDX

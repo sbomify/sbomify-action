@@ -2446,6 +2446,73 @@ class TestSanitizeCycloneDXLicenses:
         assert count == 1
         assert data["services"][0]["services"][0]["licenses"][0]["license"]["name"] == "Some Custom License"
 
+    def test_evidence_licenses_are_sanitized(self):
+        """evidence.licenses reaches the same enum and the same deserializer.
+
+        cdxgen -- the generator that emits the bare license.text -- is also
+        the one that populates licence evidence, so this is the same defect
+        one level over.
+        """
+        data = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "version": 1,
+            "components": [
+                {
+                    "type": "library",
+                    "name": "pkg",
+                    "version": "1.0",
+                    "evidence": {
+                        "licenses": [{"license": {"name": "Copyright", "text": "Copyright 2022 Google"}}],
+                    },
+                }
+            ],
+        }
+        with pytest.raises(AttributeError):
+            Bom.from_json(copy.deepcopy(data))
+
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert Bom.from_json(data) is not None
+
+    def test_evidence_license_id_is_sanitized(self):
+        """An unlisted id under evidence fails schema validation just the same."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "evidence": {"licenses": [{"license": {"id": "Some Custom License"}}]},
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert data["components"][0]["evidence"]["licenses"][0]["license"]["name"] == "Some Custom License"
+
+    def test_nested_component_evidence_is_sanitized(self):
+        """Evidence on a sub-component is reached by the same walk."""
+        data = {
+            "components": [
+                {
+                    "name": "image",
+                    "components": [
+                        {
+                            "name": "inner",
+                            "evidence": {"licenses": [{"license": {"id": "apache-2.0"}}]},
+                        }
+                    ],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        inner = data["components"][0]["components"][0]
+        assert inner["evidence"]["licenses"][0]["license"]["id"] == "Apache-2.0"
+
+    def test_non_dict_evidence_is_ignored(self):
+        data = {"components": [{"name": "pkg", "evidence": "not-a-dict"}]}
+        assert sanitize_cyclonedx_licenses(data) == 0
+
     def test_non_dict_entries_do_not_break_the_walk(self):
         """Malformed input should degrade, not raise."""
         data = {

@@ -1042,8 +1042,14 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
         if not parts:
             return 0
 
-        # Replace all entries with a single expression
+        # Replace all entries with a single expression. This asserts a dual
+        # licence the source document did not state, so it is recorded rather
+        # than only logged: since the walk reaches sub-components, it can now
+        # apply to every package under a container image, not just the top
+        # level. The alternative is worse -- cyclonedx-python-lib refuses to
+        # serialize a mixed set at all.
         combined = " OR ".join(parts)
+        original = " , ".join(parts)
         license_choices.clear()
         license_choices.append({"expression": combined})
         logger.debug(
@@ -1051,6 +1057,7 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
             component or "unknown",
             combined,
         )
+        tracker.record_license_sanitized(original, f"expression:{combined}", component=component)
         return 1
 
     def _sanitize_license_choices(license_choices: list[Any], component: str | None = None) -> int:
@@ -1143,13 +1150,22 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
             yield from _walk(entry.get(nest_key), nest_key)
 
     def _sanitize_entry(entry: dict[str, Any], fallback_name: str | None = None) -> int:
-        licenses = entry.get("licenses")
-        if not isinstance(licenses, list):
-            return 0
         name = entry.get("name") or fallback_name
-        return _sanitize_license_choices(licenses, component=name) + _consolidate_mixed_license_types(
-            licenses, component=name
-        )
+        count = 0
+        # `licenses` is the component's own statement; `evidence.licenses` is
+        # what a scanner concluded from the files. Both are licenceChoice
+        # arrays, both reach the same schema enum and the same deserializer,
+        # and cdxgen -- the generator that produced the bare license.text --
+        # populates the evidence one.
+        for holder in (entry, entry.get("evidence")):
+            if not isinstance(holder, dict):
+                continue
+            licenses = holder.get("licenses")
+            if not isinstance(licenses, list):
+                continue
+            count += _sanitize_license_choices(licenses, component=name)
+            count += _consolidate_mixed_license_types(licenses, component=name)
+        return count
 
     # Process metadata licenses, and those of the root component it describes
     metadata = data.get("metadata", {})

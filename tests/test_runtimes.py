@@ -677,7 +677,13 @@ class TestDownloadRetries:
         assert (bin_dir / "faketool").read_bytes() == payload
 
     def test_a_retry_after_a_partial_body_still_matches_the_pin(self, monkeypatch):
-        """The hash must not carry bytes over from the failed attempt."""
+        """The hash must not carry bytes over from the failed attempt.
+
+        The mid-body failure is a ChunkedEncodingError, not a
+        ConnectionError: requests only raises the latter before a response
+        exists. Getting this wrong makes the test pass against a retry path
+        that would not fire in production.
+        """
         payload = b"0123456789" * 32
         spec = _raw_spec(payload)
         _register(monkeypatch, spec)
@@ -687,7 +693,9 @@ class TestDownloadRetries:
         class _TruncatedResponse(_FakeResponse):
             def iter_content(self, chunk_size=1):
                 yield self._payload[:17]
-                raise runtimes.requests.ConnectionError("connection reset mid-body")
+                raise runtimes.requests.exceptions.ChunkedEncodingError(
+                    "Connection broken: IncompleteRead(17 bytes read)"
+                )
 
         def _flaky(*args, **kwargs):
             attempts.append(1)
@@ -701,6 +709,22 @@ class TestDownloadRetries:
 
         assert len(attempts) == 2
         assert (bin_dir / "faketool").read_bytes() == payload
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            pytest.param(runtimes.requests.ConnectionError("Connection aborted."), id="connection-aborted"),
+            pytest.param(runtimes.requests.Timeout("read timed out"), id="timeout"),
+            pytest.param(runtimes.requests.exceptions.ChunkedEncodingError("Connection broken"), id="chunked"),
+            pytest.param(runtimes.requests.exceptions.ContentDecodingError("bad gzip"), id="decoding"),
+        ],
+    )
+    def test_every_transient_shape_is_recognised(self, exc):
+        assert runtimes._is_transient(exc) is True
+
+    def test_a_malformed_url_is_not_transient(self):
+        """A request that can never be made is not worth three attempts."""
+        assert runtimes._is_transient(runtimes.requests.exceptions.MissingSchema("no scheme")) is False
 
     def test_a_missing_asset_is_not_retried(self, monkeypatch):
         """A 404 means the manifest is wrong; retrying only slows the failure."""
