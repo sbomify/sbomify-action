@@ -10,9 +10,10 @@ the `license-expression` library, ensuring compliance with CycloneDX and SPDX
 schema requirements across all versions.
 """
 
+import functools
 import logging
 import re
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from license_expression import ExpressionError, get_spdx_licensing
 
@@ -363,6 +364,12 @@ def normalize_license_list(licenses: list[str]) -> Tuple[list[str], dict[str, st
     return (normalized, texts)
 
 
+@functools.lru_cache(maxsize=1)
+def _known_symbols_by_lowercase() -> dict[str, Any]:
+    """The SPDX symbol table re-keyed by lowercase id, built once."""
+    return {key.lower(): symbol for key, symbol in _spdx_licensing.known_symbols.items()}
+
+
 def get_spdx_license_info(spdx_id: str) -> Optional[dict[str, object]]:
     """
     Get information about an SPDX license ID.
@@ -382,8 +389,11 @@ def get_spdx_license_info(spdx_id: str) -> Optional[dict[str, object]]:
     if spdx_id.startswith("LicenseRef-"):
         return {"id": spdx_id, "name": spdx_id, "is_custom": True}
 
-    # Look up in the SPDX license database (case-insensitive)
-    symbol = _spdx_licensing.known_symbols.get(spdx_id.lower())
+    # Look up in the SPDX license database (case-insensitive). known_symbols
+    # is keyed by the canonical spelling -- "Apache-2.0", not "apache-2.0" --
+    # and only 65 of its 2447 keys are already lowercase, so lowercasing
+    # before the lookup missed all but a handful, "MIT" among them.
+    symbol = _spdx_licensing.known_symbols.get(spdx_id) or _known_symbols_by_lowercase().get(spdx_id.lower())
     if symbol:
         # Get the key (canonical ID) from the symbol
         canonical_id = symbol.key if hasattr(symbol, "key") else spdx_id

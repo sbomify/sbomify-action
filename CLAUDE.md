@@ -20,9 +20,20 @@ uv run ruff check sbomify_action tests
 # Run format check
 uv run ruff format --check sbomify_action tests
 
-# Run tests (80% coverage required)
+# Run type checker
+uv run mypy sbomify_action
+
+# Run tests (fails under 80% coverage)
 uv run pytest
+
+# Run one file — add --no-cov, or the 80% gate fails on the partial run
+uv run pytest tests/test_serialization.py --no-cov
 ```
+
+The three checks above `pytest` are exactly what the `Sanity Checks` CI job
+runs, in that order. Run all four before pushing — mypy in particular fails
+CI on things the linter is happy with, such as returning `Any` from a
+function annotated to return `bool`.
 
 ## Architecture
 
@@ -79,7 +90,9 @@ Each step maintains an audit trail with timestamps for compliance.
 
 - Never edit lockfiles manually - use `uv` for dependency management
 - Always run tests before committing
-- Maintain 80%+ test coverage
+- Maintain 80%+ test coverage — `--cov-fail-under=80` in `addopts` enforces
+  it, so `pytest` goes red below the line. The margin is thin (80.04% at the
+  time of writing), so a chunk of new code without tests will trip it
 - Use `git --no-pager` for git operations
 - Never create summary/documentation files unless explicitly requested
 

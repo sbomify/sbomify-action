@@ -41,10 +41,13 @@ from ..console import (
 )
 from ..exceptions import (
     APIError,
+    AuthError,
     ConfigurationError,
     DockerImageNotFoundError,
     DuplicateArtifactError,
     FileProcessingError,
+    ForbiddenError,
+    InputPathNotFoundError,
     OIDCError,
     SBOMGenerationError,
     SBOMValidationError,
@@ -67,6 +70,7 @@ from ..release_version import (
 from ..serialization import (
     _add_compositions_if_missing,
     _fix_purl_encoding_bugs_in_json,
+    sanitize_cyclonedx_licenses,
     sanitize_spdx_licenses,
     serialize_cyclonedx_bom,
 )
@@ -946,6 +950,33 @@ def setup_dependencies() -> None:
         logger.debug(f"Additional tools not installed: {', '.join(missing)}")
 
 
+#: Backend statuses that mean "fix your credentials or your setup". 401 is a
+#: token that is missing, wrong or expired; 403 is a valid token refused the
+#: operation -- an OIDC binding never created, a component in a different
+#: product. Both are answered by the backend's own detail string, and neither
+#: is something the action can change. A 500 is deliberately absent: that one
+#: is the backend falling over and is worth knowing about.
+_USER_SIDE_HTTP_STATUSES = ("[401]", "[403]")
+
+
+def _is_auth_failure(message: str) -> bool:
+    """Whether ``message`` reports a 401 or 403 from an upload destination.
+
+    Matched on the message because these arrive through the logging
+    integration: step 5 catches the error and logs it, so by the time Sentry
+    sees the event there is no exception left to type-check. Both the sbomify
+    client's ``_build_error`` and the Dependency Track uploader render a
+    failure as ``prefix [status] - detail``, which is what makes the marker
+    reliable -- and Dependency Track's 401 is the same user-side condition,
+    so covering it too is deliberate.
+
+    Being a substring test, this is deliberately the *second* check: anything
+    that can be recognised by type is, above, so the only events reaching
+    here are log records with no exception attached.
+    """
+    return any(status in message for status in _USER_SIDE_HTTP_STATUSES)
+
+
 def initialize_sentry() -> None:
     """Initialize Sentry for error tracking.
 
@@ -989,14 +1020,31 @@ def initialize_sentry() -> None:
                     # "This version is already published" — the normal outcome of
                     # re-running a workflow on the same commit, not a defect.
                     DuplicateArtifactError,
+                    # The lock file / source directory the user named is not
+                    # there. The message already lists every location searched;
+                    # a stack trace in Sentry adds nothing.
+                    InputPathNotFoundError,
                 ),
             ):
+                return None
+
+            # A 401/403 raised rather than logged — the same user-side
+            # condition whichever path it arrives by. The client already types
+            # these, so match on the type and leave the string test to the
+            # log-record path below.
+            if isinstance(exc_value, (AuthError, ForbiddenError)):
                 return None
 
         # Filter log messages for user configuration errors
         # These come through the logging integration, not as exceptions
         message = event.get("message") or event.get("logentry", {}).get("formatted", "")
         if message.startswith("Configuration error:"):
+            return None
+
+        # The backend's 401s and 403s reach Sentry as log records, not
+        # exceptions — step 5 catches the APIError and logs it — so the type
+        # check above never sees them.
+        if _is_auth_failure(message):
             return None
 
         return event
@@ -1226,7 +1274,7 @@ def path_expansion(path: str) -> str:
     """
     # Check if the path looks like a CLI flag (common mistake when forgetting to provide a value)
     if path.startswith("-"):
-        raise FileProcessingError(
+        raise InputPathNotFoundError(
             f"Invalid file path '{path}' - this looks like a CLI flag. "
             f"Did you forget to specify a file path? "
             f"Example: --lock-file requirements.txt or set the LOCK_FILE environment variable."
@@ -1252,7 +1300,7 @@ def path_expansion(path: str) -> str:
         logger.info(f"Using input file '{workspace_relative_path}'.")
         return str(workspace_relative_path)
     else:
-        raise FileProcessingError(
+        raise InputPathNotFoundError(
             f"Specified input file '{path}' not found. "
             f"Searched in: {_format_search_locations(Path(path), relative_path, workspace_relative_path)}"
         )
@@ -1404,7 +1452,7 @@ def directory_expansion(path: str) -> str:
     workflow was written.
     """
     if path.startswith("-"):
-        raise FileProcessingError(
+        raise InputPathNotFoundError(
             f"Invalid directory path '{path}' - this looks like a CLI flag. "
             f"Did you forget to specify a directory? "
             f"Example: --source-dir dist or set the SOURCE_DIR environment variable."
@@ -1420,7 +1468,7 @@ def directory_expansion(path: str) -> str:
             logger.info(f"Using source directory '{candidate}'.")
             return str(candidate if candidate.is_absolute() else current_dir / candidate)
 
-    raise FileProcessingError(
+    raise InputPathNotFoundError(
         f"Specified source directory '{path}' not found. "
         f"Searched in: {_format_search_locations(Path(path), relative_path, workspace_relative_path)}"
     )
@@ -1607,6 +1655,13 @@ def load_sbom_from_file(file_path: str) -> tuple[str, dict[str, Any], object]:
         # Detect format silently (format should already be known at this point)
         if sbom_json.get("bomFormat") == "CycloneDX":
             sbom_format = "cyclonedx"
+            # Repair what the deserializer would choke on before handing it
+            # over. This is the shared door for the metadata overrides, which
+            # run on a user-supplied SBOM before augmentation gets near it and
+            # log-and-continue on failure — so without this a bare
+            # license.text drops COMPONENT_VERSION/NAME/PURL on the floor with
+            # only a warning, rather than failing loudly.
+            sanitize_cyclonedx_licenses(sbom_json)
             # Use cyclonedx deserializer
             parsed_object = Bom.from_json(sbom_json)  # type: ignore[attr-defined]
             logger.debug(f"Successfully loaded CycloneDX SBOM from {file_path}")

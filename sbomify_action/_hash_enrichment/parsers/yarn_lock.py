@@ -152,10 +152,16 @@ class YarnLockParser:
                 continue
             seen.add(pkg_key)
 
-            # Berry checksums may have a prefix like "10/sha512-..."
-            # or just "sha512-..."
-            if "/" in checksum:
-                checksum = checksum.split("/", 1)[-1]
+            if not isinstance(checksum, str):
+                continue
+
+            # Yarn 4 prefixes the checksum with its cache key ("10/sha512-…");
+            # Yarn 2/3 write the bare "sha512-…". Only a leading numeric
+            # segment is a prefix -- standard base64 contains "/" itself, in
+            # roughly three of every four digests, so splitting on the first
+            # slash unconditionally corrupted the hash and the package was
+            # then dropped without a word.
+            checksum = re.sub(r"^\d+/", "", checksum)
 
             pkg_hash = PackageHash.from_sri(
                 name=name,

@@ -7,14 +7,26 @@ payloads are the ones from the real events, not invented equivalents.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 import sentry_sdk
 
 from sbomify_action._generation.utils import error_signature, log_command_error
-from sbomify_action.cli.main import _format_search_locations, path_expansion
-from sbomify_action.exceptions import APIError, DuplicateArtifactError, FileProcessingError
+from sbomify_action.cli.main import (
+    _format_search_locations,
+    _is_auth_failure,
+    directory_expansion,
+    path_expansion,
+)
+from sbomify_action.exceptions import (
+    APIError,
+    AuthError,
+    DuplicateArtifactError,
+    FileProcessingError,
+    InputPathNotFoundError,
+)
 from sbomify_action.serialization import (
     _canonical_spdx_license_id,
     _is_valid_spdx_license_id,
@@ -47,6 +59,30 @@ def _capture_fingerprints(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
 
     monkeypatch.setattr(sentry_sdk, "new_scope", lambda: _Scope())
     return captured
+
+
+def _capture_before_send(monkeypatch: pytest.MonkeyPatch) -> Callable[..., object]:
+    """Return the real ``before_send``, which is defined inside initialize_sentry.
+
+    Captured by intercepting the init call rather than duplicating the
+    predicate here, so these tests exercise the shipped filter.
+    """
+    captured: dict[str, object] = {}
+
+    def fake_init(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr("sentry_sdk.init", fake_init)
+    monkeypatch.setattr("sentry_sdk.set_tag", lambda *a, **k: None)
+    monkeypatch.setattr("sentry_sdk.set_context", lambda *a, **k: None)
+    monkeypatch.delenv("TELEMETRY", raising=False)
+
+    from sbomify_action.cli.main import initialize_sentry
+
+    initialize_sentry()
+    before_send = captured["before_send"]
+    assert callable(before_send)
+    return before_send
 
 
 class TestNonSpdxLicenseIds:
@@ -279,23 +315,7 @@ class TestDuplicateArtifactClassification:
         assert issubclass(DuplicateArtifactError, APIError)
 
     def test_is_filtered_by_before_send(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # before_send is defined inside initialize_sentry; capture it by
-        # intercepting the init call rather than duplicating the predicate.
-        captured: dict[str, object] = {}
-
-        def fake_init(**kwargs: object) -> None:
-            captured.update(kwargs)
-
-        monkeypatch.setattr("sentry_sdk.init", fake_init)
-        monkeypatch.setattr("sentry_sdk.set_tag", lambda *a, **k: None)
-        monkeypatch.setattr("sentry_sdk.set_context", lambda *a, **k: None)
-        monkeypatch.delenv("TELEMETRY", raising=False)
-
-        from sbomify_action.cli.main import initialize_sentry
-
-        initialize_sentry()
-        before_send = captured["before_send"]
-        assert callable(before_send)
+        before_send = _capture_before_send(monkeypatch)
 
         event: dict[str, object] = {"message": "Upload failed for destination(s): sbomify"}
         duplicate_hint = {"exc_info": (DuplicateArtifactError, DuplicateArtifactError("dup"), None)}
@@ -304,3 +324,128 @@ class TestDuplicateArtifactClassification:
         # A real API failure still reaches Sentry.
         api_hint = {"exc_info": (APIError, APIError("boom"), None)}
         assert before_send(event, api_hint) is event
+
+
+class TestMissingInputPathClassification:
+    """GITHUB-ACTION-DP, 35 events: "Specified input file ... not found".
+
+    The user pointed LOCK_FILE at something that is not there. The message
+    already names every location searched; the stack trace behind it is not
+    a defect in the action.
+    """
+
+    def test_is_a_file_processing_error_so_existing_handlers_still_catch_it(self) -> None:
+        assert issubclass(InputPathNotFoundError, FileProcessingError)
+
+    def test_path_expansion_raises_the_narrow_type(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(InputPathNotFoundError):
+            path_expansion("definitely-not-here.json")
+
+    def test_a_flag_shaped_path_raises_the_narrow_type(self) -> None:
+        with pytest.raises(InputPathNotFoundError):
+            path_expansion("--lock-file")
+
+    def test_missing_source_directory_raises_the_narrow_type(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(InputPathNotFoundError):
+            directory_expansion("no-such-dir")
+
+    def test_a_pipeline_bug_is_still_reported(self) -> None:
+        """ "No SBOM file found from previous step" is a defect, not user input."""
+        assert not isinstance(FileProcessingError("No SBOM file found from previous step"), InputPathNotFoundError)
+
+    def test_is_filtered_by_before_send(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        before_send = _capture_before_send(monkeypatch)
+
+        event: dict[str, object] = {"message": "Specified input file 'package-lock.json' not found."}
+        missing_hint = {
+            "exc_info": (
+                InputPathNotFoundError,
+                InputPathNotFoundError("Specified input file 'package-lock.json' not found."),
+                None,
+            )
+        }
+        assert before_send(event, missing_hint) is None
+
+        # A file failure that is genuinely ours still reaches Sentry.
+        pipeline_hint = {
+            "exc_info": (
+                FileProcessingError,
+                FileProcessingError("No SBOM file found from previous step"),
+                None,
+            )
+        }
+        assert before_send(event, pipeline_hint) is event
+
+
+class TestAuthFailureClassification:
+    """GITHUB-ACTION-GA / EA / EB / DB / DC / DS / DT (403) and DA (401).
+
+    401 is a token that is missing, wrong or expired. 403 is a valid token
+    refused the operation: a binding that was never created, a component in
+    a different product. The backend's detail string says what to fix; the
+    action cannot change either outcome.
+
+    These arrive as *log records*, not exceptions — step 5 catches the
+    APIError and logs it — so a type-based filter would silently do nothing.
+    """
+
+    def test_the_reported_messages_are_recognised(self) -> None:
+        for message in (
+            "Upload to sbomify failed: Failed to upload SBOM file. [403] - Forbidden",
+            "Error processing release: Failed to create release. [403] - Component is not part of product",
+            "sbomify rejected the OIDC token (403): no binding found [403] - nope",
+            "Upload to sbomify failed: Authentication failed [401] - Unauthorized",
+        ):
+            assert _is_auth_failure(message) is True, message
+
+    def test_other_statuses_are_left_alone(self) -> None:
+        """A 500 is the backend falling over — that is worth knowing about."""
+        for message in (
+            "Failed to create release. [500] - Internal Server Error",
+            "Failed to upload SBOM file. [404] - Not Found",
+            "Everything is fine",
+        ):
+            assert _is_auth_failure(message) is False, message
+
+    def test_a_logged_403_is_filtered(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        before_send = _capture_before_send(monkeypatch)
+
+        # The shape Sentry's logging integration produces: no exc_info.
+        event: dict[str, object] = {
+            "logentry": {"formatted": "Upload to sbomify failed: Failed to upload SBOM file. [403] - Forbidden"}
+        }
+        assert before_send(event, {}) is None
+
+    def test_a_logged_401_is_filtered(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        before_send = _capture_before_send(monkeypatch)
+
+        event: dict[str, object] = {
+            "logentry": {"formatted": "Upload to sbomify failed: Authentication failed [401] - Unauthorized"}
+        }
+        assert before_send(event, {}) is None
+
+    def test_a_raised_403_is_filtered(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        before_send = _capture_before_send(monkeypatch)
+
+        event: dict[str, object] = {"message": "Failed to create release. [403] - nope"}
+        hint = {"exc_info": (APIError, APIError("Failed to create release. [403] - nope"), None)}
+        assert before_send(event, hint) is None
+
+    def test_a_raised_auth_error_is_filtered(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """AuthError subclasses APIError, so the 401 path is covered too."""
+        before_send = _capture_before_send(monkeypatch)
+
+        event: dict[str, object] = {"message": "Authentication failed [401] - Unauthorized"}
+        hint = {"exc_info": (AuthError, AuthError("Authentication failed [401] - Unauthorized"), None)}
+        assert before_send(event, hint) is None
+
+    def test_a_real_backend_failure_still_reaches_sentry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        before_send = _capture_before_send(monkeypatch)
+
+        event: dict[str, object] = {"message": "Failed to create release. [500] - Internal Server Error"}
+        hint = {"exc_info": (APIError, APIError("Failed to create release. [500] - Internal Server Error"), None)}
+        assert before_send(event, hint) is event
