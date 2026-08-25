@@ -336,9 +336,9 @@ def _is_transient(exc: requests.RequestException) -> bool:
     amount of retrying will conjure it; a dropped connection or a 5xx from
     the CDN in front of the release means try again.
     """
-    response = getattr(exc, "response", None)
-    if response is not None and getattr(response, "status_code", None) is not None:
-        return response.status_code == 429 or response.status_code >= 500
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int):
+        return status == 429 or status >= 500
     return isinstance(exc, (requests.ConnectionError, requests.Timeout))
 
 
