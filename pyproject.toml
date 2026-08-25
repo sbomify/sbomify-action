@@ -99,7 +99,7 @@ build-backend = "hatchling.build"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
-addopts = "--cov=sbomify_action --cov-report=term-missing"
+addopts = "--cov=sbomify_action --cov-report=term-missing --cov-fail-under=80"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]

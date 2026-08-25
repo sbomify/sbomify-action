@@ -23,8 +23,11 @@ uv run ruff format --check sbomify_action tests
 # Run type checker
 uv run mypy sbomify_action
 
-# Run tests (prints a coverage report; no threshold is enforced)
+# Run tests (fails under 80% coverage)
 uv run pytest
+
+# Run one file — add --no-cov, or the 80% gate fails on the partial run
+uv run pytest tests/test_serialization.py --no-cov
 ```
 
 The three checks above `pytest` are exactly what the `Sanity Checks` CI job
@@ -87,9 +90,9 @@ Each step maintains an audit trail with timestamps for compliance.
 
 - Never edit lockfiles manually - use `uv` for dependency management
 - Always run tests before committing
-- Don't reduce test coverage; add tests with new code. `addopts` reports
-  coverage but sets no `fail_under`, so nothing enforces a floor — the total
-  currently sits at 78%, below the 80% this file used to claim was required
+- Maintain 80%+ test coverage — `--cov-fail-under=80` in `addopts` enforces
+  it, so `pytest` goes red below the line. The margin is thin (80.04% at the
+  time of writing), so a chunk of new code without tests will trip it
 - Use `git --no-pager` for git operations
 - Never create summary/documentation files unless explicitly requested
 
