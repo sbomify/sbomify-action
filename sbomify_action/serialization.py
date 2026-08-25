@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import warnings
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
 from cyclonedx.model.bom import Bom
@@ -988,14 +989,18 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
     """
     Sanitize CycloneDX license data by fixing invalid license IDs and expressions.
 
-    This handles three cases:
+    This handles four cases:
     1. Compound expressions in license.id (OR/AND): moved to expression field
     2. Invalid license.id values: moved to license.name field
     3. Invalid expression values: invalid IDs replaced with LicenseRef-* format
+    4. license.text given as a bare string: wrapped in an attachedText object
 
     Some SBOM generators incorrectly put compound SPDX expressions or
     non-SPDX license strings in the license.id field, which causes
     schema validation failures.
+
+    Components and services are walked recursively, so sub-components nested
+    under a container image or application component are covered too.
 
     Args:
         data: CycloneDX SBOM data as a dict (modified in place)
@@ -1058,6 +1063,16 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
             # Handle license.id field
             license_obj = choice.get("license")
             if isinstance(license_obj, dict):
+                # license.text is an attachedText object, but some generators
+                # (cdxgen among them) emit the licence body as a bare string.
+                # cyclonedx-python-lib calls .items() on it while deserializing,
+                # so a str aborts the whole run rather than one component.
+                license_text = license_obj.get("text")
+                if isinstance(license_text, str):
+                    logger.debug("Wrapping bare license.text string in an attachedText object")
+                    license_obj["text"] = {"content": license_text}
+                    count += 1
+
                 license_id = license_obj.get("id")
                 if license_id:
                     # Compound expressions (containing OR/AND) belong in expression, not id
@@ -1112,27 +1127,47 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
 
         return count
 
-    # Process metadata licenses
+    def _walk(entries: Any, nest_key: str) -> Iterator[dict[str, Any]]:
+        """Yield each entry and its descendants.
+
+        Components and services nest arbitrarily deep — a container image SBOM
+        typically hangs every package off the image component — and a licence
+        the schema rejects is just as fatal at depth as at the top level.
+        """
+        if not isinstance(entries, list):
+            return
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            yield entry
+            yield from _walk(entry.get(nest_key), nest_key)
+
+    def _sanitize_entry(entry: dict[str, Any], fallback_name: str | None = None) -> int:
+        licenses = entry.get("licenses")
+        if not isinstance(licenses, list):
+            return 0
+        name = entry.get("name") or fallback_name
+        return _sanitize_license_choices(licenses, component=name) + _consolidate_mixed_license_types(
+            licenses, component=name
+        )
+
+    # Process metadata licenses, and those of the root component it describes
     metadata = data.get("metadata", {})
-    if "licenses" in metadata:
-        sanitized_count += _sanitize_license_choices(metadata["licenses"], component="metadata")
-        sanitized_count += _consolidate_mixed_license_types(metadata["licenses"], component="metadata")
+    if isinstance(metadata, dict):
+        sanitized_count += _sanitize_entry(metadata, fallback_name="metadata")
+        root_component = metadata.get("component")
+        if isinstance(root_component, dict):
+            sanitized_count += _sanitize_entry(root_component)
+            for nested in _walk(root_component.get("components"), "components"):
+                sanitized_count += _sanitize_entry(nested)
 
-    # Process component licenses
-    components = data.get("components", [])
-    for component in components:
-        comp_name = component.get("name")
-        if "licenses" in component:
-            sanitized_count += _sanitize_license_choices(component["licenses"], component=comp_name)
-            sanitized_count += _consolidate_mixed_license_types(component["licenses"], component=comp_name)
+    # Process component licenses, including nested sub-components
+    for component in _walk(data.get("components"), "components"):
+        sanitized_count += _sanitize_entry(component)
 
-    # Process service licenses (if present)
-    services = data.get("services", [])
-    for service in services:
-        svc_name = service.get("name")
-        if "licenses" in service:
-            sanitized_count += _sanitize_license_choices(service["licenses"], component=svc_name)
-            sanitized_count += _consolidate_mixed_license_types(service["licenses"], component=svc_name)
+    # Process service licenses (if present), including nested sub-services
+    for service in _walk(data.get("services"), "services"):
+        sanitized_count += _sanitize_entry(service)
 
     if sanitized_count > 0:
         logger.info(f"Sanitized {sanitized_count} license issue(s) (invalid IDs and/or compound expressions)")

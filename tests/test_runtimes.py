@@ -642,3 +642,133 @@ class TestBundleFileLock:
             entered = True
 
         assert entered, "the context manager must still yield without fcntl"
+
+
+class TestDownloadRetries:
+    """A dropped connection to the release CDN must not fail the run.
+
+    Seen in production as `RemoteDisconnected('Remote end closed connection
+    without response')`, which aborted generation outright because falling
+    back to another generator is deliberately refused.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_sleeping(self, monkeypatch):
+        monkeypatch.setattr(runtimes.time, "sleep", lambda _seconds: None)
+
+    def test_a_dropped_connection_is_retried(self, monkeypatch):
+        payload = b"#!/bin/sh\necho hi\n"
+        spec = _raw_spec(payload)
+        _register(monkeypatch, spec)
+
+        attempts = []
+
+        def _flaky(*args, **kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise runtimes.requests.ConnectionError("Remote end closed connection without response")
+            return _FakeResponse(payload)
+
+        monkeypatch.setattr(runtimes.requests, "get", _flaky)
+
+        bin_dir = ensure_runtime("faketool")
+
+        assert len(attempts) == 2, "the first attempt should have been retried"
+        assert (bin_dir / "faketool").read_bytes() == payload
+
+    def test_a_retry_after_a_partial_body_still_matches_the_pin(self, monkeypatch):
+        """The hash must not carry bytes over from the failed attempt."""
+        payload = b"0123456789" * 32
+        spec = _raw_spec(payload)
+        _register(monkeypatch, spec)
+
+        attempts = []
+
+        class _TruncatedResponse(_FakeResponse):
+            def iter_content(self, chunk_size=1):
+                yield self._payload[:17]
+                raise runtimes.requests.ConnectionError("connection reset mid-body")
+
+        def _flaky(*args, **kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                return _TruncatedResponse(payload)
+            return _FakeResponse(payload)
+
+        monkeypatch.setattr(runtimes.requests, "get", _flaky)
+
+        bin_dir = ensure_runtime("faketool")
+
+        assert len(attempts) == 2
+        assert (bin_dir / "faketool").read_bytes() == payload
+
+    def test_a_missing_asset_is_not_retried(self, monkeypatch):
+        """A 404 means the manifest is wrong; retrying only slows the failure."""
+        spec = _raw_spec(b"never-served")
+        _register(monkeypatch, spec)
+
+        attempts = []
+
+        class _NotFound(_FakeResponse):
+            def __init__(self):
+                super().__init__(b"")
+                self.status_code = 404
+
+            def raise_for_status(self):
+                raise runtimes.requests.HTTPError("404 Not Found", response=self)
+
+        def _gone(*args, **kwargs):
+            attempts.append(1)
+            return _NotFound()
+
+        monkeypatch.setattr(runtimes.requests, "get", _gone)
+
+        with pytest.raises(SBOMGenerationError, match="Failed to download"):
+            ensure_runtime("faketool")
+
+        assert len(attempts) == 1, "a 404 must fail on the first attempt"
+
+    def test_a_persistently_dropped_connection_gives_up(self, monkeypatch):
+        spec = _raw_spec(b"never-served")
+        _register(monkeypatch, spec)
+
+        attempts = []
+
+        def _always_drops(*args, **kwargs):
+            attempts.append(1)
+            raise runtimes.requests.ConnectionError("Remote end closed connection without response")
+
+        monkeypatch.setattr(runtimes.requests, "get", _always_drops)
+
+        with pytest.raises(SBOMGenerationError, match="Failed to download"):
+            ensure_runtime("faketool")
+
+        assert len(attempts) == runtimes._DOWNLOAD_ATTEMPTS
+
+    def test_a_server_error_is_retried(self, monkeypatch):
+        payload = b"#!/bin/sh\necho hi\n"
+        spec = _raw_spec(payload)
+        _register(monkeypatch, spec)
+
+        attempts = []
+
+        class _Unavailable(_FakeResponse):
+            def __init__(self):
+                super().__init__(b"")
+                self.status_code = 503
+
+            def raise_for_status(self):
+                raise runtimes.requests.HTTPError("503 Service Unavailable", response=self)
+
+        def _flaky(*args, **kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                return _Unavailable()
+            return _FakeResponse(payload)
+
+        monkeypatch.setattr(runtimes.requests, "get", _flaky)
+
+        bin_dir = ensure_runtime("faketool")
+
+        assert len(attempts) == 2
+        assert (bin_dir / "faketool").read_bytes() == payload

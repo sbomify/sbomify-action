@@ -45,12 +45,13 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
 import tomllib
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import requests
 
@@ -73,6 +74,14 @@ except ImportError:  # pragma: no cover - exercised only off POSIX
 _CONNECT_TIMEOUT = 10
 _READ_TIMEOUT = 120
 _CHUNK = 1024 * 1024
+
+# A dropped connection to the release CDN fails the whole run, because falling
+# back to another generator would quietly produce a different SBOM than the one
+# that was asked for. Retry the blips rather than making the user re-run.
+_DOWNLOAD_ATTEMPTS = 3
+_RETRY_BACKOFF = 2.0
+
+_T = TypeVar("_T")
 
 # Marker written into a runtime prefix once it is fully unpacked. Extraction
 # happens in a scratch directory and is moved into place atomically, so a
@@ -320,6 +329,33 @@ _ATTESTATION_TIMEOUT = 60
 _ATTESTATION_MAX_BLOB = str(1024 * 1024 * 1024)
 
 
+def _is_transient(exc: requests.RequestException) -> bool:
+    """Whether ``exc`` is a blip, as opposed to a URL that will never work.
+
+    A 404 means the manifest points at an asset that is not there and no
+    amount of retrying will conjure it; a dropped connection or a 5xx from
+    the CDN in front of the release means try again.
+    """
+    response = getattr(exc, "response", None)
+    if response is not None and getattr(response, "status_code", None) is not None:
+        return response.status_code == 429 or response.status_code >= 500
+    return isinstance(exc, (requests.ConnectionError, requests.Timeout))
+
+
+def _with_retries(attempt: Callable[[], _T], what: str) -> _T:
+    """Run ``attempt``, retrying transient network failures with a backoff."""
+    for n in range(1, _DOWNLOAD_ATTEMPTS + 1):
+        try:
+            return attempt()
+        except requests.RequestException as exc:
+            if n == _DOWNLOAD_ATTEMPTS or not _is_transient(exc):
+                raise
+            delay = _RETRY_BACKOFF ** (n - 1)
+            logger.warning(f"  {what} failed ({exc}); retrying in {delay:.0f}s [attempt {n + 1}/{_DOWNLOAD_ATTEMPTS}]")
+            time.sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def _verify_attestation(artifact: Path, bundle_url: str, label: str) -> None:
     """Check that ``artifact`` was built by our own workflow.
 
@@ -334,10 +370,14 @@ def _verify_attestation(artifact: Path, bundle_url: str, label: str) -> None:
     and are digest-pinned alone.
     """
     logger.info(f"  fetching attestation for {label}")
-    try:
+
+    def _fetch_bundle() -> bytes:
         response = requests.get(bundle_url, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT))
         response.raise_for_status()
-        bundle_bytes = response.content
+        return response.content
+
+    try:
+        bundle_bytes = _with_retries(_fetch_bundle, f"attestation bundle for {label}")
     except requests.RequestException as exc:
         raise SBOMGenerationError(f"Failed to download the attestation bundle for {label}: {exc}") from exc
 
@@ -387,34 +427,48 @@ def _download_verified(asset: Asset, dest: Path) -> None:
     held in memory, and the file is only moved into place after the digest
     matches -- a mismatched download can never be observed at ``dest``.
     """
-    # Our own builds carry no local digest: the Sigstore bundle holds a signed
-    # one, so hashing against a number transcribed into tools.toml would be a
-    # weaker check, not a second one.
-    digest = hashlib.new(asset.algorithm) if asset.digest else None
     scratch = dest.with_suffix(dest.suffix + ".part")
     name = asset.url.rsplit("/", 1)[-1]
     # Chunked responses legitimately omit Content-Length; fall back to an
     # indeterminate bar rather than reporting a bogus total.
-    total = int(getattr(asset, "size", 0) or 0)
-    progress = None
+    declared = int(getattr(asset, "size", 0) or 0)
+
+    def _stream() -> Any:
+        """One attempt. Hashes as it goes and returns the digest, or None.
+
+        Everything an attempt accumulates -- the partial file, the hash, the
+        progress bar -- is created here, so a retry starts from nothing rather
+        than resuming into a half-written file or a poisoned digest.
+        """
+        # Our own builds carry no local digest: the Sigstore bundle holds a
+        # signed one, so hashing against a number transcribed into tools.toml
+        # would be a weaker check, not a second one.
+        attempt_digest = hashlib.new(asset.algorithm) if asset.digest else None
+        progress = None
+        try:
+            with requests.get(asset.url, stream=True, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT)) as response:
+                response.raise_for_status()
+                total = int(getattr(response, "headers", {}).get("Content-Length") or declared or 0)
+                progress = _Progress(name, total)
+                with scratch.open("wb") as handle:
+                    for chunk in response.iter_content(chunk_size=_CHUNK):
+                        if chunk:
+                            if attempt_digest is not None:
+                                attempt_digest.update(chunk)
+                            handle.write(chunk)
+                            progress.advance(len(chunk))
+        except requests.RequestException:
+            scratch.unlink(missing_ok=True)
+            raise
+        finally:
+            if progress is not None:
+                progress.close()
+        return attempt_digest
+
     try:
-        with requests.get(asset.url, stream=True, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT)) as response:
-            response.raise_for_status()
-            total = int(getattr(response, "headers", {}).get("Content-Length") or total or 0)
-            progress = _Progress(name, total)
-            with scratch.open("wb") as handle:
-                for chunk in response.iter_content(chunk_size=_CHUNK):
-                    if chunk:
-                        if digest is not None:
-                            digest.update(chunk)
-                        handle.write(chunk)
-                        progress.advance(len(chunk))
+        digest = _with_retries(_stream, f"download of {name}")
     except requests.RequestException as exc:
-        scratch.unlink(missing_ok=True)
         raise SBOMGenerationError(f"Failed to download {asset.url}: {exc}") from exc
-    finally:
-        if progress is not None:
-            progress.close()
 
     if digest is not None:
         logger.info(f"  verifying {asset.algorithm} of {name}")

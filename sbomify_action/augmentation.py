@@ -73,6 +73,7 @@ from .logging_config import logger
 from .serialization import (
     link_root_dependencies,
     restore_spdx_document_describes,
+    sanitize_cyclonedx_licenses,
     sanitize_dependency_graph,
     sanitize_spdx_json_file,
     serialize_cyclonedx_bom,
@@ -1995,6 +1996,11 @@ def augment_sbom_from_file(
             spec_version = data.get("specVersion")
             if spec_version is None:
                 raise SBOMValidationError("CycloneDX SBOM is missing required 'specVersion' field")
+
+            # Repair what the deserializer would otherwise choke on. Enrichment
+            # and generation already do this; augmentation can be the first step
+            # to touch a third-party SBOM, so it has to do it too.
+            sanitize_cyclonedx_licenses(data)
 
             # Parse as CycloneDX
             try:
