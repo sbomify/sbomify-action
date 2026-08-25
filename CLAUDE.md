@@ -20,9 +20,17 @@ uv run ruff check sbomify_action tests
 # Run format check
 uv run ruff format --check sbomify_action tests
 
+# Run type checker
+uv run mypy sbomify_action
+
 # Run tests (80% coverage required)
 uv run pytest
 ```
+
+The three checks above `pytest` are exactly what the `Sanity Checks` CI job
+runs, in that order. Run all four before pushing — mypy in particular fails
+CI on things the linter is happy with, such as returning `Any` from a
+function annotated to return `bool`.
 
 ## Architecture
 
