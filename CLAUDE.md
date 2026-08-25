@@ -23,7 +23,7 @@ uv run ruff format --check sbomify_action tests
 # Run type checker
 uv run mypy sbomify_action
 
-# Run tests (80% coverage required)
+# Run tests (prints a coverage report; no threshold is enforced)
 uv run pytest
 ```
 
@@ -87,7 +87,9 @@ Each step maintains an audit trail with timestamps for compliance.
 
 - Never edit lockfiles manually - use `uv` for dependency management
 - Always run tests before committing
-- Maintain 80%+ test coverage
+- Don't reduce test coverage; add tests with new code. `addopts` reports
+  coverage but sets no `fail_under`, so nothing enforces a floor — the total
+  currently sits at 78%, below the 80% this file used to claim was required
 - Use `git --no-pager` for git operations
 - Never create summary/documentation files unless explicitly requested
 
