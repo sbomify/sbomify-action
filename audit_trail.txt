@@ -1,0 +1,8 @@
+# SBOM Audit Trail
+# Generated: 2026-07-23T17:52:43Z
+# Input: /private/tmp/claude-501/-Users-ranaaurangzaib-PycharmProjects-sbomify/84b1a6f8-a8de-4264-b66a-ea8b8e980926/scratchpad/crypto-proj/requirements.txt
+# Output: sbom_output.json
+
+## Enrichment
+
+[2026-07-23T17:52:41Z] ENRICHMENT pkg:pypi/charset_normalizer@3.4.9 transitive_dependency ADDED "discovered via requests" (source: pipdeptree)
