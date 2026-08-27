@@ -86,3 +86,30 @@ class TestLicenseDBCacheDir:
             assert "license-db" in str(cache_dir)
             # Should NOT be empty string path
             assert str(cache_dir) != "/license-db"
+
+    def test_unwritable_primary_falls_back_to_tempdir(self, tmp_path: Path):
+        """An unwritable primary location costs the cache, not the run.
+
+        This is the non-root container case: a uid with no passwd entry gets
+        ``HOME=/``, so the default lands on ``/.cache`` and the mkdir raises.
+        Enrichment must carry on with a cache somewhere else.
+
+        ``mkdir`` is stubbed rather than relying on filesystem permissions so
+        the test means the same thing when the suite happens to run as root,
+        for whom mode 0o500 is no obstacle.
+        """
+        blocked = tmp_path / "unwritable"
+        real_mkdir = Path.mkdir
+
+        def fake_mkdir(self: Path, *args: object, **kwargs: object) -> None:
+            if str(self).startswith(str(blocked)):
+                raise PermissionError(13, "Permission denied", str(self))
+            real_mkdir(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        with patch.dict(os.environ, {"SBOMIFY_CACHE_DIR": str(blocked)}, clear=False):
+            with patch.object(Path, "mkdir", fake_mkdir):
+                cache_dir = get_cache_dir()
+
+        assert not str(cache_dir).startswith(str(blocked))
+        assert cache_dir.name == "license-db"
+        assert cache_dir.exists()

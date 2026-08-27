@@ -31,6 +31,7 @@ The fastest way to get going is the **interactive setup wizard**. Run it from th
 
 ```bash
 docker run --rm -it \
+  --user "$(id -u):$(id -g)" \
   -v "$(pwd):/github/workspace" \
   -w /github/workspace \
   ghcr.io/sbomify/sbomify-action \
@@ -40,6 +41,8 @@ docker run --rm -it \
 The wizard scans your repo for lockfiles, signs you in to [sbomify](https://app.sbomify.com), registers the matching components, and writes a release-ready `.github/workflows/sboms.yml` for you—no hand-editing YAML. Pass `--dry-run` to preview the full plan without making any API changes or writing files (it still signs in to read your workspace).
 
 > **Note:** The wizard is interactive, so the `-it` flags are required, and it must run on your machine—not in CI. The volume mount (`-v "$(pwd):/github/workspace"`) is what lets it write the generated workflow back into your repo.
+
+> **Running as your own user:** The image runs unprivileged. Its default uid is `1001`, which is the user that owns the workspace on GitHub-hosted runners, so the GitHub Action needs no extra flags. Anywhere else—your laptop, a self-hosted runner, GitLab—the checkout belongs to *you*, and a container that does not own it cannot write its output there. That is what `--user "$(id -u):$(id -g)"` is for. It also means the files you get back are yours rather than root's.
 
 ### Or configure it by hand
 
@@ -77,6 +80,7 @@ The wizard is the recommended way to onboard a repository. It's an interactive t
 
 ```bash
 docker run --rm -it \
+  --user "$(id -u):$(id -g)" \
   -v "$(pwd):/github/workspace" \
   -w /github/workspace \
   ghcr.io/sbomify/sbomify-action \
@@ -1038,6 +1042,7 @@ definitions:
 docker volume create sbomify-cache
 
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   -v $(pwd):/github/workspace \
   -v sbomify-cache:/cache \
   -w /github/workspace \

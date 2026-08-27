@@ -90,7 +90,13 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Initialize Conan profile for C/C++ package metadata lookups
 # This creates a default profile based on the container's compiler/OS settings
-RUN conan profile detect --force
+#
+# CONAN_HOME rather than the default ~/.conan2: this runs as root at build
+# time, and /root is mode 700, so a profile written there is unreadable by
+# the unprivileged user the image runs as. Conan then silently falls back to
+# having no profile.
+ENV CONAN_HOME=/opt/conan
+RUN conan profile detect --force && chmod -R a+rX /opt/conan
 
 # Marks our own image, which two behaviours key off:
 #   - runtime tools are fetched on demand only in here, where we decide the
@@ -117,5 +123,34 @@ ENV SBOMIFY_GITHUB_ACTION_VERSION=${VERSION}
 ENV SBOMIFY_GITHUB_ACTION_COMMIT_SHA=${COMMIT_SHA}
 ENV SBOMIFY_GITHUB_ACTION_VCS_REF=${VCS_REF}
 
-# nosemgrep: missing-user  # GitHub Action container must run as root to access the mounted workspace
+# Run unprivileged. Nothing this image does needs root: the generators read
+# the workspace, write their output beside it, and cache tool bundles under
+# HOME.
+#
+# uid 1001 is not arbitrary -- it is the `runner` user on GitHub-hosted
+# runners, which owns the bind-mounted workspace. A container writing
+# step_1.json into a workspace it does not own fails on the very first
+# generator, so the uid has to match rather than merely be non-zero. Callers
+# whose workspace is owned by someone else pass `--user`.
+#
+# HOME is writable by *any* uid and gid, not just this one. Two callers need
+# that. Platforms that assign a random uid (OpenShift among them) keep gid 0,
+# and the README's `docker run -v "$(pwd):/github/workspace"` is run from a
+# laptop where the checkout is owned by the developer -- who reaches for
+# `--user "$(id -u):$(id -g)"`, supplying a gid that is nobody's group here.
+#
+# What lives under HOME is a per-run cache and cosign's TUF trust root
+# (`$HOME/.sigstore`), inside a container with a single tenant. HOME is also
+# set explicitly, because a uid with no passwd entry otherwise gets `/`: that
+# is what made cosign fail to verify every tool bundle, and refusing an
+# unverifiable binary is a hard stop by design, so every ecosystem that
+# fetches one died there.
+RUN useradd --uid 1001 --gid 0 --create-home --home-dir /home/sbomify --shell /bin/bash sbomify && \
+    mkdir -p /home/sbomify/.cache && \
+    chgrp -R 0 /home/sbomify && \
+    chmod -R a+rwX /home/sbomify
+ENV HOME=/home/sbomify
+ENV XDG_CACHE_HOME=/home/sbomify/.cache
+USER 1001:0
+
 CMD ["sbomify-action"]

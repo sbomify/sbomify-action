@@ -19,6 +19,7 @@ import io
 import json
 import os
 import re
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -136,16 +137,35 @@ def get_cache_dir() -> Path:
     Priority:
     1. SBOMIFY_CACHE_DIR environment variable (explicit cache location)
     2. XDG_CACHE_HOME/sbomify/license-db (XDG standard)
-    3. ~/.cache/sbomify/license-db (fallback)
-    """
-    explicit_cache = os.environ.get("SBOMIFY_CACHE_DIR")
-    if explicit_cache:
-        cache_dir = Path(explicit_cache) / "license-db"
-    else:
-        cache_dir = DEFAULT_CACHE_DIR
+    3. ~/.cache/sbomify/license-db
+    4. a temporary directory
 
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
+    The last step is what makes this safe once the image stops running as
+    root, the same reasoning as ``resolve_tool_cache`` in ``runtimes.py``: a
+    uid with no passwd entry gets ``HOME=/``, so ``~/.cache`` is ``/.cache``
+    and the mkdir raises ``PermissionError``. This is enrichment, not the
+    critical path -- a cache we cannot write should cost us the cache, not
+    the run.
+    """
+    candidates = []
+    if explicit_cache := os.environ.get("SBOMIFY_CACHE_DIR"):
+        candidates.append(Path(explicit_cache) / "license-db")
+    else:
+        candidates.append(DEFAULT_CACHE_DIR)
+    candidates.append(Path(tempfile.gettempdir()) / "sbomify" / "license-db")
+
+    last_error: OSError | None = None
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        except OSError as error:
+            last_error = error
+            logger.debug("License-db cache unusable at %s: %s", candidate, error)
+
+    # Both candidates failed, which means even the temporary directory is not
+    # writable. Nothing sensible is left to return.
+    raise last_error if last_error else OSError("No writable license-db cache directory")
 
 
 class LicenseDBSource:
