@@ -64,7 +64,7 @@ Each plugin implements:
    - All sources output to `NormalizedMetadata` dataclass
 
 3. **Augmentation** (`sbomify_action/_augmentation/`) - Adds organizational metadata
-   - Providers: `json_config` (sbomify.json), `sbomify_api`, `github`, `gitlab`, `bitbucket`
+   - Providers: `json_config` (sbomify.json), `sbomify_api`, `github`, `gitlab`, `bitbucket`, `teamcity`
    - Auto-detects VCS info from CI environment
 
 4. **Upload** (`sbomify_action/_upload/`) - Uploads SBOMs to destinations

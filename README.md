@@ -336,6 +336,8 @@ Setting `LOCK_FILE` (or `SBOM_FILE`) to `none` creates an empty SBOM and injects
 | `ADDITIONAL_PACKAGES_FILE` | No       | Custom path to additional packages file                                          |
 | `ADDITIONAL_PACKAGES`      | No       | Inline PURLs to inject (comma or newline separated)                              |
 | `DISABLE_VCS_AUGMENTATION` | No       | Set to `true` to disable auto-detection of VCS info from CI environment          |
+| `SBOMIFY_VCS_URL`         | No       | Repository URL to record when auto-detection cannot find one. **TeamCity only** — see [Other CI/CD Platforms](#other-cicd-platforms) |
+| `SBOMIFY_VCS_REF`         | No       | Branch or tag to record when auto-detection cannot find one. **TeamCity only**    |
 | `SBOMIFY_CACHE_DIR`        | No       | Directory for sbomify license database cache                                     |
 | `SBOMIFY_CLEARLY_CACHED_URL` | No     | Override the ClearlyDefined cache URL (default: `https://clearly-cached.sbomify.com`) |
 | `WORKING_DIR`              | No       | Working directory (relative to cwd or `$GITHUB_WORKSPACE` in GHA; monorepo)      |
@@ -592,11 +594,39 @@ When running in CI environments, sbomify automatically detects and adds VCS (Ver
 | GitHub Actions      | Repository URL, commit SHA, branch/tag (supports GitHub Enterprise Server) |
 | GitLab CI           | Project URL, commit SHA, ref name (supports self-managed instances)        |
 | Bitbucket Pipelines | Repository URL, commit SHA, branch/tag                                     |
+| TeamCity            | Repository URL, commit SHA, branch/tag (read from the build properties file) |
 
 **What's added to the SBOM:**
 
 - **CycloneDX**: VCS external reference on root component with `git+https://...@sha` format
 - **SPDX**: `downloadLocation` with commit-pinned URL, `sourceInfo` with build context, VCS external reference
+
+**TeamCity specifics:**
+
+TeamCity exposes almost nothing about the VCS root as an environment variable — only
+`TEAMCITY_VERSION` (detection) and `BUILD_VCS_NUMBER` (the revision) are automatic. The
+repository URL and branch are TeamCity *configuration parameters*, read from the build
+properties file at `$TEAMCITY_BUILD_PROPERTIES_FILE`.
+
+- When the action runs **inside a container**, that file may point at an agent path the
+  container cannot see. Map `SBOMIFY_VCS_URL` and `SBOMIFY_VCS_REF` explicitly instead — see
+  [Other CI/CD Platforms](#other-cicd-platforms) for a full build configuration.
+- **Only Git VCS roots are augmented.** TeamCity also supports Subversion, Perforce, TFVC,
+  Mercurial, and plugin-provided systems, where `BUILD_VCS_NUMBER` is a revision number,
+  changelist, or timestamp rather than a commit hash. Since SBOM VCS fields are Git-shaped
+  (`git+https://…@sha`), recording a Perforce changelist as a commit would be a false claim.
+  Non-Git roots are skipped; set `vcs_url` / `vcs_commit_sha` in `sbomify.json` to record
+  them yourself.
+- **How Git is detected, and its one limitation.** TeamCity exposes no VCS-type parameter at
+  all, so the repository URL is the only automatic signal: a URL ending in `.git`, on a known
+  Git host, or in `ssh://` / `git@host:path` form is treated as Git. A **self-hosted Git
+  server whose URL has neither a `.git` suffix nor a recognised host** — for example
+  `https://git.example.com/team/app` — therefore cannot be auto-detected. Set
+  `SBOMIFY_VCS_URL` (or `vcs_url` in `sbomify.json`) for those; an explicitly supplied URL
+  is always trusted. This is deliberate: for an attestation document, omitting provenance is
+  better than asserting a repository that may not be Git.
+- No commit URL is emitted. TeamCity is host-agnostic, and the commit path differs per host
+  (`/commit/`, `/-/commit/`, `/commits/`), so guessing wrong is worse than omitting it.
 
 **Overriding auto-detected values:**
 
@@ -979,14 +1009,14 @@ Use `actions/cache` before calling the sbomify action:
     UPLOAD: false
 ```
 
-For caching in other CI environments (GitLab, Bitbucket, Docker), see [Other CI/CD Platforms](#other-cicd-platforms).
+For caching in other CI environments (GitLab, Bitbucket, TeamCity, Docker), see [Other CI/CD Platforms](#other-cicd-platforms).
 
 </details>
 
 <a id="other-cicd-platforms"></a>
 
 <details>
-<summary><strong>Other CI/CD platforms</strong> (GitLab, Bitbucket, Docker, pip)</summary>
+<summary><strong>Other CI/CD platforms</strong> (GitLab, Bitbucket, TeamCity, Docker, pip)</summary>
 
 #### GitLab
 
@@ -1030,6 +1060,61 @@ definitions:
   caches:
     sbomify: .sbomify-cache
 ```
+
+#### TeamCity
+
+Add a **Command Line** build step with "Run step within Docker container" set to
+`ghcr.io/sbomify/sbomify-action:latest` and the script `sbomify-action`, then add the
+parameters below on the **Parameters** tab as `env.*` entries. The equivalent Kotlin DSL:
+
+```kotlin
+object GenerateSbom : BuildType({
+    name = "Generate SBOM"
+    vcs { root(MyVcsRoot) }
+
+    params {
+        param("env.LOCK_FILE", "poetry.lock")
+        param("env.OUTPUT_FILE", "sbom.cdx.json")
+        param("env.ENRICH", "true")
+        param("env.COMPONENT_ID", "<your-component-id>")
+        password("env.TOKEN", "credentialsJSON:<token-id>")
+
+        // VCS provenance. Auto-detected from the build properties file on a
+        // plain Command Line step; map it explicitly when the step runs inside
+        // a container, which may not see the agent's properties file.
+        // Replace MyVcsRoot with your VCS root ID (Project Settings -> VCS Roots).
+        param("env.SBOMIFY_VCS_URL", "%vcsroot.MyVcsRoot.url%")
+        param("env.SBOMIFY_VCS_REF", "%teamcity.build.vcs.branch.MyVcsRoot%")
+
+        param("env.SBOMIFY_CACHE_DIR", "/cache/sbomify")
+        param("env.SYFT_CACHE_DIR", "/cache/syft")
+    }
+
+    steps {
+        script {
+            scriptContent = "sbomify-action"
+            dockerImage = "ghcr.io/sbomify/sbomify-action:latest"
+            dockerPull = true
+            // The cache must live outside the checkout directory, which a
+            // clean checkout wipes.
+            dockerRunParameters = "-v /opt/buildagent/cache/sbomify:/cache"
+        }
+    }
+})
+```
+
+Three TeamCity-specific gotchas:
+
+- **Use `%teamcity.build.vcs.branch.<VcsRootId>%`, not `%teamcity.build.branch%`.** The latter
+  is the literal string `<default>` when the build runs on the default branch and no branch
+  specification is configured ([TW-23699](https://youtrack.jetbrains.com/issue/TW-23699)),
+  which would otherwise be recorded as the branch name.
+- **`BUILD_VCS_NUMBER` needs no mapping** — it is a real environment variable, so it reaches
+  the container on its own. Note it is the VCS *revision*; the build counter is `BUILD_NUMBER`.
+- **Caching works differently from GitLab and Bitbucket.** TeamCity agents are persistent and
+  have no first-class cache primitive, so point the cache at an agent-local directory outside
+  the checkout directory and bind-mount it, as above. For a non-Docker step, set
+  `SBOMIFY_CACHE_DIR` and `SYFT_CACHE_DIR` directly to that agent path.
 
 #### Docker
 

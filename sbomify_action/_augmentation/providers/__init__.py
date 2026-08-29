@@ -8,6 +8,7 @@ from .github import GitHubActionsProvider
 from .gitlab import GitLabCIProvider
 from .json_config import JsonConfigProvider
 from .sbomify_api import SbomifyApiProvider
+from .teamcity import TeamCityProvider
 
 __all__ = [
     "BitbucketPipelinesProvider",
@@ -16,5 +17,6 @@ __all__ = [
     "GitLabCIProvider",
     "JsonConfigProvider",
     "SbomifyApiProvider",
+    "TeamCityProvider",
     "is_vcs_augmentation_disabled",
 ]

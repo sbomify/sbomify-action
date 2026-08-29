@@ -1068,6 +1068,7 @@ def initialize_sentry() -> None:
     is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
     is_gitlab_ci = os.getenv("GITLAB_CI") == "true"
     is_bitbucket = os.getenv("BITBUCKET_PIPELINE_UUID") is not None
+    is_teamcity = os.getenv("TEAMCITY_VERSION") is not None
 
     # Determine if we should send context based on repository visibility
     # GitHub Actions
@@ -1143,6 +1144,15 @@ def initialize_sentry() -> None:
         sentry_sdk.set_tag("ci.platform", "bitbucket-pipelines")
         sentry_sdk.set_tag("repo.public", "False")
         logger.debug("Skipping CI context for Sentry (Bitbucket repository visibility unknown, treating as private)")
+
+    # TeamCity
+    elif is_teamcity:
+        # TeamCity is overwhelmingly on-premises and exposes no repository
+        # visibility signal, so treat all repos as private -- same reasoning
+        # as Bitbucket above.
+        sentry_sdk.set_tag("ci.platform", "teamcity")
+        sentry_sdk.set_tag("repo.public", "False")
+        logger.debug("Skipping CI context for Sentry (TeamCity repository visibility unknown, treating as private)")
 
     # Unknown/Local environment
     else:

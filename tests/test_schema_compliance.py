@@ -29,7 +29,7 @@ from sbomify_action.serialization import serialize_cyclonedx_bom
 # The schema-compliance tests mock sbomify-api and drive the whole
 # pipeline to verify that an operator-supplied lifecycle_phase makes
 # it all the way to the emitted BOM. If the suite runs IN GitHub
-# Actions / GitLab CI / Bitbucket Pipelines, the real CI providers
+# Actions / GitLab CI / Bitbucket Pipelines / TeamCity, the real CI providers
 # fire and win over the sbomify-api mock (priority 20 < 50), which
 # would falsely fail these assertions. Scrub the relevant env vars
 # for the duration of each test so only the mocked providers speak.
@@ -54,6 +54,11 @@ _AUGMENTATION_ENV_KEYS_TO_CLEAR = (
     "BITBUCKET_COMMIT",
     "BITBUCKET_BRANCH",
     "BITBUCKET_TAG",
+    "TEAMCITY_VERSION",
+    "TEAMCITY_BUILD_PROPERTIES_FILE",
+    "BUILD_VCS_NUMBER",
+    "SBOMIFY_VCS_URL",
+    "SBOMIFY_VCS_REF",
     "DOCKER_IMAGE",
 )
 
