@@ -15,22 +15,24 @@
 
 # Which sbom-tools release to fetch from.
 #
-# This said that scripts/freeze_tool_versions.py stamps a release tag here at
-# build time, "so a cut release keeps fetching the bundles it was tested
-# against for as long as it exists". It does not, and cannot: that script only
-# rewrites `version_from` lines, and sbom-tools publishes exactly one tag --
-# tools-rolling -- so there is no release tag to stamp.
+# An immutable release tag, not "tools-rolling". Rolling tracks master and its
+# bytes change on every push, so a cut sbomify-action release fetched whatever
+# master's bundles happened to be on the day it ran: two runs of the same
+# pinned version, weeks apart, could resolve different toolchains and produce
+# different SBOMs. Authenticity was never in doubt -- every bundle is
+# cosign-verified against its Sigstore attestation -- but the version floated,
+# which is not what a pinned release should mean.
 #
-# The consequence is worth being plain about, because the comment claimed the
-# opposite: a cut release fetches whatever master's bundles are on the day it
-# runs. Two runs of the same pinned sbomify-action version, weeks apart, can
-# resolve different toolchains and produce different SBOMs. Authenticity is
-# still guaranteed -- every bundle is cosign-verified against its Sigstore
-# attestation -- but the *version* floats.
+# A previous comment here claimed scripts/freeze_tool_versions.py stamped a
+# release tag at build time. It never did: that script only rewrites
+# `version_from` lines, and until tools-26.09.0 there was no release tag to
+# stamp -- sbom-tools published only the rolling pre-release.
 #
-# Closing this needs sbom-tools to cut immutable release tags; freezing here
-# is the second half of that change, not something this file can do alone.
-tools_release = "tools-rolling"
+# Bump this with each sbom-tools release. The trade is deliberate: master no
+# longer exercises freshly bumped tools automatically, which is what rolling
+# was for, so testing a bump means pointing this at "tools-rolling"
+# temporarily. There is no environment override -- see tool_manifest.py.
+tools_release = "tools-26.09.0"
 
 # ---------------------------------------------------------------------------
 # Bundles. `provides` is the lookup that decides what to download when a
