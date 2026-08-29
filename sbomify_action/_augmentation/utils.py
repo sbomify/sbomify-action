@@ -52,14 +52,19 @@ def build_vcs_url_with_commit(vcs_url: str, commit_sha: Optional[str]) -> str:
         VCS URL with commit pinning if SHA provided, otherwise the
         URL normalized to git+ format
     """
+    # Both http and https are prefixed: TeamCity is the first provider that can
+    # emit a plain-http root URL (an internal server), and without the prefix
+    # the result "http://host/org/app@<sha>" is not a parseable VCS locator.
+    is_http = vcs_url.startswith(("https://", "http://"))
+
     if not commit_sha:
         # Just normalize to git+ format if no commit
-        if vcs_url.startswith("https://"):
+        if is_http:
             return f"git+{vcs_url}"
         return vcs_url
 
     # Build URL with commit pinning
-    if vcs_url.startswith("https://"):
+    if is_http:
         return f"git+{vcs_url}@{commit_sha}"
     return f"{vcs_url}@{commit_sha}"
 
@@ -71,7 +76,7 @@ _MAX_VCS_URL_LENGTH = 2048
 # scp-style shorthand: ``user@host:path``. The ``user@`` part is REQUIRED so that
 # "host:1234/path" can never be misread as scp syntax and a Windows path such as
 # "C:\repos\app" cannot match either.
-_SCP_LIKE_RE = re.compile(r"^(?P<user>[^\s@/:\\]+)@(?P<host>[^\s@/:\\]+):(?P<path>[^/\s].*)$")
+_SCP_LIKE_RE = re.compile(r"^(?P<user>[^\s@/:\\]+)@(?P<host>[^\s@/:\\]+):(?P<path>/?[^\s].*)$")
 
 # Schemes we are willing to interpret as a remote repository. Anything else
 # (file://, svn://, perforce, ...) is rejected outright.
@@ -102,6 +107,20 @@ def strip_ref_prefix(ref: Optional[str]) -> Optional[str]:
         if ref.startswith(prefix):
             return ref[len(prefix) :]
     return ref
+
+
+def is_scp_like_git_url(url: str) -> bool:
+    """Whether ``url`` is scp-style shorthand for a git remote.
+
+    ``git@host:org/repo.git`` and ``git@host:/srv/git/app.git`` qualify; a
+    Perforce P4PORT such as ``user@perforce.example.com:1666`` does not, since
+    its "path" is a port number with no path separator and no ``.git`` suffix.
+    """
+    match = _SCP_LIKE_RE.match(url.strip())
+    if not match:
+        return False
+    path = match.group("path")
+    return "/" in path or path.lower().endswith(".git")
 
 
 def _assemble_repo_url(scheme: str, host: str, port: Optional[int], path: str) -> Optional[str]:
@@ -172,7 +191,12 @@ def normalize_repo_url(raw: Optional[str]) -> Optional[str]:
     if scp_match := _SCP_LIKE_RE.match(url):
         # scp syntax has no port: everything after the colon is a path, so
         # "git@host:7999/org/repo.git" legitimately means path "7999/org/repo".
-        return _assemble_repo_url("https", scp_match.group("host").lower(), None, scp_match.group("path"))
+        # Require the path to look like a repository path, otherwise a Perforce
+        # P4PORT ("user@perforce.example.com:1666") would be turned into the
+        # fabricated URL https://perforce.example.com/1666.
+        if is_scp_like_git_url(url):
+            return _assemble_repo_url("https", scp_match.group("host").lower(), None, scp_match.group("path"))
+        return None
 
     try:
         parts = urlsplit(url)

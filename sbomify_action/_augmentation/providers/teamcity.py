@@ -48,6 +48,7 @@ from sbomify_action.logging_config import logger
 
 from ..metadata import AugmentationMetadata
 from ..utils import (
+    is_scp_like_git_url,
     is_vcs_augmentation_disabled,
     normalize_repo_url,
     strip_ref_prefix,
@@ -343,12 +344,15 @@ def _load_teamcity_properties() -> Dict[str, str]:
     return {**props, **config_props}
 
 
-def _select_repo_url(props: Dict[str, str]) -> Tuple[Optional[str], Optional[str]]:
+def _select_repo_url(props: Dict[str, str]) -> Tuple[Optional[str], Optional[str], bool]:
     """
     Choose the VCS root URL from the properties.
 
-    Returns ``(root_id, raw_url)``. ``root_id`` is None when the bare
-    ``vcsroot.url`` form was used.
+    Returns ``(root_id, raw_url, ambiguous)``. ``root_id`` is None when the bare
+    ``vcsroot.url`` form was used. ``ambiguous`` is True when the build has
+    several VCS roots and one was picked arbitrarily -- callers must then refuse
+    any revision or branch that is not scoped to that same root, or they would
+    pin one repository's URL to another's commit.
 
     The documented form is ``vcsroot.<VCS_root_ID>.url``, so the multi-root
     scan is the main path rather than an edge case. A bare ``vcsroot.url`` is
@@ -356,7 +360,7 @@ def _select_repo_url(props: Dict[str, str]) -> Tuple[Optional[str], Optional[str
     it.
     """
     if bare := props.get("vcsroot.url"):
-        return None, bare
+        return None, bare, False
 
     candidates: List[Tuple[str, str]] = []
     for key, value in props.items():
@@ -366,7 +370,7 @@ def _select_repo_url(props: Dict[str, str]) -> Tuple[Optional[str], Optional[str
             candidates.append((match.group("root_id"), value))
 
     if not candidates:
-        return None, None
+        return None, None, False
 
     # Deterministic regardless of dict ordering.
     candidates.sort(key=lambda item: (item[0].lower(), item[0]))
@@ -376,10 +380,10 @@ def _select_repo_url(props: Dict[str, str]) -> Tuple[Optional[str], Optional[str
             f"TeamCity build has {len(candidates)} VCS roots; using '{root_id}'. "
             f"Set vcs_url in sbomify.json or SBOMIFY_VCS_URL to choose explicitly."
         )
-    return root_id, url
+    return root_id, url, len(candidates) > 1
 
 
-def _select_ref(props: Dict[str, str], root_id: Optional[str]) -> Optional[str]:
+def _select_ref(props: Dict[str, str], root_id: Optional[str], ambiguous: bool = False) -> Optional[str]:
     """
     Choose the branch/ref from the properties.
 
@@ -394,6 +398,11 @@ def _select_ref(props: Dict[str, str], root_id: Optional[str]) -> Optional[str]:
 
     if root_id and (scoped := props.get(f"{_VCS_BRANCH_PREFIX}{root_id}")):
         return scoped
+
+    if ambiguous:
+        # Several roots: a lone teamcity.build.vcs.branch.* almost certainly
+        # belongs to a different root than the URL we chose.
+        return None
 
     vcs_branches = [value for key, value in props.items() if key.startswith(_VCS_BRANCH_PREFIX) and value]
     if len(vcs_branches) == 1:
@@ -411,7 +420,7 @@ def _normalize_root_id_for_env(root_id: str) -> str:
     return re.sub(r"[^A-Z0-9]", "_", root_id.upper())
 
 
-def _select_commit_sha(props: Dict[str, str], root_id: Optional[str]) -> Optional[str]:
+def _select_commit_sha(props: Dict[str, str], root_id: Optional[str], ambiguous: bool = False) -> Optional[str]:
     """
     Choose the commit SHA, or None when it cannot be established unambiguously.
 
@@ -428,7 +437,10 @@ def _select_commit_sha(props: Dict[str, str], root_id: Optional[str]) -> Optiona
     VCS this variable holds a revision number, changelist, or timestamp -- an
     SVN revision such as "1234567" is valid hex and would pass a looser rule.
     """
-    candidate = os.getenv("BUILD_VCS_NUMBER")
+    # When several roots exist the bare BUILD_VCS_NUMBER is the *primary*
+    # root's revision, which need not be the root we picked, so it is only
+    # trusted for an unambiguous choice.
+    candidate = None if ambiguous else os.getenv("BUILD_VCS_NUMBER")
 
     if not candidate and root_id:
         # Verbatim first: this is what TeamCity actually exports.
@@ -438,8 +450,16 @@ def _select_commit_sha(props: Dict[str, str], root_id: Optional[str]) -> Optiona
         if not candidate:
             candidate = props.get(f"build.vcs.number.{root_id}")
 
-    if not candidate:
+    if not candidate and not ambiguous:
         candidate = props.get("build.vcs.number")
+
+    if not candidate and ambiguous:
+        logger.warning(
+            "TeamCity build has several VCS roots and no revision scoped to the chosen "
+            "root; omitting the commit SHA rather than pinning another repository's "
+            "revision. Set vcs_commit_sha in sbomify.json to record it explicitly."
+        )
+        return None
 
     if not candidate:
         scoped = {key: value for key, value in os.environ.items() if key.startswith("BUILD_VCS_NUMBER_") and value}
@@ -471,8 +491,11 @@ def _url_looks_like_git(raw_url: str, normalized_url: Optional[str]) -> bool:
     lowered = candidate.lower()
     if lowered.startswith(("ssh://", "git://", "git+")):
         return True
-    # scp shorthand (git@host:org/repo) is a git-specific convention.
-    if "@" in candidate and "://" not in candidate and ":" in candidate.split("@", 1)[1]:
+    # scp shorthand (git@host:org/repo) is a git-specific convention. Uses the
+    # same predicate as the normalizer, so the two cannot disagree -- otherwise
+    # a string accepted here but rejected there leaves the provider "confirmed
+    # Git" with no URL.
+    if is_scp_like_git_url(candidate):
         return True
 
     if normalized_url:
@@ -565,16 +588,18 @@ class TeamCityProvider:
 
         props = _load_teamcity_properties()
 
-        root_id, raw_url = _select_repo_url(props)
+        root_id, raw_url, ambiguous = _select_repo_url(props)
         vcs_url = normalize_repo_url(raw_url) if raw_url else None
         git_confirmed = _looks_like_git_root(props, root_id, raw_url, vcs_url)
 
-        if not vcs_url:
+        if not git_confirmed:
             # Fallback tier. An explicitly configured URL is an operator
             # assertion and is honoured without a Git signal, exactly as
-            # sbomify.json is -- otherwise a self-hosted Git shop on
-            # git.corp.example.com would be refused after being told what the
-            # repository is.
+            # sbomify.json is. This must trigger whenever Git could not be
+            # confirmed -- not merely when no URL was found -- because the
+            # documented case is a self-hosted root such as
+            # https://git.example.com/team/app, which normalizes perfectly well
+            # yet cannot be recognised as Git.
             if operator_url := normalize_repo_url(os.getenv("SBOMIFY_VCS_URL")):
                 vcs_url = operator_url
                 git_confirmed = True
@@ -587,8 +612,8 @@ class TeamCityProvider:
             )
             return None
 
-        ref = strip_ref_prefix(_select_ref(props, root_id) or os.getenv("SBOMIFY_VCS_REF"))
-        commit_sha = _select_commit_sha(props, root_id)
+        ref = strip_ref_prefix(_select_ref(props, root_id, ambiguous) or os.getenv("SBOMIFY_VCS_REF"))
+        commit_sha = _select_commit_sha(props, root_id, ambiguous)
 
         if not vcs_url and not commit_sha:
             logger.warning(

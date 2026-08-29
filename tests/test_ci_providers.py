@@ -786,6 +786,34 @@ class TestStripRefPrefix(unittest.TestCase):
         self.assertIsNone(strip_ref_prefix(""))
 
 
+class TestBuildVcsUrlWithHttp(unittest.TestCase):
+    """http:// URLs must still get the git+ prefix.
+
+    TeamCity is the first provider that can emit a plain-http root URL (an
+    internal server). Without the prefix the locator is
+    "http://host/org/app@<sha>", which a consumer reads as part of the path
+    rather than as a pinned VCS reference.
+    """
+
+    def test_http_url_is_prefixed(self):
+        self.assertEqual(
+            build_vcs_url_with_commit("http://git.corp.local:8080/org/app", "abc123"),
+            "git+http://git.corp.local:8080/org/app@abc123",
+        )
+
+    def test_http_url_without_commit_is_prefixed(self):
+        self.assertEqual(
+            build_vcs_url_with_commit("http://git.corp.local/org/app", None),
+            "git+http://git.corp.local/org/app",
+        )
+
+    def test_https_behaviour_unchanged(self):
+        self.assertEqual(
+            build_vcs_url_with_commit("https://github.com/acme/app", "abc123"),
+            "git+https://github.com/acme/app@abc123",
+        )
+
+
 class TestNormalizeRepoUrl(unittest.TestCase):
     """Tests for normalize_repo_url."""
 
@@ -823,6 +851,21 @@ class TestNormalizeRepoUrl(unittest.TestCase):
 
     def test_over_long_url_rejected(self):
         self.assertIsNone(normalize_repo_url("https://host/" + "a" * 4000))
+
+    def test_scp_form_with_absolute_path(self):
+        """git@host:/srv/git/app.git is a legal scp-style remote."""
+        self.assertEqual(
+            normalize_repo_url("git@host:/srv/git/app.git"),
+            "https://host/srv/git/app",
+        )
+
+    def test_perforce_port_is_not_a_git_remote(self):
+        """user@host:1666 is a P4PORT, not scp shorthand.
+
+        Its "path" is a port number with no separator and no .git suffix;
+        accepting it would fabricate https://perforce.example.com/1666.
+        """
+        self.assertIsNone(normalize_repo_url("user@perforce.example.com:1666"))
 
     def test_credentials_never_survive(self):
         """An access token in a VCS root URL must never reach the SBOM."""
@@ -1234,6 +1277,103 @@ class TestTeamCityProvider(unittest.TestCase):
         self.assertNotIn("s3cr3t", logged)
         self.assertNotIn("hunter2", str(result.to_dict()))
         self.assertNotIn("s3cr3t", str(result.to_dict()))
+
+
+class TestTeamCityReviewRegressions(unittest.TestCase):
+    """Regressions for the issues found reviewing PR #395."""
+
+    def setUp(self):
+        self.provider = TeamCityProvider()
+
+    def _fetch(self, env, config_lines):
+        with tempfile.TemporaryDirectory() as tmp:
+            full = dict(env)
+            full["TEAMCITY_BUILD_PROPERTIES_FILE"] = _write_teamcity_properties(tmp, config_lines=config_lines)
+            with patch.dict(os.environ, full, clear=True):
+                return self.provider.fetch()
+
+    def test_operator_url_rescues_unrecognised_self_hosted_root(self):
+        """The documented escape hatch must work for the documented case.
+
+        A self-hosted root such as https://git.example.com/team/app normalizes
+        fine but cannot be recognised as Git, so the fallback has to key off
+        "Git not confirmed", not "no URL found" -- otherwise SBOMIFY_VCS_URL is
+        unreachable in exactly the situation the README prescribes it for.
+        """
+        result = self._fetch(
+            {
+                "TEAMCITY_VERSION": "2024.12",
+                "BUILD_VCS_NUMBER": _TC_SHA,
+                "SBOMIFY_VCS_URL": "https://git.example.com/team/app",
+            },
+            ["vcsroot.url=https://git.example.com/team/app"],
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.vcs_url, "https://git.example.com/team/app")
+        self.assertEqual(result.vcs_commit_sha, _TC_SHA)
+
+    def test_multi_root_ignores_bare_revision(self):
+        """The bare BUILD_VCS_NUMBER belongs to the *primary* root.
+
+        With several roots it need not be the root whose URL we chose, and
+        pinning it would attest one repository's URL to another's commit.
+        """
+        result = self._fetch(
+            {"TEAMCITY_VERSION": "2024.12", "BUILD_VCS_NUMBER": _TC_SHA},
+            [
+                "vcsroot.MinimalRoot.url=https://github.com/acme/minimal.git",
+                "vcsroot.ProbeRoot.url=https://github.com/acme/probe.git",
+            ],
+        )
+        self.assertEqual(result.vcs_url, "https://github.com/acme/minimal")
+        self.assertIsNone(result.vcs_commit_sha)
+
+    def test_multi_root_ignores_other_roots_revision(self):
+        other = "fedcba9876543210fedcba9876543210fedcba98"
+        result = self._fetch(
+            {"TEAMCITY_VERSION": "2024.12", "BUILD_VCS_NUMBER_ProbeRoot": other},
+            [
+                "vcsroot.MinimalRoot.url=https://github.com/acme/minimal.git",
+                "vcsroot.ProbeRoot.url=https://github.com/acme/probe.git",
+            ],
+        )
+        self.assertEqual(result.vcs_url, "https://github.com/acme/minimal")
+        self.assertIsNone(result.vcs_commit_sha)
+
+    def test_multi_root_uses_revision_scoped_to_chosen_root(self):
+        result = self._fetch(
+            {"TEAMCITY_VERSION": "2024.12", "BUILD_VCS_NUMBER_MinimalRoot": _TC_SHA},
+            [
+                "vcsroot.MinimalRoot.url=https://github.com/acme/minimal.git",
+                "vcsroot.ProbeRoot.url=https://github.com/acme/probe.git",
+            ],
+        )
+        self.assertEqual(result.vcs_url, "https://github.com/acme/minimal")
+        self.assertEqual(result.vcs_commit_sha, _TC_SHA)
+
+    def test_multi_root_ignores_other_roots_branch(self):
+        """A lone branch parameter belonging to a different root is not ours."""
+        result = self._fetch(
+            {"TEAMCITY_VERSION": "2024.12", "BUILD_VCS_NUMBER_MinimalRoot": _TC_SHA},
+            [
+                "vcsroot.MinimalRoot.url=https://github.com/acme/minimal.git",
+                "vcsroot.ProbeRoot.url=https://github.com/acme/probe.git",
+                "teamcity.build.vcs.branch.ProbeRoot=refs/heads/other",
+            ],
+        )
+        self.assertIsNone(result.vcs_ref)
+
+    def test_single_root_still_uses_sole_branch_parameter(self):
+        """The unambiguous case must keep working -- this is the common path."""
+        result = self._fetch(
+            {"TEAMCITY_VERSION": "2024.12", "BUILD_VCS_NUMBER": _TC_SHA},
+            [
+                "vcsroot.url=https://github.com/acme/app.git",
+                "teamcity.build.vcs.branch.Main=refs/heads/main",
+            ],
+        )
+        self.assertEqual(result.vcs_ref, "main")
+        self.assertEqual(result.vcs_commit_sha, _TC_SHA)
 
 
 class TestTeamCityNonGitRoots(unittest.TestCase):
