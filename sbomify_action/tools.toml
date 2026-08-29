@@ -13,10 +13,23 @@
 # trusted because it is written down. That is also what makes the rolling
 # release usable at all, since its bytes change on every push to master.
 
-# Which sbom-tools release to fetch from. "tools-rolling" tracks master;
-# scripts/freeze_tool_versions.py stamps a release tag in its place when the
-# image is built, so a cut release keeps fetching the bundles it was tested
-# against for as long as it exists.
+# Which sbom-tools release to fetch from.
+#
+# This said that scripts/freeze_tool_versions.py stamps a release tag here at
+# build time, "so a cut release keeps fetching the bundles it was tested
+# against for as long as it exists". It does not, and cannot: that script only
+# rewrites `version_from` lines, and sbom-tools publishes exactly one tag --
+# tools-rolling -- so there is no release tag to stamp.
+#
+# The consequence is worth being plain about, because the comment claimed the
+# opposite: a cut release fetches whatever master's bundles are on the day it
+# runs. Two runs of the same pinned sbomify-action version, weeks apart, can
+# resolve different toolchains and produce different SBOMs. Authenticity is
+# still guaranteed -- every bundle is cosign-verified against its Sigstore
+# attestation -- but the *version* floats.
+#
+# Closing this needs sbom-tools to cut immutable release tags; freezing here
+# is the second half of that change, not something this file can do alone.
 tools_release = "tools-rolling"
 
 # ---------------------------------------------------------------------------
