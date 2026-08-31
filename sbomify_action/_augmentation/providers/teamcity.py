@@ -82,10 +82,6 @@ _VCS_BRANCH_PREFIX = "teamcity.build.vcs.branch."
 # it was meant to exclude.
 _COMMIT_SHA_RE = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 
-# TeamCity's internal VCS name for Git roots, as seen in the REST API
-# (``"vcsName": "jetbrains.git"``).
-_GIT_VCS_NAME = "jetbrains.git"
-
 # TeamCity's placeholder when a build runs on the default branch and no branch
 # specification is configured. See JetBrains YouTrack TW-23699.
 _DEFAULT_BRANCH_PLACEHOLDER = "<default>"
@@ -484,12 +480,21 @@ def _select_commit_sha(props: Dict[str, str], root_id: Optional[str], ambiguous:
 
 
 def _url_looks_like_git(raw_url: str, normalized_url: Optional[str]) -> bool:
-    """Check whether the URL itself positively identifies a Git remote."""
+    """Check whether the URL itself positively identifies a Git remote.
+
+    Callers must only treat this as confirmation when ``normalized_url`` is
+    also set: a URL we cannot normalize gives us nothing to attest, so claiming
+    Git for it would emit a record with a revision and no repository.
+    """
     candidate = raw_url.strip().rstrip("/")
     if candidate.lower().endswith(".git"):
         return True
     lowered = candidate.lower()
-    if lowered.startswith(("ssh://", "git://", "git+")):
+    # Explicit transports only. A bare "git+" prefix would also match
+    # git+svn:// and git+file://, which are not Git -- and which
+    # normalize_repo_url rejects, so accepting them here would leave the
+    # provider "confirmed Git" with no URL to attest.
+    if lowered.startswith(("ssh://", "git://", "git+ssh://", "git+https://", "git+http://")):
         return True
     # scp shorthand (git@host:org/repo) is a git-specific convention. Uses the
     # same predicate as the normalizer, so the two cannot disagree -- otherwise
@@ -539,7 +544,10 @@ def _looks_like_git_root(
     has no ``.git`` suffix and is not on a known host cannot be auto-detected;
     those users set ``SBOMIFY_VCS_URL`` or ``sbomify.json``.
     """
-    if raw_url and _url_looks_like_git(raw_url, normalized_url):
+    # normalized_url is required: Git is only confirmed for a URL we can
+    # actually record. Without it there is nothing to attest, and a bogus
+    # confirmation would emit a commit SHA attached to no repository.
+    if raw_url and normalized_url and _url_looks_like_git(raw_url, normalized_url):
         return True
     return False
 
@@ -615,24 +623,9 @@ class TeamCityProvider:
         ref = strip_ref_prefix(_select_ref(props, root_id, ambiguous) or os.getenv("SBOMIFY_VCS_REF"))
         commit_sha = _select_commit_sha(props, root_id, ambiguous)
 
-        if not vcs_url and not commit_sha:
-            logger.warning(
-                "TeamCity detected but neither a repository URL nor a commit SHA could be "
-                "determined. Set SBOMIFY_VCS_URL / SBOMIFY_VCS_REF, or configure vcs_url in "
-                "sbomify.json."
-            )
-            return None
-
-        if not vcs_url:
-            # BUILD_VCS_NUMBER is the one thing TeamCity reliably provides.
-            # json_config (priority 10) merges first, so a SHA alone can still
-            # complete a sbomify.json that sets only vcs_url.
-            logger.warning(
-                "TeamCity detected but could not determine the repository URL; recording the "
-                "commit SHA only. Set SBOMIFY_VCS_URL or configure vcs_url in sbomify.json."
-            )
-        else:
-            logger.info(f"Detected TeamCity: {vcs_url} @ {truncate_sha(commit_sha)}")
+        # Past the gate a URL is guaranteed: Git is confirmed either from a
+        # root URL that normalized cleanly, or from an operator-supplied one.
+        logger.info(f"Detected TeamCity: {vcs_url} @ {truncate_sha(commit_sha)}")
 
         # vcs_commit_url is deliberately None: TeamCity is host-agnostic, so the
         # commit path shape (/commit/, /-/commit/, /commits/) is unknowable here

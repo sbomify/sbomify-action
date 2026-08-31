@@ -738,10 +738,6 @@ class TestVcsAugmentationIntegration(unittest.TestCase):
         self.assertEqual(document.packages[0].download_location, "https://existing.com/download.tar.gz")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # Full-length hex used throughout the TeamCity tests (40 chars, SHA-1 shaped).
 _TC_SHA = "abc123def4567890abc123def4567890abc123de"
 
@@ -1376,6 +1372,46 @@ class TestTeamCityReviewRegressions(unittest.TestCase):
         self.assertEqual(result.vcs_commit_sha, _TC_SHA)
 
 
+class TestTeamCityGitPlusSchemes(unittest.TestCase):
+    """`git+` alone is not a Git signal.
+
+    git+svn:// and git+file:// are not Git, and normalize_repo_url rejects
+    them -- so treating the bare prefix as confirmation left the provider
+    "confirmed Git" with no URL, emitting a commit SHA attached to nothing.
+    """
+
+    def setUp(self):
+        self.provider = TeamCityProvider()
+
+    def _fetch(self, url):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_teamcity_properties(tmp, config_lines=[f"vcsroot.url={url}"])
+            env = {
+                "TEAMCITY_VERSION": "2024.12",
+                "BUILD_VCS_NUMBER": _TC_SHA,
+                "TEAMCITY_BUILD_PROPERTIES_FILE": path,
+            }
+            with patch.dict(os.environ, env, clear=True):
+                return self.provider.fetch()
+
+    def test_git_plus_svn_is_refused(self):
+        self.assertIsNone(self._fetch("git+svn://svn.example.com/repo"))
+
+    def test_git_plus_file_is_refused(self):
+        self.assertIsNone(self._fetch("git+file:///srv/git/app"))
+
+    def test_git_plus_ssh_is_accepted(self):
+        result = self._fetch("git+ssh://git@selfhosted.corp/org/app")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.vcs_url, "https://selfhosted.corp/org/app")
+
+    def test_confirmed_root_always_has_a_url(self):
+        """No path may emit a revision with no repository to attach it to."""
+        result = self._fetch("https://github.com/acme/app")
+        self.assertIsNotNone(result)
+        self.assertIsNotNone(result.vcs_url)
+
+
 class TestTeamCityNonGitRoots(unittest.TestCase):
     """The default-deny gate: only a positively-identified Git root may emit.
 
@@ -1453,3 +1489,7 @@ class TestTeamCityNonGitRoots(unittest.TestCase):
                 result = self._fetch(_TC_SHA, config_lines)
                 self.assertIsNotNone(result)
                 self.assertIsNotNone(result.vcs_url)
+
+
+if __name__ == "__main__":
+    unittest.main()
