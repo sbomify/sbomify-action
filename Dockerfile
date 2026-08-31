@@ -69,10 +69,17 @@ LABEL com.sbomify.maintainer="sbomify <hello@sbomify.com>" \
       com.sbomify.vcs.branch="${VCS_REF}" \
       com.sbomify.vcs.commit="${COMMIT_SHA}"
 
-# git is needed at runtime: the wizard reads repo facts (remote name,
-# branch, visibility) from the bind-mounted workspace, and slim images
-# don't ship it. Without it those facts silently degrade to folder-name
-# and "unknown" visibility.
+# git is needed at runtime and is deliberately baked in rather than fetched
+# like the generators are. Nearly every path wants it: the wizard reads repo
+# facts (remote name, branch, visibility) from the bind-mounted workspace,
+# submodule resolution runs it directly, and run_command threads
+# git_safe_directory_env() into *every* subprocess because the generators
+# shell out to tools that run git themselves -- composer establishing its
+# root package version, cargo, go. Slim images don't ship it, and without it
+# those facts silently degrade to folder-name and "unknown" visibility.
+#
+# So this is the one dependency that should never be lazy-loaded: a tool
+# needed by almost every run is not a tool to go and fetch mid-run.
 # dist-upgrade first: the base image digest lags the Debian security
 # archive, so packages preinstalled in the base (util-linux, openssl)
 # would otherwise ship at whatever patch level the digest froze.
@@ -88,9 +95,49 @@ COPY --from=builder /opt/venv /opt/venv
 
 ENV PATH="/opt/venv/bin:$PATH"
 
+# A home that stays writable whatever uid the caller supplies.
+#
+# The image still runs as root by default -- GitHub requires that of a
+# container action -- but plenty of callers override it. Jenkins' Docker
+# Pipeline plugin passes `-u <uid>:<gid>` by default, and anyone running
+# `docker run --user` locally does the same. A uid with no passwd entry gets
+# HOME=/, which it cannot write.
+#
+# That is not a cosmetic problem. cosign keeps its TUF trust root in
+# $HOME/.sigstore, so it cannot verify a bundle's attestation, and refusing
+# an unverifiable binary is a hard stop by design. Measured against the
+# published image with `-u 1000:1000`: every ecosystem that fetches a bundle
+# (Go, Rust, .NET, Dart, JVM, npm, PHP) fails with
+#
+#     Attestation verification failed ... mkdir /.sigstore: permission denied
+#
+# and only Python survives, because cyclonedx-py is in the venv and needs no
+# bundle. The failure reads as a supply-chain problem rather than a
+# permissions one, which is why it went unnoticed.
+#
+# World-writable rather than group-writable: the uid arrives at run time, so
+# no narrower grant covers it. What lives here is a per-run cache and the
+# trust root, inside a single-tenant ephemeral container. Deliberately NOT
+# `--gid 0`: measured against this image, primary gid 0 grants access to
+# exactly three apt/dpkg lock files and nothing else, and it is overridden
+# anyway the moment a caller passes `--user`.
+RUN useradd --uid 1001 --user-group --create-home --home-dir /home/sbomify --shell /bin/bash sbomify
+ENV HOME=/home/sbomify
+
 # Initialize Conan profile for C/C++ package metadata lookups
 # This creates a default profile based on the container's compiler/OS settings
-RUN conan profile detect --force
+#
+# CONAN_HOME rather than the default ~/.conan2 resolved at build time: that
+# lands in /root, which is mode 700 and unreadable to any other uid. Conan
+# also creates .conan.db lazily on first use, so the directory has to be
+# writable, not merely readable, or every pkg:conan/* lookup degrades to a
+# warning.
+#
+# Kept under $HOME rather than a second world-writable tree in /opt: that
+# one would contain conan's executable plugins (profile.py,
+# compatibility.py), which is a code-execution surface this does not need.
+ENV CONAN_HOME=/home/sbomify/.conan2
+RUN conan profile detect --force && chmod -R a+rwX /home/sbomify
 
 # Marks our own image, which two behaviours key off:
 #   - runtime tools are fetched on demand only in here, where we decide the
