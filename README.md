@@ -15,7 +15,7 @@ A CLI, shipped as a container image, that turns a lock file into a compliance-gr
 
 It runs as a GitHub Action, as a container image on any other CI, or locally with `uvx`. Configuration is environment variables and is identical everywhere. Works standalone or with [sbomify](https://sbomify.com) — generation, augmentation and enrichment need no account.
 
-📖 **[Full documentation](https://sbomify.com/guides/sbomify-action/)**
+📖 **[Full documentation](https://sbomify.com/sbomify-action/)**
 
 ### See it in action: FOSDEM 2026 Talk
 
@@ -39,12 +39,12 @@ It scans your repository for lock files, signs you in to [sbomify](https://app.s
 
 The wizard is interactive, so the `-it` flags are required, and it must run on your machine rather than in CI. If you would rather not use Docker, `uvx sbomify-action wizard` does the same thing.
 
-📖 [Quick start guide](https://sbomify.com/guides/sbomify-action/quickstart/)
+📖 [Quick start guide](https://sbomify.com/sbomify-action/quickstart/)
 
 ### Or configure it by hand
 
 ```yaml
-- uses: sbomify/sbomify-action@v26.8.0
+- uses: sbomify/sbomify-action@master
   env:
     LOCK_FILE: requirements.txt
     OUTPUT_FILE: sbom.cdx.json
@@ -67,7 +67,7 @@ docker run --rm \
   ghcr.io/sbomify/sbomify-action
 ```
 
-📖 [Runtime guides](https://sbomify.com/guides/sbomify-action/runtimes/) — GitHub Actions, GitLab CI, Bitbucket, Jenkins, CircleCI, Azure DevOps, TeamCity, any container runner, and local
+📖 [Runtime guides](https://sbomify.com/sbomify-action/runtimes/) — GitHub Actions, GitLab CI, Bitbucket, Jenkins, CircleCI, Azure DevOps, TeamCity, any container runner, and local
 
 ## Why not just run a scanner?
 
@@ -75,7 +75,7 @@ A scanner's job is **detection**. It gives you a name, a version and a PURL, and
 
 This tool wraps generation in three more steps — inject, augment, enrich — and runs the whole thing at build time, where the full dependency context exists and the result can be signed at origin.
 
-📖 [Why SBOM quality matters](https://sbomify.com/guides/sbomify-action/why/)
+📖 [Why SBOM quality matters](https://sbomify.com/sbomify-action/why/)
 
 ## Features
 
@@ -118,7 +118,7 @@ Naming a *manifest* that sits beside its lock file reads the lock file instead: 
 
 Container images are supported via `DOCKER_IMAGE`, and a whole directory via `SOURCE_DIR` — though a directory scan is a weaker claim than a lock file, so reach for it only when nothing else applies.
 
-📖 [Input sources](https://sbomify.com/guides/sbomify-action/sources/)
+📖 [Input sources](https://sbomify.com/sbomify-action/sources/)
 
 ## Format support
 
@@ -130,16 +130,16 @@ Container images are supported via `DOCKER_IMAGE`, and a whole directory via `SO
 
 | Topic | |
 | --- | --- |
-| [Quick start](https://sbomify.com/guides/sbomify-action/quickstart/) | The wizard, and your first pipeline run |
-| [Why SBOM quality matters](https://sbomify.com/guides/sbomify-action/why/) | Scanners vs. pipelines, and chain of custody |
-| [How it works](https://sbomify.com/guides/sbomify-action/how-it-works/) | The full pipeline, step by step |
-| [Configuration](https://sbomify.com/guides/sbomify-action/configuration/) | Every input, environment variable and CLI flag |
-| [Input sources](https://sbomify.com/guides/sbomify-action/sources/) | Lock files, container images, directories, Yocto, additional packages |
-| [Augmentation](https://sbomify.com/guides/sbomify-action/augmentation/) | Your business metadata via `sbomify.json` |
-| [Enrichment](https://sbomify.com/guides/sbomify-action/enrichment/) | Registry metadata, license databases, lifecycle data, hashes |
-| [Publishing](https://sbomify.com/guides/sbomify-action/publishing/) | OIDC trusted publishing, releases, Dependency Track |
-| [Advanced](https://sbomify.com/guides/sbomify-action/advanced/) | Attestation, audit trail, tool runtimes, caching, troubleshooting |
-| [Runtimes](https://sbomify.com/guides/sbomify-action/runtimes/) | Setup for your CI platform |
+| [Quick start](https://sbomify.com/sbomify-action/quickstart/) | The wizard, and your first pipeline run |
+| [Why SBOM quality matters](https://sbomify.com/sbomify-action/why/) | Scanners vs. pipelines, and chain of custody |
+| [How it works](https://sbomify.com/sbomify-action/how-it-works/) | The full pipeline, step by step |
+| [Configuration](https://sbomify.com/sbomify-action/configuration/) | Every input, environment variable and CLI flag |
+| [Input sources](https://sbomify.com/sbomify-action/sources/) | Lock files, container images, directories, Yocto, additional packages |
+| [Augmentation](https://sbomify.com/sbomify-action/augmentation/) | Your business metadata via `sbomify.json` |
+| [Enrichment](https://sbomify.com/sbomify-action/enrichment/) | Registry metadata, license databases, lifecycle data, hashes |
+| [Publishing](https://sbomify.com/sbomify-action/publishing/) | OIDC trusted publishing, releases, Dependency Track |
+| [Advanced](https://sbomify.com/sbomify-action/advanced/) | Attestation, audit trail, tool runtimes, caching, troubleshooting |
+| [Runtimes](https://sbomify.com/sbomify-action/runtimes/) | Setup for your CI platform |
 
 In this repository:
 
@@ -149,7 +149,7 @@ In this repository:
 
 ## Notes
 
-**Tool runtimes.** The generators are not baked into the image. Syft, cdxgen, the JVM toolchain, Go, Rust, PHP, .NET, `crane` and `cosign` are downloaded on first use, verified against a digest pinned at build time, and cached. Set `SBOMIFY_TOOL_CACHE` to persist that cache across CI runs, or `SBOMIFY_FETCH_RUNTIMES=0` to opt out for air-gapped builds. See [tool runtimes](https://sbomify.com/guides/sbomify-action/advanced/#tool-runtimes).
+**Tool runtimes.** The generators are not baked into the image. Syft, cdxgen, the JVM toolchain, Go, Rust, PHP, .NET, `crane` and `cosign` are downloaded on first use, verified against a digest pinned at build time, and cached. Set `SBOMIFY_TOOL_CACHE` to persist that cache across CI runs, or `SBOMIFY_FETCH_RUNTIMES=0` to opt out for air-gapped builds. See [tool runtimes](https://sbomify.com/sbomify-action/advanced/#tool-runtimes).
 
 **Trivy** is currently not shipped, after [compromised releases in March 2026](https://sbomify.com/2026/03/26/trivy-compromise-hardening-sbomify-action/). The remaining generators cover every supported ecosystem.
 
@@ -161,7 +161,7 @@ Report vulnerabilities to <security@sbomify.com>. See [SECURITY.md](https://gith
 
 ## Links
 
-- [Documentation](https://sbomify.com/guides/sbomify-action/)
+- [Documentation](https://sbomify.com/sbomify-action/)
 - [sbomify platform](https://sbomify.com)
 - [Community Slack](https://join.slack.com/t/sbomify/shared_invite/zt-3na54pa1f-MXrFWhotmZr0YxXc8sABTw)
 

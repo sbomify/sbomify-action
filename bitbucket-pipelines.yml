@@ -13,6 +13,6 @@ pipelines:
               UPLOAD: "true"
               AUGMENT: "true"
               ENRICH: "true"
-              SBOM_VERSION: $BITBUCKET_COMMIT
+              COMPONENT_VERSION: "$BITBUCKET_COMMIT"
               LOCK_FILE: "uv.lock"
               OUTPUT_FILE: "bitbucket-sbom.cdx.json"

@@ -11,6 +11,7 @@ Providers (in priority order):
 - github-actions: Auto-detects VCS info from GitHub Actions env (priority 20)
 - gitlab-ci: Auto-detects VCS info from GitLab CI env (priority 20)
 - bitbucket-pipelines: Auto-detects VCS info from Bitbucket Pipelines env (priority 20)
+- teamcity: Auto-detects VCS info from the TeamCity build properties file (priority 20)
 - sbomify-api: Fetches from sbomify backend API (priority 50)
 
 VCS Augmentation:
@@ -49,7 +50,7 @@ def create_default_registry() -> ProviderRegistry:
     Providers are registered in priority order (lower number = higher priority):
     - Priority 10: JsonConfigProvider (local config, can override CI-detected VCS)
     - Priority 15: DockerImageProvider (lifecycle_phase=post-build for container images)
-    - Priority 20: CI providers (GitHub Actions, GitLab CI, Bitbucket Pipelines)
+    - Priority 20: CI providers (GitHub Actions, GitLab CI, Bitbucket Pipelines, TeamCity)
     - Priority 50: SbomifyApiProvider (backend metadata)
 
     Returns:
@@ -62,6 +63,7 @@ def create_default_registry() -> ProviderRegistry:
         GitLabCIProvider,
         JsonConfigProvider,
         SbomifyApiProvider,
+        TeamCityProvider,
     )
 
     registry = ProviderRegistry()
@@ -78,6 +80,7 @@ def create_default_registry() -> ProviderRegistry:
     registry.register(GitHubActionsProvider())
     registry.register(GitLabCIProvider())
     registry.register(BitbucketPipelinesProvider())
+    registry.register(TeamCityProvider())
 
     # Priority 50: API provider (backend metadata)
     registry.register(SbomifyApiProvider())
