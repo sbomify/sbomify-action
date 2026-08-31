@@ -8,6 +8,8 @@ test_cargo_generation.json
 test_docker_image_generation.json
 test_conan_generation.json
 sbom_output.json
+# Written beside sbom_output.json by the same run; records local input paths.
+audit_trail.txt
 .coverage
 step_1.json
 additional_packages.txt
