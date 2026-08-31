@@ -85,7 +85,7 @@ This tool wraps generation in three more steps — inject, augment, enrich — a
 - **Yocto/OpenEmbedded** — batch process SPDX SBOMs from Yocto builds
 - **Inject** additional packages not in lock files (vendored code, runtime deps, system libraries)
 - **Augment** with business metadata — supplier, authors, licenses, lifecycle phase — from a local config file or sbomify
-- **VCS auto-detection** on GitHub Actions, GitLab CI and Bitbucket
+- **VCS auto-detection** on GitHub Actions, GitLab CI, Bitbucket and TeamCity (Git roots only)
 - **Enrich** from PyPI, crates.io, pub.dev, Conan Center, deps.dev, ecosyste.ms and pre-computed distro license databases
 - **Hashes and lifecycle data** — integrity hashes pulled from your lock file, CLE end-of-support dates for OS packages and tracked runtimes
 - **Audit trail** — every modification logged with UTC timestamps, for attestation and compliance
@@ -149,11 +149,11 @@ In this repository:
 
 ## Notes
 
-**Tool runtimes.** The generators are not baked into the image. Syft, cdxgen, the JVM toolchain, Go, Rust, PHP, .NET, `crane` and `cosign` are downloaded on first use, verified against a digest pinned at build time, and cached. Set `SBOMIFY_TOOL_CACHE` to persist that cache across CI runs, or `SBOMIFY_FETCH_RUNTIMES=0` to opt out for air-gapped builds. See [tool runtimes](https://sbomify.com/sbomify-action/advanced/#tool-runtimes).
+**Tool runtimes.** Only `cyclonedx-py` ships with the package. Syft, cdxgen, the JVM toolchain, Go, Rust, PHP, .NET, `crane` and `cosign` are not baked into the image — they are downloaded on first use, verified against a digest pinned at build time, and cached. Set `SBOMIFY_TOOL_CACHE` to persist that cache across CI runs, or `SBOMIFY_FETCH_RUNTIMES=0` to opt out for air-gapped builds. See [tool runtimes](https://sbomify.com/sbomify-action/advanced/#tool-runtimes).
 
 **Trivy** is currently not shipped, after [compromised releases in March 2026](https://sbomify.com/2026/03/26/trivy-compromise-hardening-sbomify-action/). The remaining generators cover every supported ecosystem.
 
-**Pinning.** Examples here use a release tag for readability. For production, pin to a full 40-character commit SHA — see [SECURITY.md](https://github.com/sbomify/sbomify-action/blob/master/SECURITY.md). The wizard does this automatically for the workflows it generates.
+**Pinning.** Examples here use `@master` so they stay correct as the action moves. Do not ship that: pin to a release tag, or for production to a full 40-character commit SHA — see [SECURITY.md](https://github.com/sbomify/sbomify-action/blob/master/SECURITY.md). The wizard does this automatically for the workflows it generates.
 
 ## Security
 
