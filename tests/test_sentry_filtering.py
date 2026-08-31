@@ -539,6 +539,55 @@ class TestSentryFiltering(unittest.TestCase):
         ci_context = contexts.get("ci", {})
         self.assertEqual(ci_context, {}, "No CI context should be sent for Bitbucket (no visibility API)")
 
+    @patch.dict(
+        os.environ,
+        {
+            "TEAMCITY_VERSION": "2024.12",
+            "BUILD_VCS_NUMBER": "abc123def4567890abc123def4567890abc123de",
+            "TEAMCITY_PROJECT_NAME": "MyProject",
+            "TEAMCITY_BUILDCONF_NAME": "Build",
+        },
+        clear=True,
+    )
+    def test_sentry_teamcity(self):
+        """
+        Test that TeamCity context is NOT sent (no visibility API).
+        TeamCity is overwhelmingly on-premises, so we treat all repos as
+        private by default -- same reasoning as Bitbucket.
+        """
+        clear_sentry_state()
+        initialize_sentry()
+
+        client = sentry_sdk.get_client()
+        captured_event = None
+
+        def capture_event(event, hint):
+            nonlocal captured_event
+            captured_event = event
+            return event
+
+        original_before_send = client.options.get("before_send")
+        client.options["before_send"] = lambda event, hint: capture_event(
+            original_before_send(event, hint) if original_before_send else event, hint
+        )
+
+        try:
+            raise SBOMGenerationError("Test exception in TeamCity")
+        except Exception:
+            sentry_sdk.capture_exception()
+
+        self.assertIsNotNone(captured_event, "Event should have been captured")
+
+        tags = captured_event.get("tags", {})
+        self.assertIsNone(tags.get("ci.repository"), "TeamCity project name should not be sent")
+        self.assertIsNone(tags.get("ci.ref"), "TeamCity branch name should not be sent")
+        self.assertEqual(tags.get("repo.public"), "False")
+        self.assertEqual(tags.get("ci.platform"), "teamcity")
+
+        contexts = captured_event.get("contexts", {})
+        ci_context = contexts.get("ci", {})
+        self.assertEqual(ci_context, {}, "No CI context should be sent for TeamCity (no visibility API)")
+
     @patch.dict(os.environ, {"TELEMETRY": "false"}, clear=True)
     def test_sentry_telemetry_disabled(self):
         """

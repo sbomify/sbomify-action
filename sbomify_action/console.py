@@ -21,7 +21,11 @@ from sbomify_action import format_display_name
 # Detect CI environments
 IS_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
 IS_GITLAB_CI = os.getenv("GITLAB_CI") == "true"
-IS_CI = os.getenv("CI") == "true" or IS_GITHUB_ACTIONS or IS_GITLAB_CI
+# TeamCity does not set the generic CI=true, so without this it would be
+# treated as a local terminal -- which turns tracebacks_show_locals back on
+# in logging_config and dumps frame locals into the build log.
+IS_TEAMCITY = os.getenv("TEAMCITY_VERSION") is not None
+IS_CI = os.getenv("CI") == "true" or IS_GITHUB_ACTIONS or IS_GITLAB_CI or IS_TEAMCITY
 
 # sbomify brand colors (from logo gradient)
 # These hex colors look great in local terminals
