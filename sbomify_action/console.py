@@ -8,6 +8,7 @@ import contextvars
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from rich.console import Console
@@ -502,6 +503,27 @@ class AuditEntry:
         return self.field
 
 
+def _audit_path(value: str) -> str:
+    """Render a path in a form that is safe to hand to a third party.
+
+    The audit trail is a compliance artifact: it is written to be read by
+    someone other than whoever generated it, and the generating machine's
+    absolute path tells that reader nothing while publishing the machine's
+    directory layout and username. A path inside the working directory is
+    recorded relative to it; anything else keeps only its file name. Values
+    that are not paths at all (``docker:...``, ``additional-packages-only``)
+    are not absolute, so they pass through untouched.
+    """
+    if not os.path.isabs(value):
+        return value
+
+    resolved = Path(value).resolve()
+    try:
+        return str(resolved.relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return resolved.name
+
+
 @dataclass
 class AuditTrail:
     """
@@ -769,9 +791,9 @@ class AuditTrail:
         ]
 
         if self.input_file:
-            lines.append(f"# Input: {self.input_file}")
+            lines.append(f"# Input: {_audit_path(self.input_file)}")
         if self.output_file:
-            lines.append(f"# Output: {self.output_file}")
+            lines.append(f"# Output: {_audit_path(self.output_file)}")
 
         lines.append("")
 
@@ -833,9 +855,9 @@ class AuditTrail:
             print("# SBOM Audit Trail")
             print(f"# Generated: {self._get_timestamp()}")
             if self.input_file:
-                print(f"# Input: {self.input_file}")
+                print(f"# Input: {_audit_path(self.input_file)}")
             if self.output_file:
-                print(f"# Output: {self.output_file}")
+                print(f"# Output: {_audit_path(self.output_file)}")
             print()
 
             # Group and print by category

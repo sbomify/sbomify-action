@@ -868,7 +868,11 @@ Every modification made to your SBOM is tracked and recorded for attestation and
 [2026-01-18T12:34:57Z] ENRICHMENT pkg:pypi/requests@2.31.0 description ADDED (source: pypi)
 ```
 
-All timestamps are in UTC (ISO 8601 format with Z suffix).
+All timestamps are in UTC (ISO 8601 format with Z suffix). The `Input` and
+`Output` paths are recorded relative to the working directory, or as a bare
+file name when the file lives outside it — the trail is meant to be handed to
+someone else, and the generating machine's absolute paths are of no use to
+them.
 
 </details>
 
