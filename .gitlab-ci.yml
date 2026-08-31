@@ -7,12 +7,12 @@ sbom-job:
     UPLOAD: true
     AUGMENT: true
     ENRICH: true
-    SBOM_VERSION: $CI_COMMIT_SHA
+    COMPONENT_VERSION: $CI_COMMIT_SHA
     LOCK_FILE: 'poetry.lock'
     OUTPUT_FILE: "gitlab-sbom.cdx.json"
 
   script:
-    - /sbomify.sh
+    - sbomify-action
 
   artifacts:
     paths:
