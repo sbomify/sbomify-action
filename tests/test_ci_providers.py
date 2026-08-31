@@ -1043,6 +1043,19 @@ class TestTeamCityProvider(unittest.TestCase):
         """TEAMCITY_VERSION is the detection signal; without it we do nothing."""
         self.assertIsNone(self.provider.fetch())
 
+    def test_empty_teamcity_version_still_counts_as_teamcity(self):
+        """Detection is presence, not truthiness -- matching console.IS_TEAMCITY.
+
+        An environment must not be TeamCity for the logger (which suppresses
+        traceback locals) and not-TeamCity for this provider.
+        """
+        result = self._fetch(
+            {"TEAMCITY_VERSION": "", "BUILD_VCS_NUMBER": _TC_SHA},
+            config_lines=["vcsroot.Main.url=https://github.com/acme/app.git"],
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.vcs_url, "https://github.com/acme/app")
+
     def test_respects_disable_vcs_augmentation(self):
         result = self._fetch(
             {

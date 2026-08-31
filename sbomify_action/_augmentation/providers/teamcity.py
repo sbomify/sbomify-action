@@ -82,8 +82,10 @@ _VCS_BRANCH_PREFIX = "teamcity.build.vcs.branch."
 # it was meant to exclude.
 _COMMIT_SHA_RE = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 
-# TeamCity's placeholder when a build runs on the default branch and no branch
-# specification is configured. See JetBrains YouTrack TW-23699.
+# TeamCity's placeholder for a build on the default branch of a VCS root that
+# has a branch specification configured. See JetBrains YouTrack TW-23699. With
+# no branch specification the parameter is absent instead -- verified on
+# 2024.12.3 through 2026.1.3 -- so both shapes have to be handled.
 _DEFAULT_BRANCH_PLACEHOLDER = "<default>"
 
 
@@ -383,10 +385,12 @@ def _select_ref(props: Dict[str, str], root_id: Optional[str], ambiguous: bool =
     """
     Choose the branch/ref from the properties.
 
-    ``teamcity.build.branch`` is preferred, but TeamCity sets it to the literal
-    ``<default>`` when the build runs on the default branch and no branch
-    specification is configured (YouTrack TW-23699). In that case the real ref
-    is usually still in ``teamcity.build.vcs.branch.<VCS_root_ID>``.
+    ``teamcity.build.branch`` is preferred, but on the default branch it never
+    carries the real name: with a branch specification configured TeamCity sets
+    it to the literal ``<default>`` (YouTrack TW-23699), and with none
+    configured it is absent altogether. Either way the real ref is usually
+    still in ``teamcity.build.vcs.branch.<VCS_root_ID>``, which the next tier
+    reads -- the placeholder is rejected here so that it falls through to it.
     """
     branch = props.get("teamcity.build.branch")
     if branch and branch != _DEFAULT_BRANCH_PLACEHOLDER:
@@ -514,12 +518,7 @@ def _url_looks_like_git(raw_url: str, normalized_url: Optional[str]) -> bool:
     return False
 
 
-def _looks_like_git_root(
-    props: Dict[str, str],
-    root_id: Optional[str],
-    raw_url: Optional[str],
-    normalized_url: Optional[str],
-) -> bool:
+def _looks_like_git_root(raw_url: Optional[str], normalized_url: Optional[str]) -> bool:
     """
     Decide whether the chosen VCS root is positively identifiable as Git.
 
@@ -535,7 +534,8 @@ def _looks_like_git_root(
     appear only when explicitly configured, so their presence cannot be used as
     a marker either.
 
-    That leaves the URL itself as the sole automatic signal. A revision's
+    That is why this function takes only the URL: there is nothing else in the
+    build properties for it to consult. A revision's
     *shape* is deliberately not a signal: Fossil and Monotone also produce
     40/64-hex content hashes, so hex length narrows the field without ever
     proving Git. It gates the SHA only, in :func:`_select_commit_sha`.
@@ -590,15 +590,18 @@ class TeamCityProvider:
             return None
 
         # Presence check, like Bitbucket's BITBUCKET_PIPELINE_UUID -- TeamCity
-        # has no "true"-valued flag of its own.
-        if not os.getenv("TEAMCITY_VERSION"):
+        # has no "true"-valued flag of its own. Tested with ``is None`` rather
+        # than truthiness so that this agrees with ``console.IS_TEAMCITY``,
+        # which gates traceback locals: one environment must not be TeamCity
+        # for the logger and not-TeamCity for the provider.
+        if os.getenv("TEAMCITY_VERSION") is None:
             return None
 
         props = _load_teamcity_properties()
 
         root_id, raw_url, ambiguous = _select_repo_url(props)
         vcs_url = normalize_repo_url(raw_url) if raw_url else None
-        git_confirmed = _looks_like_git_root(props, root_id, raw_url, vcs_url)
+        git_confirmed = _looks_like_git_root(raw_url, vcs_url)
 
         if not git_confirmed:
             # Fallback tier. An explicitly configured URL is an operator

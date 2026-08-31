@@ -1105,10 +1105,12 @@ object GenerateSbom : BuildType({
 
 Three TeamCity-specific gotchas:
 
-- **Use `%teamcity.build.vcs.branch.<VcsRootId>%`, not `%teamcity.build.branch%`.** The latter
-  is the literal string `<default>` when the build runs on the default branch and no branch
-  specification is configured ([TW-23699](https://youtrack.jetbrains.com/issue/TW-23699)),
-  which would otherwise be recorded as the branch name.
+- **Use `%teamcity.build.vcs.branch.<VcsRootId>%`, not `%teamcity.build.branch%`.** On the
+  default branch the latter never yields the real branch name: with a branch specification
+  configured it is the literal string `<default>`
+  ([TW-23699](https://youtrack.jetbrains.com/issue/TW-23699)), which would otherwise be
+  recorded as the branch name, and with no branch specification configured it is not defined
+  at all (verified on 2024.12.3 through 2026.1.3).
 - **`BUILD_VCS_NUMBER` needs no mapping** — it is a real environment variable, so it reaches
   the container on its own. Note it is the VCS *revision*; the build counter is `BUILD_NUMBER`.
 - **Caching works differently from GitLab and Bitbucket.** TeamCity agents are persistent and
