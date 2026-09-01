@@ -22,17 +22,46 @@ from sbomify_action._runtime.git import (
 )
 from sbomify_action._runtime.platforms import (
     BitbucketPlatform,
+    CircleCIPlatform,
     GenericCIPlatform,
     GitHubPlatform,
     GitLabPlatform,
+    JenkinsPlatform,
     LocalPlatform,
     TeamCityPlatform,
+    TravisPlatform,
 )
 from sbomify_action._runtime.vcs_url import _is_known_git_host
 
 GHA_ENV = {"GITHUB_ACTIONS": "true"}
 GITLAB_ENV = {"GITLAB_CI": "true"}
 BITBUCKET_ENV = {"BITBUCKET_PIPELINE_UUID": "{1234}"}
+JENKINS_ENV = {"JENKINS_URL": "https://ci.example.com"}
+CIRCLECI_ENV = {"CIRCLECI": "true"}
+TRAVIS_ENV = {"TRAVIS": "true"}
+
+#: The remote a Jenkins, Travis or TeamCity build actually has. These run next
+#: to someone's own git server far more often than against github.com, so the
+#: cases below are written around a self-hosted host that no commit-URL layout
+#: is known for.
+#:
+#: The two forms are not interchangeable: CLONE is what a job is configured
+#: with and what the vendor exports, BROWSE is what normalisation turns it into
+#: and what reaches the SBOM.
+SELF_HOSTED_CLONE_URL = "ssh://git@git.corp.example.com:7999/team/app.git"
+SELF_HOSTED_BROWSE_URL = "https://git.corp.example.com/team/app"
+
+#: Every platform except the one under test, for the "nothing else does this" checks.
+NON_GITHUB_PLATFORMS = (
+    GitLabPlatform(),
+    BitbucketPlatform(),
+    TeamCityPlatform(),
+    JenkinsPlatform(),
+    CircleCIPlatform(),
+    TravisPlatform(),
+    GenericCIPlatform(),
+    LocalPlatform(),
+)
 
 
 class TestPlatformResolution(unittest.TestCase):
@@ -76,10 +105,47 @@ class TestPlatformResolution(unittest.TestCase):
         self.assertTrue(platform.is_ci)
         self.assertIsInstance(platform, TeamCityPlatform)
 
-    @patch.dict(os.environ, {"JENKINS_URL": "https://ci.example.com"}, clear=True)
-    def test_resolves_jenkins_as_generic_ci(self):
-        """Jenkins is recognised by name through the generic platform."""
-        self.assertEqual(get_platform().name, "jenkins")
+    @patch.dict(os.environ, JENKINS_ENV, clear=True)
+    def test_resolves_jenkins_as_its_own_platform(self):
+        """JENKINS_URL selects the Jenkins platform, ahead of the generic one."""
+        platform = get_platform()
+        self.assertEqual(platform.name, "jenkins")
+        self.assertTrue(platform.is_ci)
+        self.assertIsInstance(platform, JenkinsPlatform)
+
+    def test_jenkins_detects_on_every_marker_a_build_may_carry(self):
+        """JENKINS_URL is not always there, and a container agent has neither name.
+
+        Measured on a real controller running the documented Docker Pipeline
+        agent: the container gets HUDSON_HOME and both cookies, but no
+        JENKINS_URL (unset until the instance URL is configured) and no
+        JENKINS_HOME.
+        """
+        for marker, value in (
+            ("JENKINS_URL", "https://ci.example.com"),
+            ("JENKINS_HOME", "/var/jenkins_home"),
+            ("HUDSON_HOME", "/var/jenkins_home"),
+            ("JENKINS_NODE_COOKIE", "c6c7e015-de8f-4a23-bd47-3eea9a20e126"),
+            ("JENKINS_SERVER_COOKIE", "durable-30ec40576d0dceda"),
+        ):
+            with self.subTest(marker=marker), patch.dict(os.environ, {marker: value}, clear=True):
+                self.assertEqual(get_platform().name, "jenkins")
+
+    @patch.dict(os.environ, CIRCLECI_ENV, clear=True)
+    def test_resolves_circleci_as_its_own_platform(self):
+        """CIRCLECI selects the CircleCI platform."""
+        platform = get_platform()
+        self.assertEqual(platform.name, "circleci")
+        self.assertTrue(platform.is_ci)
+        self.assertIsInstance(platform, CircleCIPlatform)
+
+    @patch.dict(os.environ, TRAVIS_ENV, clear=True)
+    def test_resolves_travis_as_its_own_platform(self):
+        """TRAVIS selects the Travis CI platform."""
+        platform = get_platform()
+        self.assertEqual(platform.name, "travis-ci")
+        self.assertTrue(platform.is_ci)
+        self.assertIsInstance(platform, TravisPlatform)
 
     @patch.dict(os.environ, {"CI": "true"}, clear=True)
     def test_unrecognised_ci_falls_back_to_generic(self):
@@ -136,7 +202,17 @@ class TestPlatformResolution(unittest.TestCase):
         names = [p.name for p in create_default_registry().get_platforms()]
         self.assertEqual(
             names,
-            ["github-actions", "gitlab-ci", "bitbucket-pipelines", "teamcity", "generic-ci", "local"],
+            [
+                "github-actions",
+                "gitlab-ci",
+                "bitbucket-pipelines",
+                "teamcity",
+                "jenkins",
+                "circleci",
+                "travis-ci",
+                "generic-ci",
+                "local",
+            ],
         )
 
     def test_every_registered_platform_satisfies_the_protocol(self):
@@ -211,10 +287,22 @@ class TestWorkspace(unittest.TestCase):
         """Bitbucket reports BITBUCKET_CLONE_DIR."""
         self.assertEqual(get_platform().workspace(), Path("/opt/atlassian/repo"))
 
-    def test_generic_ci_uses_vendor_checkout_path(self):
-        """A recognised vendor's checkout variable is used when it has one."""
+    def test_jenkins_uses_its_workspace_variable(self):
+        """A vendor's checkout variable is used when it has one."""
         with tempfile.TemporaryDirectory() as checkout:
-            with patch.dict(os.environ, {"JENKINS_URL": "https://ci", "WORKSPACE": checkout}, clear=True):
+            with patch.dict(os.environ, {**JENKINS_ENV, "WORKSPACE": checkout}, clear=True):
+                self.assertEqual(get_platform().workspace(), Path(checkout))
+
+    def test_travis_uses_its_build_dir(self):
+        """Travis reports TRAVIS_BUILD_DIR."""
+        with tempfile.TemporaryDirectory() as checkout:
+            with patch.dict(os.environ, {**TRAVIS_ENV, "TRAVIS_BUILD_DIR": checkout}, clear=True):
+                self.assertEqual(get_platform().workspace(), Path(checkout))
+
+    def test_generic_ci_uses_vendor_checkout_path(self):
+        """A recognised generic vendor's checkout variable is used too."""
+        with tempfile.TemporaryDirectory() as checkout:
+            with patch.dict(os.environ, {"BUILDKITE": "true", "BUILDKITE_BUILD_CHECKOUT_PATH": checkout}, clear=True):
                 self.assertEqual(get_platform().workspace(), Path(checkout))
 
     def test_a_tilde_checkout_path_is_expanded(self):
@@ -227,7 +315,7 @@ class TestWorkspace(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home:
             checkout = Path(home) / "project"
             checkout.mkdir()
-            env = {"CIRCLECI": "true", "CIRCLE_WORKING_DIRECTORY": "~/project", "HOME": home}
+            env = {**CIRCLECI_ENV, "CIRCLE_WORKING_DIRECTORY": "~/project", "HOME": home}
             with patch.dict(os.environ, env, clear=True):
                 self.assertEqual(get_platform().workspace(), checkout)
 
@@ -237,7 +325,7 @@ class TestWorkspace(unittest.TestCase):
         Inside a container that path routinely does not exist; using it would
         point every lookup at nothing.
         """
-        env = {"JENKINS_URL": "https://ci", "WORKSPACE": "/does/not/exist/here"}
+        env = {**JENKINS_ENV, "WORKSPACE": "/does/not/exist/here"}
         with patch.dict(os.environ, env, clear=True):
             self.assertEqual(get_platform().workspace(), Path.cwd())
 
@@ -294,7 +382,7 @@ class TestWorkingDirConfinement(unittest.TestCase):
     def test_only_github_confines(self):
         """GitHub Actions confines; nothing else does."""
         self.assertTrue(GitHubPlatform().confines_working_dir)
-        others = (GitLabPlatform(), BitbucketPlatform(), TeamCityPlatform(), GenericCIPlatform(), LocalPlatform())
+        others = NON_GITHUB_PLATFORMS
         for platform in others:
             self.assertFalse(platform.confines_working_dir, platform.name)
 
@@ -311,7 +399,7 @@ class TestLogFormatters(unittest.TestCase):
 
     def test_other_platforms_use_plain_output(self):
         """Everything else gets Rich styling and its own timestamps."""
-        others = (GitLabPlatform(), BitbucketPlatform(), TeamCityPlatform(), GenericCIPlatform(), LocalPlatform())
+        others = NON_GITHUB_PLATFORMS
         for platform in others:
             formatter = platform.log_formatter()
             self.assertIsInstance(formatter, PlainFormatter, platform.name)
@@ -367,7 +455,7 @@ class TestOidc(unittest.TestCase):
 
     def test_other_platforms_offer_no_oidc(self):
         """No other platform has an accepted issuer yet."""
-        others = (GitLabPlatform(), BitbucketPlatform(), TeamCityPlatform(), GenericCIPlatform(), LocalPlatform())
+        others = NON_GITHUB_PLATFORMS
         for platform in others:
             self.assertIsNone(platform.oidc(), platform.name)
 
@@ -436,12 +524,230 @@ class TestTelemetry(unittest.TestCase):
         """
         self.assertEqual(get_platform().telemetry_tags(), {"ci.platform": "unknown", "ci.vendor": "local"})
 
-    @patch.dict(os.environ, {"JENKINS_URL": "https://ci"}, clear=True)
-    def test_a_named_vendor_is_reported_additively(self):
-        """A recognised generic vendor is named without moving ci.platform."""
+    @patch.dict(os.environ, {"BUILDKITE": "true"}, clear=True)
+    def test_a_named_generic_vendor_is_reported_additively(self):
+        """A vendor still on the generic platform is named without moving ci.platform."""
         tags = get_platform().telemetry_tags()
         self.assertEqual(tags["ci.platform"], "unknown")
-        self.assertEqual(tags["ci.vendor"], "jenkins")
+        self.assertEqual(tags["ci.vendor"], "buildkite")
+
+    def test_graduated_vendors_name_themselves_in_ci_platform(self):
+        """A vendor with a platform of its own reports it like GitHub or GitLab.
+
+        These three used to come through the generic fallback as
+        ci.platform=unknown with the name in ci.vendor. Now that each is a
+        platform, ci.platform is the name -- the tag means "the platform we
+        resolved", and we resolved one.
+        """
+        for env, expected in ((JENKINS_ENV, "jenkins"), (CIRCLECI_ENV, "circleci"), (TRAVIS_ENV, "travis-ci")):
+            with self.subTest(platform=expected), patch.dict(os.environ, env, clear=True):
+                tags = get_platform().telemetry_tags()
+                self.assertEqual(tags, {"ci.platform": expected, "repo.public": "False"})
+                self.assertEqual(get_platform().telemetry_context(), {})
+
+
+class TestJenkinsVcs(unittest.TestCase):
+    """What Jenkins publishes, and what happens when it publishes nothing.
+
+    Jenkins is nearly always someone's own server sitting next to their own git
+    server, so a self-hosted remote -- Bitbucket Data Center on an SSH port, a
+    corporate GitLab, a bare gitolite host -- is the normal case here and
+    github.com is the exception. The cases below are written that way round.
+    """
+
+    def _vcs(self, **env):
+        with patch.dict(os.environ, {**JENKINS_ENV, **env}, clear=True):
+            return JenkinsPlatform().vcs()
+
+    def test_reads_the_git_plugin_variables(self):
+        """GIT_URL, GIT_COMMIT and GIT_BRANCH are the whole answer."""
+        vcs = self._vcs(
+            GIT_URL="https://git.corp.example.com/team/app.git",
+            GIT_COMMIT="abc123",
+            GIT_BRANCH="origin/main",
+        )
+        self.assertEqual(vcs.url, "https://git.corp.example.com/team/app")
+        self.assertEqual(vcs.commit_sha, "abc123")
+        self.assertEqual(vcs.ref, "main")
+
+    def test_an_unrecognised_forge_gets_no_commit_url(self):
+        """A self-hosted git server's commit path is unknowable from the URL.
+
+        Guessing one produces a link that 404s in an attestation document,
+        which is worse than the repository URL and SHA on their own.
+        """
+        vcs = self._vcs(GIT_URL="https://git.corp.example.com/team/app.git", GIT_COMMIT="abc123")
+        self.assertIsNone(vcs.commit_url)
+
+    def test_a_self_hosted_gitlab_keeps_its_commit_layout(self):
+        """Self-hosted GitLab lays commits out exactly like gitlab.com."""
+        vcs = self._vcs(GIT_URL="https://gitlab.corp.example.com/group/app.git", GIT_COMMIT="abc123")
+        self.assertEqual(vcs.commit_url, "https://gitlab.corp.example.com/group/app/-/commit/abc123")
+
+    def test_ssh_remotes_are_normalised_to_browse_urls(self):
+        """GIT_URL is whatever the job was configured with, and that is usually SSH."""
+        cases = (
+            # Bitbucket Data Center's SSH port. An SSH port is not an HTTPS
+            # port, so it is dropped rather than carried into a dead URL.
+            ("ssh://git@git.corp.example.com:7999/team/app.git", "https://git.corp.example.com/team/app"),
+            ("git@gitea.corp.example.com:team/app.git", "https://gitea.corp.example.com/team/app"),
+            # A credential embedded in the remote must never reach the document.
+            ("https://svc-build:s3cret@git.corp.example.com/team/app.git", "https://git.corp.example.com/team/app"),
+            # An internal server on plain http, or a non-standard https port,
+            # keeps both -- rewriting either produces a 404.
+            ("http://git.internal:8080/team/app.git", "http://git.internal:8080/team/app"),
+        )
+        for raw, expected in cases:
+            with self.subTest(url=raw):
+                self.assertEqual(self._vcs(GIT_URL=raw).url, expected)
+
+    def test_falls_back_to_the_numbered_url_of_a_multi_scm_job(self):
+        """A job with several SCMs numbers the variables from 1."""
+        self.assertEqual(
+            self._vcs(GIT_URL_1="https://git.corp.example.com/team/app").url,
+            "https://git.corp.example.com/team/app",
+        )
+
+    def test_remote_tracking_ref_forms_are_reduced_to_the_branch(self):
+        """GIT_BRANCH is remote-tracking; an SBOM records the branch."""
+        for branch, expected in (
+            ("origin/main", "main"),
+            ("refs/remotes/origin/feature/x", "feature/x"),
+            ("refs/remotes/upstream/main", "main"),
+            ("refs/heads/main", "main"),
+            ("main", "main"),
+        ):
+            with self.subTest(branch=branch):
+                self.assertEqual(self._vcs(GIT_URL=SELF_HOSTED_CLONE_URL, GIT_BRANCH=branch).ref, expected)
+
+    def test_a_local_branch_checkout_wins_over_the_remote_tracking_name(self):
+        """GIT_LOCAL_BRANCH already is the branch, with nothing to strip."""
+        vcs = self._vcs(GIT_URL=SELF_HOSTED_CLONE_URL, GIT_LOCAL_BRANCH="main", GIT_BRANCH="origin/main")
+        self.assertEqual(vcs.ref, "main")
+
+    def test_a_multibranch_tag_build_reports_the_tag(self):
+        """TAG_NAME is the ref of a tag build."""
+        self.assertEqual(self._vcs(GIT_URL=SELF_HOSTED_CLONE_URL, TAG_NAME="v1.2.3").ref, "v1.2.3")
+
+    def test_a_pull_request_build_reports_the_source_branch(self):
+        """BRANCH_NAME on a PR build is Jenkins' own PR-42, not a ref.
+
+        CHANGE_BRANCH is the branch the request came from, which is the thing
+        someone reading the SBOM can actually check out.
+        """
+        vcs = self._vcs(GIT_URL=SELF_HOSTED_CLONE_URL, BRANCH_NAME="PR-42", CHANGE_BRANCH="feature/x")
+        self.assertEqual(vcs.ref, "feature/x")
+
+    @patch("sbomify_action._runtime.platforms.base.detect_vcs")
+    def test_falls_back_to_the_checkout_without_git_variables(self, mock_detect):
+        """A job on Subversion, Perforce or no SCM exports no GIT_URL.
+
+        Behaviour there is exactly what it was before Jenkins had a platform.
+        """
+        mock_detect.return_value = VcsInfo(url="https://git.corp.example.com/team/app", commit_sha="abc123")
+        with patch.dict(os.environ, JENKINS_ENV, clear=True):
+            self.assertEqual(JenkinsPlatform().vcs().url, "https://git.corp.example.com/team/app")
+        mock_detect.assert_called_once()
+
+    @patch("sbomify_action._runtime.platforms.base.detect_vcs")
+    def test_a_non_repository_git_url_falls_back_too(self, mock_detect):
+        """A GIT_URL that does not normalise is no better than none at all.
+
+        A local path is the case that matters: a Jenkins job pointed at a
+        filesystem repository has a GIT_URL that is no use in a document.
+        """
+        mock_detect.return_value = None
+        self.assertIsNone(self._vcs(GIT_URL="/srv/git/app.git"))
+        mock_detect.assert_called_once()
+
+
+class TestCircleCIVcs(unittest.TestCase):
+    """What CircleCI publishes.
+
+    CircleCI is hosted and only builds projects it has an integration with, so
+    unlike Jenkins its remotes really are the three public forges.
+    """
+
+    def _vcs(self, **env):
+        with patch.dict(os.environ, {**CIRCLECI_ENV, **env}, clear=True):
+            return CircleCIPlatform().vcs()
+
+    def test_reads_the_job_environment(self):
+        """The clone URL is SSH for most projects and is normalised."""
+        vcs = self._vcs(
+            CIRCLE_REPOSITORY_URL="git@github.com:owner/repo.git",
+            CIRCLE_SHA1="abc123",
+            CIRCLE_BRANCH="main",
+        )
+        self.assertEqual(vcs.url, "https://github.com/owner/repo")
+        self.assertEqual(vcs.commit_sha, "abc123")
+        self.assertEqual(vcs.ref, "main")
+        self.assertEqual(vcs.commit_url, "https://github.com/owner/repo/commit/abc123")
+
+    def test_a_bitbucket_project_gets_bitbucket_commit_urls(self):
+        """CircleCI builds Bitbucket and GitLab projects too, not only GitHub."""
+        vcs = self._vcs(CIRCLE_REPOSITORY_URL="git@bitbucket.org:team/repo.git", CIRCLE_SHA1="abc123")
+        self.assertEqual(vcs.url, "https://bitbucket.org/team/repo")
+        self.assertEqual(vcs.commit_url, "https://bitbucket.org/team/repo/commits/abc123")
+
+    def test_a_tag_build_reports_the_tag(self):
+        """CIRCLE_BRANCH is empty on a tag build, and empty is not a value."""
+        vcs = self._vcs(CIRCLE_REPOSITORY_URL="https://github.com/o/r", CIRCLE_BRANCH="", CIRCLE_TAG="v1.2.3")
+        self.assertEqual(vcs.ref, "v1.2.3")
+
+    @patch("sbomify_action._runtime.platforms.base.detect_vcs")
+    def test_falls_back_to_the_checkout_without_a_repository_url(self, mock_detect):
+        """A job that did not use the checkout step publishes no URL."""
+        mock_detect.return_value = VcsInfo(url="https://github.com/owner/repo")
+        with patch.dict(os.environ, CIRCLECI_ENV, clear=True):
+            self.assertEqual(CircleCIPlatform().vcs().url, "https://github.com/owner/repo")
+        mock_detect.assert_called_once()
+
+
+class TestTravisVcs(unittest.TestCase):
+    """Travis publishes no repository URL, so the checkout supplies it.
+
+    Travis served GitHub, Bitbucket, GitLab and Assembla, and Travis Enterprise
+    sat in front of self-hosted servers, so the remote is written here as one
+    of those rather than assumed to be github.com.
+    """
+
+    def _vcs(self, checkout, **env):
+        with patch("sbomify_action._runtime.platforms.base.detect_vcs", return_value=checkout):
+            with patch.dict(os.environ, {**TRAVIS_ENV, **env}, clear=True):
+                return TravisPlatform().vcs()
+
+    def test_url_comes_from_the_checkout_and_the_ref_from_the_job(self):
+        """Travis leaves a detached HEAD, so the checkout cannot name the branch."""
+        checkout = VcsInfo(url=SELF_HOSTED_BROWSE_URL, commit_sha="abc123", ref=None)
+        vcs = self._vcs(checkout, TRAVIS_COMMIT="abc123", TRAVIS_BRANCH="main")
+        self.assertEqual(vcs.url, SELF_HOSTED_BROWSE_URL)
+        self.assertEqual(vcs.commit_sha, "abc123")
+        self.assertEqual(vcs.ref, "main")
+        # An unrecognised forge gets no guessed commit link.
+        self.assertIsNone(vcs.commit_url)
+
+    def test_the_job_commit_wins_and_the_commit_url_follows_it(self):
+        """A stale checkout SHA must not be linked as if it were this build's."""
+        checkout = VcsInfo(url="https://gitlab.corp.example.com/group/app", commit_sha="stale")
+        vcs = self._vcs(checkout, TRAVIS_COMMIT="abc123")
+        self.assertEqual(vcs.commit_sha, "abc123")
+        self.assertEqual(vcs.commit_url, "https://gitlab.corp.example.com/group/app/-/commit/abc123")
+
+    def test_a_tag_build_reports_the_tag(self):
+        """TRAVIS_BRANCH repeats the tag name on a tag build; TRAVIS_TAG is explicit."""
+        checkout = VcsInfo(url=SELF_HOSTED_BROWSE_URL)
+        self.assertEqual(self._vcs(checkout, TRAVIS_TAG="v1.2.3", TRAVIS_BRANCH="v1.2.3").ref, "v1.2.3")
+
+    def test_a_pull_request_build_reports_the_source_branch(self):
+        """TRAVIS_BRANCH on a PR build is the branch being merged *into*."""
+        checkout = VcsInfo(url=SELF_HOSTED_BROWSE_URL)
+        vcs = self._vcs(checkout, TRAVIS_BRANCH="main", TRAVIS_PULL_REQUEST_BRANCH="feature/x")
+        self.assertEqual(vcs.ref, "feature/x")
+
+    def test_nothing_is_reported_when_the_checkout_has_no_remote(self):
+        """There is no repository URL to fall back on, so there is no metadata."""
+        self.assertIsNone(self._vcs(None, TRAVIS_BRANCH="main"))
 
 
 class TestCommitUrl(unittest.TestCase):

@@ -14,11 +14,12 @@ Providers (in priority order):
 VCS Augmentation:
 The ci-platform provider automatically detects repository URL, commit SHA, and
 branch/ref by asking the resolved CI platform (see ``sbomify_action._runtime``).
-Each platform reads whatever its vendor publishes -- GitHub Actions' and GitLab
-CI's environment variables, TeamCity's build-properties file -- and falls back
-to the git checkout where the vendor publishes nothing, which covers Jenkins,
-CircleCI, Azure Pipelines and a local machine. Adding a CI system means adding
-a platform, not a provider. This can be:
+Each platform reads whatever its vendor publishes -- GitHub Actions', GitLab
+CI's, Jenkins', CircleCI's and Travis CI's environment variables, TeamCity's
+build-properties file -- and falls back to the git checkout where the vendor
+publishes nothing, which covers Azure Pipelines, any other container runner and
+a local machine. Adding a CI system means adding a platform, not a provider.
+This can be:
 - Overridden via sbomify.json config (vcs_url, vcs_commit_sha, vcs_ref)
 - Disabled entirely via DISABLE_VCS_AUGMENTATION=true environment variable
 

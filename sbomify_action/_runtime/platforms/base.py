@@ -42,6 +42,34 @@ def env_first(*names: str) -> str | None:
     return None
 
 
+def env_checkout_dir(platform: str, *names: str) -> Path | None:
+    """Return the first of ``names`` that names a directory that exists here.
+
+    A vendor's checkout-path variable is expanded and checked before it is
+    trusted. CircleCI's default ``working_directory`` is the literal string
+    ``~/project``, and that is exactly what ``CIRCLE_WORKING_DIRECTORY``
+    contains, so taking it at face value yields a *relative* path with a
+    literal ``~`` component: git would then run against a directory that does
+    not exist and report nothing. The same check covers any vendor variable
+    holding a host-side path that is not mounted inside the container.
+
+    Args:
+        platform: Platform name, for the debug line when a path does not resolve.
+        *names: Environment variables to try, in order.
+
+    Returns:
+        The expanded directory, or None when no variable resolves to one --
+        callers fall back to the process working directory, which is correct
+        for every vendor that mounts the checkout as the command's cwd.
+    """
+    if checkout := env_first(*names):
+        expanded = Path(checkout).expanduser()
+        if expanded.is_dir():
+            return expanded
+        logger.debug(f"{platform} reported checkout '{checkout}', which is not a directory here")
+    return None
+
+
 class GitCheckoutPlatform:
     """Base for platforms whose VCS metadata comes from the git checkout itself.
 
