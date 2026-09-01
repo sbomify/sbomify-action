@@ -360,6 +360,9 @@ class TestSentryFiltering(unittest.TestCase):
 
             # CI platform should indicate unknown
             self.assertEqual(tags.get("ci.platform"), "unknown")
+            # The platform is named additively, so saved searches keyed on
+            # ci.platform:unknown keep matching while the detail is available.
+            self.assertEqual(tags.get("ci.vendor"), "local")
 
             # Verify action version is still present (not sensitive)
             self.assertEqual(tags.get("action.version"), SBOMIFY_VERSION)

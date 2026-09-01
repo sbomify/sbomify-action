@@ -115,8 +115,7 @@ jobs:
       - name: Run enrichment test
         run: |
           docker run --rm \
-            -v $(pwd):/github/workspace \
-            -w /github/workspace \
+            -v $(pwd):/workspace \
             -e TOKEN=placeholder \
             -e COMPONENT_ID=placeholder \
             -e UPLOAD=false \

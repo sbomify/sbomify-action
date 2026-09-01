@@ -21,14 +21,15 @@ import sentry_sdk
 from cyclonedx.model.bom import Bom
 
 from .. import format_display_name
+from .._runtime import CIPlatform, get_platform, legacy_workspaces, workspace_candidates
 from .._upload import VALID_BOM_TYPES, VALID_DESTINATIONS
 from ..additional_packages import inject_additional_packages
 from ..augmentation import augment_sbom_from_file
 from ..console import (
     get_audit_trail,
-    gha_group,
-    gha_notice,
-    gha_warning,
+    log_group,
+    log_notice,
+    log_warning,
     print_component_not_found_error,
     print_duplicate_sbom_error,
     print_final_success,
@@ -313,9 +314,9 @@ class Config:
             if not self.token:
                 # Allow missing token when GitHub OIDC trusted publishing is available —
                 # the pipeline will exchange the OIDC JWT for a short-lived token at runtime.
-                from ..oidc import is_github_oidc_available
+                from ..oidc import is_oidc_available
 
-                if not is_github_oidc_available():
+                if not is_oidc_available():
                     operations = []
                     if self.uploads_to_sbomify:
                         operations.append("uploading to sbomify")
@@ -1064,106 +1065,22 @@ def initialize_sentry() -> None:
     # Set the action version as a tag (always safe to send)
     sentry_sdk.set_tag("action.version", SBOMIFY_VERSION)
 
-    # Detect CI/CD platform
-    is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
-    is_gitlab_ci = os.getenv("GITLAB_CI") == "true"
-    is_bitbucket = os.getenv("BITBUCKET_PIPELINE_UUID") is not None
-    is_teamcity = os.getenv("TEAMCITY_VERSION") is not None
+    # What is safe to report is the platform's judgement -- it is the only thing
+    # that knows whether this repository is public. A platform that cannot tell
+    # returns no context, which is the conservative answer, and a platform added
+    # later gets its telemetry right without touching this function.
+    platform = get_platform()
 
-    # Determine if we should send context based on repository visibility
-    # GitHub Actions
-    if is_github_actions:
-        github_visibility = os.getenv("GITHUB_REPOSITORY_VISIBILITY", "").lower()
-        is_public_repo = github_visibility == "public"
-        sentry_sdk.set_tag("ci.platform", "github-actions")
-        sentry_sdk.set_tag("repo.public", str(is_public_repo))
+    for tag, value in platform.telemetry_tags().items():
+        sentry_sdk.set_tag(tag, value)
 
-        if is_public_repo:
-            # Add GitHub context tags for public repos only
-            ci_context = {}
-            if repo := os.getenv("GITHUB_REPOSITORY"):
-                sentry_sdk.set_tag("ci.repository", repo)
-                ci_context["repository"] = repo
-            if workflow := os.getenv("GITHUB_WORKFLOW"):
-                sentry_sdk.set_tag("ci.workflow", workflow)
-                ci_context["workflow"] = workflow
-            if ref := os.getenv("GITHUB_REF"):
-                sentry_sdk.set_tag("ci.ref", ref)
-                ci_context["ref"] = ref
-            if sha := os.getenv("GITHUB_SHA"):
-                sentry_sdk.set_tag("ci.sha", sha[:7])
-                ci_context["sha"] = sha
-            if action := os.getenv("GITHUB_ACTION"):
-                ci_context["action"] = action
-            if run_id := os.getenv("GITHUB_RUN_ID"):
-                ci_context["run_id"] = run_id
-            if run_number := os.getenv("GITHUB_RUN_NUMBER"):
-                ci_context["run_number"] = run_number
-
-            if ci_context:
-                sentry_sdk.set_context("ci", ci_context)
-        else:
-            logger.debug("Skipping CI context for Sentry (private repository or visibility not set)")
-
-    # GitLab CI
-    elif is_gitlab_ci:
-        gitlab_visibility = os.getenv("CI_PROJECT_VISIBILITY", "").lower()
-        is_public_repo = gitlab_visibility == "public"
-        sentry_sdk.set_tag("ci.platform", "gitlab-ci")
-        sentry_sdk.set_tag("repo.public", str(is_public_repo))
-
-        if is_public_repo:
-            # Add GitLab context tags for public projects only
-            ci_context = {}
-            if project := os.getenv("CI_PROJECT_PATH"):
-                sentry_sdk.set_tag("ci.repository", project)
-                ci_context["project"] = project
-            if pipeline_source := os.getenv("CI_PIPELINE_SOURCE"):
-                sentry_sdk.set_tag("ci.pipeline_source", pipeline_source)
-                ci_context["pipeline_source"] = pipeline_source
-            if ref := os.getenv("CI_COMMIT_REF_NAME"):
-                sentry_sdk.set_tag("ci.ref", ref)
-                ci_context["ref"] = ref
-            if sha := os.getenv("CI_COMMIT_SHORT_SHA"):
-                sentry_sdk.set_tag("ci.sha", sha)
-                ci_context["sha"] = sha
-            if pipeline_id := os.getenv("CI_PIPELINE_ID"):
-                ci_context["pipeline_id"] = pipeline_id
-            if job_name := os.getenv("CI_JOB_NAME"):
-                ci_context["job_name"] = job_name
-
-            if ci_context:
-                sentry_sdk.set_context("ci", ci_context)
-        else:
-            logger.debug("Skipping CI context for Sentry (private repository or visibility not set)")
-
-    # Bitbucket Pipelines
-    elif is_bitbucket:
-        # Bitbucket doesn't expose repository visibility, so we treat all repos as private by default
-        # This is the safest approach for privacy
-        sentry_sdk.set_tag("ci.platform", "bitbucket-pipelines")
-        sentry_sdk.set_tag("repo.public", "False")
-        logger.debug("Skipping CI context for Sentry (Bitbucket repository visibility unknown, treating as private)")
-
-    # TeamCity
-    elif is_teamcity:
-        # TeamCity is overwhelmingly on-premises and exposes no repository
-        # visibility signal, so treat all repos as private -- same reasoning
-        # as Bitbucket above.
-        sentry_sdk.set_tag("ci.platform", "teamcity")
-        sentry_sdk.set_tag("repo.public", "False")
-        logger.debug("Skipping CI context for Sentry (TeamCity repository visibility unknown, treating as private)")
-
-    # Unknown/Local environment
+    ci_context = platform.telemetry_context()
+    if ci_context:
+        sentry_sdk.set_context("ci", ci_context)
+    elif platform.is_ci:
+        logger.debug(f"Skipping CI context for Sentry ({platform.name} repository is not public or visibility unknown)")
     else:
-        sentry_sdk.set_tag("ci.platform", "unknown")
         logger.debug("Skipping CI context for Sentry (not running in a recognized CI/CD platform)")
-
-
-def _in_github_actions() -> bool:
-    """Return True when running inside GitHub Actions."""
-    value = os.environ.get("GITHUB_ACTIONS")
-    return value is not None and value.lower() in {"true", "1"}
 
 
 def _resolve_token(explicit: Optional[str] = None) -> Optional[str]:
@@ -1181,19 +1098,25 @@ def _resolve_token(explicit: Optional[str] = None) -> Optional[str]:
     return os.environ.get("SBOMIFY_TOKEN") or os.environ.get("TOKEN") or None
 
 
-def _github_workspace() -> Path:
-    """Return the GitHub Actions workspace path as an absolute, resolved Path."""
-    raw = os.environ.get("GITHUB_WORKSPACE") or "/github/workspace"
-    workspace = Path(raw)
-    return workspace.resolve()
+def _resolved_workspace(platform: CIPlatform | None = None) -> Path:
+    """The checkout root of ``platform``, absolute and resolved.
+
+    Takes the platform rather than resolving one, so a caller that has already
+    resolved it cannot end up checking a path from one platform against a
+    decision made by another.
+    """
+    platform = platform or get_platform()
+    return (platform.workspace() or Path.cwd()).resolve()
 
 
 def resolve_working_dir(working_dir: str) -> Path:
     """Resolve a working directory path for use with os.chdir().
 
-    Supports both relative and absolute paths. When running inside GitHub Actions
-    (detected via the GITHUB_ACTIONS env var), the resolved path is validated to
-    be under the workspace to prevent escaping the mounted repository.
+    Supports both relative and absolute paths. On a platform that pins the
+    checkout to a fixed mount point (GitHub Actions), the resolved path is
+    validated to be under the workspace to prevent escaping the mounted
+    repository. Elsewhere the user picked the directory, so relative paths
+    resolve against the current working directory and no confinement applies.
 
     Args:
         working_dir: The working directory path to resolve.
@@ -1212,24 +1135,25 @@ def resolve_working_dir(working_dir: str) -> Path:
         )
 
     path = Path(working_dir)
-    in_gha = _in_github_actions()
-    workspace = _github_workspace()
+    platform = get_platform()
+    confined = platform.confines_working_dir
+    workspace = _resolved_workspace(platform)
 
     try:
         if path.is_absolute():
             resolved = path.resolve()
         else:
-            # Relative path — resolve against workspace if in GHA,
-            # otherwise against cwd (for local/non-GHA use)
-            base = workspace if in_gha else Path.cwd()
+            # Relative path — resolve against the workspace where the platform
+            # owns it, otherwise against cwd (local and most CI systems)
+            base = workspace if confined else Path.cwd()
             resolved = (base / path).resolve()
     except (OSError, RuntimeError) as exc:
         raise click.BadParameter(f"Unable to resolve working directory '{working_dir}': {exc}") from exc
 
-    # In GitHub Actions runtime, enforce the resolved path is under the workspace
-    if in_gha and not resolved.is_relative_to(workspace):
+    # Enforce the resolved path is under the workspace the platform mounted
+    if confined and not resolved.is_relative_to(workspace):
         raise click.BadParameter(
-            f"Working directory '{resolved}' must be under {workspace} when running in GitHub Actions."
+            f"Working directory '{resolved}' must be under {workspace} when running on {platform.name}."
         )
 
     if not resolved.is_dir():
@@ -1260,11 +1184,36 @@ def _format_search_locations(*candidates: Path) -> str:
     return ", ".join(f"'{location}'" for location in seen)
 
 
-#: Where a GitHub Action mounts the repository. path_expansion searches here
-#: as well as the working directory, because the two are not the same inside
-#: an action, and anything else that searches for an input has to look in the
-#: same places or it will refuse a file the caller can plainly see.
-GITHUB_WORKSPACE = "/github/workspace"
+def _first_existing(path: str | Path) -> Path | None:
+    """Return the first workspace candidate that holds ``path`` as a file."""
+    for workspace in workspace_candidates():
+        candidate = workspace / path
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+#: Deprecated. Where a GitHub Action mounts the repository, kept as a module
+#: constant because it was one and callers referenced it. Lookups go through
+#: workspace_candidates(), which asks the active platform and then falls back to
+#: this same well-known root, so changing this value no longer redirects them.
+GITHUB_WORKSPACE = str(legacy_workspaces()[0])
+
+
+def _workspace() -> Path:
+    """Root of the repository checkout, per the active CI platform.
+
+    path_expansion searches here as well as the working directory, because the
+    two are not the same on a runtime that mounts the repository somewhere
+    other than where it runs the command (a GitHub Action mounts it at
+    /github/workspace). Anything else that searches for an input has to look in
+    the same places or it will refuse a file the caller can plainly see.
+
+    Platforms that simply run inside the checkout report the working directory,
+    so the second lookup is a harmless repeat there -- _format_search_locations
+    collapses the duplicate.
+    """
+    return get_platform().workspace() or Path.cwd()
 
 
 def path_expansion(path: str) -> str:
@@ -1292,13 +1241,14 @@ def path_expansion(path: str) -> str:
 
     current_dir = Path.cwd()
     relative_path = current_dir / path
-    workspace_relative_path = Path(GITHUB_WORKSPACE) / path
+    workspace_paths = tuple(workspace / path for workspace in workspace_candidates())
 
     # Log which paths we're checking for debugging
     logger.debug(f"Searching for file '{path}'...")
     logger.debug(f"  Checking direct path: {Path(path)}")
     logger.debug(f"  Checking relative to cwd: {relative_path}")
-    logger.debug(f"  Checking workspace path: {workspace_relative_path}")
+    for workspace_path in workspace_paths:
+        logger.debug(f"  Checking workspace path: {workspace_path}")
 
     if Path(path).is_file():
         logger.info(f"Using input file '{path}'.")
@@ -1306,13 +1256,13 @@ def path_expansion(path: str) -> str:
     elif relative_path.is_file():
         logger.info(f"Using input file '{relative_path}'.")
         return str(relative_path)
-    elif workspace_relative_path.is_file():
+    elif (workspace_relative_path := _first_existing(path)) is not None:
         logger.info(f"Using input file '{workspace_relative_path}'.")
         return str(workspace_relative_path)
     else:
         raise InputPathNotFoundError(
             f"Specified input file '{path}' not found. "
-            f"Searched in: {_format_search_locations(Path(path), relative_path, workspace_relative_path)}"
+            f"Searched in: {_format_search_locations(Path(path), relative_path, *workspace_paths)}"
         )
 
 
@@ -1369,11 +1319,19 @@ def _expand_lock_file_or_substitute(path: str) -> str:
     # Resolved, because the same file reached as "./x" and as an absolute path
     # is one candidate and not two; counting it twice made every substitution
     # look ambiguous and refuse itself.
+    # Deliberately the legacy roots only, NOT workspace_candidates(): unlike
+    # path_expansion, which looks up one exact name, this *scans a directory*
+    # for same-ecosystem alternatives, and widening a scan is not the same
+    # trade as widening a lookup. Following the platform's workspace here would
+    # mean a monorepo's WORKING_DIR=packages/app, with a stale LOCK_FILE, could
+    # be answered by the lock file at the repository root -- silently scanning
+    # the wrong project, or refusing as ambiguous because it found two.
+    roots = legacy_workspaces()
     searched: tuple[Path, ...]
     if named.is_absolute():
-        searched = (named.parent, Path.cwd(), Path(GITHUB_WORKSPACE))
+        searched = (named.parent, Path.cwd(), *roots)
     else:
-        searched = (Path.cwd() / named.parent, Path(GITHUB_WORKSPACE) / named.parent)
+        searched = (Path.cwd() / named.parent, *(root / named.parent for root in roots))
     directories = {d.resolve() for d in searched if d.is_dir()}
 
     # .NET project files are matched by suffix rather than by name, so a scan
@@ -1470,17 +1428,17 @@ def directory_expansion(path: str) -> str:
 
     current_dir = Path.cwd()
     relative_path = current_dir / path
-    workspace_relative_path = Path(GITHUB_WORKSPACE) / path
+    workspace_paths = tuple(workspace / path for workspace in workspace_candidates())
 
     logger.debug(f"Searching for directory '{path}'...")
-    for candidate in (Path(path), relative_path, workspace_relative_path):
+    for candidate in (Path(path), relative_path, *workspace_paths):
         if candidate.is_dir():
             logger.info(f"Using source directory '{candidate}'.")
             return str(candidate if candidate.is_absolute() else current_dir / candidate)
 
     raise InputPathNotFoundError(
         f"Specified source directory '{path}' not found. "
-        f"Searched in: {_format_search_locations(Path(path), relative_path, workspace_relative_path)}"
+        f"Searched in: {_format_search_locations(Path(path), relative_path, *workspace_paths)}"
     )
 
 
@@ -1879,9 +1837,9 @@ def _run_post_upload_processing(config: "Config", sbom_id: str) -> None:
         # 15-minute default TTL on the originally minted token.
         if config.token_is_oidc_minted:
             from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
-            from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
+            from ..oidc import is_oidc_available, obtain_sbomify_token_via_oidc
 
-            if is_github_oidc_available():
+            if is_oidc_available():
                 try:
                     config.token = obtain_sbomify_token_via_oidc(
                         component_id=config.component_id,
@@ -2000,9 +1958,9 @@ def run_pipeline(config: Config) -> None:
     # env, we skip silently — augmentation falls back to sbomify.json.
     if config.will_use_sbomify_api and not config.token and config.component_id:
         from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
-        from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
+        from ..oidc import is_oidc_available, obtain_sbomify_token_via_oidc
 
-        if is_github_oidc_available():
+        if is_oidc_available():
             try:
                 config.token = obtain_sbomify_token_via_oidc(
                     component_id=config.component_id,
@@ -2168,7 +2126,7 @@ def run_pipeline(config: Config) -> None:
                                 f"SPDX {actual_spec_version}; using {actual_spec_version}"
                             )
 
-                    gha_warning(
+                    log_warning(
                         "Using the SBOM published by Chainguard for this image. It covers the "
                         "packages in the Chainguard base image only — anything your Dockerfile "
                         "adds on top (your application binary, files brought in via COPY/ADD, "
@@ -2353,7 +2311,7 @@ def run_pipeline(config: Config) -> None:
                         f"Added {expansion_result.added_count} transitive dependencies (discovered {expansion_result.discovered_count} total)"
                     )
                     # Log discovered packages in collapsible group
-                    with gha_group("Discovered Transitive Dependencies"):
+                    with log_group("Discovered Transitive Dependencies"):
                         for dep in expansion_result.dependencies[:50]:
                             parent_info = f" (via {dep.parent})" if dep.parent else ""
                             print(f"  {dep.purl}{parent_info}")
@@ -2411,7 +2369,7 @@ def run_pipeline(config: Config) -> None:
 
         # Inform user if API augmentation is unavailable
         if not config.token or not config.component_id:
-            gha_notice(
+            log_notice(
                 "sbomify API augmentation skipped (TOKEN or COMPONENT_ID not set). "
                 "To add metadata, either create a sbomify.json file in your project "
                 "root, set TOKEN + COMPONENT_ID, or in GitHub Actions enable trusted "
@@ -2517,9 +2475,9 @@ def run_pipeline(config: Config) -> None:
         # this is where it should be young.
         if config.token_is_oidc_minted:
             from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
-            from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
+            from ..oidc import is_oidc_available, obtain_sbomify_token_via_oidc
 
-            if is_github_oidc_available():
+            if is_oidc_available():
                 try:
                     config.token = obtain_sbomify_token_via_oidc(
                         component_id=config.component_id,
@@ -3017,7 +2975,7 @@ def _cites_a_phantom_lockfile(value: object, directory: Path) -> bool:
     # wearing a different hat.
     if cited.is_absolute():
         return not cited.is_file()
-    return not (directory / cited).is_file() and not (Path(GITHUB_WORKSPACE) / cited).is_file()
+    return not (directory / cited).is_file() and _first_existing(cited) is None
 
 
 def _recommend_a_lock_file(lock_file: str | None) -> None:
@@ -3722,7 +3680,7 @@ def _parse_upload_destinations_callback(
     "--working-dir",
     envvar="WORKING_DIR",
     default=None,
-    help="Working directory (absolute, or relative to cwd locally / GITHUB_WORKSPACE in GHA). [env: WORKING_DIR]",
+    help="Working directory (absolute, or relative to the CI platform's checkout root). [env: WORKING_DIR]",
 )
 @click.option(
     "-v",
@@ -3809,10 +3767,14 @@ def cli(
         resolved = resolve_working_dir(working_dir)
         logger.info(f"Changing working directory to '{resolved}'")
         os.chdir(resolved)
-        # Verify cwd is still under workspace after chdir (TOCTOU mitigation)
-        if _in_github_actions():
+        # Verify cwd is still under workspace after chdir (TOCTOU mitigation).
+        # One platform for both halves: checking the cwd against a workspace
+        # belonging to a different platform than the one that demanded the
+        # check would defeat the point of making it.
+        platform = get_platform()
+        if platform.confines_working_dir:
             cwd = Path.cwd().resolve()
-            workspace = _github_workspace()
+            workspace = _resolved_workspace(platform)
             if not cwd.is_relative_to(workspace):
                 logger.error(f"Working directory '{cwd}' escaped workspace '{workspace}' after chdir. Aborting.")
                 ctx.exit(1)
@@ -4119,11 +4081,7 @@ def _install_debug_buffer() -> "io.StringIO":
 
 def _wizard_in_ci() -> bool:
     """Refuse to launch the TUI under a non-interactive CI environment."""
-    for name in ("GITHUB_ACTIONS", "CI"):
-        value = os.environ.get(name)
-        if value is not None and value.strip().lower() in {"true", "1", "yes", "on"}:
-            return True
-    return False
+    return get_platform().is_ci
 
 
 def _run_wizard_cli(

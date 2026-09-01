@@ -29,8 +29,7 @@ The fastest way to get going is the **interactive setup wizard**. Run it from th
 
 ```bash
 docker run --rm -it \
-  -v "$(pwd):/github/workspace" \
-  -w /github/workspace \
+  -v "$(pwd):/workspace" \
   ghcr.io/sbomify/sbomify-action \
   sbomify-action wizard
 ```
@@ -58,14 +57,15 @@ On any other CI, pass the same variables to the container image:
 
 ```bash
 docker run --rm \
-  -v "$(pwd):/github/workspace" \
-  -w /github/workspace \
+  -v "$(pwd):/workspace" \
   -e LOCK_FILE=requirements.txt \
   -e OUTPUT_FILE=sbom.cdx.json \
   -e ENRICH=true \
   -e UPLOAD=false \
   ghcr.io/sbomify/sbomify-action
 ```
+
+The image's working directory is `/workspace`, so mounting your repository there needs no `-w`. Any other mount point works too, as long as `-w` points at it — including an existing `-v "$PWD:/github/workspace" -w /github/workspace`, which keeps working unchanged. Keep the mount and the `-w` in step: outputs are written relative to the working directory, so a mount without a matching `-w` leaves your SBOM inside the container.
 
 📖 [Runtime guides](https://sbomify.com/sbomify-action/runtimes/) — GitHub Actions, GitLab CI, Bitbucket, Jenkins, CircleCI, Azure DevOps, TeamCity, any container runner, and local
 
@@ -85,7 +85,7 @@ This tool wraps generation in three more steps — inject, augment, enrich — a
 - **Yocto/OpenEmbedded** — batch process SPDX SBOMs from Yocto builds
 - **Inject** additional packages not in lock files (vendored code, runtime deps, system libraries)
 - **Augment** with business metadata — supplier, authors, licenses, lifecycle phase — from a local config file or sbomify
-- **VCS auto-detection** on GitHub Actions, GitLab CI, Bitbucket and TeamCity (Git roots only)
+- **VCS auto-detection** on GitHub Actions, GitLab CI, Bitbucket and TeamCity (Git roots only), and from the git checkout itself everywhere else — Jenkins, CircleCI, Azure Pipelines and your own machine. `DISABLE_VCS_AUGMENTATION=true` turns it off
 - **Enrich** from PyPI, crates.io, pub.dev, Conan Center, deps.dev, ecosyste.ms and pre-computed distro license databases
 - **Hashes and lifecycle data** — integrity hashes pulled from your lock file, CLE end-of-support dates for OS packages and tracked runtimes
 - **Audit trail** — every modification logged with UTC timestamps, for attestation and compliance

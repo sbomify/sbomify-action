@@ -117,5 +117,16 @@ ENV SBOMIFY_GITHUB_ACTION_VERSION=${VERSION}
 ENV SBOMIFY_GITHUB_ACTION_COMMIT_SHA=${COMMIT_SHA}
 ENV SBOMIFY_GITHUB_ACTION_VCS_REF=${VCS_REF}
 
+# Default location for the bind-mounted repository, so `-v "$PWD:/workspace"`
+# is a complete invocation and no -w flag is needed. Without a WORKDIR the
+# container starts in / and every caller had to pass one, which is how the
+# GitHub-specific /github/workspace path ended up in docs for other CI systems.
+#
+# Nothing in the image depends on this path: GitHub Actions mounts the checkout
+# at /github/workspace and passes its own -w, and CI systems whose Docker
+# wrappers set the working directory to their agent's checkout path override it
+# too. Both keep working, as does an explicit -w from an existing pipeline.
+WORKDIR /workspace
+
 # nosemgrep: missing-user  # GitHub Action container must run as root to access the mounted workspace
 CMD ["sbomify-action"]

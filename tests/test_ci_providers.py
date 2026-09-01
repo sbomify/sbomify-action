@@ -7,22 +7,19 @@ from unittest.mock import patch
 
 from sbomify_action._augmentation.metadata import AugmentationMetadata
 from sbomify_action._augmentation.providers import (
-    BitbucketPipelinesProvider,
+    CIPlatformProvider,
     DockerImageProvider,
-    GitHubActionsProvider,
-    GitLabCIProvider,
-    TeamCityProvider,
     is_vcs_augmentation_disabled,
-)
-from sbomify_action._augmentation.providers.teamcity import (
-    _parse_java_properties,
-    _read_properties_file,
 )
 from sbomify_action._augmentation.utils import (
     build_vcs_url_with_commit,
     normalize_repo_url,
     strip_ref_prefix,
     truncate_sha,
+)
+from sbomify_action._runtime.platforms.teamcity import (
+    _parse_java_properties,
+    _read_properties_file,
 )
 
 
@@ -103,16 +100,21 @@ class TestGitHubActionsProvider(unittest.TestCase):
     """Tests for GitHubActionsProvider."""
 
     def setUp(self):
-        self.provider = GitHubActionsProvider()
+        self.provider = CIPlatformProvider()
 
     def test_provider_attributes(self):
         """Test provider has correct name and priority."""
-        self.assertEqual(self.provider.name, "github-actions")
+        self.assertEqual(self.provider.name, "ci-platform")
         self.assertEqual(self.provider.priority, 20)
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_returns_none_when_not_in_github_actions(self):
-        """Provider returns None when not in GitHub Actions."""
+    @patch("sbomify_action._runtime.platforms.base.detect_vcs", return_value=None)
+    def test_returns_none_when_not_in_github_actions(self, _mock_git):
+        """No GitHub Actions variables -> no GitHub metadata.
+
+        detect_vcs is silenced because without any vendor variables the local
+        platform takes over and would report this repository's own checkout.
+        """
         result = self.provider.fetch()
         self.assertIsNone(result)
 
@@ -224,16 +226,17 @@ class TestGitLabCIProvider(unittest.TestCase):
     """Tests for GitLabCIProvider."""
 
     def setUp(self):
-        self.provider = GitLabCIProvider()
+        self.provider = CIPlatformProvider()
 
     def test_provider_attributes(self):
         """Test provider has correct name and priority."""
-        self.assertEqual(self.provider.name, "gitlab-ci")
+        self.assertEqual(self.provider.name, "ci-platform")
         self.assertEqual(self.provider.priority, 20)
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_returns_none_when_not_in_gitlab_ci(self):
-        """Provider returns None when not in GitLab CI."""
+    @patch("sbomify_action._runtime.platforms.base.detect_vcs", return_value=None)
+    def test_returns_none_when_not_in_gitlab_ci(self, _mock_git):
+        """No GitLab CI variables -> no GitLab metadata."""
         result = self.provider.fetch()
         self.assertIsNone(result)
 
@@ -311,16 +314,17 @@ class TestBitbucketPipelinesProvider(unittest.TestCase):
     """Tests for BitbucketPipelinesProvider."""
 
     def setUp(self):
-        self.provider = BitbucketPipelinesProvider()
+        self.provider = CIPlatformProvider()
 
     def test_provider_attributes(self):
         """Test provider has correct name and priority."""
-        self.assertEqual(self.provider.name, "bitbucket-pipelines")
+        self.assertEqual(self.provider.name, "ci-platform")
         self.assertEqual(self.provider.priority, 20)
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_returns_none_when_not_in_bitbucket_pipelines(self):
-        """Provider returns None when not in Bitbucket Pipelines."""
+    @patch("sbomify_action._runtime.platforms.base.detect_vcs", return_value=None)
+    def test_returns_none_when_not_in_bitbucket_pipelines(self, _mock_git):
+        """No Bitbucket Pipelines variables -> no Bitbucket metadata."""
         result = self.provider.fetch()
         self.assertIsNone(result)
 
@@ -973,7 +977,7 @@ class TestReadPropertiesFile(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("a=" + "x" * 200)
             with patch(
-                "sbomify_action._augmentation.providers.teamcity._MAX_PROPERTIES_BYTES",
+                "sbomify_action._runtime.platforms.teamcity._MAX_PROPERTIES_BYTES",
                 32,
             ):
                 self.assertEqual(_read_properties_file(path), {})
@@ -1024,7 +1028,7 @@ class TestTeamCityProvider(unittest.TestCase):
     """Tests for TeamCityProvider."""
 
     def setUp(self):
-        self.provider = TeamCityProvider()
+        self.provider = CIPlatformProvider()
 
     def _fetch(self, env, build_lines=(), config_lines=None, with_props=True):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1035,11 +1039,12 @@ class TestTeamCityProvider(unittest.TestCase):
                 return self.provider.fetch()
 
     def test_provider_attributes(self):
-        self.assertEqual(self.provider.name, "teamcity")
+        self.assertEqual(self.provider.name, "ci-platform")
         self.assertEqual(self.provider.priority, 20)
 
     @patch.dict(os.environ, {"BUILD_VCS_NUMBER": _TC_SHA}, clear=True)
-    def test_returns_none_when_not_in_teamcity(self):
+    @patch("sbomify_action._runtime.platforms.base.detect_vcs", return_value=None)
+    def test_returns_none_when_not_in_teamcity(self, _mock_git):
         """TEAMCITY_VERSION is the detection signal; without it we do nothing."""
         self.assertIsNone(self.provider.fetch())
 
@@ -1292,7 +1297,7 @@ class TestTeamCityReviewRegressions(unittest.TestCase):
     """Regressions for the issues found reviewing PR #395."""
 
     def setUp(self):
-        self.provider = TeamCityProvider()
+        self.provider = CIPlatformProvider()
 
     def _fetch(self, env, config_lines):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1394,7 +1399,7 @@ class TestTeamCityGitPlusSchemes(unittest.TestCase):
     """
 
     def setUp(self):
-        self.provider = TeamCityProvider()
+        self.provider = CIPlatformProvider()
 
     def _fetch(self, url):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1433,7 +1438,7 @@ class TestTeamCityNonGitRoots(unittest.TestCase):
     """
 
     def setUp(self):
-        self.provider = TeamCityProvider()
+        self.provider = CIPlatformProvider()
 
     def _fetch(self, revision, config_lines):
         with tempfile.TemporaryDirectory() as tmp:

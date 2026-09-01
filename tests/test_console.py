@@ -137,15 +137,9 @@ class TestStepHeader(unittest.TestCase):
             # Re-import to get fresh GHA detection
             from sbomify_action import console as c
 
-            # Force GHA detection
-            original = c.IS_GITHUB_ACTIONS
-            c.IS_GITHUB_ACTIONS = True
-            try:
-                c.print_step_header(1, "Test Step")
-                # Should have printed ::group::
-                mock_print.assert_called()
-            finally:
-                c.IS_GITHUB_ACTIONS = original
+            c.print_step_header(1, "Test Step")
+            # Should have printed ::group::
+            mock_print.assert_called()
 
 
 class TestStepEnd(unittest.TestCase):
@@ -187,13 +181,8 @@ class TestGHAAnnotations(unittest.TestCase):
         with patch("builtins.print") as mock_print:
             from sbomify_action import console as c
 
-            original = c.IS_GITHUB_ACTIONS
-            c.IS_GITHUB_ACTIONS = True
-            try:
-                c.gha_warning("Test warning")
-                mock_print.assert_called_with("::warning::Test warning")
-            finally:
-                c.IS_GITHUB_ACTIONS = original
+            c.gha_warning("Test warning")
+            mock_print.assert_called_with("::warning::Test warning")
 
     @patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}, clear=False)
     def test_gha_error_gha_mode(self):
@@ -201,13 +190,8 @@ class TestGHAAnnotations(unittest.TestCase):
         with patch("builtins.print") as mock_print:
             from sbomify_action import console as c
 
-            original = c.IS_GITHUB_ACTIONS
-            c.IS_GITHUB_ACTIONS = True
-            try:
-                c.gha_error("Test error")
-                mock_print.assert_called_with("::error::Test error")
-            finally:
-                c.IS_GITHUB_ACTIONS = original
+            c.gha_error("Test error")
+            mock_print.assert_called_with("::error::Test error")
 
 
 class TestGHAGroup(unittest.TestCase):
@@ -225,15 +209,10 @@ class TestGHAGroup(unittest.TestCase):
         with patch("builtins.print") as mock_print:
             from sbomify_action import console as c
 
-            original = c.IS_GITHUB_ACTIONS
-            c.IS_GITHUB_ACTIONS = True
-            try:
-                with c.gha_group("Test Group"):
-                    pass
-                # Should have printed ::group:: and ::endgroup::
-                self.assertEqual(mock_print.call_count, 2)
-            finally:
-                c.IS_GITHUB_ACTIONS = original
+            with c.gha_group("Test Group"):
+                pass
+            # Should have printed ::group:: and ::endgroup::
+            self.assertEqual(mock_print.call_count, 2)
 
 
 class TestSummaryTable(unittest.TestCase):
@@ -377,7 +356,6 @@ class TestDuplicateSbomError(unittest.TestCase):
             component_version="2.0.0",
         )
 
-    @patch("sbomify_action.console.IS_GITHUB_ACTIONS", True)
     def test_print_duplicate_non_sbom_annotation_matches_guidance(self):
         """The GHA annotation for a non-SBOM duplicate must mirror the panel:
         the version to bump lives inside the authored document, and
@@ -385,8 +363,11 @@ class TestDuplicateSbomError(unittest.TestCase):
         import io
         from contextlib import redirect_stdout
 
+        from sbomify_action._runtime import use_platform
+        from sbomify_action._runtime.platforms import GitHubPlatform
+
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with redirect_stdout(buf), use_platform(GitHubPlatform()):
             print_duplicate_sbom_error(
                 component_id="c1",
                 sbom_format="cyclonedx",

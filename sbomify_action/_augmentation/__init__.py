@@ -8,15 +8,17 @@ Providers (in priority order):
 - json-config: Reads from sbomify.json config file (priority 10)
 - docker-image: Emits lifecycle_phase=post-build when the input is a
   container image (--docker-image / DOCKER_IMAGE) (priority 15)
-- github-actions: Auto-detects VCS info from GitHub Actions env (priority 20)
-- gitlab-ci: Auto-detects VCS info from GitLab CI env (priority 20)
-- bitbucket-pipelines: Auto-detects VCS info from Bitbucket Pipelines env (priority 20)
-- teamcity: Auto-detects VCS info from the TeamCity build properties file (priority 20)
+- ci-platform: Auto-detects VCS info from the active CI platform (priority 20)
 - sbomify-api: Fetches from sbomify backend API (priority 50)
 
 VCS Augmentation:
-CI providers automatically detect repository URL, commit SHA, and branch/ref
-from CI environment variables. This can be:
+The ci-platform provider automatically detects repository URL, commit SHA, and
+branch/ref by asking the resolved CI platform (see ``sbomify_action._runtime``).
+Each platform reads whatever its vendor publishes -- GitHub Actions' and GitLab
+CI's environment variables, TeamCity's build-properties file -- and falls back
+to the git checkout where the vendor publishes nothing, which covers Jenkins,
+CircleCI, Azure Pipelines and a local machine. Adding a CI system means adding
+a platform, not a provider. This can be:
 - Overridden via sbomify.json config (vcs_url, vcs_commit_sha, vcs_ref)
 - Disabled entirely via DISABLE_VCS_AUGMENTATION=true environment variable
 
@@ -50,20 +52,17 @@ def create_default_registry() -> ProviderRegistry:
     Providers are registered in priority order (lower number = higher priority):
     - Priority 10: JsonConfigProvider (local config, can override CI-detected VCS)
     - Priority 15: DockerImageProvider (lifecycle_phase=post-build for container images)
-    - Priority 20: CI providers (GitHub Actions, GitLab CI, Bitbucket Pipelines, TeamCity)
+    - Priority 20: CIPlatformProvider (VCS from the active CI platform)
     - Priority 50: SbomifyApiProvider (backend metadata)
 
     Returns:
         ProviderRegistry configured with standard providers
     """
     from .providers import (
-        BitbucketPipelinesProvider,
+        CIPlatformProvider,
         DockerImageProvider,
-        GitHubActionsProvider,
-        GitLabCIProvider,
         JsonConfigProvider,
         SbomifyApiProvider,
-        TeamCityProvider,
     )
 
     registry = ProviderRegistry()
@@ -72,15 +71,13 @@ def create_default_registry() -> ProviderRegistry:
     registry.register(JsonConfigProvider())
 
     # Priority 15: Docker-image input sets lifecycle_phase=post-build.
-    # Beats CI providers' pre-build default; loses to json_config so
+    # Beats the CI platform's pre-build default; loses to json_config so
     # operators can still override.
     registry.register(DockerImageProvider())
 
-    # Priority 20: CI providers (auto-detect VCS from environment)
-    registry.register(GitHubActionsProvider())
-    registry.register(GitLabCIProvider())
-    registry.register(BitbucketPipelinesProvider())
-    registry.register(TeamCityProvider())
+    # Priority 20: VCS from whichever CI platform this run is under. Supporting
+    # another CI system adds a platform, not a provider.
+    registry.register(CIPlatformProvider())
 
     # Priority 50: API provider (backend metadata)
     registry.register(SbomifyApiProvider())

@@ -44,6 +44,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
+from sbomify_action._runtime import workspace_candidates
 from sbomify_action.logging_config import logger
 
 from ..metadata import AugmentationMetadata
@@ -147,10 +148,16 @@ class JsonConfigProvider:
         if path.is_file():
             return path
 
-        # Also check /github/workspace for GitHub Actions
-        github_workspace = Path("/github/workspace")
-        if github_workspace.is_dir():
-            path = github_workspace / DEFAULT_CONFIG_FILE
+        # Then every checkout root an input lookup would try: the platform's
+        # own, for runtimes that mount the repository somewhere other than where
+        # they run the command (GitHub Actions mounts it at /github/workspace),
+        # followed by the well-known roots earlier releases probed regardless of
+        # platform. This has to agree with path_expansion -- a config file and a
+        # lock file sitting side by side must both be found, or neither.
+        for workspace in workspace_candidates():
+            if workspace == cwd or not workspace.is_dir():
+                continue
+            path = workspace / DEFAULT_CONFIG_FILE
             if path.is_file():
                 return path
 

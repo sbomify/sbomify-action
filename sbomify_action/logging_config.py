@@ -7,7 +7,8 @@ from typing import Any, Dict
 
 from rich.logging import RichHandler
 
-from .console import IS_CI, IS_GITHUB_ACTIONS, console
+from ._runtime import get_platform
+from .console import console
 
 
 def setup_logging(level: str = "INFO", structured: bool = False, use_rich: bool = True) -> logging.Logger:
@@ -40,12 +41,20 @@ def setup_logging(level: str = "INFO", structured: bool = False, use_rich: bool 
     elif use_rich:
         # Rich handler for beautiful output
         # In CI, show slightly more compact format
+        # Resolved once: two calls could disagree if the environment or an
+        # override changed between them, and one handler must not be half
+        # configured for one platform and half for another.
+        platform = get_platform()
         handler = RichHandler(
             console=console,
-            show_time=not IS_GITHUB_ACTIONS,  # GHA has its own timestamps
+            # Platforms that timestamp every log line themselves ask us not to.
+            show_time=platform.log_formatter().show_log_time,
             show_path=False,
             rich_tracebacks=True,
-            tracebacks_show_locals=not IS_CI,  # Don't show locals in CI (too verbose)
+            # Frame locals are too verbose for a build log, and can carry
+            # secrets. Asked of the platform rather than an import-time
+            # snapshot, so every CI system we recognise is covered.
+            tracebacks_show_locals=not platform.is_ci,
             markup=True,
         )
         handler.setLevel(getattr(logging, level.upper()))
