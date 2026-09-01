@@ -213,7 +213,12 @@ def _is_known_git_host(url: str) -> bool:
     """
     try:
         parsed = urlparse(url)
-        host = parsed.netloc.lower()
+        # hostname, not netloc: netloc carries the port and any userinfo, so
+        # `https://github.com:8443/o/r` and `https://user@github.com/o/r` both
+        # failed to match a forge that is plainly in the list. It also
+        # lower-cases for us, and tolerates a non-numeric port where `.port`
+        # would raise.
+        host = parsed.hostname or ""
         # Handle www. prefix
         if host.startswith("www."):
             host = host[4:]

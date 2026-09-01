@@ -28,6 +28,7 @@ from sbomify_action._runtime.platforms import (
     LocalPlatform,
     TeamCityPlatform,
 )
+from sbomify_action._runtime.vcs_url import _is_known_git_host
 
 GHA_ENV = {"GITHUB_ACTIONS": "true"}
 GITLAB_ENV = {"GITLAB_CI": "true"}
@@ -657,6 +658,45 @@ class TestGitSafeDirectoryEnv(unittest.TestCase):
         env = git_safe_directory_env()
         self.assertEqual(env["GIT_CONFIG_COUNT"], "3")
         self.assertEqual(env["GIT_CONFIG_KEY_2"], "safe.directory")
+
+
+class TestKnownGitHost(unittest.TestCase):
+    """Matching a forge must not be defeated by the parts of a URL around it."""
+
+    def test_a_plain_forge_url_matches(self):
+        """The ordinary case."""
+        self.assertTrue(_is_known_git_host("https://github.com/owner/repo"))
+
+    def test_an_explicit_port_does_not_defeat_the_match(self):
+        """netloc carries the port; hostname does not.
+
+        `https://github.com:8443/o/r` is still GitHub, and reading netloc made
+        it look like an unknown host.
+        """
+        self.assertTrue(_is_known_git_host("https://github.com:8443/owner/repo"))
+
+    def test_userinfo_does_not_defeat_the_match(self):
+        """Same for `user@` -- common on a CI runner's origin."""
+        self.assertTrue(_is_known_git_host("https://user@github.com/owner/repo"))
+        self.assertTrue(_is_known_git_host("https://user:token@gitlab.com/group/project"))
+
+    def test_www_and_case_are_still_handled(self):
+        """The prefix stripping and case folding survive the change."""
+        self.assertTrue(_is_known_git_host("https://WWW.GitHub.com/owner/repo"))
+
+    def test_an_unknown_host_still_does_not_match(self):
+        """Widening the match must not make it match everything."""
+        self.assertFalse(_is_known_git_host("https://git.corp.internal/owner/repo"))
+        self.assertFalse(_is_known_git_host("not a url"))
+
+    def test_a_malformed_port_still_reads_the_host(self):
+        """`hostname` tolerates a non-numeric port (only `.port` raises).
+
+        The host really is github.com, so matching is right -- and it must not
+        raise either way, since this decides a normalization, not a security
+        boundary.
+        """
+        self.assertTrue(_is_known_git_host("https://github.com:notaport/owner/repo"))
 
 
 class TestRuntimeStaysALeaf(unittest.TestCase):

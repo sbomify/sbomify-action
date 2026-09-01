@@ -25,6 +25,7 @@ owner_id/repository_id). The binding must exist before trusted publishing will
 work — otherwise the exchange returns 403.
 """
 
+import re
 import time
 from urllib.parse import urlparse
 
@@ -40,6 +41,11 @@ DEFAULT_OIDC_AUDIENCE = "sbomify.com"
 SBOMIFY_PRODUCTION_API = "https://app.sbomify.com"
 EXCHANGE_TIMEOUT = 30
 EXCHANGE_RETRY_DELAY_SECONDS = 2
+
+#: A provider slug is one path segment: lowercase letters, digits, hyphens.
+#: Anything else -- a slash, a dot-dot, an encoded separator -- would move the
+#: exchange request to a different endpoint.
+_PROVIDER_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 __all__ = [
     "DEFAULT_OIDC_AUDIENCE",
@@ -137,8 +143,20 @@ def exchange_for_sbomify_token(
             component+repository in sbomify. The user needs to create one in
             the sbomify UI.
         OIDCExchangeError: any other failure (invalid JWT, rate limit,
-            backend error, etc.).
+            backend error, etc.), or a provider_slug that is not a bare slug.
     """
+    # The slug is interpolated into the request path, and that path is where a
+    # short-lived credential gets issued. Today every caller passes a constant
+    # from a platform's OidcProvider, so nothing hostile reaches it -- but
+    # "today" is the only thing holding that, and a slug containing `/` or `..`
+    # would quietly retarget the request at a different endpoint. Cheap to rule
+    # out, so rule it out.
+    if not _PROVIDER_SLUG_RE.fullmatch(provider_slug):
+        raise OIDCExchangeError(
+            f"Refusing to build an OIDC exchange URL from provider slug {provider_slug!r}: "
+            "expected a bare slug of lowercase letters, digits and hyphens."
+        )
+
     url = f"{api_base_url.rstrip('/')}/api/v1/auth/oidc/{provider_slug}/exchange"
     headers = get_default_headers(token=oidc_jwt, content_type="application/json")
     request_body = {"component_id": component_id}
