@@ -53,6 +53,12 @@ def env_checkout_dir(platform: str, *names: str) -> Path | None:
     not exist and report nothing. The same check covers any vendor variable
     holding a host-side path that is not mounted inside the container.
 
+    Every name is tried, not just the first one that is set: Azure Pipelines
+    publishes ``BUILD_REPOSITORY_LOCALPATH`` and
+    ``SYSTEM_DEFAULTWORKINGDIRECTORY``, and a container job sees the first as a
+    host-side path that is not mounted. Stopping there would fall through to
+    the cwd while the second variable named the checkout all along.
+
     Args:
         platform: Platform name, for the debug line when a path does not resolve.
         *names: Environment variables to try, in order.
@@ -62,11 +68,14 @@ def env_checkout_dir(platform: str, *names: str) -> Path | None:
         callers fall back to the process working directory, which is correct
         for every vendor that mounts the checkout as the command's cwd.
     """
-    if checkout := env_first(*names):
+    for name in names:
+        checkout = os.environ.get(name, "").strip()
+        if not checkout:
+            continue
         expanded = Path(checkout).expanduser()
         if expanded.is_dir():
             return expanded
-        logger.debug(f"{platform} reported checkout '{checkout}', which is not a directory here")
+        logger.debug(f"{platform} reported checkout '{checkout}' in {name}, which is not a directory here")
     return None
 
 

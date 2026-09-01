@@ -85,10 +85,14 @@ class FreezeToolVersionsHook(BuildHookInterface):
         module = importlib.util.module_from_spec(spec)
         # The script imports sbomify_action to resolve versions, and the build
         # backend runs in its own environment where the project is not
-        # installed.
+        # installed. The whole path is restored rather than the one entry
+        # removed: the script inserts the same root at import time, so removing
+        # one occurrence would leave the other behind for the rest of the build
+        # backend's life -- a process that goes on to build other projects.
+        original_path = sys.path[:]
         sys.path.insert(0, str(root))
         try:
             spec.loader.exec_module(module)
             return int(module.freeze(manifest))
         finally:
-            sys.path.remove(str(root))
+            sys.path[:] = original_path

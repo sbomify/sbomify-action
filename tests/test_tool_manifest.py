@@ -62,6 +62,7 @@ def test_versions_come_from_native_lockfiles_on_master():
     )
 
 
+@pytest.mark.slow
 def test_a_built_wheel_carries_resolved_versions(tmp_path):
     """Whatever builds the wheel, its manifest must not point at a lockfile.
 
@@ -76,6 +77,10 @@ def test_a_built_wheel_carries_resolved_versions(tmp_path):
     `uv build`, `pip install .`, `pip install git+https://...`. The build hook
     in hatch_build.py freezes the manifest into the artifact, so this now holds
     for a wheel nobody remembered to prepare.
+
+    Marked slow: it builds a wheel, which is seconds rather than the
+    milliseconds the rest of this file costs. CI runs the whole suite, so this
+    only buys `-m "not slow"` back for local iteration.
     """
     root = Path(__file__).resolve().parent.parent
     if "frozen from the lockfile" in (root / "sbomify_action" / "tools.toml").read_text():

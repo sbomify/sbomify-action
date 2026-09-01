@@ -319,6 +319,24 @@ class TestWorkspace(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 self.assertEqual(get_platform().workspace(), checkout)
 
+    def test_a_second_checkout_variable_is_tried_when_the_first_is_not_here(self):
+        """Azure Pipelines publishes two, and a container job sees the first as a host path.
+
+        BUILD_REPOSITORY_LOCALPATH is where the agent put the checkout on the
+        host; inside a container that path is routinely absent while
+        SYSTEM_DEFAULTWORKINGDIRECTORY is mounted. Stopping at the first
+        variable that happened to be set would fall back to the cwd with the
+        real answer sitting in the next one.
+        """
+        with tempfile.TemporaryDirectory() as checkout:
+            env = {
+                "TF_BUILD": "True",
+                "BUILD_REPOSITORY_LOCALPATH": "/agent/_work/1/s",
+                "SYSTEM_DEFAULTWORKINGDIRECTORY": checkout,
+            }
+            with patch.dict(os.environ, env, clear=True):
+                self.assertEqual(get_platform().workspace(), Path(checkout))
+
     def test_a_checkout_path_that_is_not_here_falls_back_to_cwd(self):
         """A vendor variable holding a host-side path is not trusted blindly.
 
