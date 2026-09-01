@@ -50,10 +50,18 @@ class FreezeToolVersionsHook(BuildHookInterface):
         # in finalize().
         self._staging = tempfile.TemporaryDirectory(prefix="sbomify-manifest-")
         frozen = Path(self._staging.name) / "tools.toml"
-        shutil.copy2(manifest, frozen)
-
-        if self._freeze(root, frozen) != 0:
-            raise RuntimeError(f"could not resolve tool versions; see {FREEZER}")
+        try:
+            shutil.copy2(manifest, frozen)
+            if self._freeze(root, frozen) != 0:
+                raise RuntimeError(f"could not resolve tool versions; see {FREEZER}")
+        except BaseException:
+            # finalize() only runs once an artifact has been written, so on the
+            # way out of here nothing else would drop the staging directory.
+            # A build that fails on an unresolvable version is a build someone
+            # is about to run again, so this is the path that would accumulate.
+            self._staging.cleanup()
+            self._staging = None
+            raise
 
         build_data.setdefault("force_include", {})[str(frozen)] = MANIFEST_PATH
 
