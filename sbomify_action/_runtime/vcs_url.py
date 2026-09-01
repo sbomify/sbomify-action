@@ -11,7 +11,7 @@ unaffected.
 
 import re
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.parse import urlparse, urlsplit
 
 # Maximum length we will consider for a VCS URL. Anything longer is treated as
 # malformed rather than truncated.
@@ -176,3 +176,48 @@ def normalize_repo_url(raw: Optional[str]) -> Optional[str]:
     if scheme in ("ssh", "git"):
         return _assemble_repo_url("https", host or "", None, parts.path)
     return _assemble_repo_url(scheme, host or "", port, parts.path)
+
+
+#: Hosts we are willing to call Git without any other evidence. Moved here
+#: from _enrichment.sanitization so the CI platforms can use the same
+#: predicate: that module imports console and logging_config, and nothing
+#: under _runtime may reach them. sanitization re-exports both names.
+_KNOWN_GIT_HOSTS = frozenset(
+    {
+        "github.com",
+        "gitlab.com",
+        "bitbucket.org",
+        "codeberg.org",
+        "sr.ht",
+        "git.sr.ht",
+        "gitea.com",
+        "gitee.com",
+        "salsa.debian.org",  # Debian's GitLab
+        "gitlab.gnome.org",
+        "gitlab.freedesktop.org",
+        "git.kernel.org",
+        "git.savannah.gnu.org",
+        "git.savannah.nongnu.org",
+    }
+)
+
+
+def _is_known_git_host(url: str) -> bool:
+    """Check if URL is from a known git hosting provider.
+
+    Args:
+        url: A non-empty URL string (caller must validate)
+
+    Returns:
+        True if the URL's host is in the known git hosting providers list
+    """
+    try:
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+        # Handle www. prefix
+        if host.startswith("www."):
+            host = host[4:]
+        return host in _KNOWN_GIT_HOSTS
+    except (ValueError, TypeError, AttributeError):
+        # urlparse or string handling failed; treat as not a known git host
+        return False

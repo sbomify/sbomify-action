@@ -8,7 +8,7 @@ from typing import Any, Dict
 from rich.logging import RichHandler
 
 from ._runtime import get_platform
-from .console import IS_CI, console
+from .console import console
 
 
 def setup_logging(level: str = "INFO", structured: bool = False, use_rich: bool = True) -> logging.Logger:
@@ -47,7 +47,10 @@ def setup_logging(level: str = "INFO", structured: bool = False, use_rich: bool 
             show_time=get_platform().log_formatter().show_log_time,
             show_path=False,
             rich_tracebacks=True,
-            tracebacks_show_locals=not IS_CI,  # Don't show locals in CI (too verbose)
+            # Frame locals are too verbose for a build log, and can carry
+            # secrets. Asked of the platform rather than an import-time
+            # snapshot, so every CI system we recognise is covered.
+            tracebacks_show_locals=not get_platform().is_ci,
             markup=True,
         )
         handler.setLevel(getattr(logging, level.upper()))

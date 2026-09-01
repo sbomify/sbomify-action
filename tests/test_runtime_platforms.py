@@ -659,6 +659,63 @@ class TestGitSafeDirectoryEnv(unittest.TestCase):
         self.assertEqual(env["GIT_CONFIG_KEY_2"], "safe.directory")
 
 
+class TestRuntimeStaysALeaf(unittest.TestCase):
+    """`_runtime` must not import the subsystems that import it.
+
+    `console` resolves a platform while it is still being imported, so anything
+    a platform reaches closes an import cycle. The dependency is easy to add by
+    accident -- the TeamCity platform arrived with a function-level import of
+    `_enrichment.sanitization`, which pulls in `console` and `logging_config` --
+    and a plain module-level scan would not have caught it, so this walks every
+    import node including the ones inside functions.
+    """
+
+    #: The one sanctioned reach-back: formatters fetch the Rich console lazily,
+    #: inside the call, because writing to it is their whole job. By then
+    #: console is fully imported. Nothing else may do this.
+    ALLOWED = {("formatters.py", "sbomify_action.console")}
+
+    #: Importing any of these from _runtime would close the cycle.
+    FORBIDDEN = (
+        "sbomify_action._augmentation",
+        "sbomify_action._enrichment",
+        "sbomify_action._generation",
+        "sbomify_action._upload",
+        "sbomify_action.console",
+        "sbomify_action.logging_config",
+    )
+
+    def test_no_module_reaches_back_into_the_package(self):
+        """No import anywhere under _runtime names a forbidden module."""
+        import ast
+
+        runtime = Path(__file__).parent.parent / "sbomify_action" / "_runtime"
+        modules = sorted(runtime.rglob("*.py"))
+        self.assertTrue(modules, "found no _runtime modules to check")
+
+        for module in modules:
+            tree = ast.parse(module.read_text(), filename=str(module))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    # level > 0 is a relative import, which stays inside _runtime.
+                    names = [node.module] if node.module and node.level == 0 else []
+                else:
+                    continue
+
+                for name in names:
+                    if (module.name, name) in self.ALLOWED:
+                        continue
+                    for forbidden in self.FORBIDDEN:
+                        with self.subTest(module=module.name, imports=name):
+                            self.assertFalse(
+                                name == forbidden or name.startswith(forbidden + "."),
+                                f"{module.relative_to(runtime.parent)} line {node.lineno} imports {name}; "
+                                f"_runtime may not depend on {forbidden}",
+                            )
+
+
 class TestVcsInfo(unittest.TestCase):
     """The VcsInfo value object."""
 

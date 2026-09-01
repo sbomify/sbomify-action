@@ -51,7 +51,13 @@ from typing import Dict, List, Optional, Tuple
 
 from ..formatters import PlainFormatter
 from ..protocol import LogFormatter, OidcProvider, VcsInfo
-from ..vcs_url import is_scp_like_git_url, normalize_repo_url, strip_ref_prefix, truncate_sha
+from ..vcs_url import (
+    _is_known_git_host,
+    is_scp_like_git_url,
+    normalize_repo_url,
+    strip_ref_prefix,
+    truncate_sha,
+)
 from .base import env_first
 
 logger = logging.getLogger("sbomify_action")
@@ -509,13 +515,7 @@ def _url_looks_like_git(raw_url: str, normalized_url: Optional[str]) -> bool:
         return True
 
     if normalized_url:
-        try:
-            from sbomify_action._enrichment.sanitization import _is_known_git_host
-
-            if _is_known_git_host(normalized_url):
-                return True
-        except ImportError:  # pragma: no cover - defensive
-            return False
+        return _is_known_git_host(normalized_url)
     return False
 
 
