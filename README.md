@@ -85,7 +85,7 @@ This tool wraps generation in three more steps — inject, augment, enrich — a
 - **Yocto/OpenEmbedded** — batch process SPDX SBOMs from Yocto builds
 - **Inject** additional packages not in lock files (vendored code, runtime deps, system libraries)
 - **Augment** with business metadata — supplier, authors, licenses, lifecycle phase — from a local config file or sbomify
-- **VCS auto-detection** on GitHub Actions, GitLab CI, Bitbucket and TeamCity (Git roots only), and from the git checkout itself everywhere else — Jenkins, CircleCI, Azure Pipelines and your own machine. `DISABLE_VCS_AUGMENTATION=true` turns it off
+- **VCS auto-detection** on GitHub Actions, GitLab CI, Bitbucket, Jenkins, CircleCI, Travis CI and TeamCity (Git roots only), and from the git checkout itself everywhere else — Azure Pipelines, any other container runner and your own machine. `DISABLE_VCS_AUGMENTATION=true` turns it off
 - **Enrich** from PyPI, crates.io, pub.dev, Conan Center, deps.dev, ecosyste.ms and pre-computed distro license databases
 - **Hashes and lifecycle data** — integrity hashes pulled from your lock file, CLE end-of-support dates for OS packages and tracked runtimes
 - **Audit trail** — every modification logged with UTC timestamps, for attestation and compliance

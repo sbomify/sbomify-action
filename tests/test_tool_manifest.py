@@ -8,7 +8,11 @@ failure modes fail loudly instead of silently.
 """
 
 import re
+import shutil
+import subprocess
+import tarfile
 import tomllib
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -57,6 +61,105 @@ def test_versions_come_from_native_lockfiles_on_master():
         f"these restate a version instead of reading a native lockfile: {restated}. "
         "A second copy is a second thing to bump, and Dependabot cannot see it."
     )
+
+
+@pytest.mark.slow
+def test_a_built_wheel_carries_resolved_versions(tmp_path):
+    """Whatever builds the wheel, its manifest must not point at a lockfile.
+
+    tools.toml resolves uv's version from uv.lock, and uv.lock is not part of
+    the package: an installed copy looks for it beside the package under
+    site-packages, does not find it, and raises ManifestError while
+    sbomify_action.runtimes is still being imported -- so the command does not
+    start at all.
+
+    The image build has always run scripts/freeze_tool_versions.py first, which
+    is why the published wheel is fine. Every other way of building was broken:
+    `uv build`, `pip install .`, `pip install git+https://...`. The build hook
+    in hatch_build.py freezes the manifest into the artifact, so this now holds
+    for a wheel nobody remembered to prepare.
+
+    Marked slow: it builds a wheel, which is seconds rather than the
+    milliseconds the rest of this file costs. CI runs the whole suite, so this
+    only buys `-m "not slow"` back for local iteration.
+    """
+    root = Path(__file__).resolve().parent.parent
+    if "frozen from the lockfile" in (root / "sbomify_action" / "tools.toml").read_text():
+        pytest.skip("manifest is frozen; this is a built artifact, not a source tree")
+    if shutil.which("uv") is None:
+        pytest.skip("uv is not available to build a wheel")
+
+    result = subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(tmp_path)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    built = list(tmp_path.glob("*.whl"))
+    assert len(built) == 1, built
+    with zipfile.ZipFile(built[0]) as wheel:
+        names = wheel.namelist()
+        # Force-including the frozen copy while the source one is still
+        # collected would put two entries at this path, and which one wins on
+        # extraction is not something to leave to chance.
+        assert [n for n in names if n.endswith("tools.toml")] == ["sbomify_action/tools.toml"]
+        manifest = wheel.read("sbomify_action/tools.toml").decode()
+    assert "version_from" not in manifest, "the wheel still resolves a version from a lockfile it does not ship"
+
+    # Frozen for the artifact only: freezing the source tree in place would put
+    # the versions back out of Dependabot's reach.
+    assert "version_from" in (root / "sbomify_action" / "tools.toml").read_text()
+
+
+@pytest.mark.slow
+def test_a_built_sdist_carries_resolved_versions(tmp_path):
+    """The sdist needs the same guarantee, and gets there a longer way round.
+
+    sbomify_action/tools.toml is excluded from every target, and the frozen
+    copy is put back by force_include from the build hook. That makes the
+    manifest's presence in an sdist entirely dependent on the hook running --
+    a regression that stopped it firing for this target would ship an sdist
+    with no manifest at all, which fails later and further from the cause than
+    the wheel case does.
+
+    The sdist also has to be able to build a wheel on its own, which is why it
+    carries hatch_build.py and the freezer; asserted here so trimming the
+    include list shows up as a test failure rather than a broken
+    `pip install <sdist>`.
+    """
+    root = Path(__file__).resolve().parent.parent
+    if "frozen from the lockfile" in (root / "sbomify_action" / "tools.toml").read_text():
+        pytest.skip("manifest is frozen; this is a built artifact, not a source tree")
+    if shutil.which("uv") is None:
+        pytest.skip("uv is not available to build an sdist")
+
+    result = subprocess.run(
+        ["uv", "build", "--sdist", "--out-dir", str(tmp_path)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    built = list(tmp_path.glob("*.tar.gz"))
+    assert len(built) == 1, built
+    with tarfile.open(built[0]) as sdist:
+        names = sdist.getnames()
+        prefix = built[0].name.removesuffix(".tar.gz")
+        assert [n for n in names if n.endswith("tools.toml")] == [f"{prefix}/sbomify_action/tools.toml"]
+        member = sdist.extractfile(f"{prefix}/sbomify_action/tools.toml")
+        assert member is not None
+        manifest = member.read().decode()
+    assert "version_from" not in manifest, "the sdist still resolves a version from a lockfile it does not ship"
+
+    assert f"{prefix}/hatch_build.py" in names
+    assert f"{prefix}/scripts/freeze_tool_versions.py" in names
+
+    # Same as the wheel: frozen for the artifact only, so the versions stay
+    # where Dependabot can reach them.
+    assert "version_from" in (root / "sbomify_action" / "tools.toml").read_text()
 
 
 def test_lockfiles_are_the_ones_dependabot_watches():

@@ -8,9 +8,10 @@ platform's business.
 
 That is what makes the action work across CI systems without this module
 growing: a platform reads whatever its vendor publishes -- GitHub Actions'
-environment, TeamCity's build-properties file -- and falls back to the git
-checkout otherwise, so Jenkins and CircleCI get VCS metadata automatically
-instead of the user hand-writing ``vcs_url`` into ``sbomify.json``.
+environment, Jenkins' Git plugin variables, TeamCity's build-properties file --
+and falls back to the git checkout otherwise, so even a CI system nobody has
+written a platform for gets VCS metadata automatically instead of the user
+hand-writing ``vcs_url`` into ``sbomify.json``.
 
 Supporting one more CI system is a module under ``_runtime/platforms/``; this
 provider does not change.

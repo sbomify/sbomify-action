@@ -32,6 +32,11 @@ RUN uv sync --frozen --active --no-dev
 # the wheel is built. Those files are not part of the package, so a release
 # must carry the versions it was built against rather than expecting to read
 # them later -- see scripts/freeze_tool_versions.py.
+#
+# The build hook freezes every wheel anyway, whoever builds it. This stays as
+# the guard: --check fails the image build if the tree the wheel comes from
+# could not be resolved, rather than letting a wheel out that resolved to
+# something unexpected.
 RUN python scripts/freeze_tool_versions.py && python scripts/freeze_tool_versions.py --check
 RUN rm -rf dist/ && uv build
 RUN uv pip install dist/sbomify_action-*.whl

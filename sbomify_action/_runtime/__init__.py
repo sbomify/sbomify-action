@@ -9,6 +9,9 @@ Platforms (in detection order):
 - gitlab-ci: GitLab CI job (priority 20)
 - bitbucket-pipelines: Bitbucket Pipelines step (priority 30)
 - teamcity: TeamCity agent, VCS from the build properties file (priority 40)
+- jenkins: Jenkins agent, VCS from the Git plugin's variables (priority 50)
+- circleci: CircleCI executor, VCS from the job environment (priority 60)
+- travis-ci: Travis CI worker, ref from the job environment (priority 70)
 - generic-ci: any other recognised CI system, VCS from git (priority 90)
 - local: developer machine, VCS from git (priority 100, always matches)
 
@@ -72,11 +75,14 @@ def create_default_registry() -> PlatformRegistry:
     """
     from .platforms import (
         BitbucketPlatform,
+        CircleCIPlatform,
         GenericCIPlatform,
         GitHubPlatform,
         GitLabPlatform,
+        JenkinsPlatform,
         LocalPlatform,
         TeamCityPlatform,
+        TravisPlatform,
     )
 
     registry = PlatformRegistry()
@@ -84,6 +90,9 @@ def create_default_registry() -> PlatformRegistry:
     registry.register(GitLabPlatform())
     registry.register(BitbucketPlatform())
     registry.register(TeamCityPlatform())
+    registry.register(JenkinsPlatform())
+    registry.register(CircleCIPlatform())
+    registry.register(TravisPlatform())
     registry.register(GenericCIPlatform())
     registry.register(LocalPlatform())
     return registry
