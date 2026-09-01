@@ -1,6 +1,7 @@
 """Tests for the CI runtime platform subsystem (sbomify_action._runtime)."""
 
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -209,10 +210,35 @@ class TestWorkspace(unittest.TestCase):
         """Bitbucket reports BITBUCKET_CLONE_DIR."""
         self.assertEqual(get_platform().workspace(), Path("/opt/atlassian/repo"))
 
-    @patch.dict(os.environ, {"JENKINS_URL": "https://ci", "WORKSPACE": "/var/jenkins/ws"}, clear=True)
     def test_generic_ci_uses_vendor_checkout_path(self):
         """A recognised vendor's checkout variable is used when it has one."""
-        self.assertEqual(get_platform().workspace(), Path("/var/jenkins/ws"))
+        with tempfile.TemporaryDirectory() as checkout:
+            with patch.dict(os.environ, {"JENKINS_URL": "https://ci", "WORKSPACE": checkout}, clear=True):
+                self.assertEqual(get_platform().workspace(), Path(checkout))
+
+    def test_a_tilde_checkout_path_is_expanded(self):
+        """CircleCI's default working_directory is the literal string ~/project.
+
+        Taken at face value that is a *relative* path with a literal ~, so git
+        would run against a directory that does not exist and silently report
+        nothing -- the exact case this platform exists to make work.
+        """
+        with tempfile.TemporaryDirectory() as home:
+            checkout = Path(home) / "project"
+            checkout.mkdir()
+            env = {"CIRCLECI": "true", "CIRCLE_WORKING_DIRECTORY": "~/project", "HOME": home}
+            with patch.dict(os.environ, env, clear=True):
+                self.assertEqual(get_platform().workspace(), checkout)
+
+    def test_a_checkout_path_that_is_not_here_falls_back_to_cwd(self):
+        """A vendor variable holding a host-side path is not trusted blindly.
+
+        Inside a container that path routinely does not exist; using it would
+        point every lookup at nothing.
+        """
+        env = {"JENKINS_URL": "https://ci", "WORKSPACE": "/does/not/exist/here"}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(get_platform().workspace(), Path.cwd())
 
     @patch.dict(os.environ, {"TEAMCITY_VERSION": "2024.03"}, clear=True)
     def test_generic_ci_falls_back_to_cwd(self):
@@ -227,6 +253,38 @@ class TestWorkspace(unittest.TestCase):
     def test_local_uses_cwd(self):
         """The local platform reports the process working directory."""
         self.assertEqual(get_platform().workspace(), Path.cwd())
+
+
+class TestLocalVcsIsOptIn(unittest.TestCase):
+    """A non-CI run does not start emitting VCS metadata on its own."""
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("sbomify_action._runtime.platforms.base.detect_vcs")
+    def test_local_does_not_read_the_checkout_by_default(self, mock_detect):
+        """The same lock file must not produce a different SBOM off CI.
+
+        Before platforms existed a local run emitted no VCS fields at all.
+        Reading the checkout automatically would change the document for
+        identical input, and write an internal remote into something often
+        shared outside the company.
+        """
+        self.assertIsNone(LocalPlatform().vcs())
+        mock_detect.assert_not_called()
+
+    @patch.dict(os.environ, {"SBOMIFY_LOCAL_VCS": "true"}, clear=True)
+    @patch("sbomify_action._runtime.platforms.base.detect_vcs")
+    def test_local_reads_the_checkout_when_asked(self, mock_detect):
+        """SBOMIFY_LOCAL_VCS opts in."""
+        mock_detect.return_value = VcsInfo(url="https://github.com/owner/repo")
+        self.assertEqual(LocalPlatform().vcs().url, "https://github.com/owner/repo")
+
+    @patch.dict(os.environ, {"CI": "true"}, clear=True)
+    @patch("sbomify_action._runtime.platforms.base.detect_vcs")
+    def test_ci_still_reads_the_checkout_automatically(self, mock_detect):
+        """The opt-in is for local runs only; on CI this is the whole feature."""
+        mock_detect.return_value = VcsInfo(url="https://github.com/owner/repo")
+        self.assertIsNotNone(get_platform().vcs())
+        mock_detect.assert_called()
 
 
 class TestWorkingDirConfinement(unittest.TestCase):
@@ -368,9 +426,21 @@ class TestTelemetry(unittest.TestCase):
         self.assertEqual(platform.telemetry_context(), {})
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_local_reports_only_the_platform_name(self):
-        """The local platform knows nothing it may safely report."""
-        self.assertEqual(get_platform().telemetry_tags(), {"ci.platform": "local"})
+    def test_local_keeps_reporting_the_original_platform_value(self):
+        """ci.platform stays "unknown" for platforms that never had a name.
+
+        Saved Sentry searches and alert rules are keyed on that value, so the
+        newly available detail is additive in ci.vendor rather than a
+        replacement.
+        """
+        self.assertEqual(get_platform().telemetry_tags(), {"ci.platform": "unknown", "ci.vendor": "local"})
+
+    @patch.dict(os.environ, {"JENKINS_URL": "https://ci"}, clear=True)
+    def test_a_named_vendor_is_reported_additively(self):
+        """A recognised generic vendor is named without moving ci.platform."""
+        tags = get_platform().telemetry_tags()
+        self.assertEqual(tags["ci.platform"], "unknown")
+        self.assertEqual(tags["ci.vendor"], "jenkins")
 
 
 class TestCommitUrl(unittest.TestCase):
@@ -403,6 +473,15 @@ class TestCommitUrl(unittest.TestCase):
             commit_url_for("https://gitlab.mycompany.com/group/project", "abc123"),
             "https://gitlab.mycompany.com/group/project/-/commit/abc123",
         )
+
+    def test_self_hosted_bitbucket_gets_no_commit_url(self):
+        """Bitbucket Data Center does not keep the cloud path layout.
+
+        Server puts commits under /projects/<KEY>/repos/<slug>/commits/<sha>, so
+        matching on the host name alone would emit a URL that 404s -- and a dead
+        link in an SBOM is worse than no link.
+        """
+        self.assertIsNone(commit_url_for("https://bitbucket.example.com/PROJ/repo", "abc123"))
 
     def test_unknown_forge_gets_no_commit_url(self):
         """An unrecognised host gets no URL rather than a guessed one."""

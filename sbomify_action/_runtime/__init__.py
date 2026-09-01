@@ -56,6 +56,7 @@ __all__ = [
     "set_platform",
     "reset_platform",
     "use_platform",
+    "workspace_candidates",
 ]
 
 #: Explicit override, set by :func:`set_platform` / :func:`use_platform`.
@@ -104,6 +105,24 @@ def legacy_workspaces() -> tuple[Path, ...]:
     from .platforms.github import DEFAULT_WORKSPACE
 
     return (DEFAULT_WORKSPACE,)
+
+
+def workspace_candidates() -> tuple[Path, ...]:
+    """Every checkout root a lookup should try, in order.
+
+    The active platform's workspace first, then :func:`legacy_workspaces`. Every
+    lookup for a user-supplied input -- lock files, source directories,
+    ``sbomify.json`` -- goes through this, so they cannot drift apart and strand
+    an invocation that one of them still resolves.
+
+    De-duplicated, because on most platforms the workspace is the working
+    directory and would otherwise be searched (and reported) twice.
+    """
+    seen: list[Path] = []
+    for candidate in (get_platform().workspace() or Path.cwd(), *legacy_workspaces()):
+        if candidate not in seen:
+            seen.append(candidate)
+    return tuple(seen)
 
 
 def get_platform() -> CIPlatform:

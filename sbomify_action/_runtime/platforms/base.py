@@ -77,8 +77,19 @@ class GitCheckoutPlatform:
         return None
 
     def telemetry_tags(self) -> dict[str, str]:
-        """Report only the platform name; nothing here is known to be public."""
-        return {"ci.platform": self.name}
+        """Report the platform without changing what ``ci.platform`` means.
+
+        These platforms are the ones that used to report ``ci.platform=unknown``
+        -- anything that was not GitHub Actions, GitLab CI, Bitbucket or
+        TeamCity. Saved Sentry searches, alert rules and dashboards are keyed on
+        that value, so it stays put and the newly available detail goes in
+        ``ci.vendor`` alongside it, which is additive.
+
+        ``repo.public`` is deliberately absent, because it was absent before for
+        exactly these platforms -- it is only meaningful where the vendor tells
+        us the visibility, and none of these do.
+        """
+        return {"ci.platform": "unknown", "ci.vendor": self.name}
 
     def telemetry_context(self) -> dict[str, str]:
         """No context -- repository visibility is unknown."""

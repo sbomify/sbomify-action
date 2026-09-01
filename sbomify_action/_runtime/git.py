@@ -32,6 +32,11 @@ _COMMIT_PATH_BY_HOST: dict[str, str] = {
     "bitbucket.org": "commits",
 }
 
+#: Forges whose self-hosted product keeps the same commit path as their cloud
+#: one, so recognising them by host name is safe. Bitbucket is absent on
+#: purpose -- see :func:`commit_url_for`.
+_SELF_HOSTED_KEEPS_LAYOUT: tuple[str, ...] = ("github.com", "gitlab.com")
+
 
 def git_safe_directory_env() -> dict[str, str]:
     """Environment that lets a *child process* read the bind-mounted workspace.
@@ -104,7 +109,16 @@ def _run_git(args: list[str], cwd: Path) -> str | None:
             env={**os.environ, **git_safe_directory_env()},
         )
     except FileNotFoundError:
-        logger.debug("git executable not found; skipping local VCS detection")
+        # Raised both for a missing git binary and for a cwd that does not
+        # exist. They need different fixes, and this debug line is the only
+        # trace of why VCS detection produced nothing, so say which it was.
+        if not cwd.is_dir():
+            logger.debug(f"git working directory '{cwd}' does not exist; skipping local VCS detection")
+        else:
+            logger.debug("git executable not found; skipping local VCS detection")
+        return None
+    except NotADirectoryError:
+        logger.debug(f"git working directory '{cwd}' is not a directory; skipping local VCS detection")
         return None
     except (subprocess.SubprocessError, OSError) as exc:
         logger.debug(f"git {' '.join(args)} failed: {exc}")
@@ -133,10 +147,15 @@ def commit_url_for(vcs_url: str, commit_sha: str | None) -> str | None:
     segment = _COMMIT_PATH_BY_HOST.get(host)
     if segment is None:
         # Self-hosted instances keep the vendor's path layout under a custom
-        # host, so fall back on a vendor-name match before giving up.
-        for known_host, known_segment in _COMMIT_PATH_BY_HOST.items():
+        # host, so fall back on a vendor-name match before giving up -- but only
+        # for the vendors whose self-hosted product uses the same layout as
+        # their cloud one. Bitbucket is deliberately excluded: Data Center puts
+        # commits under /projects/<KEY>/repos/<slug>/commits/<sha>, so matching
+        # on the host name alone would emit a URL that 404s, which is worse than
+        # emitting none.
+        for known_host in _SELF_HOSTED_KEEPS_LAYOUT:
             if known_host.split(".")[0] in host:
-                segment = known_segment
+                segment = _COMMIT_PATH_BY_HOST[known_host]
                 break
     if segment is None:
         return None

@@ -11,9 +11,12 @@ graduates to its own platform module only when it needs something structural --
 its own log dialect, an OIDC issuer, or repository metadata richer than git's.
 """
 
+import logging
 from pathlib import Path
 
 from .base import GitCheckoutPlatform, env_first, env_present, env_truthy
+
+logger = logging.getLogger("sbomify_action")
 
 #: (slug, detection variables, checkout-path variables).
 #:
@@ -78,10 +81,24 @@ class GenericCIPlatform(GitCheckoutPlatform):
 
         Vendors that mount the checkout as the command's working directory need
         no variable at all -- the fallback is correct for them.
+
+        The value is expanded and checked before it is trusted. CircleCI's
+        default ``working_directory`` is the literal string ``~/project``, and
+        that is exactly what ``CIRCLE_WORKING_DIRECTORY`` contains, so taking it
+        at face value yields a *relative* path with a literal ``~`` component:
+        git would then run against a directory that does not exist and report
+        nothing, which is the case this platform exists to make work. The same
+        check covers any vendor variable holding a host-side path that is not
+        mounted inside the container.
         """
         vendor = self._vendor()
         if vendor:
             for slug, _, workspace_vars in VENDORS:
-                if slug == vendor and (checkout := env_first(*workspace_vars)):
-                    return Path(checkout)
+                if slug != vendor:
+                    continue
+                if checkout := env_first(*workspace_vars):
+                    expanded = Path(checkout).expanduser()
+                    if expanded.is_dir():
+                        return expanded
+                    logger.debug(f"{vendor} reported checkout '{checkout}', which is not a directory here")
         return Path.cwd()

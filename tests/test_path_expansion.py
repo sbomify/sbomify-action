@@ -203,7 +203,7 @@ class TestLegacyWorkspaceCompatibility(unittest.TestCase):
 
             with (
                 change_directory(elsewhere),
-                patch("sbomify_action.cli.main.legacy_workspaces", return_value=(legacy,)),
+                patch("sbomify_action._runtime.legacy_workspaces", return_value=(legacy,)),
             ):
                 result = path_expansion("requirements.txt")
 
@@ -219,7 +219,7 @@ class TestLegacyWorkspaceCompatibility(unittest.TestCase):
 
             with (
                 change_directory(elsewhere),
-                patch("sbomify_action.cli.main.legacy_workspaces", return_value=(legacy,)),
+                patch("sbomify_action._runtime.legacy_workspaces", return_value=(legacy,)),
             ):
                 result = path_expansion("requirements.txt")
 
@@ -231,7 +231,7 @@ class TestLegacyWorkspaceCompatibility(unittest.TestCase):
             legacy = Path(legacy_dir).resolve()
             with (
                 change_directory(elsewhere),
-                patch("sbomify_action.cli.main.legacy_workspaces", return_value=(legacy,)),
+                patch("sbomify_action._runtime.legacy_workspaces", return_value=(legacy,)),
             ):
                 with self.assertRaises(FileProcessingError) as context:
                     path_expansion("nonexistent.txt")
