@@ -11,12 +11,9 @@ graduates to its own platform module only when it needs something structural --
 its own log dialect, an OIDC issuer, or repository metadata richer than git's.
 """
 
-import logging
 from pathlib import Path
 
 from .base import GitCheckoutPlatform, env_checkout_dir, env_present, env_truthy
-
-logger = logging.getLogger("sbomify_action")
 
 #: (slug, detection variables, checkout-path variables).
 #:

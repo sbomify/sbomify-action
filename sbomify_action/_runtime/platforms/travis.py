@@ -21,14 +21,11 @@ Environment variables used:
 - TRAVIS_TAG / TRAVIS_PULL_REQUEST_BRANCH / TRAVIS_BRANCH: ref
 """
 
-import logging
 from pathlib import Path
 
 from ..git import commit_url_for
 from ..protocol import VcsInfo
 from .base import GitCheckoutPlatform, env_checkout_dir, env_first, env_truthy
-
-logger = logging.getLogger("sbomify_action")
 
 
 class TravisPlatform(GitCheckoutPlatform):
