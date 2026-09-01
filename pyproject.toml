@@ -75,6 +75,10 @@ include = [
     "sbomify_action/**/*.tcss",
     "sbomify_action/**/*.toml",
     "sbomify-action.cdx.json",
+    # An sdist has to be able to build a wheel on its own, which means carrying
+    # the build hook and the freezer it calls.
+    "hatch_build.py",
+    "scripts/freeze_tool_versions.py",
 ]
 core-metadata-version = "2.3"
 
@@ -90,6 +94,12 @@ include = [
     "sbomify_action/**/*.tcss",
     "sbomify_action/**/*.toml",
 ]
+# The build hook force-includes a frozen copy in its place; collecting the
+# source one as well would put two entries at the same path in the artifact.
+exclude = ["sbomify_action/tools.toml"]
+
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
 
 [build-system]
 requires = ["hatchling>=1.28.0"]

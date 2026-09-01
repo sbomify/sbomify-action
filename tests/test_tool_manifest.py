@@ -8,7 +8,10 @@ failure modes fail loudly instead of silently.
 """
 
 import re
+import shutil
+import subprocess
 import tomllib
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -57,6 +60,51 @@ def test_versions_come_from_native_lockfiles_on_master():
         f"these restate a version instead of reading a native lockfile: {restated}. "
         "A second copy is a second thing to bump, and Dependabot cannot see it."
     )
+
+
+def test_a_built_wheel_carries_resolved_versions(tmp_path):
+    """Whatever builds the wheel, its manifest must not point at a lockfile.
+
+    tools.toml resolves uv's version from uv.lock, and uv.lock is not part of
+    the package: an installed copy looks for it beside the package under
+    site-packages, does not find it, and raises ManifestError while
+    sbomify_action.runtimes is still being imported -- so the command does not
+    start at all.
+
+    The image build has always run scripts/freeze_tool_versions.py first, which
+    is why the published wheel is fine. Every other way of building was broken:
+    `uv build`, `pip install .`, `pip install git+https://...`. The build hook
+    in hatch_build.py freezes the manifest into the artifact, so this now holds
+    for a wheel nobody remembered to prepare.
+    """
+    root = Path(__file__).resolve().parent.parent
+    if "frozen from the lockfile" in (root / "sbomify_action" / "tools.toml").read_text():
+        pytest.skip("manifest is frozen; this is a built artifact, not a source tree")
+    if shutil.which("uv") is None:
+        pytest.skip("uv is not available to build a wheel")
+
+    result = subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(tmp_path)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    built = list(tmp_path.glob("*.whl"))
+    assert len(built) == 1, built
+    with zipfile.ZipFile(built[0]) as wheel:
+        names = wheel.namelist()
+        # Force-including the frozen copy while the source one is still
+        # collected would put two entries at this path, and which one wins on
+        # extraction is not something to leave to chance.
+        assert [n for n in names if n.endswith("tools.toml")] == ["sbomify_action/tools.toml"]
+        manifest = wheel.read("sbomify_action/tools.toml").decode()
+    assert "version_from" not in manifest, "the wheel still resolves a version from a lockfile it does not ship"
+
+    # Frozen for the artifact only: freezing the source tree in place would put
+    # the versions back out of Dependabot's reach.
+    assert "version_from" in (root / "sbomify_action" / "tools.toml").read_text()
 
 
 def test_lockfiles_are_the_ones_dependabot_watches():
