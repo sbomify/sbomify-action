@@ -21,7 +21,7 @@ import sentry_sdk
 from cyclonedx.model.bom import Bom
 
 from .. import format_display_name
-from .._runtime import get_platform, legacy_workspaces, workspace_candidates
+from .._runtime import CIPlatform, get_platform, legacy_workspaces, workspace_candidates
 from .._upload import VALID_BOM_TYPES, VALID_DESTINATIONS
 from ..additional_packages import inject_additional_packages
 from ..augmentation import augment_sbom_from_file
@@ -1083,16 +1083,6 @@ def initialize_sentry() -> None:
         logger.debug("Skipping CI context for Sentry (not running in a recognized CI/CD platform)")
 
 
-def _confines_working_dir() -> bool:
-    """Return True when the platform pins the checkout to a fixed path.
-
-    Only such a platform (GitHub Actions' container workspace) needs the
-    containment checks below; elsewhere the user chose the working directory
-    themselves and there is nothing to escape from.
-    """
-    return get_platform().confines_working_dir
-
-
 def _resolve_token(explicit: Optional[str] = None) -> Optional[str]:
     """Resolve the sbomify API token, in precedence order.
 
@@ -1108,9 +1098,15 @@ def _resolve_token(explicit: Optional[str] = None) -> Optional[str]:
     return os.environ.get("SBOMIFY_TOKEN") or os.environ.get("TOKEN") or None
 
 
-def _resolved_workspace() -> Path:
-    """The active platform's checkout root, absolute and resolved."""
-    return _workspace().resolve()
+def _resolved_workspace(platform: CIPlatform | None = None) -> Path:
+    """The checkout root of ``platform``, absolute and resolved.
+
+    Takes the platform rather than resolving one, so a caller that has already
+    resolved it cannot end up checking a path from one platform against a
+    decision made by another.
+    """
+    platform = platform or get_platform()
+    return (platform.workspace() or Path.cwd()).resolve()
 
 
 def resolve_working_dir(working_dir: str) -> Path:
@@ -1141,7 +1137,7 @@ def resolve_working_dir(working_dir: str) -> Path:
     path = Path(working_dir)
     platform = get_platform()
     confined = platform.confines_working_dir
-    workspace = _resolved_workspace()
+    workspace = _resolved_workspace(platform)
 
     try:
         if path.is_absolute():
@@ -1323,11 +1319,19 @@ def _expand_lock_file_or_substitute(path: str) -> str:
     # Resolved, because the same file reached as "./x" and as an absolute path
     # is one candidate and not two; counting it twice made every substitution
     # look ambiguous and refuse itself.
+    # Deliberately the legacy roots only, NOT workspace_candidates(): unlike
+    # path_expansion, which looks up one exact name, this *scans a directory*
+    # for same-ecosystem alternatives, and widening a scan is not the same
+    # trade as widening a lookup. Following the platform's workspace here would
+    # mean a monorepo's WORKING_DIR=packages/app, with a stale LOCK_FILE, could
+    # be answered by the lock file at the repository root -- silently scanning
+    # the wrong project, or refusing as ambiguous because it found two.
+    roots = legacy_workspaces()
     searched: tuple[Path, ...]
     if named.is_absolute():
-        searched = (named.parent, Path.cwd(), *workspace_candidates())
+        searched = (named.parent, Path.cwd(), *roots)
     else:
-        searched = (Path.cwd() / named.parent, *(w / named.parent for w in workspace_candidates()))
+        searched = (Path.cwd() / named.parent, *(root / named.parent for root in roots))
     directories = {d.resolve() for d in searched if d.is_dir()}
 
     # .NET project files are matched by suffix rather than by name, so a scan
@@ -3763,10 +3767,14 @@ def cli(
         resolved = resolve_working_dir(working_dir)
         logger.info(f"Changing working directory to '{resolved}'")
         os.chdir(resolved)
-        # Verify cwd is still under workspace after chdir (TOCTOU mitigation)
-        if _confines_working_dir():
+        # Verify cwd is still under workspace after chdir (TOCTOU mitigation).
+        # One platform for both halves: checking the cwd against a workspace
+        # belonging to a different platform than the one that demanded the
+        # check would defeat the point of making it.
+        platform = get_platform()
+        if platform.confines_working_dir:
             cwd = Path.cwd().resolve()
-            workspace = _resolved_workspace()
+            workspace = _resolved_workspace(platform)
             if not cwd.is_relative_to(workspace):
                 logger.error(f"Working directory '{cwd}' escaped workspace '{workspace}' after chdir. Aborting.")
                 ctx.exit(1)
