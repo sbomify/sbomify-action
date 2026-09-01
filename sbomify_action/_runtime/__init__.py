@@ -39,6 +39,7 @@ and ``git_safe_directory_env`` live here, re-exported from their old homes.
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 from .protocol import CIPlatform, LogFormatter, OidcProvider, VcsInfo
 from .registry import PlatformRegistry
@@ -51,6 +52,7 @@ __all__ = [
     "VcsInfo",
     "create_default_registry",
     "get_platform",
+    "legacy_workspaces",
     "set_platform",
     "reset_platform",
     "use_platform",
@@ -84,6 +86,24 @@ def create_default_registry() -> PlatformRegistry:
     registry.register(GenericCIPlatform())
     registry.register(LocalPlatform())
     return registry
+
+
+def legacy_workspaces() -> tuple[Path, ...]:
+    """Well-known checkout paths earlier releases searched on every platform.
+
+    Before platforms existed the action probed ``/github/workspace``
+    unconditionally, whatever it was running under. Hand-rolled invocations
+    relied on that -- ``docker run -v "$PWD:/github/workspace"`` with no ``-w``
+    resolved because of it -- so input lookups keep searching these after the
+    active platform's own workspace, and such a pipeline keeps working.
+
+    Sourced from the platform that owns each path, so the literal is not
+    duplicated, and imported lazily to keep this module free of platform
+    imports at load time.
+    """
+    from .platforms.github import DEFAULT_WORKSPACE
+
+    return (DEFAULT_WORKSPACE,)
 
 
 def get_platform() -> CIPlatform:

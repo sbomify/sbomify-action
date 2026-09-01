@@ -185,5 +185,59 @@ class TestPathExpansionEdgeCases(unittest.TestCase):
         self.assertIn("looks like a CLI flag", error_message)
 
 
+class TestLegacyWorkspaceCompatibility(unittest.TestCase):
+    """The well-known path stays searchable on every platform.
+
+    Before platforms existed, /github/workspace was probed unconditionally, so
+    `docker run -v "$PWD:/github/workspace"` with no -w resolved even though the
+    working directory was /. Pipelines were written against that. Searching only
+    the active platform's workspace would strand them, which is why the lookups
+    keep the legacy roots as a tail.
+    """
+
+    def test_a_legacy_workspace_is_still_searched_off_platform(self):
+        """A file only in the legacy workspace is still found on a local run."""
+        with tempfile.TemporaryDirectory() as legacy_dir, tempfile.TemporaryDirectory() as elsewhere:
+            legacy = Path(legacy_dir).resolve()
+            (legacy / "requirements.txt").write_text("requests==2.32.3")
+
+            with (
+                change_directory(elsewhere),
+                patch("sbomify_action.cli.main.legacy_workspaces", return_value=(legacy,)),
+            ):
+                result = path_expansion("requirements.txt")
+
+            self.assertEqual(Path(result).resolve(), legacy / "requirements.txt")
+
+    def test_the_working_directory_still_wins(self):
+        """A legacy root is a fallback, never an override of the real cwd."""
+        with tempfile.TemporaryDirectory() as legacy_dir, tempfile.TemporaryDirectory() as elsewhere:
+            legacy = Path(legacy_dir).resolve()
+            (legacy / "requirements.txt").write_text("from-legacy")
+            here = Path(elsewhere).resolve()
+            (here / "requirements.txt").write_text("from-cwd")
+
+            with (
+                change_directory(elsewhere),
+                patch("sbomify_action.cli.main.legacy_workspaces", return_value=(legacy,)),
+            ):
+                result = path_expansion("requirements.txt")
+
+            self.assertEqual(Path(result).read_text(), "from-cwd")
+
+    def test_the_legacy_root_is_named_when_nothing_is_found(self):
+        """The error lists every root actually tried."""
+        with tempfile.TemporaryDirectory() as legacy_dir, tempfile.TemporaryDirectory() as elsewhere:
+            legacy = Path(legacy_dir).resolve()
+            with (
+                change_directory(elsewhere),
+                patch("sbomify_action.cli.main.legacy_workspaces", return_value=(legacy,)),
+            ):
+                with self.assertRaises(FileProcessingError) as context:
+                    path_expansion("nonexistent.txt")
+
+            self.assertIn(str(legacy / "nonexistent.txt"), str(context.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

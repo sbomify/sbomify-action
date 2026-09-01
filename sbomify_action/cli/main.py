@@ -21,7 +21,7 @@ import sentry_sdk
 from cyclonedx.model.bom import Bom
 
 from .. import format_display_name
-from .._runtime import get_platform
+from .._runtime import get_platform, legacy_workspaces
 from .._upload import VALID_BOM_TYPES, VALID_DESTINATIONS
 from ..additional_packages import inject_additional_packages
 from ..augmentation import augment_sbom_from_file
@@ -1188,6 +1188,34 @@ def _format_search_locations(*candidates: Path) -> str:
     return ", ".join(f"'{location}'" for location in seen)
 
 
+def _workspace_candidates() -> tuple[Path, ...]:
+    """Every checkout root an input lookup should try, in order.
+
+    The active platform's workspace first, then the well-known paths earlier
+    releases probed unconditionally. Keeping the second group is what lets a
+    hand-rolled `docker run -v "$PWD:/github/workspace"` -- which used to
+    resolve because the probe was hardcoded -- keep resolving.
+
+    De-duplicated, because on most platforms the workspace is the working
+    directory and would otherwise be searched (and reported) twice.
+    """
+    candidates: list[Path] = [_workspace(), *legacy_workspaces()]
+    seen: list[Path] = []
+    for candidate in candidates:
+        if candidate not in seen:
+            seen.append(candidate)
+    return tuple(seen)
+
+
+def _first_existing(path: str | Path) -> Path | None:
+    """Return the first workspace candidate that holds ``path`` as a file."""
+    for workspace in _workspace_candidates():
+        candidate = workspace / path
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _workspace() -> Path:
     """Root of the repository checkout, per the active CI platform.
 
@@ -1229,13 +1257,14 @@ def path_expansion(path: str) -> str:
 
     current_dir = Path.cwd()
     relative_path = current_dir / path
-    workspace_relative_path = _workspace() / path
+    workspace_paths = tuple(workspace / path for workspace in _workspace_candidates())
 
     # Log which paths we're checking for debugging
     logger.debug(f"Searching for file '{path}'...")
     logger.debug(f"  Checking direct path: {Path(path)}")
     logger.debug(f"  Checking relative to cwd: {relative_path}")
-    logger.debug(f"  Checking workspace path: {workspace_relative_path}")
+    for workspace_path in workspace_paths:
+        logger.debug(f"  Checking workspace path: {workspace_path}")
 
     if Path(path).is_file():
         logger.info(f"Using input file '{path}'.")
@@ -1243,13 +1272,13 @@ def path_expansion(path: str) -> str:
     elif relative_path.is_file():
         logger.info(f"Using input file '{relative_path}'.")
         return str(relative_path)
-    elif workspace_relative_path.is_file():
+    elif (workspace_relative_path := _first_existing(path)) is not None:
         logger.info(f"Using input file '{workspace_relative_path}'.")
         return str(workspace_relative_path)
     else:
         raise InputPathNotFoundError(
             f"Specified input file '{path}' not found. "
-            f"Searched in: {_format_search_locations(Path(path), relative_path, workspace_relative_path)}"
+            f"Searched in: {_format_search_locations(Path(path), relative_path, *workspace_paths)}"
         )
 
 
@@ -1308,9 +1337,9 @@ def _expand_lock_file_or_substitute(path: str) -> str:
     # look ambiguous and refuse itself.
     searched: tuple[Path, ...]
     if named.is_absolute():
-        searched = (named.parent, Path.cwd(), _workspace())
+        searched = (named.parent, Path.cwd(), *_workspace_candidates())
     else:
-        searched = (Path.cwd() / named.parent, _workspace() / named.parent)
+        searched = (Path.cwd() / named.parent, *(w / named.parent for w in _workspace_candidates()))
     directories = {d.resolve() for d in searched if d.is_dir()}
 
     # .NET project files are matched by suffix rather than by name, so a scan
@@ -1407,17 +1436,17 @@ def directory_expansion(path: str) -> str:
 
     current_dir = Path.cwd()
     relative_path = current_dir / path
-    workspace_relative_path = _workspace() / path
+    workspace_paths = tuple(workspace / path for workspace in _workspace_candidates())
 
     logger.debug(f"Searching for directory '{path}'...")
-    for candidate in (Path(path), relative_path, workspace_relative_path):
+    for candidate in (Path(path), relative_path, *workspace_paths):
         if candidate.is_dir():
             logger.info(f"Using source directory '{candidate}'.")
             return str(candidate if candidate.is_absolute() else current_dir / candidate)
 
     raise InputPathNotFoundError(
         f"Specified source directory '{path}' not found. "
-        f"Searched in: {_format_search_locations(Path(path), relative_path, workspace_relative_path)}"
+        f"Searched in: {_format_search_locations(Path(path), relative_path, *workspace_paths)}"
     )
 
 
@@ -2954,7 +2983,7 @@ def _cites_a_phantom_lockfile(value: object, directory: Path) -> bool:
     # wearing a different hat.
     if cited.is_absolute():
         return not cited.is_file()
-    return not (directory / cited).is_file() and not (_workspace() / cited).is_file()
+    return not (directory / cited).is_file() and _first_existing(cited) is None
 
 
 def _recommend_a_lock_file(lock_file: str | None) -> None:

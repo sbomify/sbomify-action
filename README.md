@@ -65,7 +65,7 @@ docker run --rm \
   ghcr.io/sbomify/sbomify-action
 ```
 
-The image's working directory is `/workspace`, so mounting your repository there needs no `-w`. Any other mount point works too, as long as `-w` points at it. If you are upgrading from a version that had no working directory, `-v "$PWD:/github/workspace"` without a `-w` no longer resolves — switch the mount to `/workspace`, or keep your path and pass a matching `-w`. The GitHub Action is unaffected; the runner sets both itself.
+The image's working directory is `/workspace`, so mounting your repository there needs no `-w`. Any other mount point works too, as long as `-w` points at it — and an existing `-v "$PWD:/github/workspace"` keeps resolving, with or without a `-w`, because that path is still searched.
 
 📖 [Runtime guides](https://sbomify.com/sbomify-action/runtimes/) — GitHub Actions, GitLab CI, Bitbucket, Jenkins, CircleCI, Azure DevOps, TeamCity, any container runner, and local
 
