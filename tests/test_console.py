@@ -3,6 +3,7 @@
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from sbomify_action.console import (
@@ -14,6 +15,7 @@ from sbomify_action.console import (
     AuditEntry,
     AuditTrail,
     TransformationTracker,
+    _audit_path,
     console,
     get_audit_trail,
     get_transformation_tracker,
@@ -805,6 +807,83 @@ class TestAuditTrail(unittest.TestCase):
         trail.record_vcs_normalization("a", "b")
         self.assertTrue(trail.has_transformations())
         self.assertTrue(trail.has_changes())
+
+    def test_audit_file_relativizes_path_inside_cwd(self):
+        """An input inside the working directory is recorded relative to it."""
+        with tempfile.TemporaryDirectory() as workdir:
+            nested = os.path.join(workdir, "src")
+            os.mkdir(nested)
+            lock_file = os.path.join(nested, "requirements.txt")
+
+            trail = AuditTrail()
+            trail.input_file = lock_file
+            trail.output_file = os.path.join(workdir, "sbom_output.json")
+            trail.record_supplier_added("ACME Corp")
+
+            audit_path = os.path.join(workdir, "audit_trail.txt")
+            with patch("sbomify_action.console.Path.cwd", return_value=Path(workdir)):
+                trail.write_audit_file(audit_path)
+
+            with open(audit_path, "r") as f:
+                content = f.read()
+
+        self.assertIn("# Input: src/requirements.txt", content)
+        self.assertIn("# Output: sbom_output.json", content)
+        self.assertNotIn(workdir, content)
+
+    def test_audit_file_strips_path_outside_cwd(self):
+        """An input from elsewhere on the machine keeps only its file name.
+
+        The audit trail is handed to a third party, so the generating
+        machine's directory layout and username must not travel with it.
+        """
+        with tempfile.TemporaryDirectory() as workdir, tempfile.TemporaryDirectory() as elsewhere:
+            lock_file = os.path.join(elsewhere, "requirements.txt")
+
+            trail = AuditTrail()
+            trail.input_file = lock_file
+            trail.record_supplier_added("ACME Corp")
+
+            audit_path = os.path.join(workdir, "audit_trail.txt")
+            with patch("sbomify_action.console.Path.cwd", return_value=Path(workdir)):
+                trail.write_audit_file(audit_path)
+
+            with open(audit_path, "r") as f:
+                content = f.read()
+
+        self.assertIn("# Input: requirements.txt", content)
+        self.assertNotIn(elsewhere, content)
+
+    def test_audit_path_passes_through_non_paths(self):
+        """Relative paths and non-path inputs are recorded verbatim."""
+        self.assertEqual(_audit_path("requirements.txt"), "requirements.txt")
+        self.assertEqual(_audit_path("src/requirements.txt"), "src/requirements.txt")
+        self.assertEqual(_audit_path("docker:nginx:latest"), "docker:nginx:latest")
+        self.assertEqual(_audit_path("additional-packages-only"), "additional-packages-only")
+
+    def test_audit_path_survives_an_unusable_cwd(self):
+        """A filesystem that cannot answer must not crash a finished run.
+
+        ``print_to_stdout_for_attestation`` runs unguarded on the success
+        path, so sanitizing falls back to the file name rather than raising.
+        """
+        with patch("sbomify_action.console.Path.cwd", side_effect=FileNotFoundError):
+            self.assertEqual(_audit_path("/home/someone/project/requirements.txt"), "requirements.txt")
+
+    def test_attestation_stdout_relativizes_path(self):
+        """The stdout copy of the trail is sanitized the same way as the file."""
+        with tempfile.TemporaryDirectory() as elsewhere:
+            trail = AuditTrail()
+            trail.input_file = os.path.join(elsewhere, "requirements.txt")
+            trail.record_supplier_added("ACME Corp")
+
+            with patch("builtins.print") as mock_print:
+                trail.print_to_stdout_for_attestation()
+
+            printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list if call.args)
+
+        self.assertIn("# Input: requirements.txt", printed)
+        self.assertNotIn(elsewhere, printed)
 
     def test_has_transformations_legacy(self):
         """Test legacy has_transformations method."""
