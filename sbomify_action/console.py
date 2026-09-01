@@ -1,11 +1,15 @@
 """Rich console utilities for sbomify-action.
 
 This module provides a shared Rich Console instance and helper functions
-for beautiful CLI output, optimized for GitHub Actions and CI environments.
+for beautiful CLI output.
+
+How output is rendered is the active CI platform's business, not this module's:
+structural output (groups, step headers, annotations, banners) is delegated to
+``get_platform().log_formatter()``. GitHub Actions gets workflow commands,
+everything else gets Rich styling.
 """
 
 import contextvars
-import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, Generator, List, Optional, Tuple
@@ -17,15 +21,34 @@ from rich.text import Text
 from rich.theme import Theme
 
 from sbomify_action import format_display_name
+from sbomify_action._runtime import LogFormatter, get_platform
 
-# Detect CI environments
-IS_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
-IS_GITLAB_CI = os.getenv("GITLAB_CI") == "true"
-# TeamCity does not set the generic CI=true, so without this it would be
-# treated as a local terminal -- which turns tracebacks_show_locals back on
-# in logging_config and dumps frame locals into the build log.
-IS_TEAMCITY = os.getenv("TEAMCITY_VERSION") is not None
-IS_CI = os.getenv("CI") == "true" or IS_GITHUB_ACTIONS or IS_GITLAB_CI or IS_TEAMCITY
+# Resolved once: the Console below is built from it and cannot be rebuilt later.
+# Everything else calls _formatter(), which re-resolves per call.
+_STARTUP_PLATFORM = get_platform()
+
+# Snapshots taken at import, for decisions that are themselves made once (the
+# Console's colour handling, the theme). They do NOT track later changes to the
+# environment and nothing reads them to choose output format -- reassigning one
+# changes nothing. Call get_platform() if you need the current platform.
+#
+# IS_CI comes from the platform, which is why TeamCity no longer needs a flag of
+# its own here: every CI platform reports is_ci, so tracebacks_show_locals stays
+# off for all of them rather than only the ones this module remembered to list.
+IS_GITHUB_ACTIONS = _STARTUP_PLATFORM.name == "github-actions"
+IS_GITLAB_CI = _STARTUP_PLATFORM.name == "gitlab-ci"
+IS_TEAMCITY = _STARTUP_PLATFORM.name == "teamcity"
+IS_CI = _STARTUP_PLATFORM.is_ci
+
+
+def _formatter() -> LogFormatter:
+    """Return the active platform's log formatter.
+
+    Resolved per call so a platform pinned mid-process (tests, embedders) takes
+    effect without re-importing this module.
+    """
+    return get_platform().log_formatter()
+
 
 # sbomify brand colors (from logo gradient)
 # These hex colors look great in local terminals
@@ -71,11 +94,11 @@ custom_theme = Theme(
     }
 )
 
-# Shared console instance
-# Force colors ON in GitHub Actions (it supports ANSI colors but Rich may incorrectly disable them)
+# Shared console instance. Whether to force colors on is the platform's call --
+# some runners support ANSI but Rich cannot detect it through their pipe.
 console = Console(
     theme=custom_theme,
-    force_terminal=IS_GITHUB_ACTIONS or None,
+    force_terminal=_STARTUP_PLATFORM.log_formatter().force_terminal,
     color_system="auto",
 )
 
@@ -114,28 +137,19 @@ def print_step_header(step_num: int | float, title: str) -> None:
     """
     Print a styled step header.
 
-    In GitHub Actions, uses ::group:: for collapsible sections.
-    In other environments, uses Rich styling.
+    Rendering is the platform's choice: a collapsible group on GitHub Actions,
+    a Rich rule elsewhere.
 
     Args:
         step_num: Step number (e.g., 1, 2, or substeps like 1.4, 1.5)
         title: Step title
     """
-    step_title = f"STEP {step_num}: {title}"
-
-    if IS_GITHUB_ACTIONS:
-        # GitHub Actions collapsible group
-        print(f"::group::{step_title}")
-        console.print(f"[bold blue]{step_title}[/bold blue]")
-    else:
-        # Rich panel-style header for local terminal
-        console.print()
-        console.rule(f"[bold blue]{step_title}[/bold blue]", style="blue")
+    _formatter().step_header(f"STEP {step_num}: {title}")
 
 
 def print_step_end(step_num: int | float, success: bool = True) -> None:
     """
-    Print step completion status and close GitHub Actions group.
+    Print step completion status and close the step's group, if any.
 
     Args:
         step_num: Step number (e.g., 1, 2, or substeps like 1.4, 1.5)
@@ -146,91 +160,70 @@ def print_step_end(step_num: int | float, success: bool = True) -> None:
     else:
         console.print(f"[error]✗ Step {step_num} failed[/error]")
 
-    if IS_GITHUB_ACTIONS:
-        print("::endgroup::")
-    else:
-        console.print()
+    _formatter().step_footer()
 
 
 @contextmanager
-def gha_group(title: str) -> Generator[None, None, None]:
+def log_group(title: str) -> Generator[None, None, None]:
     """
-    Context manager for GitHub Actions collapsible groups.
+    Context manager for a collapsible output group.
+
+    Collapses on platforms that support it; a no-op elsewhere.
 
     Args:
         title: Group title
 
     Usage:
-        with gha_group("Details"):
-            print("This is collapsible in GHA")
+        with log_group("Details"):
+            print("This is collapsible where the platform supports it")
     """
-    if IS_GITHUB_ACTIONS:
-        print(f"::group::{title}")
+    formatter = _formatter()
+    formatter.group_start(title)
     try:
         yield
     finally:
-        if IS_GITHUB_ACTIONS:
-            print("::endgroup::")
+        formatter.group_end()
 
 
-def gha_warning(message: str, title: Optional[str] = None) -> None:
+def log_warning(message: str, title: Optional[str] = None) -> None:
     """
-    Emit a warning that appears in GitHub Actions job summary.
+    Emit a warning annotation.
 
     Args:
         message: Warning message
         title: Optional title for the warning
     """
-    if IS_GITHUB_ACTIONS:
-        if title:
-            print(f"::warning title={title}::{message}")
-        else:
-            print(f"::warning::{message}")
-    else:
-        if title:
-            console.print(f"[warning]Warning ({title}):[/warning] {message}")
-        else:
-            console.print(f"[warning]Warning:[/warning] {message}")
+    _formatter().warning(message, title)
 
 
-def gha_error(message: str, title: Optional[str] = None) -> None:
+def log_error(message: str, title: Optional[str] = None) -> None:
     """
-    Emit an error that appears in GitHub Actions job summary.
+    Emit an error annotation.
 
     Args:
         message: Error message
         title: Optional title for the error
     """
-    if IS_GITHUB_ACTIONS:
-        if title:
-            print(f"::error title={title}::{message}")
-        else:
-            print(f"::error::{message}")
-    else:
-        if title:
-            console.print(f"[error]Error ({title}):[/error] {message}")
-        else:
-            console.print(f"[error]Error:[/error] {message}")
+    _formatter().error(message, title)
 
 
-def gha_notice(message: str, title: Optional[str] = None) -> None:
+def log_notice(message: str, title: Optional[str] = None) -> None:
     """
-    Emit a notice annotation in GitHub Actions.
+    Emit an informational annotation.
 
     Args:
         message: Notice message
         title: Optional title for the notice
     """
-    if IS_GITHUB_ACTIONS:
-        if title:
-            print(f"::notice title={title}::{message}")
-        else:
-            print(f"::notice::{message}")
-    else:
-        if title:
-            console.print(f"[info]Notice ({title}):[/info] {message}")
-        else:
-            console.print(f"[info]Notice:[/info] {message}")
+    _formatter().notice(message, title)
+
+
+# Deprecated GitHub-flavoured aliases. The annotations are no longer
+# GitHub-specific -- each platform renders them its own way.
+gha_group = log_group
+gha_warning = log_warning
+gha_error = log_error
+gha_notice = log_notice
 
 
 def print_summary_table(
@@ -442,21 +435,16 @@ def print_component_not_found_error(component_id: str) -> None:
 def print_final_success() -> None:
     """Print final success message."""
     console.print()
-    if IS_GITHUB_ACTIONS:
-        console.print("[bold green]✓ SUCCESS![/bold green] All steps completed successfully.")
-    else:
-        console.rule("[bold green]SUCCESS[/bold green]", style="green")
-        console.print("[bold green]All steps completed successfully![/bold green]", justify="center")
+    _formatter().final_success()
     console.print()
 
 
 def print_final_failure(message: str) -> None:
     """Print final failure message."""
     console.print()
-    gha_error(message, title="SBOM Processing Failed")
-    if not IS_GITHUB_ACTIONS:
-        console.rule("[bold red]FAILED[/bold red]", style="red")
-        console.print(f"[bold red]{message}[/bold red]", justify="center")
+    formatter = _formatter()
+    formatter.error(message, "SBOM Processing Failed")
+    formatter.final_failure(message)
     console.print()
 
 

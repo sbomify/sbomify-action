@@ -2,21 +2,15 @@
 
 # Re-export utility from parent module for backwards compatibility
 from ..utils import is_vcs_augmentation_disabled
-from .bitbucket import BitbucketPipelinesProvider
+from .ci_platform import CIPlatformProvider
 from .docker_image import DockerImageProvider
-from .github import GitHubActionsProvider
-from .gitlab import GitLabCIProvider
 from .json_config import JsonConfigProvider
 from .sbomify_api import SbomifyApiProvider
-from .teamcity import TeamCityProvider
 
 __all__ = [
-    "BitbucketPipelinesProvider",
+    "CIPlatformProvider",
     "DockerImageProvider",
-    "GitHubActionsProvider",
-    "GitLabCIProvider",
     "JsonConfigProvider",
     "SbomifyApiProvider",
-    "TeamCityProvider",
     "is_vcs_augmentation_disabled",
 ]

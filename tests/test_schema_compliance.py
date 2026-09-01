@@ -68,8 +68,16 @@ def _scrub_ci_env():
     """Remove all CI / docker-image environment variables for the
     duration of the block and restore them afterwards. Use this when
     a test wants only the mocked providers (sbomify-api / json-config)
-    to contribute augmentation metadata."""
+    to contribute augmentation metadata.
+
+    Clearing the vendor variables is no longer enough on its own: with none of
+    them set the local platform takes over and reads VCS metadata straight from
+    this repository's git checkout. DISABLE_VCS_AUGMENTATION is the supported
+    switch that silences the ci-platform provider whichever platform resolved.
+    """
     saved = {k: os.environ.pop(k, None) for k in _AUGMENTATION_ENV_KEYS_TO_CLEAR}
+    saved["DISABLE_VCS_AUGMENTATION"] = os.environ.get("DISABLE_VCS_AUGMENTATION")
+    os.environ["DISABLE_VCS_AUGMENTATION"] = "true"
     try:
         yield
     finally:

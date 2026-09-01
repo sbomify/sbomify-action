@@ -44,6 +44,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
+from sbomify_action._runtime import get_platform
 from sbomify_action.logging_config import logger
 
 from ..metadata import AugmentationMetadata
@@ -147,10 +148,12 @@ class JsonConfigProvider:
         if path.is_file():
             return path
 
-        # Also check /github/workspace for GitHub Actions
-        github_workspace = Path("/github/workspace")
-        if github_workspace.is_dir():
-            path = github_workspace / DEFAULT_CONFIG_FILE
+        # Also check the platform's checkout root, for runtimes that mount the
+        # repository somewhere other than where they run the command (GitHub
+        # Actions mounts it at /github/workspace).
+        workspace = get_platform().workspace()
+        if workspace and workspace != cwd and workspace.is_dir():
+            path = workspace / DEFAULT_CONFIG_FILE
             if path.is_file():
                 return path
 

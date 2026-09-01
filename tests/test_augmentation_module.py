@@ -1258,7 +1258,9 @@ class TestErrorHandling:
             assert "Invalid JSON in SBOM file" in str(exc_info.value)
 
     @patch("sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file")
-    @patch.dict(os.environ, {}, clear=True)
+    # DISABLE_VCS_AUGMENTATION silences the ci-platform provider, which would
+    # otherwise read this repository's own git checkout and return VCS metadata.
+    @patch.dict(os.environ, {"DISABLE_VCS_AUGMENTATION": "true"}, clear=True)
     @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_api_connection_error(self, mock_get, mock_find_config):
         """Test handling of API connection errors (provider returns None, not exception)."""
@@ -1280,7 +1282,9 @@ class TestErrorHandling:
         assert result == {}
 
     @patch("sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file")
-    @patch.dict(os.environ, {}, clear=True)
+    # DISABLE_VCS_AUGMENTATION silences the ci-platform provider, which would
+    # otherwise read this repository's own git checkout and return VCS metadata.
+    @patch.dict(os.environ, {"DISABLE_VCS_AUGMENTATION": "true"}, clear=True)
     @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_api_timeout_error(self, mock_get, mock_find_config):
         """Test handling of API timeout errors (provider returns None, not exception)."""
@@ -1301,7 +1305,9 @@ class TestErrorHandling:
         assert result == {}
 
     @patch("sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file")
-    @patch.dict(os.environ, {}, clear=True)
+    # DISABLE_VCS_AUGMENTATION silences the ci-platform provider, which would
+    # otherwise read this repository's own git checkout and return VCS metadata.
+    @patch.dict(os.environ, {"DISABLE_VCS_AUGMENTATION": "true"}, clear=True)
     @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_api_404_error(self, mock_get, mock_find_config):
         """Test handling of API 404 errors (provider returns None, not exception)."""

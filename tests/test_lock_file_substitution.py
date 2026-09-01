@@ -104,16 +104,14 @@ def test_two_manifests_are_still_ambiguous(project):
 
 
 def test_it_searches_the_action_workspace_too(tmp_path, monkeypatch):
-    """path_expansion looks in /github/workspace as well as the working
-    directory, because inside a GitHub Action they are not the same. The
+    """path_expansion looks in the platform's workspace as well as the working
+    directory, because on a runtime that mounts the repository elsewhere (a
+    GitHub Action mounts it at /github/workspace) they are not the same. The
     substitution claimed parity and checked only two of the three, so it could
     refuse a file the caller could plainly see -- in exactly the environment
     where LOCK_FILE is most likely to be pinned and stale."""
-    # sys.modules, because `sbomify_action.cli` re-exports the click
-    # command as `main` and shadows the submodule of the same name.
-    import sys
-
-    _m = sys.modules["sbomify_action.cli.main"]
+    from sbomify_action._runtime import use_platform
+    from sbomify_action._runtime.platforms import GitHubPlatform
 
     workspace = tmp_path / "gh"
     workspace.mkdir()
@@ -122,9 +120,12 @@ def test_it_searches_the_action_workspace_too(tmp_path, monkeypatch):
     elsewhere = tmp_path / "somewhere-else"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
-    monkeypatch.setattr(_m, "GITHUB_WORKSPACE", str(workspace))
+    # GITHUB_WORKSPACE is what the runner sets to say where it mounted the
+    # checkout, so pointing it at the fixture reproduces the split.
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(workspace))
 
-    assert _expand_lock_file_or_substitute("package-lock.json").endswith("pnpm-lock.yaml")
+    with use_platform(GitHubPlatform()):
+        assert _expand_lock_file_or_substitute("package-lock.json").endswith("pnpm-lock.yaml")
 
 
 def test_a_symlinked_lockfile_keeps_its_own_path(project):

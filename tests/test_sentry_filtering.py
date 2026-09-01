@@ -358,8 +358,9 @@ class TestSentryFiltering(unittest.TestCase):
             self.assertIsNone(tags.get("ci.sha"), "Commit SHA should not be sent outside CI")
             self.assertIsNone(tags.get("repo.public"), "Public repo tag not set outside CI")
 
-            # CI platform should indicate unknown
-            self.assertEqual(tags.get("ci.platform"), "unknown")
+            # With no CI variables set at all, the local platform is what
+            # resolves — reported by name rather than as "unknown".
+            self.assertEqual(tags.get("ci.platform"), "local")
 
             # Verify action version is still present (not sensitive)
             self.assertEqual(tags.get("action.version"), SBOMIFY_VERSION)

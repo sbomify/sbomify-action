@@ -3,7 +3,7 @@
 These tests verify that:
 1. Files are found when they exist as direct paths
 2. Files are found when they exist relative to current directory
-3. Files are found when they exist in /github/workspace
+3. Files are found when they exist in the active platform's workspace
 4. FileProcessingError is raised with helpful message when file not found
 """
 
@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from sbomify_action.cli.main import path_expansion
 from sbomify_action.exceptions import FileProcessingError
@@ -59,8 +60,17 @@ class TestPathExpansion(unittest.TestCase):
 
     def test_file_not_found_raises_error_with_helpful_message(self):
         """Test that FileProcessingError includes file name and searched paths."""
+        from sbomify_action._runtime import use_platform
+        from sbomify_action._runtime.platforms import GitHubPlatform
+
         with tempfile.TemporaryDirectory() as tmp_dir:
-            with change_directory(tmp_dir):
+            # Pin GitHub Actions with no GITHUB_WORKSPACE set, so the fallback
+            # probe is its container mount point and the message names it.
+            with (
+                change_directory(tmp_dir),
+                patch.dict(os.environ, {"GITHUB_WORKSPACE": ""}, clear=False),
+                use_platform(GitHubPlatform()),
+            ):
                 with self.assertRaises(FileProcessingError) as context:
                     path_expansion("nonexistent_file.txt")
 

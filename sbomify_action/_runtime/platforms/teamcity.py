@@ -1,4 +1,7 @@
-"""TeamCity provider for VCS augmentation metadata.
+"""TeamCity platform.
+
+Ported from the TeamCity augmentation provider: the extraction logic below is
+unchanged, only its shell moved so TeamCity is a CI platform like any other.
 
 This provider detects when running under JetBrains TeamCity and extracts VCS
 information. Unlike GitHub Actions / GitLab CI / Bitbucket Pipelines, TeamCity
@@ -25,7 +28,7 @@ Resolution order (``sbomify.json``, at priority 10, still beats all of it):
 TeamCity is VCS-agnostic: a VCS root may be Subversion, Perforce, TFVC,
 Mercurial, or anything a third-party plugin adds. ``BUILD_VCS_NUMBER`` is a
 commit hash only under Git. Because the SBOM VCS fields are Git-shaped end to
-end (``git+https://...@sha`` locators), this provider is **default-deny**: it
+end (``git+https://...@sha`` locators), this platform is **default-deny**: it
 emits nothing unless something positively identifies the root as Git. See
 ``_looks_like_git_root``.
 
@@ -39,21 +42,19 @@ the bare forms are absent entirely -- it never executes for the common case.
 Set DISABLE_VCS_AUGMENTATION=true to disable VCS enrichment.
 """
 
+import logging
 import os
 import re
 import stat
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
-from sbomify_action.logging_config import logger
+from ..formatters import PlainFormatter
+from ..protocol import LogFormatter, OidcProvider, VcsInfo
+from ..vcs_url import is_scp_like_git_url, normalize_repo_url, strip_ref_prefix, truncate_sha
+from .base import env_first
 
-from ..metadata import AugmentationMetadata
-from ..utils import (
-    is_scp_like_git_url,
-    is_vcs_augmentation_disabled,
-    normalize_repo_url,
-    strip_ref_prefix,
-    truncate_sha,
-)
+logger = logging.getLogger("sbomify_action")
 
 # Real TeamCity properties files are 10-200 KB. 4 MiB is generous while still
 # bounding a pathological or hostile file.
@@ -552,51 +553,39 @@ def _looks_like_git_root(raw_url: Optional[str], normalized_url: Optional[str]) 
     return False
 
 
-class TeamCityProvider:
-    """
-    Provider that extracts VCS metadata from a TeamCity build.
-
-    This provider has priority 20, which is lower than sbomify.json (10),
-    allowing local config to override auto-detected values.
-    """
+class TeamCityPlatform:
+    """JetBrains TeamCity build agent."""
 
     name: str = "teamcity"
-    priority: int = 20
+    priority: int = 40
+    is_ci: bool = True
+    confines_working_dir: bool = False
 
-    def fetch(
-        self,
-        component_id: Optional[str] = None,
-        api_base_url: Optional[str] = None,
-        token: Optional[str] = None,
-        config_path: Optional[str] = None,
-        **kwargs: Any,
-    ) -> Optional[AugmentationMetadata]:
+    def detects(self) -> bool:
+        """True when running under TeamCity.
+
+        A presence check, like Bitbucket's BITBUCKET_PIPELINE_UUID -- TeamCity
+        has no "true"-valued flag of its own. Tested with ``is None`` rather
+        than truthiness so that one environment cannot be TeamCity for the
+        logger and not-TeamCity for VCS detection.
         """
-        Extract VCS metadata from the TeamCity build environment.
+        return os.getenv("TEAMCITY_VERSION") is not None
 
-        Args:
-            component_id: Ignored (not needed for CI provider)
-            api_base_url: Ignored (not needed for CI provider)
-            token: Ignored (not needed for CI provider)
-            config_path: Ignored (not needed for CI provider)
-            **kwargs: Additional arguments (ignored)
+    def workspace(self) -> Optional[Path]:
+        """The working directory.
+
+        TeamCity exposes the checkout directory as a build parameter rather
+        than an environment variable, and its Docker wrapper already runs the
+        command inside the checkout, so the working directory is the answer.
+        """
+        return Path.cwd()
+
+    def vcs(self) -> Optional[VcsInfo]:
+        """Extract VCS metadata from the TeamCity build environment.
 
         Returns:
-            AugmentationMetadata with VCS info if running under TeamCity against
-            a Git VCS root, None otherwise
+            VcsInfo if running against a Git VCS root, None otherwise.
         """
-        if is_vcs_augmentation_disabled():
-            logger.debug("VCS augmentation disabled, skipping TeamCity provider")
-            return None
-
-        # Presence check, like Bitbucket's BITBUCKET_PIPELINE_UUID -- TeamCity
-        # has no "true"-valued flag of its own. Tested with ``is None`` rather
-        # than truthiness so that this agrees with ``console.IS_TEAMCITY``,
-        # which gates traceback locals: one environment must not be TeamCity
-        # for the logger and not-TeamCity for the provider.
-        if os.getenv("TEAMCITY_VERSION") is None:
-            return None
-
         props = _load_teamcity_properties()
 
         root_id, raw_url, ambiguous = _select_repo_url(props)
@@ -611,7 +600,7 @@ class TeamCityProvider:
             # documented case is a self-hosted root such as
             # https://git.example.com/team/app, which normalizes perfectly well
             # yet cannot be recognised as Git.
-            if operator_url := normalize_repo_url(os.getenv("SBOMIFY_VCS_URL")):
+            if operator_url := normalize_repo_url(env_first("SBOMIFY_VCS_URL")):
                 vcs_url = operator_url
                 git_confirmed = True
 
@@ -623,26 +612,35 @@ class TeamCityProvider:
             )
             return None
 
-        ref = strip_ref_prefix(_select_ref(props, root_id, ambiguous) or os.getenv("SBOMIFY_VCS_REF"))
+        ref = strip_ref_prefix(_select_ref(props, root_id, ambiguous) or env_first("SBOMIFY_VCS_REF"))
         commit_sha = _select_commit_sha(props, root_id, ambiguous)
 
         # Past the gate a URL is guaranteed: Git is confirmed either from a
         # root URL that normalized cleanly, or from an operator-supplied one.
         logger.info(f"Detected TeamCity: {vcs_url} @ {truncate_sha(commit_sha)}")
 
-        # vcs_commit_url is deliberately None: TeamCity is host-agnostic, so the
+        # commit_url is deliberately None: TeamCity is host-agnostic, so the
         # commit path shape (/commit/, /-/commit/, /commits/) is unknowable here
         # and guessing wrong is worse than omitting.
-        #
-        # Default to ``pre-build`` -- see GitHubActionsProvider for the full
-        # CycloneDX 1.7 schema rationale. The docker-image augmentation
-        # overrides to ``post-build`` for built artifacts, and ``json_config``
-        # (priority 10) beats this provider for operator overrides.
-        return AugmentationMetadata(
-            source=self.name,
-            vcs_url=vcs_url,
-            vcs_commit_sha=commit_sha,
-            vcs_ref=ref,
-            vcs_commit_url=None,
-            lifecycle_phase="pre-build",
+        return VcsInfo(
+            url=vcs_url,
+            commit_sha=commit_sha,
+            ref=ref,
+            commit_url=None,
         )
+
+    def log_formatter(self) -> LogFormatter:
+        """Plain Rich output -- TeamCity service messages are a separate feature."""
+        return PlainFormatter()
+
+    def oidc(self) -> Optional[OidcProvider]:
+        """No OIDC provider -- the sbomify exchange endpoint is GitHub-only."""
+        return None
+
+    def telemetry_tags(self) -> dict[str, str]:
+        """TeamCity exposes no repository visibility, so report nothing further."""
+        return {"ci.platform": self.name, "repo.public": "False"}
+
+    def telemetry_context(self) -> dict[str, str]:
+        """No context -- visibility is unknown, so nothing is safe to report."""
+        return {}

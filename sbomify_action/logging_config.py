@@ -7,7 +7,8 @@ from typing import Any, Dict
 
 from rich.logging import RichHandler
 
-from .console import IS_CI, IS_GITHUB_ACTIONS, console
+from ._runtime import get_platform
+from .console import IS_CI, console
 
 
 def setup_logging(level: str = "INFO", structured: bool = False, use_rich: bool = True) -> logging.Logger:
@@ -42,7 +43,8 @@ def setup_logging(level: str = "INFO", structured: bool = False, use_rich: bool 
         # In CI, show slightly more compact format
         handler = RichHandler(
             console=console,
-            show_time=not IS_GITHUB_ACTIONS,  # GHA has its own timestamps
+            # Platforms that timestamp every log line themselves ask us not to.
+            show_time=get_platform().log_formatter().show_log_time,
             show_path=False,
             rich_tracebacks=True,
             tracebacks_show_locals=not IS_CI,  # Don't show locals in CI (too verbose)

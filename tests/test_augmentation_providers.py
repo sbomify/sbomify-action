@@ -905,26 +905,22 @@ class TestCreateDefaultRegistry:
         registry = create_default_registry()
         providers = registry.list_providers()
 
-        # 7 providers: json-config, docker-image, github-actions,
-        # gitlab-ci, bitbucket-pipelines, teamcity, sbomify-api
-        assert len(providers) == 7
+        # 4 providers: json-config, docker-image, ci-platform, sbomify-api.
+        # The per-vendor CI providers collapsed into ci-platform, which asks
+        # whichever platform sbomify_action._runtime resolved -- so supporting
+        # another CI system no longer grows this list.
+        assert len(providers) == 4
         provider_names = [p["name"] for p in providers]
         assert "json-config" in provider_names
         assert "docker-image" in provider_names
-        assert "github-actions" in provider_names
-        assert "gitlab-ci" in provider_names
-        assert "bitbucket-pipelines" in provider_names
-        assert "teamcity" in provider_names
+        assert "ci-platform" in provider_names
         assert "sbomify-api" in provider_names
 
         # Verify priority ordering (lower = higher priority)
         priorities = {p["name"]: p["priority"] for p in providers}
         assert priorities["json-config"] == 10  # Highest priority
         assert priorities["docker-image"] == 15  # Container-image input
-        assert priorities["github-actions"] == 20
-        assert priorities["gitlab-ci"] == 20
-        assert priorities["bitbucket-pipelines"] == 20
-        assert priorities["teamcity"] == 20
+        assert priorities["ci-platform"] == 20
         assert priorities["sbomify-api"] == 50  # Lowest priority
 
 
@@ -955,13 +951,11 @@ class TestLifecyclePhasePrecedence:
 
     def _registry_no_api(self):
         """Registry without the sbomify-api provider so tests don't hit
-        the network. Returns the same 5 providers that actually decide
+        the network. Returns the 3 providers that actually decide
         lifecycle_phase today."""
         from sbomify_action._augmentation.providers import (
-            BitbucketPipelinesProvider,
+            CIPlatformProvider,
             DockerImageProvider,
-            GitHubActionsProvider,
-            GitLabCIProvider,
             JsonConfigProvider,
         )
         from sbomify_action._augmentation.registry import ProviderRegistry
@@ -969,9 +963,7 @@ class TestLifecyclePhasePrecedence:
         registry = ProviderRegistry()
         registry.register(JsonConfigProvider())
         registry.register(DockerImageProvider())
-        registry.register(GitHubActionsProvider())
-        registry.register(GitLabCIProvider())
-        registry.register(BitbucketPipelinesProvider())
+        registry.register(CIPlatformProvider())
         return registry
 
     def test_ci_lockfile_scan_defaults_to_pre_build(self):
@@ -1173,10 +1165,8 @@ class TestLifecyclePhaseSpdxCdxParity:
         """Run the real registry (minus sbomify-api) with ``env`` as
         the only env vars and return the merged AugmentationMetadata."""
         from sbomify_action._augmentation.providers import (
-            BitbucketPipelinesProvider,
+            CIPlatformProvider,
             DockerImageProvider,
-            GitHubActionsProvider,
-            GitLabCIProvider,
             JsonConfigProvider,
         )
         from sbomify_action._augmentation.registry import ProviderRegistry
@@ -1184,9 +1174,7 @@ class TestLifecyclePhaseSpdxCdxParity:
         registry = ProviderRegistry()
         registry.register(JsonConfigProvider())
         registry.register(DockerImageProvider())
-        registry.register(GitHubActionsProvider())
-        registry.register(GitLabCIProvider())
-        registry.register(BitbucketPipelinesProvider())
+        registry.register(CIPlatformProvider())
 
         with patch.dict(os.environ, env, clear=True):
             return registry.fetch_metadata()

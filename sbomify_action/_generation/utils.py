@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+from sbomify_action._runtime.git import git_safe_directory_env
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
 from sbomify_action.release_version import normalize_release_version, tag_from_ci
@@ -887,54 +888,6 @@ def ensure_php_installed() -> None:
     resolves it, so most PHP on GitHub arrives as a manifest and nothing else.
     """
     ensure_runtime("composer")
-
-
-def git_safe_directory_env() -> dict[str, str]:
-    """Environment that lets a *child process* read the bind-mounted workspace.
-
-    The action already defends against git's "detected dubious ownership"
-    guard, in ``submodule.py`` and the wizard's ``repo_facts.py``, by passing
-    ``-c safe.directory=*`` on its own git commands. That does nothing for the
-    generators, which do not run git themselves -- they run tools that do.
-    Composer is the clearest case: it establishes the root package's version by
-    asking git for the tag at HEAD, and when the workspace is mounted into the
-    container under a different UID that call fails, so Composer falls back to
-    ``1.0.0+no-version-set`` and any project depending on its own version stops
-    resolving. On ``laravel/framework`` v13.24.0 that is the difference between
-    0 components and 72.
-
-    Passed through git's environment-based configuration rather than a config
-    file, because there is no file to write that would not be either the
-    user's own or a new thing to clean up: ``GIT_CONFIG_COUNT`` and its
-    numbered key/value pairs are read by every git process in the tree and
-    persist nowhere. The user's ``.gitconfig`` is not ours to edit, and the
-    repository's belongs to whoever mounted it.
-
-    Appended to any existing ``GIT_CONFIG_COUNT`` rather than assuming zero, so
-    a caller who is already configuring git this way keeps their settings
-    instead of having them silently dropped.
-
-    Widening ``safe.directory`` does relax a guard whose purpose is to stop git
-    from running config -- and therefore hooks -- out of a repository owned by
-    someone else. Inside this container that is a workspace the user explicitly
-    asked to scan, which is the same judgement the two existing call sites
-    already make, and the alternative is a silently empty SBOM.
-    """
-    try:
-        count = int(os.environ.get("GIT_CONFIG_COUNT", "0"))
-    except ValueError:
-        # Not a number means nothing downstream can trust it either; git would
-        # reject it too. Start fresh rather than propagate the garbage.
-        count = 0
-    # A negative count is garbage in the same way, but int() accepts it: it
-    # would name the pair GIT_CONFIG_KEY_-1 and declare a count of 0, so git
-    # would read no settings at all and the guard would stay in force.
-    count = max(count, 0)
-    return {
-        "GIT_CONFIG_COUNT": str(count + 1),
-        f"GIT_CONFIG_KEY_{count}": "safe.directory",
-        f"GIT_CONFIG_VALUE_{count}": "*",
-    }
 
 
 #: A version Composer will accept as the root package's: a numeric core, with
