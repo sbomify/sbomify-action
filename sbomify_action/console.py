@@ -517,9 +517,19 @@ def _audit_path(value: str) -> str:
     if not os.path.isabs(value):
         return value
 
-    resolved = Path(value).resolve()
     try:
-        return str(resolved.relative_to(Path.cwd().resolve()))
+        resolved = Path(value).resolve()
+        cwd = Path.cwd().resolve()
+    except OSError:
+        # Sanitizing is best-effort and runs on the success path, where the
+        # attestation copy is printed unguarded -- a deleted or unreadable
+        # working directory must not turn a finished run into a crash. Fall
+        # back to the file name, which errs toward less disclosure, never
+        # more.
+        return os.path.basename(value)
+
+    try:
+        return str(resolved.relative_to(cwd))
     except ValueError:
         return resolved.name
 

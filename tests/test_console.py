@@ -861,6 +861,15 @@ class TestAuditTrail(unittest.TestCase):
         self.assertEqual(_audit_path("docker:nginx:latest"), "docker:nginx:latest")
         self.assertEqual(_audit_path("additional-packages-only"), "additional-packages-only")
 
+    def test_audit_path_survives_an_unusable_cwd(self):
+        """A filesystem that cannot answer must not crash a finished run.
+
+        ``print_to_stdout_for_attestation`` runs unguarded on the success
+        path, so sanitizing falls back to the file name rather than raising.
+        """
+        with patch("sbomify_action.console.Path.cwd", side_effect=FileNotFoundError):
+            self.assertEqual(_audit_path("/home/someone/project/requirements.txt"), "requirements.txt")
+
     def test_attestation_stdout_relativizes_path(self):
         """The stdout copy of the trail is sanitized the same way as the file."""
         with tempfile.TemporaryDirectory() as elsewhere:
