@@ -65,7 +65,7 @@ dev = [
     "types-pyyaml>=6.0.12.20250915",
     "types-toml>=0.10.8.20240310",
     "types-defusedxml>=0.7.0.20260504",
-    "uv==0.12.5",
+    "uv==0.12.7",
 ]
 
 [tool.hatch.build.targets.sdist]
