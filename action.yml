@@ -19,8 +19,17 @@ inputs:
     required: false
 runs:
   using: 'docker'
-  # Bump/pin this to release
-  image: 'docker://ghcr.io/sbomify/sbomify-action:latest'
+  # Pinned by digest, and bumped with the release.
+  #
+  # A tag here is resolved when the step runs, so a consumer who pins
+  # `sbomify/sbomify-action@<sha>` -- which is what SECURITY.md tells them to
+  # do -- pins this file and nothing else: the image underneath it still
+  # floats. The pin they believe they have does not exist. A digest is the
+  # only reference that makes it real.
+  #
+  # `:latest` was also the wrong tag to float on: it is published before the
+  # versioned tag, so it lags the release it is meant to represent.
+  image: 'docker://ghcr.io/sbomify/sbomify-action:26.8.0@sha256:b89230442778f50a24b27b55b373cdbaad042f5ffb27d9af195e99ed3bd2e7bb'
   env:
     WORKING_DIR: ${{ inputs['working-dir'] }}
     COMPONENT_PURL: ${{ inputs['component-purl'] }}
