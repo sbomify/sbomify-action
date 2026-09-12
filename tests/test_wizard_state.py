@@ -906,3 +906,48 @@ def test_apply_workflow_emission_uses_created_product_id(tmp_path: Path) -> None
     content = workflow_file.read_text()
     # PRODUCT_RELEASE must reference the newly-created product id, not be absent.
     assert "PRODUCT_RELEASE: '[\"prod-NEW:" in content
+
+
+def test_pick_default_workspace_key_prefers_the_new_flag() -> None:
+    """The backend serves is_default_workspace beside the deprecated name."""
+    from sbomify_action.cli.wizard.screens.authenticate import _pick_default_workspace_key
+
+    workspaces = [
+        {"key": "sandbox", "members": [{"is_me": True, "is_default_workspace": False, "is_default_team": False}]},
+        {"key": "prod", "members": [{"is_me": True, "is_default_workspace": True, "is_default_team": True}]},
+    ]
+    assert _pick_default_workspace_key(workspaces) == "prod"
+
+
+def test_pick_default_workspace_key_still_reads_the_old_flag_alone() -> None:
+    """Against a backend that has not shipped the new name yet."""
+    from sbomify_action.cli.wizard.screens.authenticate import _pick_default_workspace_key
+
+    workspaces = [
+        {"key": "sandbox", "members": [{"is_me": True, "is_default_team": False}]},
+        {"key": "prod", "members": [{"is_me": True, "is_default_team": True}]},
+    ]
+    assert _pick_default_workspace_key(workspaces) == "prod"
+
+
+def test_pick_default_workspace_key_trusts_the_new_flag_over_the_old() -> None:
+    """If they ever disagree, the name that is not being retired wins."""
+    from sbomify_action.cli.wizard.screens.authenticate import _pick_default_workspace_key
+
+    workspaces = [
+        {"key": "sandbox", "members": [{"is_me": True, "is_default_workspace": True, "is_default_team": False}]},
+        {"key": "prod", "members": [{"is_me": True, "is_default_workspace": False, "is_default_team": True}]},
+    ]
+    assert _pick_default_workspace_key(workspaces) == "sandbox"
+
+
+def test_pick_default_workspace_key_survives_the_old_flag_being_dropped() -> None:
+    """The sunset case. Before this, every membership read False and the
+    picker silently fell through to the first workspace in the list."""
+    from sbomify_action.cli.wizard.screens.authenticate import _pick_default_workspace_key
+
+    workspaces = [
+        {"key": "sandbox", "members": [{"is_me": True, "is_default_workspace": False}]},
+        {"key": "prod", "members": [{"is_me": True, "is_default_workspace": True}]},
+    ]
+    assert _pick_default_workspace_key(workspaces) == "prod"
