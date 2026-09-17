@@ -492,3 +492,49 @@ class TestJvmWrappersComeFromTheBundle:
         monkeypatch.setattr(runtimes, "ensure_runtime", lambda _tool: prefix / "bin")
 
         assert runtimes.bundle_wrappers("gradle") == {}
+
+
+class TestPomVersions:
+    """Reading a pinned version out of tools/pom.xml.
+
+    defusedxml ships no stubs, so everything this walks is untyped. The version
+    it returns has to be a real string, not whatever the parser handed back.
+    """
+
+    POM = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <dependencies>
+    <dependency>
+      <groupId>org.cyclonedx</groupId>
+      <artifactId>cyclonedx-maven-plugin</artifactId>
+      <version>2.9.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.example</groupId>
+      <artifactId>no-version-here</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+"""
+
+    def _pom(self, tmp_path: Path) -> Path:
+        path = tmp_path / "pom.xml"
+        path.write_text(self.POM)
+        return path
+
+    def test_it_returns_the_pinned_version(self, tmp_path: Path) -> None:
+        version = tool_manifest._version_from_pom(self._pom(tmp_path), "cyclonedx-maven-plugin")
+
+        assert version == "2.9.1"
+        assert type(version) is str
+
+    def test_a_declared_but_unpinned_dependency_says_which_it_is(self, tmp_path: Path) -> None:
+        """The artifact is right there in the file; "not found" sends the reader
+        hunting for something that is not missing. Usually a parent pom or a
+        dependencyManagement block supplies the version."""
+        with pytest.raises(ManifestError, match="declares no version"):
+            tool_manifest._version_from_pom(self._pom(tmp_path), "no-version-here")
+
+    def test_an_unknown_artifact_says_so(self, tmp_path: Path) -> None:
+        with pytest.raises(ManifestError, match="not found in"):
+            tool_manifest._version_from_pom(self._pom(tmp_path), "nothing-like-this")

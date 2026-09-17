@@ -924,7 +924,10 @@ def fetch_rpm_repomd(repo_url: str) -> Optional[str]:
             if data.get("type") == "primary":
                 location = data.find(q("location"))
                 if location is not None:
-                    return location.get("href")
+                    # defusedxml ships no stubs, so its elements are Any; the
+                    # annotation is where that stops.
+                    href: Optional[str] = location.get("href")
+                    return href
     except Exception as e:
         logger.warning(f"Failed to fetch repomd.xml from {repo_url}: {e}")
 
