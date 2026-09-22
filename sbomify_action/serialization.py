@@ -664,6 +664,34 @@ def link_root_dependencies(bom: Bom) -> int:
     return len(top_level_refs)
 
 
+def load_cyclonedx_bom(data: dict[str, Any]) -> Bom:
+    """Deserialize a CycloneDX document, repairing first what the parser refuses.
+
+    ``Bom.from_json`` is stricter about licence shapes than the generators
+    that write them, and it fails the whole document rather than the one
+    component it could not read. cdxgen puts the licence body straight into
+    ``license.text``, where the schema wants an attachedText object;
+    cyclonedx-python-lib calls ``.items()`` on that string, so one component's
+    copyright header ends the run with ``AttributeError: 'str' object has no
+    attribute 'items'`` and no indication of which component or which field.
+
+    ``sanitize_cyclonedx_licenses`` repairs that and three sibling cases, and
+    it has to run on every document before that document is parsed. Four of
+    the six call sites did it by hand, each carrying its own comment about
+    why. The two that did not -- hash enrichment and dependency expansion --
+    were still dying on it. Pairing the repair with the parse here is what
+    keeps a seventh call site from becoming the next one.
+
+    ``data`` is repaired in place, as ``sanitize_cyclonedx_licenses`` does.
+    """
+    sanitize_cyclonedx_licenses(data)
+    # from_json comes from py_serializable's protocol and is untyped, so it
+    # returns Any. Naming the type here rather than widening the ignore is
+    # what lets callers be type-checked at all.
+    bom: Bom = Bom.from_json(data)  # type: ignore[attr-defined]
+    return bom
+
+
 def serialize_cyclonedx_bom(bom: Bom, spec_version: Optional[str] = None) -> str:
     """
     Serialize a CycloneDX BOM to JSON string using the appropriate version outputter.
@@ -683,7 +711,7 @@ def serialize_cyclonedx_bom(bom: Bom, spec_version: Optional[str] = None) -> str
         ValueError: If spec_version is unsupported or cannot be determined
 
     Examples:
-        >>> bom = Bom.from_json(data)
+        >>> bom = load_cyclonedx_bom(data)
         >>> # Serialize as CycloneDX 1.6
         >>> json_str = serialize_cyclonedx_bom(bom, "1.6")
         >>>

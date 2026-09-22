@@ -36,8 +36,8 @@ from spdx_tools.spdx.writer.write_anything import write_file as spdx_write_file
 
 from .logging_config import logger
 from .serialization import (
+    load_cyclonedx_bom,
     restore_spdx_document_describes,
-    sanitize_cyclonedx_licenses,
     sanitize_spdx_json_file,
     serialize_cyclonedx_bom,
 )
@@ -559,12 +559,8 @@ def inject_additional_packages(sbom_file: str) -> int:
             logger.error("CycloneDX SBOM missing specVersion")
             return 0
 
-        # Same repair the other CycloneDX entry points do, for the same reason:
-        # a licence the deserializer rejects would drop the whole injection.
-        sanitize_cyclonedx_licenses(data)
-
         try:
-            bom = Bom.from_json(data)  # type: ignore[attr-defined]
+            bom = load_cyclonedx_bom(data)
         except Exception as e:
             logger.error(f"Failed to parse CycloneDX SBOM: {e}")
             return 0

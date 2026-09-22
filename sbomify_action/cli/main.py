@@ -18,8 +18,6 @@ import click
 import sentry_sdk
 
 # Add cyclonedx imports for proper SBOM handling
-from cyclonedx.model.bom import Bom
-
 from .. import format_display_name
 from .._runtime import CIPlatform, get_platform, legacy_workspaces, workspace_candidates
 from .._upload import VALID_BOM_TYPES, VALID_DESTINATIONS
@@ -72,7 +70,7 @@ from ..sbomify_api import VALID_COMPLIANCE_SUBCATEGORIES, VALID_DOCUMENT_TYPES
 from ..serialization import (
     _add_compositions_if_missing,
     _fix_purl_encoding_bugs_in_json,
-    sanitize_cyclonedx_licenses,
+    load_cyclonedx_bom,
     sanitize_spdx_licenses,
     serialize_cyclonedx_bom,
 )
@@ -1768,15 +1766,13 @@ def load_sbom_from_file(file_path: str) -> tuple[str, dict[str, Any], object]:
         # Detect format silently (format should already be known at this point)
         if sbom_json.get("bomFormat") == "CycloneDX":
             sbom_format = "cyclonedx"
-            # Repair what the deserializer would choke on before handing it
-            # over. This is the shared door for the metadata overrides, which
-            # run on a user-supplied SBOM before augmentation gets near it and
-            # log-and-continue on failure — so without this a bare
-            # license.text drops COMPONENT_VERSION/NAME/PURL on the floor with
-            # only a warning, rather than failing loudly.
-            sanitize_cyclonedx_licenses(sbom_json)
-            # Use cyclonedx deserializer
-            parsed_object = Bom.from_json(sbom_json)  # type: ignore[attr-defined]
+            # The shared door for the metadata overrides, which run on a
+            # user-supplied SBOM before augmentation gets near it and
+            # log-and-continue on failure — so without the repair inside
+            # load_cyclonedx_bom a bare license.text drops
+            # COMPONENT_VERSION/NAME/PURL on the floor with only a warning,
+            # rather than failing loudly.
+            parsed_object = load_cyclonedx_bom(sbom_json)
             logger.debug(f"Successfully loaded CycloneDX SBOM from {file_path}")
         elif sbom_json.get("spdxVersion") is not None or is_spdx3(sbom_json):
             sbom_format = "spdx"
