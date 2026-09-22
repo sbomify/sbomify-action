@@ -96,6 +96,46 @@ Each step maintains an audit trail with timestamps for compliance.
 - Use `git --no-pager` for git operations
 - Never create summary/documentation files unless explicitly requested
 
+## Audit your own diff before you commit
+
+Read every hunk of `git --no-pager diff` and `git --no-pager diff --staged`
+before committing. A hunk that does not serve the change you were asked to
+make is noise, and noise is expensive: it buries the real change in review,
+churns `git blame`, and turns a three-line fix into a two-hundred-line pull
+request nobody can check.
+
+**Revert any hunk whose only effect is one of these:**
+
+- Rewrapping prose, comments or docstrings to a different width, joining lines
+  onto one line, or splitting one line across several.
+- Blank lines, trailing whitespace or a trailing newline added or removed in
+  code you did not otherwise change.
+- Reordering imports, dict keys or function definitions with no functional
+  reason.
+- Swapping quote style, `.format()` for an f-string, or `List[str]` for
+  `list[str]` on lines the task did not touch. The modern syntax below is the
+  rule for code you write, not a licence to sweep the file.
+- Renaming a local, reordering parameters or restyling a conditional because
+  you prefer it the other way.
+- Re-serialising a JSON or YAML file with different indentation or key order.
+  SBOM fixtures under `tests/test-data/` are byte-for-byte inputs: a
+  re-indented fixture is a thousand-line diff that changes nothing.
+- Touching `uv.lock` or `bun.lock` by hand. Regenerate with `uv` or `bun`, or
+  leave them alone.
+
+**The formatters own the shape of a file, you do not.** `ruff format` and the
+pre-commit hooks are the only things allowed to reformat, and what they change
+belongs in the diff. If one of them rewrites a file far past your edit, that
+file was unformatted before you arrived: put the reformat in its own commit
+and say so in the message. The same goes for a cleanup that is genuinely worth
+doing. A rename, a reorder, a dead-code removal — each is its own commit,
+never folded into the change under review.
+
+Two commands catch most of it. `git --no-pager diff --stat`: if the line count
+is much larger than the change you would describe in one sentence, there is
+reformatting in there. `git --no-pager diff -w`: if that is much smaller than
+the plain diff, the gap is whitespace churn to revert.
+
 ## Git Commit Identity
 
 Worktree environments may have no inherited `user.name`/`user.email`. **Never run `git config` to set identity.** Pass identity via environment variables on the commit command instead:
