@@ -105,8 +105,8 @@ from .generation import (
 from .logging_config import logger
 from .serialization import (
     link_root_dependencies,
+    load_cyclonedx_bom,
     restore_spdx_document_describes,
-    sanitize_cyclonedx_licenses,
     sanitize_dependency_graph,
     sanitize_purls,
     sanitize_spdx_json_file,
@@ -1730,12 +1730,11 @@ def _enrich_cyclonedx_sbom(data: Dict[str, Any], input_path: Path, output_path: 
                     components.append(component_data)
                 data["metadata"]["tools"] = {"components": components, "services": []}
 
-    # Sanitize invalid license IDs (e.g., Trivy puts non-SPDX IDs in license.id field)
-    sanitize_cyclonedx_licenses(data)
-
-    # Parse BOM
+    # Parse BOM, repairing the licence shapes the deserializer refuses
+    # (Trivy puts non-SPDX ids in license.id, cdxgen puts a bare string in
+    # license.text).
     try:
-        bom = Bom.from_json(data)  # type: ignore[attr-defined]
+        bom = load_cyclonedx_bom(data)
     except Exception as e:
         raise SBOMValidationError(f"Failed to parse CycloneDX SBOM: {e}")
 

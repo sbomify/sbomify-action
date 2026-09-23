@@ -72,8 +72,8 @@ from .exceptions import SBOMValidationError
 from .logging_config import logger
 from .serialization import (
     link_root_dependencies,
+    load_cyclonedx_bom,
     restore_spdx_document_describes,
-    sanitize_cyclonedx_licenses,
     sanitize_dependency_graph,
     sanitize_spdx_json_file,
     serialize_cyclonedx_bom,
@@ -2012,15 +2012,10 @@ def augment_sbom_from_file(
             if spec_version is None:
                 raise SBOMValidationError("CycloneDX SBOM is missing required 'specVersion' field")
 
-            # Repair what the deserializer would otherwise choke on. Every
-            # other CycloneDX entry point does the same; this one parses its
-            # own copy of the document rather than reusing an already-loaded
-            # Bom, so it has to repair its own copy too.
-            sanitize_cyclonedx_licenses(data)
-
-            # Parse as CycloneDX
+            # Parses its own copy of the document rather than reusing an
+            # already-loaded Bom, so it repairs its own copy too.
             try:
-                bom = Bom.from_json(data)  # type: ignore[attr-defined]
+                bom = load_cyclonedx_bom(data)
             except Exception as e:
                 raise SBOMValidationError(f"Failed to parse CycloneDX SBOM: {e}")
             logger.info("Processing CycloneDX SBOM")

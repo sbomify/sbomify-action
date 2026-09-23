@@ -10,7 +10,7 @@ from cyclonedx.model.bom import Bom
 
 from ..console import get_audit_trail
 from ..logging_config import logger
-from ..serialization import serialize_cyclonedx_bom
+from ..serialization import load_cyclonedx_bom, serialize_cyclonedx_bom
 from ..spdx3 import is_spdx3
 from .models import HashAlgorithm, PackageHash, normalize_package_name
 from .parsers import (
@@ -311,7 +311,7 @@ def enrich_sbom_with_hashes(
     # Detect format and enrich
     if sbom_data.get("bomFormat") == "CycloneDX":
         # CycloneDX format
-        bom = Bom.from_json(sbom_data)  # type: ignore[attr-defined]
+        bom = load_cyclonedx_bom(sbom_data)
         stats = enricher.enrich_cyclonedx(bom, lock_path, overwrite_existing)
 
         # Serialize back
