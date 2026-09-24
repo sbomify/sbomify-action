@@ -686,8 +686,16 @@ def _repository_name() -> Optional[str]:
 
     Only used to answer "does this tag name a different package", so a missing
     value means the check is skipped rather than guessed at.
+
+    ``CIRCLE_PROJECT_REPONAME`` already holds the bare repository name rather
+    than an ``owner/repo`` pair; taking the last path segment leaves it alone.
     """
-    for var in ("GITHUB_REPOSITORY", "CI_PROJECT_PATH", "BITBUCKET_REPO_FULL_NAME"):
+    for var in (
+        "GITHUB_REPOSITORY",
+        "CI_PROJECT_PATH",
+        "BITBUCKET_REPO_FULL_NAME",
+        "CIRCLE_PROJECT_REPONAME",
+    ):
         if value := os.getenv(var):
             return value.split("/")[-1]
     return None

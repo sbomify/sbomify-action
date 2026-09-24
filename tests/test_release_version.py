@@ -15,7 +15,7 @@ from sbomify_action.release_version import (
     version_from_release_tag,
 )
 
-CI_VARS = ("GITHUB_REF_TYPE", "GITHUB_REF_NAME", "GITHUB_REF", "CI_COMMIT_TAG", "BITBUCKET_TAG")
+CI_VARS = ("GITHUB_REF_TYPE", "GITHUB_REF_NAME", "GITHUB_REF", "CI_COMMIT_TAG", "BITBUCKET_TAG", "CIRCLE_TAG")
 
 
 @pytest.fixture(autouse=True)
@@ -44,10 +44,15 @@ class TestReadingTheTag:
         monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
         assert tag_from_ci() is None
 
-    @pytest.mark.parametrize("var", ["CI_COMMIT_TAG", "BITBUCKET_TAG"])
-    def test_gitlab_and_bitbucket(self, monkeypatch, var):
+    @pytest.mark.parametrize("var", ["CI_COMMIT_TAG", "BITBUCKET_TAG", "CIRCLE_TAG"])
+    def test_gitlab_bitbucket_and_circleci(self, monkeypatch, var):
         monkeypatch.setenv(var, "v7.8.9")
         assert tag_from_ci() == "v7.8.9"
+
+    def test_a_circleci_branch_build_has_no_tag(self, monkeypatch):
+        """CircleCI leaves CIRCLE_TAG unset unless a tag triggered the build."""
+        monkeypatch.setenv("CIRCLE_BRANCH", "main")
+        assert tag_from_ci() is None
 
     def test_nothing_set(self):
         assert tag_from_ci() is None
