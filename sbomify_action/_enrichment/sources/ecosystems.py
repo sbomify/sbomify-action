@@ -20,7 +20,13 @@ DEFAULT_TIMEOUT = 15  # seconds - ecosyste.ms can be slower
 
 # Package types that ecosyste.ms doesn't support well
 # OS packages (deb, rpm, apk) should use PURL/Repology instead
-UNSUPPORTED_TYPES = {"deb", "rpm", "apk", "alpm", "ebuild"}
+#
+# yocto is ours. We mint pkg:yocto ourselves in _yocto/purl.py because a Yocto
+# recipe has no registry to point at, so every lookup here is a round trip that
+# cannot come back with anything. A Yocto image carries hundreds of them: the
+# sato-sdk reference image has 421 distinct ones, which is around twelve
+# minutes of requests, before the SBOM is uploaded, for no enrichment at all.
+UNSUPPORTED_TYPES = {"deb", "rpm", "apk", "alpm", "ebuild", "yocto"}
 
 # Simple in-memory cache
 _cache: Dict[str, Optional[NormalizedMetadata]] = {}
