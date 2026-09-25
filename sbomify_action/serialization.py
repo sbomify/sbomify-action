@@ -14,22 +14,15 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
 from cyclonedx.model.bom import Bom
-from license_expression import ExpressionError, Licensing, get_spdx_licensing
 
 if TYPE_CHECKING:
     from cyclonedx.model.component import Component
 from packageurl import PackageURL
 from spdx_tools.spdx.model import Document  # type: ignore[attr-defined]
 
+from ._spdx_expression import parse_spdx_expression, spdx_licensing, unknown_spdx_keys
 from .console import get_transformation_tracker
 from .logging_config import logger
-
-
-@functools.lru_cache(maxsize=1)
-def _spdx_licensing_singleton() -> Licensing:
-    """Return a cached SPDX licensing instance (singleton)."""
-    return get_spdx_licensing()
-
 
 # ============================================================================
 # CycloneDX Version Management
@@ -949,11 +942,8 @@ def _is_compound_expression(license_str: str) -> bool:
 
     from license_expression import AND, OR, LicenseWithExceptionSymbol
 
-    try:
-        parsed = _spdx_licensing_singleton().parse(license_str, validate=False)
-        return isinstance(parsed, (OR, AND, LicenseWithExceptionSymbol))
-    except ExpressionError:
-        return False
+    parsed = parse_spdx_expression(license_str)
+    return isinstance(parsed, (OR, AND, LicenseWithExceptionSymbol))
 
 
 @functools.lru_cache(maxsize=1)
@@ -1118,7 +1108,11 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
                     count += 1
 
                 license_id = license_obj.get("id")
-                if license_id:
+                # Only a string can be an SPDX id. A number or an object here
+                # is a schema violation the validator reports with the field's
+                # path; the checks below would instead end the run on
+                # ``len()`` or a dict used as a dict key.
+                if license_id and isinstance(license_id, str):
                     # Compound expressions (containing OR/AND) belong in expression, not id
                     if _is_compound_expression(license_id):
                         # Remove the license wrapper — expression is a peer of license, not nested
@@ -1255,22 +1249,33 @@ def _sanitize_spdx_license_expression(expression: str) -> tuple[str, bool]:
     Returns:
         Tuple of (sanitized expression, was_modified)
     """
-    from license_expression import ExpressionError, LicenseWithExceptionSymbol, get_spdx_licensing
+    from license_expression import LicenseWithExceptionSymbol
 
     if not expression or expression in ("NOASSERTION", "NONE"):
         return expression, False
 
-    spdx_licensing = get_spdx_licensing()
+    licensing = spdx_licensing()
+
+    def _whole_expression_as_license_ref() -> tuple[str, bool]:
+        """Nothing in the expression could be read: keep it all as one ref."""
+        sanitized = _to_license_ref(expression)
+        if len(sanitized) <= _MAX_LICENSE_REF_LENGTH:
+            return sanitized, True
+        hash_val = hashlib.md5(expression.encode(), usedforsecurity=False).hexdigest()[:16]
+        return f"LicenseRef-{hash_val}", True
+
+    parsed = parse_spdx_expression(expression)
+    if parsed is None:
+        logger.debug("Could not parse license expression %r", expression)
+        return _whole_expression_as_license_ref()
 
     try:
-        parsed = spdx_licensing.parse(expression, validate=False)
-        unknown_keys = spdx_licensing.unknown_license_keys(parsed)
+        unknown_set = unknown_spdx_keys(parsed)
 
-        if not unknown_keys:
+        if not unknown_set:
             return expression, False
 
         # Build symbol substitution map: old_symbol -> new_expression
-        unknown_set = {str(k) for k in unknown_keys}
         subs_map = {}
         for sym in parsed.symbols:
             # LicenseWithExceptionSymbol (e.g. "MIT WITH Exception") has no .key;
@@ -1292,7 +1297,7 @@ def _sanitize_spdx_license_expression(expression: str) -> tuple[str, bool]:
                     logger.debug(
                         f"Converting invalid SPDX license WITH expression: '{lic_key} WITH {exc_key}' to '{lic_ref} WITH {exc_ref}'"
                     )
-                    subs_map[sym] = spdx_licensing.parse(f"{lic_ref} WITH {exc_ref}", validate=False)
+                    subs_map[sym] = licensing.parse(f"{lic_ref} WITH {exc_ref}", validate=False)
                 continue
 
             key_str = sym.key
@@ -1300,7 +1305,7 @@ def _sanitize_spdx_license_expression(expression: str) -> tuple[str, bool]:
                 continue
             license_ref = _to_license_ref(key_str)
             logger.debug(f"Converting invalid SPDX license '{key_str}' to '{license_ref}'")
-            subs_map[sym] = spdx_licensing.parse(license_ref, validate=False)
+            subs_map[sym] = licensing.parse(license_ref, validate=False)
 
         if not subs_map:
             return expression, False
@@ -1308,15 +1313,12 @@ def _sanitize_spdx_license_expression(expression: str) -> tuple[str, bool]:
         result = parsed.subs(subs_map)
         return result.render(), True
 
-    except ExpressionError as e:
-        # Expression couldn't be parsed at all - convert entire thing to LicenseRef
-        logger.debug(f"Could not parse license expression '{expression}': {e}")
-        sanitized = _to_license_ref(expression)
-        if len(sanitized) <= _MAX_LICENSE_REF_LENGTH:
-            return sanitized, True
-        else:
-            hash_val = hashlib.md5(expression.encode(), usedforsecurity=False).hexdigest()[:16]
-            return f"LicenseRef-{hash_val}", True
+    except Exception:  # noqa: BLE001 - see sbomify_action._spdx_expression
+        # Substituting or re-rendering the tree failed. The expression was
+        # readable but cannot be repaired symbol by symbol, so keep the whole
+        # string as one reference rather than ending the run over one licence.
+        logger.debug("Could not rewrite license expression %r", expression, exc_info=True)
+        return _whole_expression_as_license_ref()
 
 
 def sanitize_spdx_licenses(data: dict[str, Any]) -> int:
@@ -1334,6 +1336,22 @@ def sanitize_spdx_licenses(data: dict[str, Any]) -> int:
     """
     sanitized_count = 0
     tracker = get_transformation_tracker()
+
+    def _entries(value: Any) -> Iterator[dict[str, Any]]:
+        """Yield the object entries of an SPDX collection, and nothing else.
+
+        ``packages``, ``files``, ``snippets`` and ``@graph`` are arrays of
+        objects in a conforming document, but this runs on documents that are
+        not conforming yet -- that is the point of it. An explicit
+        ``"packages": null`` is not an empty list, and iterating it, or
+        calling ``.get`` on a string entry, ended the run before the validator
+        could say which key was wrong.
+        """
+        if not isinstance(value, list):
+            return
+        for entry in value:
+            if isinstance(entry, dict):
+                yield entry
 
     def _sanitize_license_field(obj: dict[str, Any], field: str, component: str | None = None) -> int:
         """Sanitize a single license field."""
@@ -1376,12 +1394,10 @@ def sanitize_spdx_licenses(data: dict[str, Any]) -> int:
     # validation whatever happens here. Read anyway, because iterating a dict
     # walks its keys and reports "nothing to fix" about a document nobody
     # looked at.
-    graph = data.get("@graph", [])
+    graph = data.get("@graph")
     if isinstance(graph, dict):
         graph = [graph]
-    for element in graph:
-        if not isinstance(element, dict):
-            continue
+    for element in _entries(graph):
         # JSON-LD states the type as `type` under the SPDX 3 context and as
         # `@type` expanded. spdx3.py reads both, and the component id below
         # already reads both spellings of the id; reading one spelling of the
@@ -1395,20 +1411,20 @@ def sanitize_spdx_licenses(data: dict[str, Any]) -> int:
         )
 
     # Process packages
-    for package in data.get("packages", []):
+    for package in _entries(data.get("packages")):
         pkg_name = package.get("name")
         sanitized_count += _sanitize_license_field(package, "licenseConcluded", component=pkg_name)
         sanitized_count += _sanitize_license_field(package, "licenseDeclared", component=pkg_name)
         sanitized_count += _sanitize_license_list(package, "licenseInfoFromFiles", component=pkg_name)
 
     # Process files
-    for file in data.get("files", []):
+    for file in _entries(data.get("files")):
         file_name = file.get("fileName") or file.get("SPDXID")
         sanitized_count += _sanitize_license_field(file, "licenseConcluded", component=file_name)
         sanitized_count += _sanitize_license_list(file, "licenseInfoInFiles", component=file_name)
 
     # Process snippets
-    for snippet in data.get("snippets", []):
+    for snippet in _entries(data.get("snippets")):
         snippet_name = snippet.get("name") or snippet.get("SPDXID")
         sanitized_count += _sanitize_license_field(snippet, "licenseConcluded", component=snippet_name)
         sanitized_count += _sanitize_license_list(snippet, "licenseInfoInSnippets", component=snippet_name)

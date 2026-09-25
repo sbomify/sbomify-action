@@ -15,12 +15,17 @@ import logging
 import re
 from typing import Any, Optional, Tuple
 
-from license_expression import ExpressionError, get_spdx_licensing
+from sbomify_action._spdx_expression import (
+    is_known_spdx_expression,
+    parse_spdx_expression,
+    spdx_licensing,
+    unknown_spdx_keys,
+)
 
 logger = logging.getLogger(__name__)
 
-# Get the SPDX licensing instance (contains all official SPDX license IDs)
-_spdx_licensing = get_spdx_licensing()
+# The SPDX licensing instance (contains all official SPDX license IDs)
+_spdx_licensing = spdx_licensing()
 
 # SPDX special values that are always valid
 SPDX_SPECIAL_VALUES = {"NOASSERTION", "NONE"}
@@ -145,14 +150,8 @@ def validate_spdx_expression(license_str: str) -> bool:
             return True
         return False
 
-    try:
-        # Parse without validation first
-        parsed = _spdx_licensing.parse(license_str, validate=False)
-        # Check for unknown license keys
-        unknown = _spdx_licensing.unknown_license_keys(parsed)
-        return len(unknown) == 0
-    except ExpressionError:
-        return False
+    # Parses, and every key in it is on the SPDX list
+    return is_known_spdx_expression(license_str)
 
 
 def is_spdx_identifier(license_str: str) -> bool:
@@ -271,14 +270,10 @@ def normalize_license(license_str: str) -> Tuple[str, Optional[str]]:
     # 3. Something like "non-standard" or "proprietary"
     #
     # Try to parse it as SPDX (case-insensitive)
-    try:
-        parsed = _spdx_licensing.parse(stripped, validate=False)
-        unknown = _spdx_licensing.unknown_license_keys(parsed)
-        if not unknown:
-            # It's a valid SPDX expression! Return the canonical form
-            return (str(parsed), None)
-    except ExpressionError:
-        pass
+    parsed = parse_spdx_expression(stripped)
+    if parsed is not None and not unknown_spdx_keys(parsed):
+        # It's a valid SPDX expression! Return the canonical form
+        return (str(parsed), None)
 
     # Not a valid SPDX - return as-is and let the SBOM consumer handle it
     # This preserves the original information without guessing
@@ -314,21 +309,35 @@ def _split_license_string(license_str: str) -> list[str]:
     return result
 
 
-def normalize_license_list(licenses: list[str]) -> Tuple[list[str], dict[str, str]]:
+def normalize_license_list(licenses: Any) -> Tuple[list[str], dict[str, str]]:
     """
     Normalize a list of license strings.
 
     Args:
-        licenses: List of raw license strings
+        licenses: Raw license strings, as a package registry returned them.
+            Typed loosely on purpose: every caller is a data source handing
+            over a decoded JSON or YAML value it does not control. A registry
+            that answers ``"licenses": null``, one string instead of an array,
+            or an array of objects is a bad answer to log, not a reason to end
+            the run -- and iterating a bare string would silently register one
+            "license" per character.
 
     Returns:
         Tuple of (list of normalized identifiers, dict of license_id -> full text)
     """
-    normalized = []
-    texts = {}
+    normalized: list[str] = []
+    texts: dict[str, str] = {}
+
+    if not licenses:
+        return (normalized, texts)
+    if isinstance(licenses, str):
+        licenses = [licenses]
 
     for lic in licenses:
         if not lic:
+            continue
+        if not isinstance(lic, str):
+            logger.warning(f"Ignoring non-string license value of type {type(lic).__name__}")
             continue
         # If this looks like full license text, do NOT split — preserve as one blob
         if is_license_text(lic.strip()):
