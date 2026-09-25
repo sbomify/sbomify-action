@@ -13,6 +13,7 @@ schema requirements across all versions.
 import functools
 import logging
 import re
+from collections.abc import Mapping
 from typing import Any, Optional, Tuple
 
 from sbomify_action._spdx_expression import (
@@ -332,12 +333,27 @@ def normalize_license_list(licenses: Any) -> Tuple[list[str], dict[str, str]]:
         return (normalized, texts)
     if isinstance(licenses, str):
         licenses = [licenses]
+    elif isinstance(licenses, Mapping):
+        # One licence stated as an object -- npm's deprecated
+        # {"type": "MIT", "url": ...} and anything shaped like it. Iterating it
+        # walks its keys, which registered "type" and "url" as licence ids.
+        stated = next(
+            (licenses[key] for key in ("type", "name", "id", "expression") if isinstance(licenses.get(key), str)),
+            None,
+        )
+        if stated is None:
+            logger.warning(f"Ignoring license object with no type/name/id/expression key: {licenses!r:.120}")
+            return (normalized, texts)
+        licenses = [stated]
+    elif not isinstance(licenses, (list, tuple, set, frozenset)):
+        logger.warning(f"Ignoring non-iterable license value of type {type(licenses).__name__}: {licenses!r:.120}")
+        return (normalized, texts)
 
     for lic in licenses:
         if not lic:
             continue
         if not isinstance(lic, str):
-            logger.warning(f"Ignoring non-string license value of type {type(lic).__name__}")
+            logger.warning(f"Ignoring non-string license value of type {type(lic).__name__}: {lic!r:.120}")
             continue
         # If this looks like full license text, do NOT split — preserve as one blob
         if is_license_text(lic.strip()):

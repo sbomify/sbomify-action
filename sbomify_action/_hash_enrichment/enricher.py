@@ -200,7 +200,9 @@ class HashEnricher:
         hash_lookup = self._build_hash_lookup(lockfile_hashes, ecosystem)
 
         # Process packages
-        packages = spdx_data.get("packages", [])
+        # ``or []``: an explicit "packages": null is not an absent key, and
+        # this is the document the user supplied.
+        packages = spdx_data.get("packages") or []
         stats["sbom_components"] = len(packages)
 
         for package in packages:

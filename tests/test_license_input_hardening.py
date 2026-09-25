@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import ast
 import copy
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
+from cyclonedx.model.bom import Bom
 
 from sbomify_action._enrichment.license_normalizer import (
     validate_spdx_expression as normalizer_validate,
@@ -34,9 +36,11 @@ from sbomify_action._spdx_expression import (
 from sbomify_action.serialization import (
     _is_compound_expression,
     _sanitize_spdx_license_expression,
+    load_cyclonedx_bom,
     sanitize_cyclonedx_licenses,
     sanitize_spdx_licenses,
 )
+from sbomify_action.validation import validate_sbom_data
 
 #: Strings that tokenize as SPDX but cannot be assembled into a tree.
 #: ``license_expression`` raises ``IndexError`` for the first and
@@ -154,17 +158,54 @@ class TestTheParserRaisesMoreThanExpressionError:
 
 
 class TestLicenceValuesOfTheWrongType:
-    """A schema violation is for the validator to report, not to crash on."""
+    """A value of the wrong type is rendered, not skipped.
 
-    @pytest.mark.parametrize("value", [2, 1.5, True, ["MIT"], {"id": "MIT"}, None])
-    def test_a_non_string_license_id_is_left_for_the_validator(self, value: Any) -> None:
-        """``len()`` on a number, and a dict as a dict key, both ended the run.
+    Skipping it was the first attempt and it only moved the failure: the
+    document still reaches ``Bom.from_json``, which uses the value as a dict
+    key, so a dict or a list ended the run with ``TypeError: unhashable type``
+    before any validator could name the field.
+    """
 
-        The value stays as it is: ``validate_sbom_data`` names the offending
-        path (``components.0.licenses``), which is a far better message than
-        ``TypeError: unhashable type: 'dict'`` from inside the sanitizer.
-        """
+    @pytest.mark.parametrize("value", [2, 1.5, True, ["MIT"], {"a": 1}])
+    def test_a_non_string_license_id_is_rendered_and_demoted(self, value: Any) -> None:
         data = _cyclonedx([{"license": {"id": value}}])
+        assert sanitize_cyclonedx_licenses(data) == 2  # rendered, then demoted
+        licence = data["components"][0]["licenses"][0]["license"]
+        # No JSON object is on the SPDX list, so it lands in name with the
+        # value readable rather than being dropped.
+        assert "id" not in licence
+        assert licence["name"] == json.dumps(value)
+        assert validate_sbom_data(data, "cyclonedx", "1.6").valid is True
+
+    @pytest.mark.parametrize("value", [2, ["MIT"], {"a": 1}])
+    def test_a_non_string_name_or_expression_is_rendered(self, value: Any) -> None:
+        for choice in ({"license": {"name": value}}, {"expression": value}):
+            data = _cyclonedx([copy.deepcopy(choice)])
+            assert sanitize_cyclonedx_licenses(data) >= 1
+            assert validate_sbom_data(data, "cyclonedx", "1.6").valid is True
+
+    @pytest.mark.parametrize("value", [["MIT"], {"a": 1}])
+    def test_the_document_now_deserializes(self, value: Any) -> None:
+        """The half of this the first fix missed.
+
+        A list or a dict is unhashable, and the deserializer uses the value as
+        a dict key, so skipping it left the run to die one step later.
+        """
+        raw = _cyclonedx([{"license": {"id": value}}])
+        with pytest.raises(TypeError, match="unhashable"):
+            Bom.from_json(copy.deepcopy(raw))  # type: ignore[attr-defined]
+        load_cyclonedx_bom(raw)  # sanitizes first, so this no longer raises
+
+    @pytest.mark.parametrize("value", [2, 1.5, True])
+    def test_a_number_reaches_the_validator_and_is_repaired(self, value: Any) -> None:
+        """A scalar is hashable, so it parses and fails schema validation instead."""
+        raw = _cyclonedx([{"license": {"id": value}}])
+        assert validate_sbom_data(copy.deepcopy(raw), "cyclonedx", "1.6").valid is False
+        sanitize_cyclonedx_licenses(raw)
+        assert validate_sbom_data(raw, "cyclonedx", "1.6").valid is True
+
+    def test_a_null_id_is_left_alone(self) -> None:
+        data = _cyclonedx([{"license": {"id": None, "name": "MIT"}}])
         before = copy.deepcopy(data)
         assert sanitize_cyclonedx_licenses(data) == 0
         assert data == before
@@ -173,6 +214,31 @@ class TestLicenceValuesOfTheWrongType:
         data = _cyclonedx([{"license": {"id": "apache-2.0"}}])
         assert sanitize_cyclonedx_licenses(data) == 1
         assert data["components"][0]["licenses"][0]["license"]["id"] == "Apache-2.0"
+
+
+class TestBlankLicenceFields:
+    """Whitespace is an empty field, not an expression nobody could read.
+
+    ``license_expression`` answers ``None`` for " " exactly as it does for a
+    string it failed on, so routing both through one "unparseable" branch
+    rewrote a blank field as ``LicenseRef-unknown`` -- inventing a licence the
+    document never stated, and counting it as a repair.
+    """
+
+    @pytest.mark.parametrize("blank", ["", " ", "\n", "\t  "])
+    def test_a_blank_expression_is_untouched(self, blank: str) -> None:
+        assert _sanitize_spdx_license_expression(blank) == (blank, False)
+
+    @pytest.mark.parametrize("blank", [" ", "\n"])
+    def test_a_blank_spdx_field_is_not_counted_as_a_repair(self, blank: str) -> None:
+        data = {"spdxVersion": "SPDX-2.3", "packages": [{"name": "p", "licenseDeclared": blank}]}
+        assert sanitize_spdx_licenses(data) == 0
+        assert data["packages"][0]["licenseDeclared"] == blank
+
+    def test_a_real_unparseable_expression_still_becomes_a_ref(self) -> None:
+        sanitized, was_modified = _sanitize_spdx_license_expression("MIT AND ()")
+        assert was_modified is True
+        assert sanitized.startswith("LicenseRef-")
 
 
 class TestSpdxCollectionsThatAreNotArraysOfObjects:
@@ -203,6 +269,34 @@ class TestLicencesAsARegistryActuallyAnswers:
     def test_no_licences_is_an_empty_result(self, value: Any) -> None:
         """deps.dev answers ``"licenses": null`` for a package it knows nothing about."""
         assert normalize_license_list(value) == ([], {})
+
+    @pytest.mark.parametrize("value", [7, 1.5, object()])
+    def test_a_non_iterable_answer_is_refused_not_raised(self, value: Any, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("WARNING"):
+            assert normalize_license_list(value) == ([], {})
+        assert "non-iterable license value" in caplog.text
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"type": "MIT", "url": "https://example.com/LICENSE"},
+            {"name": "MIT"},
+            {"id": "MIT"},
+            {"expression": "MIT"},
+        ],
+    )
+    def test_one_licence_stated_as_an_object_is_read_not_walked(self, value: Any) -> None:
+        """npm's deprecated ``{"type": ..., "url": ...}``.
+
+        Iterating the mapping walked its keys, registering "type" and "url" as
+        licence identifiers -- licence data invented out of field names.
+        """
+        assert normalize_license_list(value) == (["MIT"], {})
+
+    def test_an_object_with_no_licence_key_is_refused(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("WARNING"):
+            assert normalize_license_list({"url": "https://example.com"}) == ([], {})
+        assert "no type/name/id/expression key" in caplog.text
 
     def test_one_string_is_one_licence_not_one_per_character(self) -> None:
         """A registry that answers with a bare string used to yield M, I, T."""

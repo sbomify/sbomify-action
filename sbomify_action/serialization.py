@@ -396,8 +396,10 @@ def sanitize_spdx_json_file(file_path: str) -> int:
 
     fixed_count = 0
 
-    # Fix primaryPackagePurpose values in packages
-    for package in data.get("packages", []):
+    # Fix primaryPackagePurpose values in packages. ``or []`` because an
+    # explicit "packages": null is not an absent key, and this reads the
+    # document the user supplied.
+    for package in data.get("packages") or []:
         purpose = package.get("primaryPackagePurpose")
         if purpose is None:
             continue
@@ -1012,6 +1014,26 @@ def _is_valid_spdx_license_id(license_id: str) -> bool:
     return _canonical_spdx_license_id(license_id) is not None
 
 
+def _as_license_text(value: Any) -> str:
+    """Render a non-string licence value as text, losing nothing.
+
+    ``license.id``, ``license.name`` and ``expression`` are strings in the
+    schema. A generator that writes a number or an object there breaks more
+    than validation: cyclonedx-python-lib uses the value as a dict key while
+    deserializing, so a dict or a list ends the run with ``TypeError:
+    unhashable type`` before the validator can name the field. Leaving the
+    value alone is not enough, because the document still reaches that
+    deserializer.
+
+    Rendered as JSON it keeps the run alive, stays readable for whoever has to
+    sort the document out, and the ordinary id checks then decide where it
+    belongs -- normally ``license.name``, since no JSON object is on the SPDX
+    list. ``default=str`` is belt and braces: every value here was decoded
+    from JSON, so it is already serializable.
+    """
+    return value if isinstance(value, str) else json.dumps(value, default=str)
+
+
 def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
     """
     Sanitize CycloneDX license data by fixing invalid license IDs and expressions.
@@ -1087,12 +1109,37 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
         tracker.record_license_sanitized(original, f"expression:{combined}", component=component)
         return 1
 
+    def _render_non_string_values(choice: dict[str, Any], component: str | None = None) -> int:
+        """Give ``id``, ``name`` and ``expression`` the string type they declare.
+
+        Done before anything else reads them, so every check below -- and the
+        deserializer after it -- sees a string. See ``_as_license_text`` for
+        why rendering beats skipping.
+        """
+        count = 0
+        for holder, key in ((choice, "expression"), (choice.get("license"), "id"), (choice.get("license"), "name")):
+            if not isinstance(holder, dict):
+                continue
+            value = holder.get(key)
+            if value is None or isinstance(value, str):
+                continue
+            rendered = _as_license_text(value)
+            logger.debug("Rendering non-string %s (%s) as text: %r", key, type(value).__name__, rendered)
+            holder[key] = rendered
+            # The audit line names the type it arrived as, since the rendered
+            # text is identical on both sides of a plain type repair.
+            tracker.record_license_sanitized(f"<{type(value).__name__}>", f"{key}:{rendered}", component=component)
+            count += 1
+        return count
+
     def _sanitize_license_choices(license_choices: list[Any], component: str | None = None) -> int:
         """Process a list of licenseChoice objects."""
         count = 0
         for choice in license_choices:
             if not isinstance(choice, dict):
                 continue
+
+            count += _render_non_string_values(choice, component=component)
 
             # Handle license.id field
             license_obj = choice.get("license")
@@ -1107,12 +1154,9 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
                     license_obj["text"] = {"content": license_text}
                     count += 1
 
+                # A string by now: _render_non_string_values ran above.
                 license_id = license_obj.get("id")
-                # Only a string can be an SPDX id. A number or an object here
-                # is a schema violation the validator reports with the field's
-                # path; the checks below would instead end the run on
-                # ``len()`` or a dict used as a dict key.
-                if license_id and isinstance(license_id, str):
+                if license_id:
                     # Compound expressions (containing OR/AND) belong in expression, not id
                     if _is_compound_expression(license_id):
                         # Remove the license wrapper — expression is a peer of license, not nested
@@ -1155,7 +1199,7 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
 
             # Handle expression field
             expression = choice.get("expression")
-            if expression and isinstance(expression, str):
+            if expression:
                 sanitized_expr, was_modified = _sanitize_spdx_license_expression(expression)
                 if was_modified:
                     logger.debug(f"Sanitizing invalid license expression: {expression} -> {sanitized_expr}")
@@ -1251,7 +1295,11 @@ def _sanitize_spdx_license_expression(expression: str) -> tuple[str, bool]:
     """
     from license_expression import LicenseWithExceptionSymbol
 
-    if not expression or expression in ("NOASSERTION", "NONE"):
+    # ``not expression.strip()`` as well as ``not expression``: the parser
+    # answers None for whitespace exactly as it does for a string it could not
+    # read, and rewriting " " as a LicenseRef would invent a licence the
+    # document never stated -- and count it as a repair.
+    if not expression or not expression.strip() or expression in ("NOASSERTION", "NONE"):
         return expression, False
 
     licensing = spdx_licensing()
