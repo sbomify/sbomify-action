@@ -224,7 +224,9 @@ class DependencyEnricher:
         source: str,
     ) -> ExpansionResult:
         """Add discovered dependencies to SPDX SBOM."""
-        packages = sbom_data.get("packages", [])
+        # ``or []``: an explicit "packages": null is not an absent key, and
+        # this is the document the user supplied.
+        packages = sbom_data.get("packages") or []
         original_count = len(packages)
 
         # Build set of existing package identifiers (normalized for comparison)

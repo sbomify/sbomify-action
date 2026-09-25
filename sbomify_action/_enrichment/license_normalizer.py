@@ -15,11 +15,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Iterator, Optional, Set
 
-from license_expression import ExpressionError, get_spdx_licensing
-
-# SPDX licensing instance for validation
-_spdx_licensing = get_spdx_licensing()
-
+from sbomify_action._spdx_expression import is_known_spdx_expression
 
 # =============================================================================
 # License Alias Mappings
@@ -190,12 +186,7 @@ def validate_spdx_expression(license_str: str) -> bool:
     if license_str.startswith("LicenseRef-"):
         return bool(re.match(r"^LicenseRef-[a-zA-Z0-9.\-]+$", license_str))
 
-    try:
-        parsed = _spdx_licensing.parse(license_str, validate=False)
-        unknown = _spdx_licensing.unknown_license_keys(parsed)
-        return len(unknown) == 0
-    except ExpressionError:
-        return False
+    return is_known_spdx_expression(license_str)
 
 
 # =============================================================================
