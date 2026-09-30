@@ -821,6 +821,36 @@ class TestUnsupportedHostOS:
 
         assert ensure_runtime("syft") == installed
 
+    def test_an_ecosystem_key_is_probed_under_its_real_command(self, monkeypatch, tmp_path):
+        """The key "rust" is what cargo-cyclonedx asks for; `cargo` is what it runs.
+
+        cargo-cyclonedx is found on PATH under its own name, so it claims the
+        input and then asks for the toolchain by ecosystem. Probing PATH for a
+        command called "rust" finds nothing and reports a Rust toolchain
+        missing on a machine that has one -- same for the jvm bundle's
+        "maven", whose binary is `mvn`.
+        """
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        installed = tmp_path / "bin"
+        installed.mkdir()
+        for command in ("cargo", "mvn"):
+            (installed / command).write_text("#!/bin/sh\n")
+        monkeypatch.setattr(
+            runtimes.shutil, "which", lambda c: str(installed / c) if (installed / c).exists() else None
+        )
+
+        assert ensure_runtime("rust") == installed
+        assert ensure_runtime("maven") == installed
+
+    def test_the_command_named_in_the_error_is_the_one_to_install(self, monkeypatch):
+        """Telling someone to `install rust` and have it appear on PATH as
+        `rust` is advice that cannot be followed."""
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda c: None)
+
+        with pytest.raises(SBOMGenerationError, match=r"Install cargo yourself"):
+            ensure_runtime("rust")
+
     def test_a_missing_tool_names_the_os_and_the_way_out(self, monkeypatch):
         monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
         monkeypatch.setattr(runtimes.shutil, "which", lambda name: None)

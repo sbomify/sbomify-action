@@ -198,6 +198,17 @@ def host_supports_runtimes() -> bool:
     return platform.system() == "Linux"
 
 
+#: Runtime keys that are not the name of a command. A bundle may provide a
+#: whole toolchain under an ecosystem name -- "rust" is what cargo-cyclonedx
+#: asks for but `cargo` is what it runs, and the jvm bundle's "maven" is
+#: `mvn` -- so probing PATH for the key itself would report a toolchain
+#: missing that is sitting right there. The bundle.toml that records this
+#: properly only arrives inside the bundle, which off Linux is precisely what
+#: cannot be fetched, so the handful that differ are named here instead.
+#: Anything absent from this map is its own command.
+_PROBE_COMMANDS = {"rust": "cargo", "maven": "mvn"}
+
+
 def can_fetch_runtimes() -> bool:
     """Whether a runtime fetch could succeed here.
 
@@ -962,12 +973,13 @@ def ensure_runtime(name: str) -> Path:
     # before bundle_for, because a bundle would otherwise fetch cosign to
     # verify itself and hit the same wall one layer down.
     if not host_supports_runtimes():
-        if installed := shutil.which(name):
+        command = _PROBE_COMMANDS.get(name, name)
+        if installed := shutil.which(command):
             logger.debug(f"No pinned {name} runtime for {platform.system()}; using {installed} from PATH")
             return Path(installed).parent
         raise SBOMGenerationError(
             f"No pinned {name} runtime for {platform.system()}: sbomify publishes its tool "
-            f"bundles for Linux only. Install {name} yourself and it will be used from PATH, "
+            f"bundles for Linux only. Install {command} yourself and it will be used from PATH, "
             f"or run the container image (sbomifyhub/sbomify-action), which carries the tools."
         )
 
