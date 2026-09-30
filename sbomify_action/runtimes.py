@@ -181,6 +181,34 @@ def fetching_is_enabled() -> bool:
     return opt_out not in ("0", "false", "no")
 
 
+def host_supports_runtimes() -> bool:
+    """Whether pinned runtimes exist for this operating system at all.
+
+    Every bundle in sbomify/sbom-tools is published as ``linux-amd64`` or
+    ``linux-arm64``, and the vendor-pinned cosign that verifies them is a
+    Linux binary too. Nothing here ever asked what OS it was on, so a macOS
+    run -- a documented way to use this, `uvx sbomify-action` -- resolved the
+    arm64 asset, downloaded a Linux ELF, marked it executable and exec'd it.
+    The user saw `[Errno 8] Exec format error` naming a path inside our own
+    cache, which says nothing about what went wrong or what to do about it.
+
+    Architecture is checked separately, in current_arch: an unknown machine
+    and an unsupported OS are different failures and read differently.
+    """
+    return platform.system() == "Linux"
+
+
+def can_fetch_runtimes() -> bool:
+    """Whether a runtime fetch could succeed here.
+
+    Both halves have to hold: the user must not have opted out, and the
+    platform must be one we publish for. Generators that cannot fall back to
+    a tool the user installed gate on this, so that on an unsupported host
+    they decline the input rather than claiming it and dying in generate().
+    """
+    return fetching_is_enabled() and host_supports_runtimes()
+
+
 def can_provide(tool: str) -> bool:
     """Whether we could obtain this tool if asked.
 
@@ -190,7 +218,7 @@ def can_provide(tool: str) -> bool:
     asked `name in RUNTIMES` reported itself unavailable and the whole chain
     quietly fell through to syft.
     """
-    return (bundle_for(tool) is not None or tool in RUNTIMES) and fetching_is_enabled()
+    return (bundle_for(tool) is not None or tool in RUNTIMES) and can_fetch_runtimes()
 
 
 def current_arch() -> str:
@@ -925,8 +953,24 @@ def ensure_runtime(name: str) -> Path:
 
     Raises:
         SBOMGenerationError: if the runtime is unknown, unavailable for this
-            architecture, cannot be downloaded, or fails its checksum.
+            platform, cannot be downloaded, or fails its checksum.
     """
+    # Nothing is published for this OS, so there is no pinned artifact to
+    # prefer and the rule below about never shadowing one does not apply.
+    # Whatever the user installed is the only thing that can run here, and
+    # using it is what makes the documented local run work at all. Checked
+    # before bundle_for, because a bundle would otherwise fetch cosign to
+    # verify itself and hit the same wall one layer down.
+    if not host_supports_runtimes():
+        if installed := shutil.which(name):
+            logger.debug(f"No pinned {name} runtime for {platform.system()}; using {installed} from PATH")
+            return Path(installed).parent
+        raise SBOMGenerationError(
+            f"No pinned {name} runtime for {platform.system()}: sbomify publishes its tool "
+            f"bundles for Linux only. Install {name} yourself and it will be used from PATH, "
+            f"or run the container image (sbomifyhub/sbomify-action), which carries the tools."
+        )
+
     # Most tools now arrive inside an ecosystem bundle from sbomify/sbom-tools.
     # cosign is the exception and stays vendor-pinned below: it is what
     # verifies every bundle's attestation, and trust in a verifier cannot be

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled
+from sbomify_action.runtimes import can_fetch_runtimes, ensure_runtime
 
 from ..protocol import FormatVersion, GenerationInput
 from ..result import GenerationResult
@@ -92,10 +92,12 @@ class CycloneDXGomodGenerator:
 
     def supports(self, input: GenerationInput) -> bool:
         """Claim go.mod when there is source to analyse and we may fetch."""
-        if not fetching_is_enabled():
+        if not can_fetch_runtimes():
             # Outside our image the user's toolchain decides; fetching a tool
             # they did not install would change which generator wins and so
-            # change the SBOM they get.
+            # change the SBOM they get. The same applies when no bundle is
+            # published for this OS: there is nothing to fetch, and claiming
+            # go.mod here would only take the input away from syft.
             return False
 
         if not input.is_lock_file or input.output_format not in ("cyclonedx", "spdx"):

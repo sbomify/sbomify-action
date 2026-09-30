@@ -796,3 +796,67 @@ class TestDownloadRetries:
 
         assert len(attempts) == 2
         assert (bin_dir / "faketool").read_bytes() == payload
+
+
+class TestUnsupportedHostOS:
+    """What happens off Linux, which is the only OS we publish bundles for.
+
+    Before this, current_arch was the only platform question asked, so macOS
+    on Apple silicon resolved the arm64 asset, downloaded a Linux ELF and
+    exec'd it -- `[Errno 8] Exec format error` pointing at a path inside our
+    own cache, with nothing to tell the user it was the wrong OS.
+    """
+
+    def test_a_tool_on_path_is_used_instead_of_fetching(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        installed = tmp_path / "homebrew" / "bin"
+        installed.mkdir(parents=True)
+        (installed / "syft").write_text("#!/bin/sh\n")
+
+        def _must_not_download(*args, **kwargs):
+            raise AssertionError("fetched a Linux bundle on a non-Linux host")
+
+        monkeypatch.setattr(runtimes.requests, "get", _must_not_download)
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name))
+
+        assert ensure_runtime("syft") == installed
+
+    def test_a_missing_tool_names_the_os_and_the_way_out(self, monkeypatch):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: None)
+
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            ensure_runtime("syft")
+
+        message = str(excinfo.value)
+        assert "Darwin" in message, "the error has to say which OS it is refusing"
+        assert "Linux only" in message
+        assert "sbomifyhub/sbomify-action" in message, "and how to get the tools anyway"
+
+    def test_generators_stop_claiming_inputs_they_cannot_serve(self, monkeypatch):
+        """can_provide is what a generator asks before claiming an input.
+
+        Answering yes off Linux is how the failure got as far as generate():
+        the generator took the input, then died fetching a binary that could
+        never run, instead of leaving it to a tool already installed.
+        """
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Linux")
+        assert runtimes.can_provide("syft") is True
+        assert runtimes.can_fetch_runtimes() is True
+
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Windows")
+        assert runtimes.can_provide("syft") is False
+        assert runtimes.can_fetch_runtimes() is False
+
+    def test_the_fetch_opt_out_is_still_read_separately(self, monkeypatch):
+        """SBOMIFY_FETCH_RUNTIMES is about consent, not about the platform.
+
+        They are folded together only in can_fetch_runtimes; keeping
+        fetching_is_enabled answering the question it is named for matters,
+        because it also gates the bun registry resolution, which works fine
+        on macOS.
+        """
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+        assert runtimes.fetching_is_enabled() is True
+        assert runtimes.host_supports_runtimes() is False

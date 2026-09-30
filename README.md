@@ -15,6 +15,8 @@ A CLI, shipped as a container image, that turns a lock file into a compliance-gr
 
 It runs as a GitHub Action, as a container image on any other CI, or locally with `uvx`. Configuration is environment variables and is identical everywhere. Works standalone or with [sbomify](https://sbomify.com) — generation, augmentation and enrichment need no account.
 
+The pinned tool bundles it fetches on demand are published for Linux only. A `uvx` run on macOS or Windows uses whatever generators are on your `PATH` instead (`brew install syft`, `npm install -g @cyclonedx/cdxgen`, …); the container image carries them all and works anywhere Docker does.
+
 📖 **[Full documentation](https://sbomify.com/sbomify-action/)**
 
 ### See it in action: FOSDEM 2026 Talk
