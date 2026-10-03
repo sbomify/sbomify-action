@@ -796,3 +796,60 @@ class TestDownloadRetries:
 
         assert len(attempts) == 2
         assert (bin_dir / "faketool").read_bytes() == payload
+
+
+class TestNonLinuxHostsDoNotFetchLinuxBinaries:
+    """Every published runtime is a ``linux-<arch>`` artifact.
+
+    Fetching one onto a Mac verifies its digest and its attestation -- the
+    bytes really are the binary we pinned -- and then fails with
+    ``[Errno 8] Exec format error`` once something tries to run it, pointing
+    at a cache path rather than at the mismatch. Worse, the fetched binary is
+    prepended to PATH, so it shadows a perfectly good native install.
+    """
+
+    def test_fetching_is_off_where_we_publish_nothing(self, monkeypatch):
+        monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        assert runtimes.runtimes_are_published_for_this_host() is False
+        assert runtimes.fetching_is_enabled() is False
+
+    def test_no_generator_claims_an_input_it_cannot_tool(self, monkeypatch):
+        """can_provide is how a generator decides to take the job."""
+        monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        assert runtimes.can_provide("syft") is False
+        assert runtimes.can_provide("cdxgen") is False
+
+    @pytest.mark.parametrize("system", ["Darwin", "Windows"])
+    def test_fetching_anyway_says_what_is_wrong(self, monkeypatch, system):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: system)
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            ensure_runtime("cosign")
+        message = str(excinfo.value)
+        assert "Linux only" in message
+        assert system in message
+
+    def test_bundles_refuse_the_same_way(self, monkeypatch):
+        bundle = runtimes.bundle_for("syft")
+        assert bundle is not None, "syft is expected to arrive in a bundle"
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        with pytest.raises(SBOMGenerationError, match="Linux only"):
+            runtimes.ensure_bundle(bundle)
+
+    def test_linux_is_unaffected(self, monkeypatch):
+        monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Linux")
+        assert runtimes.runtimes_are_published_for_this_host() is True
+        assert runtimes.fetching_is_enabled() is True
+        assert runtimes.can_provide("syft") is True
+
+    def test_the_user_is_told_why_nothing_was_available(self, monkeypatch):
+        from sbomify_action import tool_checks
+
+        monkeypatch.setattr(tool_checks.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(tool_checks, "check_tool_for_input", lambda *a, **k: ([], ["syft"]))
+        message = tool_checks.format_no_tools_error("lock_file", "package-lock.json")
+        assert "Linux only" in message
+        assert "Darwin" in message

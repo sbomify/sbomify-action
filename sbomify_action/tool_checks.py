@@ -8,11 +8,13 @@ For pip-installed users, external tools are optional but recommended
 for full functionality. The Docker image includes all tools pre-installed.
 """
 
+import platform
 import shutil
 from dataclasses import dataclass, field
 from typing import Optional
 
 from .logging_config import logger
+from .runtimes import runtimes_are_published_for_this_host
 
 
 @dataclass
@@ -350,6 +352,19 @@ def format_no_tools_error(input_type: str, lock_file: Optional[str] = None) -> s
         "sbomify-action requires external tools for SBOM generation.",
         "The Docker image (sbomifyhub/sbomify-action) includes all tools pre-installed.",
         "",
+    ]
+
+    # Say why we did not just fetch them. On Linux we would have, so the list
+    # below is the whole story; anywhere else the tools have to come from the
+    # host and the user has no way of knowing that from the list alone.
+    if not runtimes_are_published_for_this_host():
+        lines += [
+            "The pinned runtimes sbomify normally fetches are built for Linux only, "
+            f"so none could be downloaded on {platform.system()}.",
+            "",
+        ]
+
+    lines += [
         "For pip installations, install one or more of these tools:",
         "",
     ]

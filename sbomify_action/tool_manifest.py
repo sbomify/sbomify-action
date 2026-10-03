@@ -25,13 +25,16 @@ _MANIFEST = Path(__file__).with_name("tools.toml")
 #: Where the bundles come from. Only the release moves; the file names inside
 #: it follow from the bundle and the architecture.
 _BUNDLE_BASE = "https://github.com/sbomify/sbom-tools/releases/download"
-_ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
 
 #: Where our own tool builds are published. Master replaces the assets on this
 #: rolling pre-release on every push; the image build stamps a release tag in
 #: its place, so a cut release fetches the binaries it was built against.
 TOOLS_RELEASE = "tools-rolling"
 _TOOLS_RELEASE_BASE = "https://github.com/sbomify/sbomify-action/releases/download"
+
+#: Both publishers name their assets ``<tool>-linux-<arch>``: we build for
+#: Linux and nothing else. runtimes.fetching_is_enabled is what keeps a
+#: non-Linux host from fetching one of these and finding out the hard way.
 _ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
 
 

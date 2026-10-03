@@ -158,13 +158,62 @@ _locks: dict[str, threading.Lock] = {name: threading.Lock() for name in RUNTIMES
 _resolved: dict[str, Path] = {}
 
 
+#: Host operating systems we publish runtimes for. Every asset in tools.toml
+#: and every sbom-tools bundle is named for a ``linux-<arch>`` slug; there is
+#: no darwin or windows artifact to fetch. The action itself runs in our Linux
+#: image, but the same package pip-installs and runs anywhere, and fetching a
+#: Linux ELF onto a Mac only produces "Exec format error" one layer later.
+_FETCHABLE_OS = frozenset({"linux"})
+
+_unsupported_host_warned = False
+
+
+def current_os() -> str:
+    """The host operating system, in the names our artifacts are published under."""
+    return platform.system().lower()
+
+
+def runtimes_are_published_for_this_host() -> bool:
+    """Whether pinned runtimes exist for this operating system at all."""
+    return current_os() in _FETCHABLE_OS
+
+
+def _unsupported_host_reason() -> str:
+    """Explain, once, why nothing can be fetched here and what to do instead."""
+    return (
+        f"Pinned tool runtimes are published for Linux only, and this is "
+        f"{platform.system()}. sbomify will use the SBOM tools already installed on "
+        "PATH; install the ones you need natively (e.g. `brew install syft`), or run "
+        "the sbomifyhub/sbomify-action container, which ships with them."
+    )
+
+
+def _warn_unsupported_host_once() -> None:
+    global _unsupported_host_warned
+    if not _unsupported_host_warned:
+        _unsupported_host_warned = True
+        logger.warning(_unsupported_host_reason())
+
+
+def _require_fetchable_host() -> None:
+    """Refuse to fetch on a host we publish no binaries for.
+
+    Without this the download succeeds, the digest and attestation verify --
+    they describe a perfectly good Linux binary -- and the failure surfaces as
+    ``[Errno 8] Exec format error`` against a cache path, several steps from
+    the thing that is actually wrong.
+    """
+    if not runtimes_are_published_for_this_host():
+        raise SBOMGenerationError(_unsupported_host_reason())
+
+
 def fetching_is_enabled() -> bool:
     """Whether we may fetch a tool that is not already present.
 
-    On by default, everywhere. Fetching what an ecosystem needs is the whole
-    design: the image stopped baking in every tool it might want, and the
-    tools come from pinned, digest-verified, attested bundles at the moment
-    they are needed.
+    On by default, everywhere we publish binaries for. Fetching what an
+    ecosystem needs is the whole design: the image stopped baking in every
+    tool it might want, and the tools come from pinned, digest-verified,
+    attested bundles at the moment they are needed.
 
     It used to be opt-in outside our own image, on the reasoning that
     downloading a tool changes which generator wins and so changes the SBOM.
@@ -177,6 +226,9 @@ def fetching_is_enabled() -> bool:
     Set SBOMIFY_FETCH_RUNTIMES=0 to opt out, for an air-gapped build or where
     only preinstalled tools may run.
     """
+    if not runtimes_are_published_for_this_host():
+        _warn_unsupported_host_once()
+        return False
     opt_out = os.environ.get("SBOMIFY_FETCH_RUNTIMES", "").lower()
     return opt_out not in ("0", "false", "no")
 
@@ -805,6 +857,8 @@ def ensure_bundle(bundle: Bundle) -> Path:
     if cached := _bundles_ready.get(bundle.name):
         return cached
 
+    _require_fetchable_host()
+
     with _bundle_lock(bundle.name), _bundle_file_lock(bundle.name):
         if cached := _bundles_ready.get(bundle.name):
             return cached
@@ -925,8 +979,11 @@ def ensure_runtime(name: str) -> Path:
 
     Raises:
         SBOMGenerationError: if the runtime is unknown, unavailable for this
-            architecture, cannot be downloaded, or fails its checksum.
+            operating system or architecture, cannot be downloaded, or fails
+            its checksum.
     """
+    _require_fetchable_host()
+
     # Most tools now arrive inside an ecosystem bundle from sbomify/sbom-tools.
     # cosign is the exception and stays vendor-pinned below: it is what
     # verifies every bundle's attestation, and trust in a verifier cannot be
@@ -993,4 +1050,6 @@ def _prepend_path(directory: Path) -> None:
 
 def reset_runtime_cache() -> None:
     """Forget memoised lookups. For tests."""
+    global _unsupported_host_warned
     _resolved.clear()
+    _unsupported_host_warned = False
