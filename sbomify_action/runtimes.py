@@ -190,7 +190,26 @@ def can_provide(tool: str) -> bool:
     asked `name in RUNTIMES` reported itself unavailable and the whole chain
     quietly fell through to syft.
     """
-    return (bundle_for(tool) is not None or tool in RUNTIMES) and fetching_is_enabled()
+    return runtimes_are_native() and (bundle_for(tool) is not None or tool in RUNTIMES) and fetching_is_enabled()
+
+
+#: The only OS the pinned runtimes are built for. Every asset slug in
+#: tool_manifest is ``linux-<arch>``, so this is a fact about what sbom-tools
+#: publishes rather than a policy decided here.
+_RUNTIME_OS = "linux"
+
+
+def runtimes_are_native() -> bool:
+    """Whether a fetched runtime could actually execute on this host.
+
+    Nothing used to ask. The package is published as OS Independent and people
+    install it from PyPI on a Mac, where ``current_arch()`` answered "arm64",
+    the fetcher dutifully downloaded ``cosign-linux-arm64`` and the exec of it
+    failed with ``[Errno 8] Exec format error`` -- which reads like a corrupt
+    download rather than the platform mismatch it is. Every generator needing
+    a fetched tool died that way, so the whole action was unusable off Linux.
+    """
+    return platform.system().lower() == _RUNTIME_OS
 
 
 def current_arch() -> str:
@@ -201,6 +220,32 @@ def current_arch() -> str:
     if machine in ("aarch64", "arm64"):
         return "arm64"
     raise SBOMGenerationError(f"No pinned tool runtimes for architecture {platform.machine()!r}")
+
+
+def _foreign_platform_tool(name: str) -> Path:
+    """Stand in for a pinned runtime on a host it cannot run on.
+
+    A tool the user installed themselves is the honest answer here, and the
+    only working one: there is no darwin or windows bundle to select instead.
+    It is not the pinned binary, so say so rather than letting it pass for
+    one -- the published SBOM names the versions this release was built
+    against, and whatever is on PATH is not necessarily among them. That is
+    the same trade ``ensure_runtime`` refuses to make on Linux, where the
+    pinned artifact runs and declining it would be choosing to lie; here the
+    alternative is not a different SBOM but no SBOM at all.
+    """
+    found = shutil.which(name)
+    if found:
+        logger.warning(
+            f"No pinned {name} runtime for {platform.system()}; using {found} from PATH instead. "
+            "Its version may differ from the one this release was tested against."
+        )
+        return Path(found).parent
+    raise SBOMGenerationError(
+        f"No pinned {name} runtime for {platform.system()} ({platform.machine()}): the tool bundles are "
+        f"{_RUNTIME_OS} builds only. Install {name} and put it on PATH, or run sbomify-action through the "
+        "Docker image (sbomifyhub/sbomify-action), which carries the tools it needs."
+    )
 
 
 def cache_root() -> Path:
@@ -923,10 +968,19 @@ def ensure_runtime(name: str) -> Path:
     keep working unchanged. Repeat calls are cheap: the result is memoised in
     process and the on-disk prefix is reused across processes.
 
+    On a host the pinned runtimes are not built for, a tool already on PATH
+    is used in their place -- see :func:`_foreign_platform_tool`.
+
     Raises:
         SBOMGenerationError: if the runtime is unknown, unavailable for this
-            architecture, cannot be downloaded, or fails its checksum.
+            platform with nothing on PATH to stand in, cannot be downloaded,
+            or fails its checksum.
     """
+    # Before anything is selected or downloaded: a Linux binary on a Mac is
+    # 83MB fetched, verified and cached to produce an exec failure.
+    if not runtimes_are_native():
+        return _foreign_platform_tool(name)
+
     # Most tools now arrive inside an ecosystem bundle from sbomify/sbom-tools.
     # cosign is the exception and stays vendor-pinned below: it is what
     # verifies every bundle's attestation, and trust in a verifier cannot be

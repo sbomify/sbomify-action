@@ -796,3 +796,59 @@ class TestDownloadRetries:
 
         assert len(attempts) == 2
         assert (bin_dir / "faketool").read_bytes() == payload
+
+
+class TestForeignPlatform:
+    """A host the pinned bundles are not built for.
+
+    Every asset sbom-tools publishes is ``linux-<arch>``, and nothing used to
+    check the OS: a macOS user installing from PyPI downloaded
+    ``cosign-linux-arm64`` and got ``[Errno 8] Exec format error``, which
+    reads like a corrupt download rather than the platform mismatch it is.
+    """
+
+    @pytest.fixture
+    def _on_macos(self, monkeypatch):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.platform, "machine", lambda: "arm64")
+
+    def test_runtimes_are_native_only_on_linux(self, monkeypatch):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Linux")
+        assert runtimes.runtimes_are_native() is True
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        assert runtimes.runtimes_are_native() is False
+
+    def test_nothing_is_offered_that_cannot_run(self, _on_macos):
+        """A generator asking whether we could obtain syft must hear no."""
+        assert runtimes.can_provide("syft") is False
+        assert runtimes.can_provide("cdxgen") is False
+
+    def test_a_tool_on_path_stands_in(self, _on_macos, monkeypatch, tmp_path):
+        installed = tmp_path / "bin" / "syft"
+        installed.parent.mkdir(parents=True)
+        installed.touch()
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed) if name == "syft" else None)
+
+        assert ensure_runtime("syft") == installed.parent
+
+    def test_without_one_the_error_names_the_platform(self, _on_macos, monkeypatch):
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: None)
+
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            ensure_runtime("syft")
+
+        message = str(excinfo.value)
+        assert "Darwin" in message
+        assert "linux builds only" in message
+
+    def test_nothing_is_downloaded(self, _on_macos, monkeypatch):
+        """The fetch is skipped outright rather than failing after 83MB."""
+
+        def _no_network(*args, **kwargs):
+            raise AssertionError("a runtime was fetched for a platform it cannot run on")
+
+        monkeypatch.setattr(runtimes.requests, "get", _no_network)
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: None)
+
+        with pytest.raises(SBOMGenerationError):
+            ensure_runtime("cosign")

@@ -33,7 +33,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import bundle_plugin_version, bundle_wrappers, ensure_runtime, fetching_is_enabled
+from sbomify_action.runtimes import bundle_plugin_version, bundle_wrappers, can_provide, ensure_runtime
 
 from ..protocol import FormatVersion, GenerationInput
 from ..result import GenerationResult
@@ -257,10 +257,13 @@ class _JvmGenerator:
         ]
 
     def supports(self, input: GenerationInput) -> bool:
-        if not fetching_is_enabled():
+        if not can_provide("java"):
             # Outside our image the user's toolchain decides. Fetching a JDK
             # they did not install would change which generator wins, and so
-            # change the SBOM they get, without them asking.
+            # change the SBOM they get, without them asking. The same answer
+            # covers a host we publish no JDK bundle for at all: claiming the
+            # build file there only reaches the plugin version, which is read
+            # off a bundle that was never fetched.
             return False
         if not input.is_lock_file or input.output_format not in ("cyclonedx", "spdx"):
             return False
