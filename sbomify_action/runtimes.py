@@ -212,6 +212,30 @@ def runtimes_are_native() -> bool:
     return platform.system().lower() == _RUNTIME_OS
 
 
+#: Runtime ids that are not the name of a command, and the commands a host has
+#: to actually have for that runtime to be satisfied.
+#:
+#: A runtime id names something we *fetch*, which is not always something you
+#: can *run*. The jvm bundle's "maven" installs `mvn`; "rust" is a whole
+#: toolchain, and cargo-cyclonedx shells out to both `cargo` (for `cargo
+#: metadata`) and `rustc` (for the host target triple) -- there is no `rust`
+#: binary anywhere to find. Probing PATH for the id itself reported a
+#: toolchain missing that was sitting right there.
+#:
+#: Anything absent from this map is its own command. The bundle metadata that
+#: would record this properly ships *inside* the bundle, which off Linux is
+#: exactly what cannot be fetched, so the two that differ are named here.
+_RUNTIME_COMMANDS: dict[str, tuple[str, ...]] = {
+    "maven": ("mvn",),
+    "rust": ("cargo", "rustc"),
+}
+
+
+def commands_for(name: str) -> tuple[str, ...]:
+    """The executables that have to be present for runtime ``name``."""
+    return _RUNTIME_COMMANDS.get(name, (name,))
+
+
 def current_arch() -> str:
     """Map the host machine to the arch keys used in RUNTIMES."""
     machine = platform.machine().lower()
@@ -234,18 +258,32 @@ def _foreign_platform_tool(name: str) -> Path:
     pinned artifact runs and declining it would be choosing to lie; here the
     alternative is not a different SBOM but no SBOM at all.
     """
-    found = shutil.which(name)
-    if found:
-        logger.warning(
-            f"No pinned {name} runtime for {platform.system()}; using {found} from PATH instead. "
-            "Its version may differ from the one this release was tested against."
+    commands = commands_for(name)
+    resolved = {command: shutil.which(command) for command in commands}
+    missing = [command for command, path in resolved.items() if path is None]
+
+    if missing:
+        wanted = " and ".join(missing)
+        raise SBOMGenerationError(
+            f"No pinned {name} runtime for {platform.system()} ({platform.machine()}): the tool bundles are "
+            f"{_RUNTIME_OS} builds only. Install {wanted} and put {'them' if len(missing) > 1 else 'it'} on "
+            "PATH, or run sbomify-action through the Docker image (sbomifyhub/sbomify-action), which carries "
+            "the tools it needs."
         )
-        return Path(found).parent
-    raise SBOMGenerationError(
-        f"No pinned {name} runtime for {platform.system()} ({platform.machine()}): the tool bundles are "
-        f"{_RUNTIME_OS} builds only. Install {name} and put it on PATH, or run sbomify-action through the "
-        "Docker image (sbomifyhub/sbomify-action), which carries the tools it needs."
+
+    # Every command resolved. Report them all, because "maven" being satisfied
+    # by an `mvn` and "rust" by a `cargo` plus a `rustc` is not guessable from
+    # the runtime id in the log line.
+    found = [path for path in resolved.values() if path is not None]
+    logger.warning(
+        f"No pinned {name} runtime for {platform.system()}; using {', '.join(found)} from PATH instead. "
+        "Their versions may differ from the ones this release was tested against."
     )
+    # The directory of the first command, matching what the Linux path returns:
+    # a prefix for the caller to prepend to PATH. The others were required to
+    # exist, not to be co-located -- a rustup `cargo` and a distro `rustc` can
+    # live in different directories and both already be on the PATH we inherit.
+    return Path(found[0]).parent
 
 
 def cache_root() -> Path:

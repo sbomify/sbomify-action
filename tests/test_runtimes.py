@@ -841,6 +841,88 @@ class TestForeignPlatform:
         assert "Darwin" in message
         assert "linux builds only" in message
 
+    def test_a_runtime_id_that_is_not_a_command_resolves_its_real_one(self, _on_macos, monkeypatch, tmp_path):
+        """ "maven" is satisfied by an `mvn`, not by a `maven`.
+
+        The jvm bundle installs the command under its own name, so probing
+        PATH for the runtime id reported a Maven missing that was installed.
+        """
+        mvn = tmp_path / "bin" / "mvn"
+        mvn.parent.mkdir(parents=True)
+        mvn.touch()
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(mvn) if name == "mvn" else None)
+
+        assert runtimes.commands_for("maven") == ("mvn",)
+        assert ensure_runtime("maven") == mvn.parent
+
+    def test_a_toolchain_id_requires_every_command_it_stands_for(self, _on_macos, monkeypatch, tmp_path):
+        """ "rust" is cargo *and* rustc: cargo-cyclonedx shells out to both."""
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir(parents=True)
+        for command in ("cargo", "rustc"):
+            (bin_dir / command).touch()
+        monkeypatch.setattr(
+            runtimes.shutil,
+            "which",
+            lambda name: str(bin_dir / name) if name in ("cargo", "rustc") else None,
+        )
+
+        assert runtimes.commands_for("rust") == ("cargo", "rustc")
+        assert ensure_runtime("rust") == bin_dir
+
+    def test_half_a_toolchain_is_not_enough(self, _on_macos, monkeypatch, tmp_path):
+        """A `cargo` without a `rustc` fails here, not inside cargo-cyclonedx.
+
+        cargo-cyclonedx asks rustc for the host target triple and exits
+        non-zero without it, with a message about a target rather than about a
+        missing toolchain.
+        """
+        cargo = tmp_path / "bin" / "cargo"
+        cargo.parent.mkdir(parents=True)
+        cargo.touch()
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(cargo) if name == "cargo" else None)
+
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            ensure_runtime("rust")
+
+        message = str(excinfo.value)
+        assert "rustc" in message
+        assert "cargo" not in message.replace("cargo-cyclonedx", "")
+
+    def test_the_error_names_the_command_to_install_not_the_runtime_id(self, _on_macos, monkeypatch):
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: None)
+
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            ensure_runtime("maven")
+
+        # "Install maven" sends a macOS user to `brew install maven`, which is
+        # right by luck; "Install mvn" is what the probe actually looked for.
+        assert "mvn" in str(excinfo.value)
+
+    def test_the_java_caller_succeeds_with_a_native_toolchain(self, _on_macos, monkeypatch, tmp_path):
+        """The caller Copilot named: `ensure_java_maven_installed` on macOS.
+
+        It asks for "java" and then "maven"; with a JDK and a Maven installed
+        natively, both have to resolve rather than the second one raising.
+        """
+        from sbomify_action._generation.utils import ensure_java_maven_installed
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir(parents=True)
+        for command in ("java", "mvn"):
+            (bin_dir / command).touch()
+        monkeypatch.setattr(
+            runtimes.shutil,
+            "which",
+            lambda name: str(bin_dir / name) if name in ("java", "mvn") else None,
+        )
+
+        ensure_java_maven_installed()
+
+    def test_commands_for_passes_through_a_plain_runtime_id(self):
+        for name in ("syft", "cdxgen", "cosign", "crane", "java", "go", "dotnet"):
+            assert runtimes.commands_for(name) == (name,)
+
     def test_nothing_is_downloaded(self, _on_macos, monkeypatch):
         """The fetch is skipped outright rather than failing after 83MB."""
 
