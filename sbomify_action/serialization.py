@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 from packageurl import PackageURL
 from spdx_tools.spdx.model import Document  # type: ignore[attr-defined]
 
+from ._spdx_collections import spdx_objects
 from ._spdx_expression import parse_spdx_expression, spdx_licensing, unknown_spdx_keys
 from .console import get_transformation_tracker
 from .logging_config import logger
@@ -396,10 +397,10 @@ def sanitize_spdx_json_file(file_path: str) -> int:
 
     fixed_count = 0
 
-    # Fix primaryPackagePurpose values in packages. ``or []`` because an
-    # explicit "packages": null is not an absent key, and this reads the
-    # document the user supplied.
-    for package in data.get("packages") or []:
+    # Fix primaryPackagePurpose values in packages. This reads the document
+    # the user supplied, before validation: a null, a non-array or a stray
+    # scalar entry under "packages" is skipped, not raised on.
+    for package in spdx_objects(data.get("packages")):
         purpose = package.get("primaryPackagePurpose")
         if purpose is None:
             continue
@@ -1385,22 +1386,6 @@ def sanitize_spdx_licenses(data: dict[str, Any]) -> int:
     sanitized_count = 0
     tracker = get_transformation_tracker()
 
-    def _entries(value: Any) -> Iterator[dict[str, Any]]:
-        """Yield the object entries of an SPDX collection, and nothing else.
-
-        ``packages``, ``files``, ``snippets`` and ``@graph`` are arrays of
-        objects in a conforming document, but this runs on documents that are
-        not conforming yet -- that is the point of it. An explicit
-        ``"packages": null`` is not an empty list, and iterating it, or
-        calling ``.get`` on a string entry, ended the run before the validator
-        could say which key was wrong.
-        """
-        if not isinstance(value, list):
-            return
-        for entry in value:
-            if isinstance(entry, dict):
-                yield entry
-
     def _sanitize_license_field(obj: dict[str, Any], field: str, component: str | None = None) -> int:
         """Sanitize a single license field."""
         value = obj.get(field)
@@ -1445,7 +1430,7 @@ def sanitize_spdx_licenses(data: dict[str, Any]) -> int:
     graph = data.get("@graph")
     if isinstance(graph, dict):
         graph = [graph]
-    for element in _entries(graph):
+    for element in spdx_objects(graph):
         # JSON-LD states the type as `type` under the SPDX 3 context and as
         # `@type` expanded. spdx3.py reads both, and the component id below
         # already reads both spellings of the id; reading one spelling of the
@@ -1459,20 +1444,20 @@ def sanitize_spdx_licenses(data: dict[str, Any]) -> int:
         )
 
     # Process packages
-    for package in _entries(data.get("packages")):
+    for package in spdx_objects(data.get("packages")):
         pkg_name = package.get("name")
         sanitized_count += _sanitize_license_field(package, "licenseConcluded", component=pkg_name)
         sanitized_count += _sanitize_license_field(package, "licenseDeclared", component=pkg_name)
         sanitized_count += _sanitize_license_list(package, "licenseInfoFromFiles", component=pkg_name)
 
     # Process files
-    for file in _entries(data.get("files")):
+    for file in spdx_objects(data.get("files")):
         file_name = file.get("fileName") or file.get("SPDXID")
         sanitized_count += _sanitize_license_field(file, "licenseConcluded", component=file_name)
         sanitized_count += _sanitize_license_list(file, "licenseInfoInFiles", component=file_name)
 
     # Process snippets
-    for snippet in _entries(data.get("snippets")):
+    for snippet in spdx_objects(data.get("snippets")):
         snippet_name = snippet.get("name") or snippet.get("SPDXID")
         sanitized_count += _sanitize_license_field(snippet, "licenseConcluded", component=snippet_name)
         sanitized_count += _sanitize_license_list(snippet, "licenseInfoInSnippets", component=snippet_name)

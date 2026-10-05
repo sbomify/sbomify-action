@@ -8,6 +8,7 @@ from typing import Any
 from cyclonedx.model.component import Component, ComponentType
 from packageurl import PackageURL
 
+from .._spdx_collections import spdx_object_list, spdx_objects
 from ..console import get_audit_trail
 from ..logging_config import logger
 from ..serialization import load_cyclonedx_bom, serialize_cyclonedx_bom
@@ -22,7 +23,7 @@ def _count_sbom_packages(sbom_data: dict[str, Any]) -> int:
     if sbom_data.get("bomFormat") == "CycloneDX":
         return len(sbom_data.get("components") or [])
     if sbom_data.get("spdxVersion"):
-        return len(sbom_data.get("packages") or [])
+        return sum(1 for _ in spdx_objects(sbom_data.get("packages")))
     if is_spdx3(sbom_data):
         return sum(
             1
@@ -224,9 +225,12 @@ class DependencyEnricher:
         source: str,
     ) -> ExpansionResult:
         """Add discovered dependencies to SPDX SBOM."""
-        # ``or []``: an explicit "packages": null is not an absent key, and
-        # this is the document the user supplied.
-        packages = sbom_data.get("packages") or []
+        # This reads the document the user supplied, before the validator
+        # has had a chance to say what is wrong with it: a null, a non-array
+        # or a stray scalar entry under "packages" must not end the run.
+        # The list is assigned back over the key below, so the non-object
+        # entries this drops are dropped from the output too.
+        packages = spdx_object_list(sbom_data.get("packages"))
         original_count = len(packages)
 
         # Build set of existing package identifiers (normalized for comparison)

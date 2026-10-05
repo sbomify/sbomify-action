@@ -8,6 +8,7 @@ from cyclonedx.model import HashAlgorithm as CdxHashAlgorithm
 from cyclonedx.model import HashType
 from cyclonedx.model.bom import Bom
 
+from .._spdx_collections import spdx_objects
 from ..console import get_audit_trail
 from ..logging_config import logger
 from ..serialization import load_cyclonedx_bom, serialize_cyclonedx_bom
@@ -199,10 +200,11 @@ class HashEnricher:
         ecosystem = parser.ecosystem if parser else "unknown"
         hash_lookup = self._build_hash_lookup(lockfile_hashes, ecosystem)
 
-        # Process packages
-        # ``or []``: an explicit "packages": null is not an absent key, and
-        # this is the document the user supplied.
-        packages = spdx_data.get("packages") or []
+        # Process packages. Entries are mutated in place, so this iterates
+        # the original objects rather than copying the collection; a null, a
+        # non-array or a stray scalar entry is skipped instead of ending the
+        # run, because this reads the document before the validator does.
+        packages = list(spdx_objects(spdx_data.get("packages")))
         stats["sbom_components"] = len(packages)
 
         for package in packages:
