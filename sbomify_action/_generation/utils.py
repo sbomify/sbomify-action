@@ -645,23 +645,33 @@ def run_command(
         stderr = e.stderr or ""
         stdout = e.stdout or ""
 
-        # Say so when the daemon is the problem. This has to come first: syft
-        # falls back to the registry when it cannot reach the socket, so the
-        # tail of the output is a registry error and the not-found check below
-        # would otherwise claim the image does not exist.
-        if docker_image and detect_docker_daemon_unreachable(combined_output(stderr, stdout)):
+        # Both classifications read the whole failure, not just stderr: cdxgen
+        # writes the sentence that says why to stdout, so a check against
+        # stderr alone misses it -- see combined_output.
+        output = combined_output(stderr, stdout)
+
+        # Say so when the daemon is the problem, and let that be the answer.
+        # syft falls back to the registry when it cannot reach the socket, so
+        # the tail of the output is a registry error -- commonly "pull access
+        # denied" or "UNAUTHORIZED" -- which the not-found patterns match.
+        # Reporting "image not found" there would send the user to check a
+        # registry and a tag that are both fine, so the not-found
+        # classification is skipped entirely while the daemon is the known
+        # cause, rather than merely being preceded by a warning about it.
+        daemon_unreachable = bool(docker_image) and detect_docker_daemon_unreachable(output)
+        if daemon_unreachable:
             logger.warning(
                 f"Could not reach the Docker daemon while scanning '{docker_image}'. "
                 "The image was then looked for in a registry, so any authentication "
-                "error above is a symptom rather than the cause. Either give the "
-                "container access to /var/run/docker.sock, or scan the image without "
-                "a daemon by saving it first: "
+                "or not-found error above is a symptom rather than the cause. Either "
+                "give the container access to /var/run/docker.sock, or scan the image "
+                "without a daemon by saving it first: "
                 "`docker save <image> -o image.tar` and DOCKER_IMAGE=docker-archive:image.tar"
             )
 
         # Check if this is a Docker image not found error (user configuration issue)
         # Log at WARNING level since this isn't a bug - user specified a non-existent image
-        if docker_image and detect_docker_image_not_found(stderr):
+        if docker_image and not daemon_unreachable and detect_docker_image_not_found(output):
             logger.warning(f"Docker image '{docker_image}' not found")
             log_command_error(command_name, stderr, stdout, level="warning")
             raise DockerImageNotFoundError(
@@ -689,7 +699,7 @@ def run_command(
             log_command_error(command_name, stderr, stdout, level="debug")
 
         # Include error summary in the exception message for better diagnostics
-        error_summary = extract_error_summary(combined_output(stderr, stdout))
+        error_summary = extract_error_summary(output)
         message = f"{command_name} command failed with return code {e.returncode}"
         if error_summary:
             message += f": {error_summary}"

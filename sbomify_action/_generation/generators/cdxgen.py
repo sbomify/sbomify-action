@@ -394,10 +394,11 @@ class CdxgenImageGenerator:
         if not input.is_docker_image:
             return False
 
-        # A scheme-prefixed reference is syft's syntax. cdxgen reads an archive
-        # from a bare path with `-t docker`, so a prefixed value would be
-        # treated as an image name and fail to resolve. Decline, and let the
-        # syft generator take it.
+        # A scheme-prefixed reference is syft's syntax. generate() invokes
+        # cdxgen with `-t oci`, which takes a bare image name or archive path
+        # and knows nothing of `docker:`/`oci-archive:` prefixes, so a
+        # prefixed value is read as part of the name and fails to resolve.
+        # Decline, and let the syft generator take it.
         if image_ref_scheme(input.docker_image):
             return False
 

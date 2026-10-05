@@ -6,8 +6,13 @@ all. sbomify passes DOCKER_IMAGE through verbatim, so that syntax already
 works today; these tests pin the two things around it that did not.
 """
 
+import inspect
+import logging
+import subprocess
+
 import pytest
 
+from sbomify_action._generation import utils
 from sbomify_action._generation.generators.cdxgen import CdxgenImageGenerator
 from sbomify_action._generation.generators.trivy import TrivyImageGenerator
 from sbomify_action._generation.protocol import GenerationInput
@@ -15,6 +20,7 @@ from sbomify_action._generation.utils import (
     detect_docker_daemon_unreachable,
     image_ref_scheme,
 )
+from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 
 
 class TestImageRefScheme:
@@ -122,3 +128,100 @@ class TestDaemonUnreachableDetection:
     )
     def test_does_not_fire_on_other_failures(self, output: str):
         assert detect_docker_daemon_unreachable(output) is False
+
+
+class TestDaemonUnreachableWinsOverNotFound:
+    """The classification, not just the warning.
+
+    Detecting the daemon and then falling through to the not-found check still
+    reports "image not found": syft's registry fallback emits exactly the
+    phrases those patterns match -- "pull access denied", "UNAUTHORIZED" --
+    so the run ended with the user checking a registry and a tag that were
+    both correct. The daemon is the known cause, so the not-found
+    classification is skipped rather than merely preceded by a warning.
+    """
+
+    @staticmethod
+    def _failing(stderr: str = "", stdout: str = "", returncode: int = 1):
+        """A run_command call whose subprocess fails with this output."""
+
+        def _run(*args, **kwargs):
+            raise subprocess.CalledProcessError(returncode, ["syft"], output=stdout, stderr=stderr)
+
+        return _run
+
+    # What syft actually writes when the socket is out of reach and it then
+    # tries the registry instead.
+    DAEMON_THEN_REGISTRY = (
+        "failed to connect to Docker daemon\n"
+        "pull access denied for alpine, repository does not exist or may require 'docker login'\n"
+    )
+
+    def test_a_daemon_failure_is_not_reported_as_a_missing_image(self, monkeypatch):
+        monkeypatch.setattr(utils.subprocess, "run", self._failing(stderr=self.DAEMON_THEN_REGISTRY))
+
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            utils.run_command(["syft", "alpine:3.20"], "syft", docker_image="alpine:3.20")
+
+        assert not isinstance(excinfo.value, DockerImageNotFoundError)
+
+    def test_the_daemon_is_named_in_the_warning(self, monkeypatch, caplog):
+        monkeypatch.setattr(utils.subprocess, "run", self._failing(stderr=self.DAEMON_THEN_REGISTRY))
+
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(SBOMGenerationError):
+                utils.run_command(["syft", "alpine:3.20"], "syft", docker_image="alpine:3.20")
+
+        assert "Docker daemon" in caplog.text
+        assert "docker save" in caplog.text
+
+    def test_a_genuinely_missing_image_is_still_reported_as_one(self, monkeypatch):
+        """Without a daemon error in the output, nothing changes."""
+        monkeypatch.setattr(
+            utils.subprocess,
+            "run",
+            self._failing(stderr="manifest for alpine:nonexistent not found: manifest unknown"),
+        )
+
+        with pytest.raises(DockerImageNotFoundError):
+            utils.run_command(["syft", "alpine:nonexistent"], "syft", docker_image="alpine:nonexistent")
+
+    def test_not_found_is_detected_on_stdout_too(self, monkeypatch):
+        """cdxgen writes the sentence that says why to stdout, not stderr.
+
+        The not-found check read `stderr` alone, so a tool that reports the
+        failure on stdout was classified as a generic command failure.
+        """
+        monkeypatch.setattr(
+            utils.subprocess,
+            "run",
+            self._failing(
+                stderr="Error running cdxgen:\n",
+                stdout="manifest for alpine:nonexistent not found: manifest unknown\n",
+            ),
+        )
+
+        with pytest.raises(DockerImageNotFoundError):
+            utils.run_command(["cdxgen", "alpine:nonexistent"], "cdxgen", docker_image="alpine:nonexistent")
+
+    def test_no_docker_image_means_neither_classification(self, monkeypatch):
+        """A lock-file run must not be reclassified by a stray phrase."""
+        monkeypatch.setattr(utils.subprocess, "run", self._failing(stderr=self.DAEMON_THEN_REGISTRY))
+
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            utils.run_command(["syft", "."], "syft")
+
+        assert not isinstance(excinfo.value, DockerImageNotFoundError)
+
+
+class TestCdxgenDeclineComment:
+    """The comment in supports() must name the flag generate() passes."""
+
+    def test_the_image_generator_invokes_cdxgen_with_t_oci(self):
+        source = inspect.getsource(CdxgenImageGenerator.generate)
+        assert '"oci",' in source
+
+    def test_the_decline_comment_does_not_claim_t_docker(self):
+        source = inspect.getsource(CdxgenImageGenerator.supports)
+        assert "-t docker" not in source
+        assert "-t oci" in source
