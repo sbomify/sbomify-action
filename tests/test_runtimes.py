@@ -824,6 +824,8 @@ class TestNonLinuxHostsDoNotFetchLinuxBinaries:
     @pytest.mark.parametrize("system", ["Darwin", "Windows"])
     def test_fetching_anyway_says_what_is_wrong(self, monkeypatch, system):
         monkeypatch.setattr(runtimes.platform, "system", lambda: system)
+        # Nothing on PATH to stand in: this is the no-fallback case.
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: None)
         with pytest.raises(SBOMGenerationError) as excinfo:
             ensure_runtime("cosign")
         message = str(excinfo.value)
@@ -843,6 +845,139 @@ class TestNonLinuxHostsDoNotFetchLinuxBinaries:
         assert runtimes.runtimes_are_published_for_this_host() is True
         assert runtimes.fetching_is_enabled() is True
         assert runtimes.can_provide("syft") is True
+
+    def test_an_installed_tool_is_used_rather_than_refused(self, monkeypatch, tmp_path):
+        """The whole point of declining the fetch: the native install still runs.
+
+        A generator sets its ``_*_AVAILABLE`` flag from PATH, so refusing here
+        meant it claimed the input and then died before invoking the binary it
+        had already found.
+        """
+        installed = tmp_path / "bin" / "syft"
+        installed.parent.mkdir(parents=True)
+        installed.touch()
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed) if name == "syft" else None)
+
+        assert ensure_runtime("syft") == installed.parent
+
+    def test_a_runtime_id_that_is_not_a_command_resolves_its_real_one(self, monkeypatch, tmp_path):
+        """ "maven" is satisfied by an ``mvn``; the jvm bundle's id is not a command."""
+        mvn = tmp_path / "bin" / "mvn"
+        mvn.parent.mkdir(parents=True)
+        mvn.touch()
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(mvn) if name == "mvn" else None)
+
+        assert runtimes.commands_for("maven") == ("mvn",)
+        assert ensure_runtime("maven") == mvn.parent
+
+    def test_a_toolchain_id_requires_every_command_it_stands_for(self, monkeypatch, tmp_path):
+        """ "rust" is cargo *and* rustc: cargo-cyclonedx shells out to both."""
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir(parents=True)
+        for command in ("cargo", "rustc"):
+            (bin_dir / command).touch()
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(
+            runtimes.shutil,
+            "which",
+            lambda name: str(bin_dir / name) if name in ("cargo", "rustc") else None,
+        )
+
+        assert runtimes.commands_for("rust") == ("cargo", "rustc")
+        assert ensure_runtime("rust") == bin_dir
+
+    def test_half_a_toolchain_is_not_enough(self, monkeypatch, tmp_path):
+        """A ``cargo`` without a ``rustc`` fails here, not inside cargo-cyclonedx.
+
+        cargo-cyclonedx asks rustc for the host target triple and exits
+        non-zero without it, reporting a missing target rather than a
+        half-installed toolchain.
+        """
+        cargo = tmp_path / "bin" / "cargo"
+        cargo.parent.mkdir(parents=True)
+        cargo.touch()
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(cargo) if name == "cargo" else None)
+
+        with pytest.raises(SBOMGenerationError, match="rustc"):
+            ensure_runtime("rust")
+
+    def test_the_java_caller_succeeds_with_a_native_toolchain(self, monkeypatch, tmp_path):
+        """`ensure_java_maven_installed` asks for "java" then "maven"."""
+        from sbomify_action._generation.utils import ensure_java_maven_installed
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir(parents=True)
+        for command in ("java", "mvn"):
+            (bin_dir / command).touch()
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(
+            runtimes.shutil,
+            "which",
+            lambda name: str(bin_dir / name) if name in ("java", "mvn") else None,
+        )
+
+        ensure_java_maven_installed()
+
+    def test_commands_for_passes_through_a_plain_runtime_id(self):
+        for name in ("syft", "cdxgen", "cosign", "crane", "java", "go", "dotnet"):
+            assert runtimes.commands_for(name) == (name,)
+
+    def test_a_generator_run_reaches_the_installed_binary(self, monkeypatch, tmp_path):
+        """End to end: the syft generator invokes the syft it found on PATH.
+
+        ``generate()`` calls ``ensure_runtime("syft")`` as its first act. The
+        assertion that matters is that the command afterwards actually runs,
+        rather than the generator refusing an input it had already claimed.
+        """
+        from sbomify_action._generation.generators import syft as syft_generator
+        from sbomify_action._generation.protocol import GenerationInput
+
+        installed = tmp_path / "bin" / "syft"
+        installed.parent.mkdir(parents=True)
+        installed.touch(mode=0o755)
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed) if name == "syft" else None)
+        # The generator reads PATH at import time, so pin the flag the way an
+        # install on a non-Linux host would have set it.
+        monkeypatch.setattr(syft_generator, "_SYFT_AVAILABLE", True)
+        monkeypatch.setattr(syft_generator, "_SYFT_PATH", str(installed))
+        # conftest's _no_runtime_fetching stubs ensure_runtime inside every
+        # generator module, which is exactly the call under test here. Put the
+        # real one back; it reaches no network on this path by construction.
+        monkeypatch.setattr(syft_generator, "ensure_runtime", runtimes.ensure_runtime)
+
+        lock_file = tmp_path / "package-lock.json"
+        lock_file.write_text('{"lockfileVersion": 3, "packages": {}}', encoding="utf-8")
+        output_file = tmp_path / "out.cdx.json"
+
+        invoked: list[list[str]] = []
+
+        def _fake_run(cmd, tool_name, **kwargs):
+            invoked.append(list(cmd))
+            output_file.write_text(
+                '{"bomFormat": "CycloneDX", "specVersion": "1.6", "components": []}',
+                encoding="utf-8",
+            )
+            return None
+
+        monkeypatch.setattr(syft_generator, "run_command", _fake_run)
+
+        generator = syft_generator.SyftFsGenerator()
+        generation_input = GenerationInput(
+            lock_file=str(lock_file),
+            output_file=str(output_file),
+            output_format="cyclonedx",
+        )
+        assert generator.supports(generation_input) is True
+
+        result = generator.generate(generation_input)
+
+        assert invoked, "generate() raised before invoking the installed syft"
+        assert invoked[0][0] == "syft"
+        assert result.success is True, result.error_message
 
     def test_the_user_is_told_why_nothing_was_available(self, monkeypatch):
         from sbomify_action import tool_checks

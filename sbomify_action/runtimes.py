@@ -207,6 +207,71 @@ def _require_fetchable_host() -> None:
         raise SBOMGenerationError(_unsupported_host_reason())
 
 
+#: Runtime ids that are not the name of a command, and the commands a host has
+#: to actually have for that runtime to be satisfied.
+#:
+#: A runtime id names something we fetch, which is not always something you
+#: can run. The jvm bundle's "maven" installs ``mvn``; "rust" is a toolchain,
+#: and cargo-cyclonedx shells out to both ``cargo`` (for ``cargo metadata``)
+#: and ``rustc`` (for the host target triple) -- there is no ``rust`` binary
+#: to find anywhere. Probing PATH for the id itself reports a toolchain
+#: missing that is sitting right there.
+#:
+#: Anything absent from this map is its own command. The bundle metadata that
+#: would record this properly ships *inside* the bundle, which on a host we
+#: publish nothing for is exactly what cannot be fetched, so the two that
+#: differ are named here.
+_RUNTIME_COMMANDS: dict[str, tuple[str, ...]] = {
+    "maven": ("mvn",),
+    "rust": ("cargo", "rustc"),
+}
+
+
+def commands_for(name: str) -> tuple[str, ...]:
+    """The executables that have to be present for runtime ``name``."""
+    return _RUNTIME_COMMANDS.get(name, (name,))
+
+
+def _installed_runtime_instead(name: str) -> Path:
+    """Use an installed copy of ``name`` on a host we publish no runtime for.
+
+    There is nothing to prefer it over here. On Linux ``ensure_runtime``
+    deliberately does not fall back to PATH: the pinned artifact runs, and
+    quietly running a different version while the SBOM names the pinned one
+    would be choosing to lie. On a host with no artifact at all that trade
+    does not exist -- the alternative to the tool the user installed is no
+    SBOM -- so take it, and say in the log that it is not the pinned version.
+
+    This is also what makes the availability checks honest. A generator sets
+    its ``_*_AVAILABLE`` flag from ``check_tool_available(...)``, which reads
+    PATH; without this, the generator claimed the input on the strength of an
+    installed binary and then died in ``generate()`` before invoking it.
+    """
+    commands = commands_for(name)
+    resolved = {command: shutil.which(command) for command in commands}
+    missing = [command for command, path in resolved.items() if path is None]
+
+    if missing:
+        wanted = " and ".join(missing)
+        raise SBOMGenerationError(
+            f"{_unsupported_host_reason()} No {wanted} was found on PATH for the {name!r} runtime."
+        )
+
+    # Report every command: that "maven" is satisfied by an ``mvn``, and
+    # "rust" by a ``cargo`` plus a ``rustc``, is not guessable from the id.
+    found = [path for path in resolved.values() if path is not None]
+    logger.info(
+        f"No pinned {name} runtime for {platform.system()}; using {', '.join(found)} from PATH. "
+        "Their versions may differ from the ones this release was tested against."
+    )
+    # The directory of the first command, matching what the fetching path
+    # returns: a prefix for the caller to prepend to PATH. The others were
+    # required to exist, not to be co-located -- a rustup ``cargo`` beside a
+    # distro ``rustc`` is a real layout, and both are already on the PATH we
+    # inherit.
+    return Path(found[0]).parent
+
+
 def fetching_is_enabled() -> bool:
     """Whether we may fetch a tool that is not already present.
 
@@ -981,8 +1046,17 @@ def ensure_runtime(name: str) -> Path:
         SBOMGenerationError: if the runtime is unknown, unavailable for this
             operating system or architecture, cannot be downloaded, or fails
             its checksum.
+
+    On a host we publish no runtimes for, a tool already installed on PATH is
+    used in their place -- see :func:`_installed_runtime_instead`.
     """
-    _require_fetchable_host()
+    # Before the bundle lookup: a bundle is as Linux-only as a pinned asset,
+    # and fetching one here would pull cosign to verify it and hit the same
+    # wall a layer down. What matters on such a host is that the tool the user
+    # installed keeps working rather than being shadowed by one that cannot.
+    if not runtimes_are_published_for_this_host():
+        _warn_unsupported_host_once()
+        return _installed_runtime_instead(name)
 
     # Most tools now arrive inside an ecosystem bundle from sbomify/sbom-tools.
     # cosign is the exception and stays vendor-pinned below: it is what
