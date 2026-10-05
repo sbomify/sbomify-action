@@ -33,7 +33,7 @@ from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import bundle_plugin_version, bundle_wrappers, can_provide, ensure_runtime
+from sbomify_action.runtimes import bundle_is_obtainable, bundle_plugin_version, bundle_wrappers, ensure_runtime
 
 from ..protocol import FormatVersion, GenerationInput
 from ..result import GenerationResult
@@ -257,13 +257,20 @@ class _JvmGenerator:
         ]
 
     def supports(self, input: GenerationInput) -> bool:
-        if not (can_provide("java") and can_provide(self.runtime)):
+        if not bundle_is_obtainable():
             # Outside our image the user's toolchain decides. Fetching a JDK
             # they did not install would change which generator wins, and so
-            # change the SBOM they get, without them asking. can_provide
-            # rather than fetching_is_enabled, because a host we publish no
-            # artifact for may still have a JDK and a build tool installed --
-            # declining there sent a machine with both down to syft.
+            # change the SBOM they get, without them asking.
+            #
+            # bundle_is_obtainable, not can_provide: these generators need
+            # more than the build tool. maven_plugin_coordinate,
+            # gradle_plugin_coordinate and sbt_plugin_version all read the
+            # plugin pins out of the bundle's bundle.toml, and a natively
+            # installed mvn on a Mac has no such file -- so claiming the input
+            # on the strength of an installed toolchain only moves the failure
+            # from supports() into generate(). Until the pins have a source
+            # that does not require the bundle, declining is the honest answer
+            # and syft still produces something.
             return False
         if not input.is_lock_file or input.output_format not in ("cyclonedx", "spdx"):
             return False

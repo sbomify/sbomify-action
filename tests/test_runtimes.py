@@ -899,6 +899,59 @@ class TestNonLinuxHostsDoNotFetchLinuxBinaries:
 
         assert CycloneDXGomodGenerator().supports(generation_input) is True
 
+    def test_the_jvm_generator_declines_what_it_cannot_finish(self, monkeypatch, tmp_path):
+        """A native JDK is not enough: these generators need the bundle's pins.
+
+        maven_plugin_coordinate and friends read the plugin versions out of
+        the bundle's bundle.toml, which sits beside a fetched prefix. A
+        natively installed mvn has no such file, so claiming the input on the
+        strength of the toolchain only moves the failure from supports() into
+        generate().
+        """
+        from sbomify_action._generation.generators.cyclonedx_jvm import (
+            CycloneDXMavenGenerator,
+        )
+
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(
+            runtimes.shutil,
+            "which",
+            lambda name: f"/usr/local/bin/{name}" if name in ("java", "mvn") else None,
+        )
+        pom = tmp_path / "pom.xml"
+        pom.write_text("<project/>", encoding="utf-8")
+        generation_input = GenerationInput(lock_file=str(pom), output_format="cyclonedx")
+
+        assert runtimes.bundle_is_obtainable() is False
+        assert CycloneDXMavenGenerator().supports(generation_input) is False
+
+    def test_the_jvm_generator_still_claims_it_on_linux(self, monkeypatch, tmp_path):
+        from sbomify_action._generation.generators.cyclonedx_jvm import (
+            CycloneDXMavenGenerator,
+        )
+
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Linux")
+        monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+        pom = tmp_path / "pom.xml"
+        pom.write_text("<project/>", encoding="utf-8")
+        generation_input = GenerationInput(lock_file=str(pom), output_format="cyclonedx")
+
+        assert runtimes.bundle_is_obtainable() is True
+        assert CycloneDXMavenGenerator().supports(generation_input) is True
+
+    def test_the_opt_out_is_not_the_platform_gate(self, monkeypatch):
+        """They answer different questions and must not be read as one.
+
+        Folding them together made a macOS run skip npm registry resolution,
+        which needs the network rather than a Linux artifact.
+        """
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+
+        assert runtimes.fetching_is_enabled() is True
+        assert runtimes.runtimes_are_published_for_this_host() is False
+        assert runtimes.bundle_is_obtainable() is False
+
     def test_an_unknown_runtime_is_still_unknown_off_linux(self, monkeypatch):
         """The documented contract, which the PATH fallback jumped ahead of.
 

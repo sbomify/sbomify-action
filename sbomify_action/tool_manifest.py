@@ -33,8 +33,11 @@ TOOLS_RELEASE = "tools-rolling"
 _TOOLS_RELEASE_BASE = "https://github.com/sbomify/sbomify-action/releases/download"
 
 #: Both publishers name their assets ``<tool>-linux-<arch>``: we build for
-#: Linux and nothing else. runtimes.fetching_is_enabled is what keeps a
-#: non-Linux host from fetching one of these and finding out the hard way.
+#: Linux and nothing else. runtimes.runtimes_are_published_for_this_host is
+#: what keeps a non-Linux host from fetching one of these and finding out the
+#: hard way, via the guards in ensure_runtime and ensure_bundle.
+#: runtimes.fetching_is_enabled is a different question -- the user's network
+#: opt-out, which is on by default on every OS.
 _ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
 
 

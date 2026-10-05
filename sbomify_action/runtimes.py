@@ -232,6 +232,19 @@ def commands_for(name: str) -> tuple[str, ...]:
     return _RUNTIME_COMMANDS.get(name, (name,))
 
 
+def bundle_is_obtainable() -> bool:
+    """Whether a *bundle* -- its binaries and its bundle.toml -- can be had here.
+
+    Distinct from :func:`runtime_is_obtainable`, which an installed executable
+    on PATH can satisfy. Some callers need what only the bundle carries:
+    :func:`bundle_plugin_version` reads the plugin pins out of ``bundle.toml``
+    beside the prefix, and a native ``mvn`` on a Mac has no such file. A
+    generator that depends on those pins must decline rather than claim the
+    input and fail when it goes looking.
+    """
+    return runtimes_are_published_for_this_host() and fetching_is_enabled()
+
+
 def _installed_runtime_instead(name: str) -> Path:
     """Use an installed copy of ``name`` on a host we publish no runtime for.
 
@@ -273,12 +286,18 @@ def _installed_runtime_instead(name: str) -> Path:
 
 
 def fetching_is_enabled() -> bool:
-    """Whether we may fetch a tool that is not already present.
+    """Whether the *user* has allowed us to fetch a tool, on any host.
 
-    On by default, everywhere we publish binaries for. Fetching what an
-    ecosystem needs is the whole design: the image stopped baking in every
-    tool it might want, and the tools come from pinned, digest-verified,
-    attested bundles at the moment they are needed.
+    This is the network opt-out and nothing else. Whether a runtime exists
+    for this host is a separate question -- see
+    :func:`runtimes_are_published_for_this_host` -- and the two were briefly
+    folded together here, which is recorded at the end of this docstring
+    because the bug it caused is easy to reintroduce.
+
+    On by default, everywhere. Fetching what an ecosystem needs is the whole
+    design: the image stopped baking in every tool it might want, and the
+    tools come from pinned, digest-verified, attested bundles at the moment
+    they are needed.
 
     It used to be opt-in outside our own image, on the reasoning that
     downloading a tool changes which generator wins and so changes the SBOM.
@@ -291,13 +310,10 @@ def fetching_is_enabled() -> bool:
     Set SBOMIFY_FETCH_RUNTIMES=0 to opt out, for an air-gapped build or where
     only preinstalled tools may run.
 
-    This is the user's answer about reaching the network, and nothing else.
-    Whether a *runtime* exists for this host is a separate question, asked by
-    runtimes_are_published_for_this_host, and the two were briefly folded
-    together here. That broke callers which only ever meant the opt-out:
-    resolving a bare package.json against the npm registry needs the network,
-    not a Linux artifact, and conflating them made a macOS run skip the
-    resolution and hand cdxgen a manifest it reads as zero components.
+    Folding the host check in here broke the callers that only ever meant the
+    opt-out: resolving a bare package.json against the npm registry needs the
+    network, not a Linux artifact, and conflating them made a macOS run skip
+    the resolution and hand cdxgen a manifest it reads as zero components.
     """
     opt_out = os.environ.get("SBOMIFY_FETCH_RUNTIMES", "").lower()
     return opt_out not in ("0", "false", "no")
