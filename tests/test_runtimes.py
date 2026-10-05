@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import logging
 import os
 import tarfile
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from sbomify_action import runtimes
+from sbomify_action._generation.protocol import GenerationInput
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.runtimes import (
     Asset,
@@ -808,18 +810,107 @@ class TestNonLinuxHostsDoNotFetchLinuxBinaries:
     prepended to PATH, so it shadows a perfectly good native install.
     """
 
-    def test_fetching_is_off_where_we_publish_nothing(self, monkeypatch):
-        monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
+    def test_no_runtime_is_published_where_we_build_nothing(self, monkeypatch):
         monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
         assert runtimes.runtimes_are_published_for_this_host() is False
+
+    def test_the_fetch_opt_out_is_only_about_the_network(self, monkeypatch):
+        """fetching_is_enabled answers the user's question, not the host's.
+
+        Folding the host check in here broke callers that only ever meant the
+        opt-out: resolving a bare package.json against the npm registry needs
+        the network, not a Linux artifact, so a macOS run skipped it and
+        handed cdxgen a manifest it reads as zero components.
+        """
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
+        assert runtimes.fetching_is_enabled() is True
+        monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "0")
         assert runtimes.fetching_is_enabled() is False
 
-    def test_no_generator_claims_an_input_it_cannot_tool(self, monkeypatch):
+    def test_registry_resolution_still_runs_off_linux(self, monkeypatch, tmp_path, caplog):
+        """The caller at _generation/utils.py that gates on the opt-out.
+
+        Resolving a bare package.json reaches the npm registry; it wants the
+        network, not a Linux artifact. Folding the host check into
+        fetching_is_enabled made a macOS run skip it and hand cdxgen a
+        manifest it reads as zero components.
+        """
+        from sbomify_action._generation import utils as generation_utils
+
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+        (tmp_path / "package.json").write_text('{"name": "x"}', encoding="utf-8")
+        # A missing bun is a different, later decline -- and the one we want
+        # to land on: reaching it proves the opt-out check did not fire.
+        monkeypatch.setattr(generation_utils.shutil, "which", lambda name: None)
+
+        with caplog.at_level(logging.DEBUG, logger="sbomify_action"):
+            assert generation_utils.resolve_npm_lockfile(tmp_path) is None
+
+        assert "bun is not on PATH" in caplog.text
+        assert "Runtime fetching is disabled" not in caplog.text
+
+    def test_nothing_is_claimed_that_cannot_be_obtained(self, monkeypatch):
         """can_provide is how a generator decides to take the job."""
         monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
         monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: None)
         assert runtimes.can_provide("syft") is False
         assert runtimes.can_provide("cdxgen") is False
+
+    def test_an_installed_tool_is_claimable_off_linux(self, monkeypatch):
+        """The point of the fallback: a native install is still usable.
+
+        Gating purely on fetchability made the Go and JVM generators decline
+        unconditionally off Linux, before their installed toolchains could
+        reach the PATH fallback, so a machine with a real Go toolchain fell
+        through to syft.
+        """
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(
+            runtimes.shutil,
+            "which",
+            lambda name: f"/usr/local/bin/{name}" if name in ("go", "cyclonedx-gomod") else None,
+        )
+        assert runtimes.can_provide("go") is True
+        assert runtimes.can_provide("cyclonedx-gomod") is True
+        assert runtimes.can_provide("syft") is False
+
+    def test_a_half_installed_toolchain_is_not_claimable(self, monkeypatch):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: "/usr/local/bin/cargo" if name == "cargo" else None)
+        assert runtimes.can_provide("rust") is False
+
+    def test_the_go_generator_claims_go_mod_with_a_native_toolchain(self, monkeypatch, tmp_path):
+        from sbomify_action._generation.generators.cyclonedx_gomod import CycloneDXGomodGenerator
+
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(
+            runtimes.shutil,
+            "which",
+            lambda name: f"/usr/local/bin/{name}" if name in ("go", "cyclonedx-gomod") else None,
+        )
+        go_mod = tmp_path / "go.mod"
+        go_mod.write_text("module example.com/x\n", encoding="utf-8")
+        # supports() also wants source to analyse beside the manifest.
+        (tmp_path / "main.go").write_text("package main\n", encoding="utf-8")
+        generation_input = GenerationInput(lock_file=str(go_mod), output_format="cyclonedx")
+
+        assert CycloneDXGomodGenerator().supports(generation_input) is True
+
+    def test_an_unknown_runtime_is_still_unknown_off_linux(self, monkeypatch):
+        """The documented contract, which the PATH fallback jumped ahead of.
+
+        Probing PATH first meant `ensure_runtime("no-such-tool")` reported a
+        platform problem, or succeeded outright if some unrelated executable
+        happened to carry that name.
+        """
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: "/usr/bin/" + name)
+
+        with pytest.raises(SBOMGenerationError, match="Unknown tool runtime"):
+            ensure_runtime("no-such-tool")
 
     @pytest.mark.parametrize("system", ["Darwin", "Windows"])
     def test_fetching_anyway_says_what_is_wrong(self, monkeypatch, system):
@@ -845,6 +936,13 @@ class TestNonLinuxHostsDoNotFetchLinuxBinaries:
         assert runtimes.runtimes_are_published_for_this_host() is True
         assert runtimes.fetching_is_enabled() is True
         assert runtimes.can_provide("syft") is True
+
+    def test_the_opt_out_still_stops_a_claim_on_linux(self, monkeypatch):
+        """An air-gapped Linux build with nothing installed claims nothing."""
+        monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "0")
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: None)
+        assert runtimes.can_provide("syft") is False
 
     def test_an_installed_tool_is_used_rather_than_refused(self, monkeypatch, tmp_path):
         """The whole point of declining the fetch: the native install still runs.
@@ -933,7 +1031,6 @@ class TestNonLinuxHostsDoNotFetchLinuxBinaries:
         rather than the generator refusing an input it had already claimed.
         """
         from sbomify_action._generation.generators import syft as syft_generator
-        from sbomify_action._generation.protocol import GenerationInput
 
         installed = tmp_path / "bin" / "syft"
         installed.parent.mkdir(parents=True)

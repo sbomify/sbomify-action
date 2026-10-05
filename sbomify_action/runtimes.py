@@ -290,10 +290,15 @@ def fetching_is_enabled() -> bool:
 
     Set SBOMIFY_FETCH_RUNTIMES=0 to opt out, for an air-gapped build or where
     only preinstalled tools may run.
+
+    This is the user's answer about reaching the network, and nothing else.
+    Whether a *runtime* exists for this host is a separate question, asked by
+    runtimes_are_published_for_this_host, and the two were briefly folded
+    together here. That broke callers which only ever meant the opt-out:
+    resolving a bare package.json against the npm registry needs the network,
+    not a Linux artifact, and conflating them made a macOS run skip the
+    resolution and hand cdxgen a manifest it reads as zero components.
     """
-    if not runtimes_are_published_for_this_host():
-        _warn_unsupported_host_once()
-        return False
     opt_out = os.environ.get("SBOMIFY_FETCH_RUNTIMES", "").lower()
     return opt_out not in ("0", "false", "no")
 
@@ -307,7 +312,37 @@ def can_provide(tool: str) -> bool:
     asked `name in RUNTIMES` reported itself unavailable and the whole chain
     quietly fell through to syft.
     """
-    return (bundle_for(tool) is not None or tool in RUNTIMES) and fetching_is_enabled()
+    return is_known_runtime(tool) and runtime_is_obtainable(tool)
+
+
+def is_known_runtime(name: str) -> bool:
+    """Whether ``name`` is a runtime we know how to provide at all.
+
+    Asked before anything probes PATH, so that an unknown id is reported as
+    unknown rather than as a platform or PATH problem -- and so that a
+    coincidentally-named executable cannot make one look available.
+    """
+    return bundle_for(name) is not None or name in RUNTIMES
+
+
+def runtime_is_obtainable(name: str) -> bool:
+    """Whether this runtime could be made available on this host.
+
+    Two independent ways, and a generator claiming an input needs either:
+
+    - We can fetch it: an artifact is published for this OS and the user has
+      not opted out of fetching.
+    - It is already installed: every command it stands for is on PATH, so
+      ``ensure_runtime`` will hand back the user's own copy.
+
+    Keeping these apart matters off Linux. Gating purely on fetchability made
+    the Go and JVM generators decline unconditionally on macOS -- before
+    their installed toolchains could reach the PATH fallback -- so a machine
+    with a real Go toolchain fell through to syft.
+    """
+    if runtimes_are_published_for_this_host() and fetching_is_enabled():
+        return True
+    return all(shutil.which(command) for command in commands_for(name))
 
 
 def current_arch() -> str:
@@ -1055,6 +1090,12 @@ def ensure_runtime(name: str) -> Path:
     # wall a layer down. What matters on such a host is that the tool the user
     # installed keeps working rather than being shadowed by one that cannot.
     if not runtimes_are_published_for_this_host():
+        # The unknown-runtime contract first, as the fetching path does
+        # further down: an id we have never heard of must be reported as
+        # unknown, not as a platform problem -- and must not be satisfied by
+        # an unrelated executable that happens to share its name.
+        if not is_known_runtime(name):
+            raise SBOMGenerationError(f"Unknown tool runtime {name!r}")
         _warn_unsupported_host_once()
         return _installed_runtime_instead(name)
 
