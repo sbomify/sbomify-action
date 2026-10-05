@@ -872,3 +872,77 @@ class TestHostsTheRuntimesCannotRunOn:
     def test_host_runs_runtimes(self, monkeypatch, system, expected):
         monkeypatch.setattr(runtimes.platform, "system", lambda: system)
         assert runtimes.host_runs_runtimes() is expected
+
+    def test_an_installed_go_toolchain_still_claims_go_mod(self, monkeypatch):
+        """The Go generator gates on fetching, so it needs the check directly.
+
+        Declining every go.mod off Linux would be too much: unlike the JVM
+        generators, this one needs nothing from the bundle but the two
+        commands, and ensure_runtime hands it an installed pair. Declining
+        anyway drops the project to syft, or to no SBOM at all.
+        """
+        from sbomify_action._generation.generators.cyclonedx_gomod import CycloneDXGomodGenerator
+        from sbomify_action._generation.protocol import GenerationInput
+
+        monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+
+        go_mod = Path(__file__).parent / "test-data" / "projects" / "go" / "go.mod"
+        assert go_mod.exists(), f"fixture missing: {go_mod}"
+        input = GenerationInput(lock_file=str(go_mod), output_format="cyclonedx")
+        generator = CycloneDXGomodGenerator()
+
+        installed = {"cyclonedx-gomod", "go"}
+        monkeypatch.setattr(
+            "sbomify_action._generation.generators.cyclonedx_gomod.shutil.which",
+            lambda name: f"/opt/homebrew/bin/{name}" if name in installed else None,
+        )
+        assert generator.supports(input) is True
+
+        installed.discard("cyclonedx-gomod")
+        assert generator.supports(input) is False, "nothing to run and nothing to fetch"
+
+
+class TestRuntimeIdsThatAreNotCommandNames:
+    """A runtime is a thing we fetch, not always a thing you can run.
+
+    The jvm bundle's "maven" installs `mvn`; "rust" is a toolchain and there is
+    no `rust` binary anywhere. Looking the runtime id up on PATH verbatim would
+    report a fully installed native toolchain as missing, which is the one
+    outcome the fallback exists to avoid.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _off_linux(self, monkeypatch):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+
+    def test_maven_is_found_as_mvn(self, monkeypatch, tmp_path):
+        installed = tmp_path / "bin"
+        installed.mkdir()
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name) if name == "mvn" else None)
+
+        assert ensure_runtime("maven") == installed
+
+    def test_rust_needs_cargo_and_rustc(self, monkeypatch, tmp_path):
+        """cargo-cyclonedx shells out to both, so finding one is not enough."""
+        installed = tmp_path / "cargo" / "bin"
+        installed.mkdir(parents=True)
+        toolchain = {"cargo", "rustc"}
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name) if name in toolchain else None)
+
+        assert ensure_runtime("rust") == installed
+
+        toolchain.discard("rustc")
+        runtimes.reset_runtime_cache()
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            ensure_runtime("rust")
+
+        assert "rustc" in str(excinfo.value)
+        assert "cargo" not in str(excinfo.value), "cargo is installed; do not ask for it"
+
+    def test_an_id_that_is_its_own_command_is_unaffected(self, monkeypatch, tmp_path):
+        installed = tmp_path / "bin"
+        installed.mkdir()
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name))
+
+        assert ensure_runtime("cdxgen") == installed

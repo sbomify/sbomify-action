@@ -266,9 +266,14 @@ class _JvmGenerator:
         if not fetching_is_enabled() or not host_runs_runtimes():
             # Outside our image the user's toolchain decides. Fetching a JDK
             # they did not install would change which generator wins, and so
-            # change the SBOM they get, without them asking. Off Linux the JDK
-            # bundle will not run at all, so claiming a build file here only
-            # takes it away from a generator that could have read it.
+            # change the SBOM they get, without them asking.
+            #
+            # Off Linux there is no bundle to fetch, and unlike the Go
+            # generator an installed toolchain does not rescue this one: every
+            # _run below applies a plugin whose version comes from the fetched
+            # bundle's bundle.toml (see bundle_plugin_version), and a native
+            # mvn/gradle/sbt has no such file to read. Claiming a build file
+            # here would only take it from a generator that could have read it.
             return False
         if not input.is_lock_file or input.output_format not in ("cyclonedx", "spdx"):
             return False

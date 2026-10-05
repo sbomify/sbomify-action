@@ -94,6 +94,16 @@ _READY = ".sbomify-runtime-ready"
 # slugs, so on any other kernel there is nothing here that can be executed.
 _RUNTIME_OS = "Linux"
 
+# What to look for on PATH when a runtime id is not itself a command. A runtime
+# is a thing we fetch, which is not always a thing you can run: the jvm bundle's
+# "maven" installs `mvn`, and "rust" is a toolchain -- cargo-cyclonedx shells out
+# to both `cargo` and `rustc`, and there is no `rust` binary to find. Anything
+# absent here is its own command name.
+_COMMANDS: dict[str, tuple[str, ...]] = {
+    "maven": ("mvn",),
+    "rust": ("cargo", "rustc"),
+}
+
 
 @dataclass(frozen=True)
 class Asset:
@@ -217,14 +227,19 @@ def _installed_instead(name: str) -> Path:
     published OS Independent -- and such a host already has the real tool, or
     can install it. What it must not do is run ours.
     """
-    if found := shutil.which(name):
-        logger.info(f"No pinned {name} runtime for {platform.system()}; using the {name} on PATH ({found})")
-        return Path(found).parent
+    commands = _COMMANDS.get(name, (name,))
+    resolved = {command: shutil.which(command) for command in commands}
 
-    raise SBOMGenerationError(
-        f"The pinned {name} runtime is a {_RUNTIME_OS} build and cannot run on {platform.system()}. "
-        f"Install {name} and put it on PATH, or run sbomify-action from its container image."
-    )
+    if missing := [command for command, path in resolved.items() if not path]:
+        raise SBOMGenerationError(
+            f"The pinned {name} runtime is a {_RUNTIME_OS} build and cannot run on {platform.system()}. "
+            f"Install {' and '.join(missing)} and put it on PATH, "
+            f"or run sbomify-action from its container image."
+        )
+
+    found = [path for path in resolved.values() if path]
+    logger.info(f"No pinned {name} runtime for {platform.system()}; using the {commands[0]} on PATH ({found[0]})")
+    return Path(found[0]).parent
 
 
 def current_arch() -> str:
