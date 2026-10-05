@@ -11,11 +11,12 @@ Supported outputs:
 - CycloneDX 1.4-1.6
 """
 
+import shutil
 from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled
+from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled, host_runs_runtimes
 
 from ..protocol import FormatVersion, GenerationInput
 from ..result import GenerationResult
@@ -90,12 +91,24 @@ class CycloneDXGomodGenerator:
             ),
         ]
 
+    def _toolchain_is_installed(self) -> bool:
+        """Both commands generate() shells out to, already on PATH."""
+        return all(shutil.which(command) for command in ("cyclonedx-gomod", "go"))
+
     def supports(self, input: GenerationInput) -> bool:
         """Claim go.mod when there is source to analyse and we may fetch."""
         if not fetching_is_enabled():
             # Outside our image the user's toolchain decides; fetching a tool
             # they did not install would change which generator wins and so
             # change the SBOM they get.
+            return False
+
+        if not host_runs_runtimes() and not self._toolchain_is_installed():
+            # Off Linux there is nothing to fetch -- every pinned artifact is a
+            # Linux binary -- but an installed toolchain still runs, through
+            # ensure_runtime's fallback. So decline only when there is none:
+            # claiming go.mod with no way to read it takes it from a generator
+            # that could have.
             return False
 
         if not input.is_lock_file or input.output_format not in ("cyclonedx", "spdx"):

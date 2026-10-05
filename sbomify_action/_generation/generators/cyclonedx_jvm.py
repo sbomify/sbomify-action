@@ -33,7 +33,13 @@ from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import bundle_plugin_version, bundle_wrappers, ensure_runtime, fetching_is_enabled
+from sbomify_action.runtimes import (
+    bundle_plugin_version,
+    bundle_wrappers,
+    ensure_runtime,
+    fetching_is_enabled,
+    host_runs_runtimes,
+)
 
 from ..protocol import FormatVersion, GenerationInput
 from ..result import GenerationResult
@@ -257,10 +263,17 @@ class _JvmGenerator:
         ]
 
     def supports(self, input: GenerationInput) -> bool:
-        if not fetching_is_enabled():
+        if not fetching_is_enabled() or not host_runs_runtimes():
             # Outside our image the user's toolchain decides. Fetching a JDK
             # they did not install would change which generator wins, and so
             # change the SBOM they get, without them asking.
+            #
+            # Off Linux there is no bundle to fetch, and unlike the Go
+            # generator an installed toolchain does not rescue this one: every
+            # _run below applies a plugin whose version comes from the fetched
+            # bundle's bundle.toml (see bundle_plugin_version), and a native
+            # mvn/gradle/sbt has no such file to read. Claiming a build file
+            # here would only take it from a generator that could have read it.
             return False
         if not input.is_lock_file or input.output_format not in ("cyclonedx", "spdx"):
             return False
