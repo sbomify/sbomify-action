@@ -32,6 +32,7 @@ from sbomify_action._spdx_expression import (
     is_known_spdx_expression,
     parse_spdx_expression,
     spdx_licensing,
+    unknown_spdx_keys,
 )
 from sbomify_action.serialization import (
     _is_compound_expression,
@@ -314,3 +315,148 @@ class TestLicencesAsARegistryActuallyAnswers:
         metadata = DepsDevSource()._normalize_response("pkg", "pypi", {"licenses": None, "links": []})
         assert metadata is not None
         assert metadata.licenses == []
+
+
+class TestMixedWrongTypeConsolidation:
+    """A wrong-typed licence beside an expression must still consolidate validly.
+
+    `_consolidate_mixed_license_types` joins every entry into one OR
+    expression, because cyclonedx-python-lib refuses to serialize a component
+    holding both a LicenseExpression and a DisjunctiveLicense. It runs *after*
+    the per-choice expression pass, so whatever it builds is final.
+
+    A wrong-typed `license.id` is rendered to JSON text and then demoted to
+    `license.name`, which is free text and legal there. As an operand in an
+    expression it is not: the join produced values such as
+    `Apache-2.0 OR ["MIT"]`, which no SPDX parser reads and which fails
+    validation and deserialization.
+    """
+
+    @staticmethod
+    def _assert_valid_expression(expression: str) -> None:
+        """Parseable, and every symbol in it is either SPDX or a LicenseRef.
+
+        `is_known_spdx_expression` is not the right gate here: it reports
+        every `LicenseRef-*` as unknown, which is exactly what a preserved
+        free-text licence is supposed to be. The contract is that the
+        expression parses and invents no bare operand.
+        """
+        parsed = parse_spdx_expression(expression)
+        assert parsed is not None, expression
+        unknown = unknown_spdx_keys(parsed)
+        assert all(key.startswith("LicenseRef-") for key in unknown), (expression, unknown)
+
+    @staticmethod
+    def _consolidated(licenses: list[Any]) -> str:
+        bom = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "components": [{"type": "library", "name": "pkg", "licenses": licenses}],
+        }
+        sanitize_cyclonedx_licenses(bom)
+        choices = bom["components"][0]["licenses"]
+        assert len(choices) == 1, choices
+        return choices[0]["expression"]
+
+    @pytest.mark.parametrize(
+        "wrong_typed",
+        [
+            {"a": 1},
+            ["MIT"],
+            42,
+            True,
+            [{"id": "MIT"}],
+            {"nested": {"deep": ["x"]}},
+        ],
+    )
+    def test_the_join_is_a_parseable_expression(self, wrong_typed: Any) -> None:
+        expression = self._consolidated(
+            [
+                {"expression": "Apache-2.0"},
+                {"license": {"id": wrong_typed}},
+            ]
+        )
+
+        self._assert_valid_expression(expression)
+
+    @pytest.mark.parametrize("wrong_typed", [{"a": 1}, ["MIT"], 42])
+    def test_the_rendered_text_is_not_left_as_a_bare_operand(self, wrong_typed: Any) -> None:
+        expression = self._consolidated(
+            [
+                {"expression": "Apache-2.0"},
+                {"license": {"id": wrong_typed}},
+            ]
+        )
+
+        # The characters that made the old join unparseable.
+        assert not any(character in expression for character in '{}[]":')
+        assert "Apache-2.0" in expression
+        assert "LicenseRef-" in expression
+
+    def test_free_text_in_name_beside_an_expression_becomes_a_license_ref(self) -> None:
+        expression = self._consolidated(
+            [
+                {"expression": "Apache-2.0"},
+                {"license": {"name": "Commercial, see LICENSE.txt"}},
+            ]
+        )
+
+        self._assert_valid_expression(expression)
+        assert "LicenseRef-" in expression
+
+    def test_a_valid_id_beside_an_expression_is_kept_verbatim(self) -> None:
+        """The repair must not rewrite licences that were already fine."""
+        expression = self._consolidated(
+            [
+                {"expression": "Apache-2.0"},
+                {"license": {"id": "MIT"}},
+            ]
+        )
+
+        assert expression == "Apache-2.0 OR MIT"
+
+    def test_an_spdx_id_stated_under_name_is_kept_verbatim(self) -> None:
+        expression = self._consolidated(
+            [
+                {"expression": "Apache-2.0"},
+                {"license": {"name": "MIT"}},
+            ]
+        )
+
+        assert expression == "Apache-2.0 OR MIT"
+
+    def test_a_compound_expression_keeps_its_precedence(self) -> None:
+        expression = self._consolidated(
+            [
+                {"expression": "MIT AND Apache-2.0"},
+                {"license": {"id": ["GPL-3.0-only"]}},
+            ]
+        )
+
+        assert expression.startswith("(MIT AND Apache-2.0) OR ")
+        self._assert_valid_expression(expression)
+
+    def test_the_consolidated_bom_still_deserializes(self) -> None:
+        """The failure mode the consolidation exists to avoid, end to end."""
+        bom = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "version": 1,
+            "metadata": {"component": {"type": "application", "name": "app", "bom-ref": "root"}},
+            "components": [
+                {
+                    "type": "library",
+                    "name": "pkg",
+                    "version": "1.0",
+                    "bom-ref": "pkg@1.0",
+                    "licenses": [
+                        {"expression": "Apache-2.0"},
+                        {"license": {"id": {"a": 1}}},
+                    ],
+                }
+            ],
+        }
+        sanitize_cyclonedx_licenses(bom)
+
+        loaded = Bom.from_json(bom)
+        assert loaded is not None

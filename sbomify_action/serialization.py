@@ -1087,6 +1087,16 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
                 if isinstance(lic, dict):
                     part = lic.get("id") or lic.get("name")
                     if isinstance(part, str) and part:
+                        # A `name` is free text, and about to become an
+                        # operand in an expression, where free text is not
+                        # valid. The demoted values are the sharp case: an
+                        # `id` that arrived as a dict or a list is rendered to
+                        # JSON text and then demoted to `name`, so joining it
+                        # raw produced `Apache-2.0 OR ["MIT"]`. An SPDX id
+                        # under `name` -- which the demotion step above never
+                        # writes, but a generator may -- is left alone.
+                        if "id" not in lic and _canonical_spdx_license_id(part) is None:
+                            part = _to_license_ref(part)
                         parts.append(part)
 
         if not parts:
@@ -1100,6 +1110,12 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
         # serialize a mixed set at all.
         combined = " OR ".join(parts)
         original = " , ".join(parts)
+        # Re-sanitize the join. Consolidation runs after the per-choice
+        # expression pass, so nothing downstream would repair what it builds,
+        # and the operands it concatenates have only been checked one at a
+        # time -- an id valid in isolation can still land beside a `WITH` or a
+        # bare `+` that makes the whole string unparseable.
+        combined, _ = _sanitize_spdx_license_expression(combined)
         license_choices.clear()
         license_choices.append({"expression": combined})
         logger.debug(
