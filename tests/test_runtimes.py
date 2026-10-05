@@ -796,3 +796,79 @@ class TestDownloadRetries:
 
         assert len(attempts) == 2
         assert (bin_dir / "faketool").read_bytes() == payload
+
+
+class TestHostsTheRuntimesCannotRunOn:
+    """A pinned runtime is a Linux binary, so a Mac must not be given one.
+
+    sbomify-action is published OS Independent and people pip install it on
+    macOS. There, ``ensure_runtime`` downloaded ``syft-linux-arm64.tar.gz``,
+    verified it with a ``cosign-linux-arm64`` it had also just downloaded, and
+    both ended the same way:
+
+        Could not run cosign to verify syft-linux-arm64.tar.gz:
+        [Errno 8] Exec format error: '/Users/.../cosign-3.1.3-arm64/cosign'
+
+    The second failure was worse than the first. ``ensure_runtime`` is called
+    unconditionally, before the tool is run, and it prepends its own prefix to
+    PATH -- so on a host that had a working syft installed, ours shadowed it
+    and the run failed as ``Exec format error: 'syft'``. Installing the tool,
+    which is the documented remedy, did not help.
+    """
+
+    def test_an_installed_tool_is_used_instead_of_a_download(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+
+        installed = tmp_path / "homebrew" / "bin"
+        installed.mkdir(parents=True)
+        (installed / "syft").touch(mode=0o755)
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name))
+
+        def _no_network(*args, **kwargs):
+            raise AssertionError("a Linux artifact must not be downloaded onto a Darwin host")
+
+        monkeypatch.setattr(runtimes.requests, "get", _no_network)
+
+        assert ensure_runtime("syft") == installed
+
+    def test_the_installed_tool_is_not_shadowed_on_path(self, monkeypatch, tmp_path):
+        """The PATH prepend is what broke a host that had the tool already."""
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        installed = tmp_path / "bin"
+        installed.mkdir()
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name))
+
+        before = os.environ.get("PATH", "")
+        ensure_runtime("syft")
+        assert os.environ.get("PATH", "") == before
+
+    def test_without_an_installed_tool_the_error_says_what_to_do(self, monkeypatch):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: None)
+
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            ensure_runtime("syft")
+
+        message = str(excinfo.value)
+        assert "Darwin" in message
+        assert "Install syft" in message
+        assert "Exec format" not in message
+
+    def test_a_generator_does_not_claim_an_input_it_cannot_serve(self, monkeypatch):
+        """can_provide is what a generator asks before claiming an input.
+
+        Answering yes off Linux routes the input to a generator whose only
+        possible outcome is a failed exec, instead of to one that works.
+        """
+        monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Linux")
+        assert runtimes.can_provide("syft") is True
+
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        assert runtimes.can_provide("syft") is False
+
+    @pytest.mark.parametrize("system,expected", [("Linux", True), ("Darwin", False), ("Windows", False)])
+    def test_host_runs_runtimes(self, monkeypatch, system, expected):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: system)
+        assert runtimes.host_runs_runtimes() is expected

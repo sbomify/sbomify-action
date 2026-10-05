@@ -89,6 +89,11 @@ _T = TypeVar("_T")
 # is re-fetched rather than trusted.
 _READY = ".sbomify-runtime-ready"
 
+# Every pinned artifact is a Linux binary. tools.toml names linux-amd64 and
+# linux-arm64 assets, and the bundles from sbomify/sbom-tools follow the same
+# slugs, so on any other kernel there is nothing here that can be executed.
+_RUNTIME_OS = "Linux"
+
 
 @dataclass(frozen=True)
 class Asset:
@@ -190,7 +195,36 @@ def can_provide(tool: str) -> bool:
     asked `name in RUNTIMES` reported itself unavailable and the whole chain
     quietly fell through to syft.
     """
-    return (bundle_for(tool) is not None or tool in RUNTIMES) and fetching_is_enabled()
+    return (bundle_for(tool) is not None or tool in RUNTIMES) and fetching_is_enabled() and host_runs_runtimes()
+
+
+def host_runs_runtimes() -> bool:
+    """Whether the pinned runtimes could run on this host at all.
+
+    Separate from :func:`fetching_is_enabled`, which is about whether we may
+    reach the network. This is about whether the bytes on the other end are
+    executable here. Downloading a Linux binary onto macOS is not a slower
+    success: it ends in ``[Errno 8] Exec format error``, after the download,
+    naming a cache path the user never asked for.
+    """
+    return platform.system() == _RUNTIME_OS
+
+
+def _installed_instead(name: str) -> Path:
+    """Fall back to an installed copy of ``name`` on a host we have no runtime for.
+
+    A pip install on macOS is a supported way to run this -- the package is
+    published OS Independent -- and such a host already has the real tool, or
+    can install it. What it must not do is run ours.
+    """
+    if found := shutil.which(name):
+        logger.info(f"No pinned {name} runtime for {platform.system()}; using the {name} on PATH ({found})")
+        return Path(found).parent
+
+    raise SBOMGenerationError(
+        f"The pinned {name} runtime is a {_RUNTIME_OS} build and cannot run on {platform.system()}. "
+        f"Install {name} and put it on PATH, or run sbomify-action from its container image."
+    )
 
 
 def current_arch() -> str:
@@ -923,14 +957,26 @@ def ensure_runtime(name: str) -> Path:
     keep working unchanged. Repeat calls are cheap: the result is memoised in
     process and the on-disk prefix is reused across processes.
 
+    On a host the pinned runtimes cannot run on, this returns the directory of
+    an installed copy instead and prepends nothing -- see
+    :func:`_installed_instead`.
+
     Raises:
         SBOMGenerationError: if the runtime is unknown, unavailable for this
-            architecture, cannot be downloaded, or fails its checksum.
+            architecture or operating system, cannot be downloaded, or fails
+            its checksum.
     """
     # Most tools now arrive inside an ecosystem bundle from sbomify/sbom-tools.
     # cosign is the exception and stays vendor-pinned below: it is what
     # verifies every bundle's attestation, and trust in a verifier cannot be
     # bootstrapped from an artifact only that verifier can check.
+    # Before the bundle lookup: a bundle is just as Linux-only as a pinned
+    # asset, and on a host that cannot run either, what matters is that the
+    # tool the user installed keeps working rather than being shadowed by
+    # ours on PATH.
+    if not host_runs_runtimes():
+        return _installed_instead(name)
+
     if bundle := bundle_for(name):
         return ensure_bundle(bundle)
 
