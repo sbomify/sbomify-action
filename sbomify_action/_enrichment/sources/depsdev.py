@@ -150,7 +150,9 @@ class DepsDevSource:
             return None
 
         # Extract and normalize licenses
-        raw_licenses: List[str] = data.get("licenses", [])
+        # ``or []``, not a .get default: deps.dev answers with an explicit
+        # null for a package it has no licence data for.
+        raw_licenses: List[str] = data.get("licenses") or []
         licenses, license_texts = normalize_license_list(raw_licenses)
 
         # Extract links
