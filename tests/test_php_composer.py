@@ -30,6 +30,7 @@ def no_version_in_env(monkeypatch):
         "GITHUB_REF",
         "CI_COMMIT_TAG",
         "BITBUCKET_TAG",
+        "CIRCLE_TAG",
     ):
         monkeypatch.delenv(name, raising=False)
 

@@ -13,6 +13,16 @@ import re
 from typing import Optional
 from urllib.parse import urlparse
 
+from sbomify_action._runtime.vcs_url import (
+    _KNOWN_GIT_HOSTS as _KNOWN_GIT_HOSTS,
+)
+
+# Both moved to _runtime so the CI platforms can share the predicate without
+# importing this module (which pulls in console and logging_config).
+# Re-exported because they were importable from here.
+from sbomify_action._runtime.vcs_url import (
+    _is_known_git_host as _is_known_git_host,
+)
 from sbomify_action.console import get_transformation_tracker
 from sbomify_action.logging_config import logger
 
@@ -44,25 +54,6 @@ _SSH_GIT_PATTERN = re.compile(r"^git@([^:]+):(.+)$")
 _SCM_GIT_PATTERN = re.compile(r"^scm:git:(.+)$", re.IGNORECASE)
 
 # Known git hosting providers - we can safely assume URLs from these are git repos
-_KNOWN_GIT_HOSTS = frozenset(
-    {
-        "github.com",
-        "gitlab.com",
-        "bitbucket.org",
-        "codeberg.org",
-        "sr.ht",
-        "git.sr.ht",
-        "gitea.com",
-        "gitee.com",
-        "salsa.debian.org",  # Debian's GitLab
-        "gitlab.gnome.org",
-        "gitlab.freedesktop.org",
-        "git.kernel.org",
-        "git.savannah.gnu.org",
-        "git.savannah.nongnu.org",
-    }
-)
-
 # Track already-logged VCS normalizations to avoid duplicate messages
 _logged_vcs_normalizations: set[str] = set()
 
@@ -250,27 +241,6 @@ def sanitize_supplier(value: Optional[str]) -> Optional[str]:
 def sanitize_license(value: Optional[str]) -> Optional[str]:
     """Sanitize a license string."""
     return sanitize_string(value, MAX_LICENSE_LENGTH, allow_newlines=False, field_name="license")
-
-
-def _is_known_git_host(url: str) -> bool:
-    """Check if URL is from a known git hosting provider.
-
-    Args:
-        url: A non-empty URL string (caller must validate)
-
-    Returns:
-        True if the URL's host is in the known git hosting providers list
-    """
-    try:
-        parsed = urlparse(url)
-        host = parsed.netloc.lower()
-        # Handle www. prefix
-        if host.startswith("www."):
-            host = host[4:]
-        return host in _KNOWN_GIT_HOSTS
-    except (ValueError, TypeError, AttributeError):
-        # urlparse or string handling failed; treat as not a known git host
-        return False
 
 
 def normalize_vcs_url(url: str) -> str:

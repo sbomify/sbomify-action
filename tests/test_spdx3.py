@@ -69,6 +69,55 @@ class TestExtractSpdx3Version(unittest.TestCase):
     def test_no_context(self):
         self.assertIsNone(extract_spdx3_version({}))
 
+    def test_the_document_outranks_an_element_that_disagrees(self):
+        """A merged document carries the other document's version on the
+        element it took, and the scan returned whichever came first in the
+        file. The SpdxDocument's own CreationInfo is the normative claim."""
+        data = {
+            "@graph": [
+                {
+                    "type": "software_Package",
+                    "spdxId": "urn:p",
+                    "creationInfo": {"type": "CreationInfo", "specVersion": "3.0.0"},
+                },
+                {
+                    "type": "SpdxDocument",
+                    "spdxId": "urn:d",
+                    "creationInfo": {"type": "CreationInfo", "specVersion": "3.0.1"},
+                },
+            ]
+        }
+        self.assertEqual(extract_spdx3_version(data), "3.0.1")
+
+    def test_the_document_is_asked_even_when_it_references_its_creation_info(self):
+        """This repo's own fixtures reference rather than inline, so reading
+        only the inline form would leave the preference doing nothing."""
+        data = {
+            "@graph": [
+                {"type": "CreationInfo", "@id": "_:doc-ci", "specVersion": "3.0.1"},
+                {
+                    "type": "software_Package",
+                    "spdxId": "urn:p",
+                    "creationInfo": {"type": "CreationInfo", "specVersion": "3.0.0"},
+                },
+                {"type": "SpdxDocument", "spdxId": "urn:d", "creationInfo": "_:doc-ci"},
+            ]
+        }
+        self.assertEqual(extract_spdx3_version(data), "3.0.1")
+
+    def test_a_document_that_states_nothing_falls_back_to_the_graph(self):
+        data = {
+            "@graph": [
+                {
+                    "type": "software_Package",
+                    "spdxId": "urn:p",
+                    "creationInfo": {"type": "CreationInfo", "specVersion": "3.0.0"},
+                },
+                {"type": "SpdxDocument", "spdxId": "urn:d"},
+            ]
+        }
+        self.assertEqual(extract_spdx3_version(data), "3.0.0")
+
 
 class TestParseSpdx3File(unittest.TestCase):
     """Tests for parse_spdx3_file()."""
@@ -252,14 +301,67 @@ class TestValidationIntegration(unittest.TestCase):
         self.assertEqual(ver, "3.0.1")
 
     def test_schema_validation(self):
+        """The fixture is held to the schema, not merely detected.
+
+        This used to assert only that `valid is not None`, with a comment
+        saying the fixture might not pass the strict schema. It did not, and a
+        test that declines to check is why the writer shipped documents that
+        failed every element.
+        """
         from sbomify_action.validation import validate_sbom_file_auto
 
         result = validate_sbom_file_auto(str(TEST_DATA_DIR / "spdx3_minimal.json"))
         self.assertEqual(result.sbom_format, "spdx")
         self.assertEqual(result.spec_version, "3.0.1")
-        # Our minimal test fixture may not pass the strict 3.0.1 schema,
-        # but format/version detection must always succeed (valid is not None).
-        self.assertIsNotNone(result.valid)
+        self.assertIs(result.valid, True, result.error_message)
+
+    def test_every_spdx3_fixture_that_claims_conformance_validates(self):
+        """A fixture nobody validates proves whatever it is asked to prove."""
+        from sbomify_action.validation import validate_sbom_file_auto
+
+        for name in ("spdx3_minimal.json", "spdx3_multi_type.json", "spdx3_conformant.json"):
+            with self.subTest(fixture=name):
+                result = validate_sbom_file_auto(str(TEST_DATA_DIR / name))
+
+                self.assertIs(result.valid, True, f"{name}: {result.error_message}")
+
+
+class TestTheSpellingsProducersActuallyUse(unittest.TestCase):
+    """`spdx3_legacy_spellings.json` is not conformant, on purpose.
+
+    It carries `@id` where 3.0.1 wants `spdxId`, unprefixed software
+    properties, `profile` on a CreationInfo and an empty `createdBy`. Real
+    producers emit all of that, and the parser reads it deliberately. The
+    coverage used to be incidental, in a fixture that happened to be invalid;
+    naming the fixture makes it something a reader can find and a change can
+    be measured against.
+    """
+
+    LEGACY = TEST_DATA_DIR / "spdx3_legacy_spellings.json"
+
+    def test_it_is_still_the_non_conformant_one(self):
+        """If someone tidies this fixture, these tests stop meaning anything,
+        so say what it is for right here."""
+        from sbomify_action.validation import validate_sbom_file_auto
+
+        self.assertIs(validate_sbom_file_auto(str(self.LEGACY)).valid, False)
+
+    def test_an_element_keyed_by_at_id_is_read(self):
+        payload = parse_spdx3_file(str(self.LEGACY))
+
+        self.assertIn("urn:spdx.dev:pkg-test", payload.get_full_map())
+
+    def test_unprefixed_software_properties_are_read(self):
+        payload = parse_spdx3_file(str(self.LEGACY))
+        package = payload.get_element("urn:spdx.dev:pkg-test")
+
+        self.assertEqual(package.package_version, "1.0.0")
+        self.assertEqual(package.package_url, "pkg:pypi/test-package@1.0.0")
+
+    def test_the_document_is_found_despite_the_spelling(self):
+        payload = parse_spdx3_file(str(self.LEGACY))
+
+        self.assertIn("urn:spdx.dev:doc-test", payload.get_full_map())
 
 
 class TestAdditionalPackagesIntegration(unittest.TestCase):

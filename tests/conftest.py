@@ -3,6 +3,9 @@
 from pathlib import Path
 
 import pytest
+import sentry_sdk
+from sentry_sdk.envelope import Envelope
+from sentry_sdk.transport import Transport
 
 
 @pytest.fixture(autouse=True)
@@ -27,16 +30,58 @@ def offline_action_pin(monkeypatch):
     ci_emitter.resolve_action_ref.cache_clear()
 
 
+class NoNetworkTransport(Transport):
+    """A Sentry transport that keeps every envelope in this process.
+
+    Sentry's own transport is chosen from the options at ``init`` time and
+    then owns a background worker with a live connection pool. Replacing it
+    is the only place where "no test may talk to Sentry" can be stated once
+    and hold for the whole suite.
+    """
+
+    def __init__(self, options: dict | None = None) -> None:
+        super().__init__(options)
+        self.envelopes: list[Envelope] = []
+
+    def capture_envelope(self, envelope: Envelope) -> None:
+        self.envelopes.append(envelope)
+
+
 @pytest.fixture(autouse=True)
 def disable_sentry_for_tests(monkeypatch):
-    """Disable Sentry telemetry for all tests.
+    """Keep Sentry off, and keep it in the process when a test turns it on.
 
-    This fixture runs automatically for every test to prevent Sentry events
-    from being sent during test runs. Tests that specifically need to test
-    Sentry functionality (like test_sentry_filtering.py) should override
-    this by setting TELEMETRY=true in their own fixtures or patches.
+    Two layers, because one was not enough.
+
+    TELEMETRY=false is the first, and it covers every test that does not care
+    about Sentry. It is not enough on its own: the tests in
+    test_sentry_filtering.py exist to exercise ``initialize_sentry``, so they
+    have to switch telemetry back on. Several do it with
+    ``patch.dict(os.environ, {...}, clear=True)``, which wipes the whole
+    environment -- TELEMETRY, so telemetry defaults back to on, and SENTRY_DSN,
+    so ``initialize_sentry`` falls back to the production DSN compiled into it.
+    Six of those seven tests knew to put SENTRY_DSN back. The seventh did not,
+    and shipped a real exception to the live project on every CI run for a
+    month before anyone read the project and asked why the top issue was
+    "Test exception in TeamCity".
+
+    Adding the key to the seventh test fixes that test. It does not fix the
+    next one, because the failure mode is a forgotten dict key in a file whose
+    whole subject is turning telemetry on. So the second layer is the
+    transport: every ``sentry_sdk.init`` in this suite gets one that appends
+    to a list. A test that forgets the DSN now sees no events instead of a
+    live project seeing all of them, and the assertion it was making still
+    works, because ``before_send`` and the client options are untouched.
     """
     monkeypatch.setenv("TELEMETRY", "false")
+
+    real_init = sentry_sdk.init
+
+    def init_without_network(*args, **kwargs):
+        kwargs["transport"] = NoNetworkTransport()
+        return real_init(*args, **kwargs)
+
+    monkeypatch.setattr(sentry_sdk, "init", init_without_network)
 
 
 @pytest.fixture(autouse=True)

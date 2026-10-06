@@ -72,8 +72,8 @@ from .exceptions import SBOMValidationError
 from .logging_config import logger
 from .serialization import (
     link_root_dependencies,
+    load_cyclonedx_bom,
     restore_spdx_document_describes,
-    sanitize_cyclonedx_licenses,
     sanitize_dependency_graph,
     sanitize_spdx_json_file,
     serialize_cyclonedx_bom,
@@ -1759,6 +1759,7 @@ def augment_spdx3_sbom(
         make_spdx3_creation_info,
         make_spdx3_spdx_id,
         parse_spdx3_file,
+        spdx3_license_relationships,
         spdx3_licenses_from_list,
         write_spdx3_file,
     )
@@ -1819,7 +1820,21 @@ def augment_spdx3_sbom(
             elif isinstance(lic_data, str):
                 license_ids.append(lic_data)
 
-        if license_ids and (not root_pkg.declared_license or override_sbom_metadata):
+        # A package whose author stated a licence the 3.0.1 way, as a
+        # relationship, has declared_license unset, so that field alone cannot
+        # tell a declared package from an undeclared one.
+        stated = spdx3_license_relationships(payload, root_pkg.spdx_id)
+        if license_ids and (not (root_pkg.declared_license or stated) or override_sbom_metadata):
+            # Overriding means one declared licence, not two that disagree.
+            for relationship in stated:
+                payload.get_full_map().pop(relationship.spdx_id, None)
+                # And out of the document's own inventory. A document that
+                # lists its elements is asserting what it contains, so leaving
+                # the id there would have it claim an element the graph no
+                # longer holds, which no reader can resolve and no schema
+                # catches: JSON Schema cannot follow a cross-reference.
+                if doc and relationship.spdx_id in doc.element:
+                    doc.element.remove(relationship.spdx_id)
             root_pkg.declared_license = spdx3_licenses_from_list(license_ids)
             logger.info(f"Set license(s): {', '.join(license_ids)}")
 
@@ -1997,15 +2012,10 @@ def augment_sbom_from_file(
             if spec_version is None:
                 raise SBOMValidationError("CycloneDX SBOM is missing required 'specVersion' field")
 
-            # Repair what the deserializer would otherwise choke on. Every
-            # other CycloneDX entry point does the same; this one parses its
-            # own copy of the document rather than reusing an already-loaded
-            # Bom, so it has to repair its own copy too.
-            sanitize_cyclonedx_licenses(data)
-
-            # Parse as CycloneDX
+            # Parses its own copy of the document rather than reusing an
+            # already-loaded Bom, so it repairs its own copy too.
             try:
-                bom = Bom.from_json(data)  # type: ignore[attr-defined]
+                bom = load_cyclonedx_bom(data)
             except Exception as e:
                 raise SBOMValidationError(f"Failed to parse CycloneDX SBOM: {e}")
             logger.info("Processing CycloneDX SBOM")

@@ -65,6 +65,17 @@ def tag_sbom_with_release(api_base_url: str, token: str, sbom_id: str, release_i
     _client(api_base_url, token).tag_sbom_with_release(sbom_id, release_id)
 
 
+def tag_artifact_with_release(
+    api_base_url: str,
+    token: str,
+    artifact_id: str,
+    release_id: str,
+    artifact_kind: str = "sbom",
+) -> None:
+    """Associate an SBOM or a document with a release; idempotent on DUPLICATE_ARTIFACT."""
+    _client(api_base_url, token).tag_artifact_with_release(artifact_id, release_id, artifact_kind=artifact_kind)
+
+
 def get_release_friendly_name(release_details: Optional[dict[str, Any]], version: str) -> str:
     """Return a user-friendly release label.
 

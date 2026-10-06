@@ -664,6 +664,34 @@ def link_root_dependencies(bom: Bom) -> int:
     return len(top_level_refs)
 
 
+def load_cyclonedx_bom(data: dict[str, Any]) -> Bom:
+    """Deserialize a CycloneDX document, repairing first what the parser refuses.
+
+    ``Bom.from_json`` is stricter about licence shapes than the generators
+    that write them, and it fails the whole document rather than the one
+    component it could not read. cdxgen puts the licence body straight into
+    ``license.text``, where the schema wants an attachedText object;
+    cyclonedx-python-lib calls ``.items()`` on that string, so one component's
+    copyright header ends the run with ``AttributeError: 'str' object has no
+    attribute 'items'`` and no indication of which component or which field.
+
+    ``sanitize_cyclonedx_licenses`` repairs that and three sibling cases, and
+    it has to run on every document before that document is parsed. Four of
+    the six call sites did it by hand, each carrying its own comment about
+    why. The two that did not -- hash enrichment and dependency expansion --
+    were still dying on it. Pairing the repair with the parse here is what
+    keeps a seventh call site from becoming the next one.
+
+    ``data`` is repaired in place, as ``sanitize_cyclonedx_licenses`` does.
+    """
+    sanitize_cyclonedx_licenses(data)
+    # from_json comes from py_serializable's protocol and is untyped, so it
+    # returns Any. Naming the type here rather than widening the ignore is
+    # what lets callers be type-checked at all.
+    bom: Bom = Bom.from_json(data)  # type: ignore[attr-defined]
+    return bom
+
+
 def serialize_cyclonedx_bom(bom: Bom, spec_version: Optional[str] = None) -> str:
     """
     Serialize a CycloneDX BOM to JSON string using the appropriate version outputter.
@@ -683,7 +711,7 @@ def serialize_cyclonedx_bom(bom: Bom, spec_version: Optional[str] = None) -> str
         ValueError: If spec_version is unsupported or cannot be determined
 
     Examples:
-        >>> bom = Bom.from_json(data)
+        >>> bom = load_cyclonedx_bom(data)
         >>> # Serialize as CycloneDX 1.6
         >>> json_str = serialize_cyclonedx_bom(bom, "1.6")
         >>>
@@ -816,8 +844,12 @@ def _add_compositions_if_missing(json_str: str) -> str:
 # SPDX Version Management
 # ============================================================================
 
-# SPDX versions supported (2.x via spdx-tools library, 3.0.1 via custom parser/writer in spdx3.py)
-SUPPORTED_SPDX_VERSIONS = ["2.2", "2.3", "3.0.1"]
+# SPDX versions supported (2.x via spdx-tools library, 3.0.x via the custom
+# parser/writer in spdx3.py). Wider than _generation.protocol.SPDX_VERSIONS,
+# which is what a generator can emit from a lock file: nothing generates an
+# SPDX 3 document, but one supplied through SBOM_FILE is read, validated and
+# written back at the version it declares.
+SUPPORTED_SPDX_VERSIONS = ["2.2", "2.3", "3.0.0", "3.0.1"]
 
 # Default SPDX version
 DEFAULT_SPDX_VERSION = "2.3"
@@ -852,8 +884,11 @@ def validate_spdx_version(version: str) -> bool:
     """
     Check if SPDX version is supported.
 
+    Supported means this package can read and write it, which is wider than
+    what it can generate. Nothing generates an SPDX 3 document.
+
     Args:
-        version: SPDX version string (e.g., "2.3", "3.0")
+        version: SPDX version string (e.g., "2.3", "3.0.1")
 
     Returns:
         True if supported, False otherwise
@@ -861,8 +896,10 @@ def validate_spdx_version(version: str) -> bool:
     Examples:
         >>> validate_spdx_version("2.3")
         True
+        >>> validate_spdx_version("3.0.0")
+        True
         >>> validate_spdx_version("3.0")
-        False  # Until SPDX 3.0 support is added
+        False  # The 3.0 line has two releases; name the one you mean
     """
     return version in SUPPORTED_SPDX_VERSIONS
 
@@ -1329,6 +1366,33 @@ def sanitize_spdx_licenses(data: dict[str, Any]) -> int:
                 tracker.record_license_sanitized(value, sanitized, component=component)
                 count += 1
         return count
+
+    # An SPDX 3 document has none of the keys below: it states a licence as a
+    # Relationship to a simplelicensing_LicenseExpression element in @graph.
+    # Walked the 2.x way it reports zero repairs having looked at nothing,
+    # which reads as "nothing to fix" on every call site.
+    # A single node object rather than an array: JSON-LD allows it, the SPDX 3
+    # schemas pin @graph to an array, so a document shaped that way fails
+    # validation whatever happens here. Read anyway, because iterating a dict
+    # walks its keys and reports "nothing to fix" about a document nobody
+    # looked at.
+    graph = data.get("@graph", [])
+    if isinstance(graph, dict):
+        graph = [graph]
+    for element in graph:
+        if not isinstance(element, dict):
+            continue
+        # JSON-LD states the type as `type` under the SPDX 3 context and as
+        # `@type` expanded. spdx3.py reads both, and the component id below
+        # already reads both spellings of the id; reading one spelling of the
+        # type here skips a conforming document and reports nothing to fix.
+        if (element.get("type") or element.get("@type")) != "simplelicensing_LicenseExpression":
+            continue
+        sanitized_count += _sanitize_license_field(
+            element,
+            "simplelicensing_licenseExpression",
+            component=element.get("spdxId") or element.get("@id"),
+        )
 
     # Process packages
     for package in data.get("packages", []):

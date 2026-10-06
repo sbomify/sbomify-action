@@ -104,16 +104,13 @@ def test_two_manifests_are_still_ambiguous(project):
 
 
 def test_it_searches_the_action_workspace_too(tmp_path, monkeypatch):
-    """path_expansion looks in /github/workspace as well as the working
-    directory, because inside a GitHub Action they are not the same. The
+    """path_expansion looks in the platform's workspace as well as the working
+    directory, because on a runtime that mounts the repository elsewhere (a
+    GitHub Action mounts it at /github/workspace) they are not the same. The
     substitution claimed parity and checked only two of the three, so it could
     refuse a file the caller could plainly see -- in exactly the environment
     where LOCK_FILE is most likely to be pinned and stale."""
-    # sys.modules, because `sbomify_action.cli` re-exports the click
-    # command as `main` and shadows the submodule of the same name.
-    import sys
-
-    _m = sys.modules["sbomify_action.cli.main"]
+    from unittest.mock import patch
 
     workspace = tmp_path / "gh"
     workspace.mkdir()
@@ -122,9 +119,14 @@ def test_it_searches_the_action_workspace_too(tmp_path, monkeypatch):
     elsewhere = tmp_path / "somewhere-else"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
-    monkeypatch.setattr(_m, "GITHUB_WORKSPACE", str(workspace))
 
-    assert _expand_lock_file_or_substitute("package-lock.json").endswith("pnpm-lock.yaml")
+    # The mount point, not the platform's workspace. Substitution scans a
+    # directory for alternatives rather than looking up one name, so it follows
+    # only the fixed roots the action mounts at -- following the platform's
+    # workspace would let a monorepo's repository root answer a subproject's
+    # stale LOCK_FILE. See _expand_lock_file_or_substitute.
+    with patch("sbomify_action.cli.main.legacy_workspaces", return_value=(workspace,)):
+        assert _expand_lock_file_or_substitute("package-lock.json").endswith("pnpm-lock.yaml")
 
 
 def test_a_symlinked_lockfile_keeps_its_own_path(project):
@@ -157,3 +159,27 @@ def test_two_dotnet_project_files_are_still_ambiguous(project):
 
     with pytest.raises(FileProcessingError):
         _expand_lock_file_or_substitute("packages.lock.json")
+
+
+def test_the_repository_root_does_not_answer_a_subprojects_stale_lock_file(tmp_path, monkeypatch):
+    """A monorepo subproject must not be substituted from the repository root.
+
+    On a GitHub-hosted runner GITHUB_WORKSPACE is the repository root -- a real
+    directory, usually full of lock files. Following the platform's workspace
+    here meant WORKING_DIR=packages/app with a stale LOCK_FILE could be answered
+    by the root's lock file, or refused as ambiguous because it found two. This
+    is also why the whole suite passed locally and failed in CI: locally the
+    variable is unset, so the extra root did not exist.
+    """
+    root = tmp_path / "repo"
+    subproject = root / "packages" / "app"
+    subproject.mkdir(parents=True)
+    (root / "uv.lock").write_text("")  # the repository's own, unrelated
+    (subproject / "requirements.txt").write_text("")
+
+    monkeypatch.chdir(subproject)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(root))
+
+    # The subproject's own manifest, not the root's uv.lock, and not a refusal.
+    assert _expand_lock_file_or_substitute("poetry.lock").endswith("requirements.txt")

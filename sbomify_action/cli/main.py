@@ -18,17 +18,16 @@ import click
 import sentry_sdk
 
 # Add cyclonedx imports for proper SBOM handling
-from cyclonedx.model.bom import Bom
-
 from .. import format_display_name
+from .._runtime import CIPlatform, get_platform, legacy_workspaces, workspace_candidates
 from .._upload import VALID_BOM_TYPES, VALID_DESTINATIONS
 from ..additional_packages import inject_additional_packages
 from ..augmentation import augment_sbom_from_file
 from ..console import (
     get_audit_trail,
-    gha_group,
-    gha_notice,
-    gha_warning,
+    log_group,
+    log_notice,
+    log_warning,
     print_component_not_found_error,
     print_duplicate_sbom_error,
     print_final_success,
@@ -67,15 +66,16 @@ from ..release_version import (
     tag_from_ci,
     version_from_release_tag,
 )
+from ..sbomify_api import VALID_COMPLIANCE_SUBCATEGORIES, VALID_DOCUMENT_TYPES
 from ..serialization import (
     _add_compositions_if_missing,
     _fix_purl_encoding_bugs_in_json,
-    sanitize_cyclonedx_licenses,
+    load_cyclonedx_bom,
     sanitize_spdx_licenses,
     serialize_cyclonedx_bom,
 )
 from ..spdx3 import is_spdx3
-from ..upload import upload_sbom
+from ..upload import upload_document, upload_sbom
 
 
 # Import version for tool metadata with multiple fallback mechanisms
@@ -227,6 +227,12 @@ class Config:
     docker_image: Optional[str] = None
     lock_file: Optional[str] = None
     source_dir: Optional[str] = None
+    document_file: Optional[str] = None
+    document_name: Optional[str] = None
+    document_type: str = "other"
+    document_version: Optional[str] = None
+    document_description: str = ""
+    document_compliance_subcategory: Optional[str] = None
     output_file: str = "sbom_output.json"
     upload: bool = True
     upload_destinations: list[str] | None = None
@@ -271,6 +277,17 @@ class Config:
         )
 
     @property
+    def is_document_upload(self) -> bool:
+        """True iff this run publishes a document (PDF etc.) rather than an SBOM.
+
+        A document is opaque bytes with metadata: nothing to generate, augment,
+        enrich or validate, and a different endpoint on a different kind of
+        component. The pipeline branches on this early rather than threading
+        skip-conditions through every SBOM step.
+        """
+        return bool(self.document_file)
+
+    @property
     def uploads_to_sbomify(self) -> bool:
         """True iff the configured upload destinations include sbomify."""
         return self.upload and self.upload_destinations is not None and "sbomify" in self.upload_destinations
@@ -298,6 +315,71 @@ class Config:
         """
         return self.requires_sbomify_api or self.augment
 
+    def _validate_document_upload(self) -> None:
+        """Validate DOCUMENT_FILE mode and drop the settings it cannot honour.
+
+        A document is published exactly as authored — the whole point of
+        uploading a pentest report or a SOC 2 attestation is that the bytes are
+        the ones that were signed off. So every SBOM-shaped setting is either
+        rejected here (where it would change what gets published) or warned
+        about and cleared (where it would simply do nothing).
+
+        Raises:
+            ConfigurationError: If configuration is invalid
+        """
+        if not self.upload:
+            raise ConfigurationError(
+                "DOCUMENT_FILE requires UPLOAD=true: a document is uploaded as authored, so with "
+                "uploads disabled the run would do nothing at all."
+            )
+        non_sbomify = [d for d in (self.upload_destinations or []) if d != "sbomify"]
+        if non_sbomify:
+            raise ConfigurationError(
+                f"DOCUMENT_FILE can only be uploaded to sbomify; remove {', '.join(non_sbomify)} "
+                "from UPLOAD_DESTINATIONS. Other destinations only accept SBOMs."
+            )
+        if self.document_type not in VALID_DOCUMENT_TYPES:
+            raise ConfigurationError(
+                f"Invalid DOCUMENT_TYPE: '{self.document_type}'. "
+                f"Must be one of: {', '.join(sorted(VALID_DOCUMENT_TYPES))}"
+            )
+        if self.document_compliance_subcategory:
+            if self.document_compliance_subcategory not in VALID_COMPLIANCE_SUBCATEGORIES:
+                raise ConfigurationError(
+                    f"Invalid DOCUMENT_COMPLIANCE_SUBCATEGORY: '{self.document_compliance_subcategory}'. "
+                    f"Must be one of: {', '.join(sorted(VALID_COMPLIANCE_SUBCATEGORIES))}"
+                )
+            if self.document_type != "compliance":
+                logger.warning(
+                    f"DOCUMENT_COMPLIANCE_SUBCATEGORY only applies to DOCUMENT_TYPE=compliance; "
+                    f"ignoring it for DOCUMENT_TYPE={self.document_type}."
+                )
+                self.document_compliance_subcategory = None
+        # BOM_TYPE names a kind of BOM. A document is not one, and pairing them
+        # would mislabel whichever the backend believed.
+        if self.bom_type and self.bom_type != "sbom":
+            raise ConfigurationError(
+                f"BOM_TYPE='{self.bom_type}' cannot be combined with DOCUMENT_FILE — a document is "
+                "not a BOM. Use DOCUMENT_TYPE to describe it, or SBOM_FILE for a real BOM artifact."
+            )
+        if self.submodule_path:
+            raise ConfigurationError(
+                "SUBMODULE_PATH resolves a pinned submodule to an SBOM version and has no meaning "
+                "for a document; remove it."
+            )
+        if self.augment or self.enrich:
+            logger.warning("DOCUMENT_FILE is uploaded as authored; ignoring AUGMENT/ENRICH.")
+            self.augment = False
+            self.enrich = False
+        if self.component_name or self.component_purl or self.override_name:
+            logger.warning(
+                "DOCUMENT_FILE is uploaded as authored; ignoring "
+                "COMPONENT_NAME/COMPONENT_PURL/OVERRIDE_NAME. Use DOCUMENT_NAME to name the document."
+            )
+            self.component_name = None
+            self.component_purl = None
+            self.override_name = False
+
     def validate(self) -> None:
         """
         Validate configuration settings.
@@ -313,9 +395,9 @@ class Config:
             if not self.token:
                 # Allow missing token when GitHub OIDC trusted publishing is available —
                 # the pipeline will exchange the OIDC JWT for a short-lived token at runtime.
-                from ..oidc import is_github_oidc_available
+                from ..oidc import is_oidc_available
 
-                if not is_github_oidc_available():
+                if not is_oidc_available():
                     operations = []
                     if self.uploads_to_sbomify:
                         operations.append("uploading to sbomify")
@@ -338,13 +420,20 @@ class Config:
                 reason = " or ".join(operations)
                 raise ConfigurationError(f"Component ID is not defined (required when {reason})")
 
-        inputs = [self.sbom_file, self.lock_file, self.source_dir, self.docker_image]
+        inputs = [self.sbom_file, self.lock_file, self.source_dir, self.docker_image, self.document_file]
         if sum(bool(x) for x in inputs) > 1:
-            raise ConfigurationError("Please provide only one of: SBOM_FILE, LOCK_FILE, SOURCE_DIR, or DOCKER_IMAGE")
+            raise ConfigurationError(
+                "Please provide only one of: SBOM_FILE, LOCK_FILE, SOURCE_DIR, DOCKER_IMAGE, or DOCUMENT_FILE"
+            )
         if not any(inputs):
-            raise ConfigurationError("Please provide one of: SBOM_FILE, LOCK_FILE, SOURCE_DIR, or DOCKER_IMAGE")
+            raise ConfigurationError(
+                "Please provide one of: SBOM_FILE, LOCK_FILE, SOURCE_DIR, DOCKER_IMAGE, or DOCUMENT_FILE"
+            )
         if self.source_dir and not Path(self.source_dir).is_dir():
             raise ConfigurationError(f"SOURCE_DIR '{self.source_dir}' is not a directory")
+
+        if self.is_document_upload:
+            self._validate_document_upload()
 
         # Submodule mode: attach-or-backfill against the submodule's
         # component. Needs a lockfile to backfill from, and only makes
@@ -457,13 +546,39 @@ class Config:
                 )
             if self.sbom_format == "spdx" and self.spec_version not in SPDX_VERSIONS:
                 hint = ""
-                if self.spec_version == "3.0.1":
+                # Any 3.x, not just 3.0.1: 3.0 is what syft, Microsoft
+                # sbom-tool, JFrog Xray and Yocto 5.x emit, so it is just as
+                # likely to be asked for, and it hit the bare message.
+                if self.spec_version.startswith("3"):
+                    from ..validation import SPDX_SCHEMAS
+
+                    # "3.0" is a key in SPDX_SCHEMAS so an alias-context
+                    # document reaches a schema at all, but it is not a version
+                    # anyone can send: both official schemas pin @context with
+                    # a const to their fully qualified URL, so a document
+                    # declaring the bare 3.0 line fails whichever schema it is
+                    # held to. Offering SBOM_FILE for it would cost a round
+                    # trip to the same refusal.
+                    readable = self.spec_version in SPDX_SCHEMAS and self.spec_version != "3.0"
                     hint = (
-                        " SPDX 3.0.1 cannot be generated from a lock file or Docker image --"
-                        " no generator plugin emits it. Two other routes produce it:"
-                        " pass an existing 3.0.1 document as SBOM_FILE, or use"
-                        " additional-packages-only mode (LOCK_FILE=none or SBOM_FILE=none)."
+                        f" SPDX {self.spec_version} cannot be generated from a lock file or"
+                        " Docker image -- no generator plugin emits any SPDX 3."
                     )
+                    if readable:
+                        # The empty-SBOM route always writes 3.0.1, whatever
+                        # was asked for, so say which version it hands back
+                        # rather than implying it honours this one.
+                        hint += (
+                            " Two other routes produce one:"
+                            f" pass an existing {self.spec_version} document as SBOM_FILE, or use"
+                            " additional-packages-only mode (LOCK_FILE=none or SBOM_FILE=none),"
+                            " which writes 3.0.1."
+                        )
+                    else:
+                        # Do not send them off to write a document we would
+                        # then refuse: SBOM_FILE only accepts what we can read.
+                        supported = ", ".join(v for v in SPDX_SCHEMAS if v.startswith("3") and v != "3.0")
+                        hint += f" Nor is it read: the SPDX 3 versions accepted via SBOM_FILE are {supported}."
                 raise ConfigurationError(
                     f"Invalid spec_version '{self.spec_version}' for SPDX. Supported: {', '.join(SPDX_VERSIONS)}.{hint}"
                 )
@@ -571,8 +686,16 @@ def _repository_name() -> Optional[str]:
 
     Only used to answer "does this tag name a different package", so a missing
     value means the check is skipped rather than guessed at.
+
+    ``CIRCLE_PROJECT_REPONAME`` already holds the bare repository name rather
+    than an ``owner/repo`` pair; taking the last path segment leaves it alone.
     """
-    for var in ("GITHUB_REPOSITORY", "CI_PROJECT_PATH", "BITBUCKET_REPO_FULL_NAME"):
+    for var in (
+        "GITHUB_REPOSITORY",
+        "CI_PROJECT_PATH",
+        "BITBUCKET_REPO_FULL_NAME",
+        "CIRCLE_PROJECT_REPONAME",
+    ):
         if value := os.getenv(var):
             return value.split("/")[-1]
     return None
@@ -700,6 +823,12 @@ def build_config(
     docker_image: Optional[str] = None,
     lock_file: Optional[str] = None,
     source_dir: Optional[str] = None,
+    document_file: Optional[str] = None,
+    document_name: Optional[str] = None,
+    document_type: str = "other",
+    document_version: Optional[str] = None,
+    document_description: Optional[str] = None,
+    document_compliance_subcategory: Optional[str] = None,
     output_file: str = "sbom_output.json",
     upload: bool = True,
     upload_destinations: Optional[list[str]] = None,
@@ -845,6 +974,15 @@ def build_config(
     # keyword means "build from additional packages alone", which is a
     # statement about lock files and has no reading for a directory.
     expanded_source_dir = directory_expansion(source_dir) if source_dir else None
+    expanded_document_file = path_expansion(document_file) if document_file else None
+
+    # A document carries its own version, but most workflows already compute
+    # one for the component and mean the same thing by it; fall back to that
+    # before the backend's "1.0", which would silently stamp every upload with
+    # the same version.
+    resolved_document_version = document_version or (final_component_version if document_file else None) or "1.0"
+    if document_file:
+        logger.info(f"Uploading document: {expanded_document_file} (type: {document_type or 'other'})")
 
     config = Config(
         token=token or "",
@@ -853,6 +991,14 @@ def build_config(
         docker_image=docker_image,
         lock_file=expanded_lock_file,
         source_dir=expanded_source_dir,
+        document_file=expanded_document_file,
+        document_name=document_name or None,
+        document_type=(document_type or "other").lower(),
+        document_version=resolved_document_version,
+        document_description=document_description or "",
+        document_compliance_subcategory=(
+            document_compliance_subcategory.lower() if document_compliance_subcategory else None
+        ),
         output_file=output_file,
         upload=upload,
         upload_destinations=upload_destinations,
@@ -905,6 +1051,12 @@ def load_config() -> Config:
         docker_image=os.getenv("DOCKER_IMAGE"),
         lock_file=os.getenv("LOCK_FILE"),
         source_dir=os.getenv("SOURCE_DIR"),
+        document_file=os.getenv("DOCUMENT_FILE"),
+        document_name=os.getenv("DOCUMENT_NAME"),
+        document_type=os.getenv("DOCUMENT_TYPE", "other"),
+        document_version=os.getenv("DOCUMENT_VERSION"),
+        document_description=os.getenv("DOCUMENT_DESCRIPTION"),
+        document_compliance_subcategory=os.getenv("DOCUMENT_COMPLIANCE_SUBCATEGORY"),
         output_file=os.getenv("OUTPUT_FILE", "sbom_output.json"),
         upload=evaluate_boolean(os.getenv("UPLOAD", "True"), source="UPLOAD"),
         upload_destinations=upload_destinations,
@@ -1064,96 +1216,22 @@ def initialize_sentry() -> None:
     # Set the action version as a tag (always safe to send)
     sentry_sdk.set_tag("action.version", SBOMIFY_VERSION)
 
-    # Detect CI/CD platform
-    is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
-    is_gitlab_ci = os.getenv("GITLAB_CI") == "true"
-    is_bitbucket = os.getenv("BITBUCKET_PIPELINE_UUID") is not None
+    # What is safe to report is the platform's judgement -- it is the only thing
+    # that knows whether this repository is public. A platform that cannot tell
+    # returns no context, which is the conservative answer, and a platform added
+    # later gets its telemetry right without touching this function.
+    platform = get_platform()
 
-    # Determine if we should send context based on repository visibility
-    # GitHub Actions
-    if is_github_actions:
-        github_visibility = os.getenv("GITHUB_REPOSITORY_VISIBILITY", "").lower()
-        is_public_repo = github_visibility == "public"
-        sentry_sdk.set_tag("ci.platform", "github-actions")
-        sentry_sdk.set_tag("repo.public", str(is_public_repo))
+    for tag, value in platform.telemetry_tags().items():
+        sentry_sdk.set_tag(tag, value)
 
-        if is_public_repo:
-            # Add GitHub context tags for public repos only
-            ci_context = {}
-            if repo := os.getenv("GITHUB_REPOSITORY"):
-                sentry_sdk.set_tag("ci.repository", repo)
-                ci_context["repository"] = repo
-            if workflow := os.getenv("GITHUB_WORKFLOW"):
-                sentry_sdk.set_tag("ci.workflow", workflow)
-                ci_context["workflow"] = workflow
-            if ref := os.getenv("GITHUB_REF"):
-                sentry_sdk.set_tag("ci.ref", ref)
-                ci_context["ref"] = ref
-            if sha := os.getenv("GITHUB_SHA"):
-                sentry_sdk.set_tag("ci.sha", sha[:7])
-                ci_context["sha"] = sha
-            if action := os.getenv("GITHUB_ACTION"):
-                ci_context["action"] = action
-            if run_id := os.getenv("GITHUB_RUN_ID"):
-                ci_context["run_id"] = run_id
-            if run_number := os.getenv("GITHUB_RUN_NUMBER"):
-                ci_context["run_number"] = run_number
-
-            if ci_context:
-                sentry_sdk.set_context("ci", ci_context)
-        else:
-            logger.debug("Skipping CI context for Sentry (private repository or visibility not set)")
-
-    # GitLab CI
-    elif is_gitlab_ci:
-        gitlab_visibility = os.getenv("CI_PROJECT_VISIBILITY", "").lower()
-        is_public_repo = gitlab_visibility == "public"
-        sentry_sdk.set_tag("ci.platform", "gitlab-ci")
-        sentry_sdk.set_tag("repo.public", str(is_public_repo))
-
-        if is_public_repo:
-            # Add GitLab context tags for public projects only
-            ci_context = {}
-            if project := os.getenv("CI_PROJECT_PATH"):
-                sentry_sdk.set_tag("ci.repository", project)
-                ci_context["project"] = project
-            if pipeline_source := os.getenv("CI_PIPELINE_SOURCE"):
-                sentry_sdk.set_tag("ci.pipeline_source", pipeline_source)
-                ci_context["pipeline_source"] = pipeline_source
-            if ref := os.getenv("CI_COMMIT_REF_NAME"):
-                sentry_sdk.set_tag("ci.ref", ref)
-                ci_context["ref"] = ref
-            if sha := os.getenv("CI_COMMIT_SHORT_SHA"):
-                sentry_sdk.set_tag("ci.sha", sha)
-                ci_context["sha"] = sha
-            if pipeline_id := os.getenv("CI_PIPELINE_ID"):
-                ci_context["pipeline_id"] = pipeline_id
-            if job_name := os.getenv("CI_JOB_NAME"):
-                ci_context["job_name"] = job_name
-
-            if ci_context:
-                sentry_sdk.set_context("ci", ci_context)
-        else:
-            logger.debug("Skipping CI context for Sentry (private repository or visibility not set)")
-
-    # Bitbucket Pipelines
-    elif is_bitbucket:
-        # Bitbucket doesn't expose repository visibility, so we treat all repos as private by default
-        # This is the safest approach for privacy
-        sentry_sdk.set_tag("ci.platform", "bitbucket-pipelines")
-        sentry_sdk.set_tag("repo.public", "False")
-        logger.debug("Skipping CI context for Sentry (Bitbucket repository visibility unknown, treating as private)")
-
-    # Unknown/Local environment
+    ci_context = platform.telemetry_context()
+    if ci_context:
+        sentry_sdk.set_context("ci", ci_context)
+    elif platform.is_ci:
+        logger.debug(f"Skipping CI context for Sentry ({platform.name} repository is not public or visibility unknown)")
     else:
-        sentry_sdk.set_tag("ci.platform", "unknown")
         logger.debug("Skipping CI context for Sentry (not running in a recognized CI/CD platform)")
-
-
-def _in_github_actions() -> bool:
-    """Return True when running inside GitHub Actions."""
-    value = os.environ.get("GITHUB_ACTIONS")
-    return value is not None and value.lower() in {"true", "1"}
 
 
 def _resolve_token(explicit: Optional[str] = None) -> Optional[str]:
@@ -1171,19 +1249,25 @@ def _resolve_token(explicit: Optional[str] = None) -> Optional[str]:
     return os.environ.get("SBOMIFY_TOKEN") or os.environ.get("TOKEN") or None
 
 
-def _github_workspace() -> Path:
-    """Return the GitHub Actions workspace path as an absolute, resolved Path."""
-    raw = os.environ.get("GITHUB_WORKSPACE") or "/github/workspace"
-    workspace = Path(raw)
-    return workspace.resolve()
+def _resolved_workspace(platform: CIPlatform | None = None) -> Path:
+    """The checkout root of ``platform``, absolute and resolved.
+
+    Takes the platform rather than resolving one, so a caller that has already
+    resolved it cannot end up checking a path from one platform against a
+    decision made by another.
+    """
+    platform = platform or get_platform()
+    return (platform.workspace() or Path.cwd()).resolve()
 
 
 def resolve_working_dir(working_dir: str) -> Path:
     """Resolve a working directory path for use with os.chdir().
 
-    Supports both relative and absolute paths. When running inside GitHub Actions
-    (detected via the GITHUB_ACTIONS env var), the resolved path is validated to
-    be under the workspace to prevent escaping the mounted repository.
+    Supports both relative and absolute paths. On a platform that pins the
+    checkout to a fixed mount point (GitHub Actions), the resolved path is
+    validated to be under the workspace to prevent escaping the mounted
+    repository. Elsewhere the user picked the directory, so relative paths
+    resolve against the current working directory and no confinement applies.
 
     Args:
         working_dir: The working directory path to resolve.
@@ -1202,24 +1286,25 @@ def resolve_working_dir(working_dir: str) -> Path:
         )
 
     path = Path(working_dir)
-    in_gha = _in_github_actions()
-    workspace = _github_workspace()
+    platform = get_platform()
+    confined = platform.confines_working_dir
+    workspace = _resolved_workspace(platform)
 
     try:
         if path.is_absolute():
             resolved = path.resolve()
         else:
-            # Relative path — resolve against workspace if in GHA,
-            # otherwise against cwd (for local/non-GHA use)
-            base = workspace if in_gha else Path.cwd()
+            # Relative path — resolve against the workspace where the platform
+            # owns it, otherwise against cwd (local and most CI systems)
+            base = workspace if confined else Path.cwd()
             resolved = (base / path).resolve()
     except (OSError, RuntimeError) as exc:
         raise click.BadParameter(f"Unable to resolve working directory '{working_dir}': {exc}") from exc
 
-    # In GitHub Actions runtime, enforce the resolved path is under the workspace
-    if in_gha and not resolved.is_relative_to(workspace):
+    # Enforce the resolved path is under the workspace the platform mounted
+    if confined and not resolved.is_relative_to(workspace):
         raise click.BadParameter(
-            f"Working directory '{resolved}' must be under {workspace} when running in GitHub Actions."
+            f"Working directory '{resolved}' must be under {workspace} when running on {platform.name}."
         )
 
     if not resolved.is_dir():
@@ -1250,11 +1335,36 @@ def _format_search_locations(*candidates: Path) -> str:
     return ", ".join(f"'{location}'" for location in seen)
 
 
-#: Where a GitHub Action mounts the repository. path_expansion searches here
-#: as well as the working directory, because the two are not the same inside
-#: an action, and anything else that searches for an input has to look in the
-#: same places or it will refuse a file the caller can plainly see.
-GITHUB_WORKSPACE = "/github/workspace"
+def _first_existing(path: str | Path) -> Path | None:
+    """Return the first workspace candidate that holds ``path`` as a file."""
+    for workspace in workspace_candidates():
+        candidate = workspace / path
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+#: Deprecated. Where a GitHub Action mounts the repository, kept as a module
+#: constant because it was one and callers referenced it. Lookups go through
+#: workspace_candidates(), which asks the active platform and then falls back to
+#: this same well-known root, so changing this value no longer redirects them.
+GITHUB_WORKSPACE = str(legacy_workspaces()[0])
+
+
+def _workspace() -> Path:
+    """Root of the repository checkout, per the active CI platform.
+
+    path_expansion searches here as well as the working directory, because the
+    two are not the same on a runtime that mounts the repository somewhere
+    other than where it runs the command (a GitHub Action mounts it at
+    /github/workspace). Anything else that searches for an input has to look in
+    the same places or it will refuse a file the caller can plainly see.
+
+    Platforms that simply run inside the checkout report the working directory,
+    so the second lookup is a harmless repeat there -- _format_search_locations
+    collapses the duplicate.
+    """
+    return get_platform().workspace() or Path.cwd()
 
 
 def path_expansion(path: str) -> str:
@@ -1282,13 +1392,14 @@ def path_expansion(path: str) -> str:
 
     current_dir = Path.cwd()
     relative_path = current_dir / path
-    workspace_relative_path = Path(GITHUB_WORKSPACE) / path
+    workspace_paths = tuple(workspace / path for workspace in workspace_candidates())
 
     # Log which paths we're checking for debugging
     logger.debug(f"Searching for file '{path}'...")
     logger.debug(f"  Checking direct path: {Path(path)}")
     logger.debug(f"  Checking relative to cwd: {relative_path}")
-    logger.debug(f"  Checking workspace path: {workspace_relative_path}")
+    for workspace_path in workspace_paths:
+        logger.debug(f"  Checking workspace path: {workspace_path}")
 
     if Path(path).is_file():
         logger.info(f"Using input file '{path}'.")
@@ -1296,13 +1407,13 @@ def path_expansion(path: str) -> str:
     elif relative_path.is_file():
         logger.info(f"Using input file '{relative_path}'.")
         return str(relative_path)
-    elif workspace_relative_path.is_file():
+    elif (workspace_relative_path := _first_existing(path)) is not None:
         logger.info(f"Using input file '{workspace_relative_path}'.")
         return str(workspace_relative_path)
     else:
         raise InputPathNotFoundError(
             f"Specified input file '{path}' not found. "
-            f"Searched in: {_format_search_locations(Path(path), relative_path, workspace_relative_path)}"
+            f"Searched in: {_format_search_locations(Path(path), relative_path, *workspace_paths)}"
         )
 
 
@@ -1359,11 +1470,19 @@ def _expand_lock_file_or_substitute(path: str) -> str:
     # Resolved, because the same file reached as "./x" and as an absolute path
     # is one candidate and not two; counting it twice made every substitution
     # look ambiguous and refuse itself.
+    # Deliberately the legacy roots only, NOT workspace_candidates(): unlike
+    # path_expansion, which looks up one exact name, this *scans a directory*
+    # for same-ecosystem alternatives, and widening a scan is not the same
+    # trade as widening a lookup. Following the platform's workspace here would
+    # mean a monorepo's WORKING_DIR=packages/app, with a stale LOCK_FILE, could
+    # be answered by the lock file at the repository root -- silently scanning
+    # the wrong project, or refusing as ambiguous because it found two.
+    roots = legacy_workspaces()
     searched: tuple[Path, ...]
     if named.is_absolute():
-        searched = (named.parent, Path.cwd(), Path(GITHUB_WORKSPACE))
+        searched = (named.parent, Path.cwd(), *roots)
     else:
-        searched = (Path.cwd() / named.parent, Path(GITHUB_WORKSPACE) / named.parent)
+        searched = (Path.cwd() / named.parent, *(root / named.parent for root in roots))
     directories = {d.resolve() for d in searched if d.is_dir()}
 
     # .NET project files are matched by suffix rather than by name, so a scan
@@ -1460,17 +1579,17 @@ def directory_expansion(path: str) -> str:
 
     current_dir = Path.cwd()
     relative_path = current_dir / path
-    workspace_relative_path = Path(GITHUB_WORKSPACE) / path
+    workspace_paths = tuple(workspace / path for workspace in workspace_candidates())
 
     logger.debug(f"Searching for directory '{path}'...")
-    for candidate in (Path(path), relative_path, workspace_relative_path):
+    for candidate in (Path(path), relative_path, *workspace_paths):
         if candidate.is_dir():
             logger.info(f"Using source directory '{candidate}'.")
             return str(candidate if candidate.is_absolute() else current_dir / candidate)
 
     raise InputPathNotFoundError(
         f"Specified source directory '{path}' not found. "
-        f"Searched in: {_format_search_locations(Path(path), relative_path, workspace_relative_path)}"
+        f"Searched in: {_format_search_locations(Path(path), relative_path, *workspace_paths)}"
     )
 
 
@@ -1655,15 +1774,13 @@ def load_sbom_from_file(file_path: str) -> tuple[str, dict[str, Any], object]:
         # Detect format silently (format should already be known at this point)
         if sbom_json.get("bomFormat") == "CycloneDX":
             sbom_format = "cyclonedx"
-            # Repair what the deserializer would choke on before handing it
-            # over. This is the shared door for the metadata overrides, which
-            # run on a user-supplied SBOM before augmentation gets near it and
-            # log-and-continue on failure — so without this a bare
-            # license.text drops COMPONENT_VERSION/NAME/PURL on the floor with
-            # only a warning, rather than failing loudly.
-            sanitize_cyclonedx_licenses(sbom_json)
-            # Use cyclonedx deserializer
-            parsed_object = Bom.from_json(sbom_json)  # type: ignore[attr-defined]
+            # The shared door for the metadata overrides, which run on a
+            # user-supplied SBOM before augmentation gets near it and
+            # log-and-continue on failure — so without the repair inside
+            # load_cyclonedx_bom a bare license.text drops
+            # COMPONENT_VERSION/NAME/PURL on the floor with only a warning,
+            # rather than failing loudly.
+            parsed_object = load_cyclonedx_bom(sbom_json)
             logger.debug(f"Successfully loaded CycloneDX SBOM from {file_path}")
         elif sbom_json.get("spdxVersion") is not None or is_spdx3(sbom_json):
             sbom_format = "spdx"
@@ -1774,12 +1891,15 @@ def _finalize_output_content(content: str, bom_type: Optional[str]) -> str:
     return content
 
 
-def _finalize_post_upload(results: "AggregateResult") -> None:
+def _finalize_post_upload(results: "AggregateResult", step_number: int = 6) -> None:
     """Log the outcome of each processor that ran and exit non-zero if any failed.
 
     A failed processor (e.g. a 403 when the OIDC/CI token cuts a release) must
     surface as a non-zero exit, not be swallowed as a green run. Skipped
     processors don't run here, so they aren't logged and aren't failures.
+
+    ``step_number`` matches the header the caller opened: the SBOM pipeline
+    reaches processors at step 6, a document upload at step 2.
     """
     for proc_result in results.enabled_processors:
         if proc_result.success:
@@ -1790,9 +1910,9 @@ def _finalize_post_upload(results: "AggregateResult") -> None:
             logger.error(f"Processor '{proc_result.processor_name}' failed: {proc_result.error_message}")
 
     if results.any_failures:
-        _log_step_end(6, success=False)
+        _log_step_end(step_number, success=False)
         sys.exit(1)
-    _log_step_end(6)
+    _log_step_end(step_number)
 
 
 def _find_existing_submodule_sbom(config: "Config", sbom_format: str) -> Optional[str]:
@@ -1858,9 +1978,22 @@ def _prepare_submodule_mode(config: "Config") -> Optional[str]:
     return None
 
 
-def _run_post_upload_processing(config: "Config", sbom_id: str) -> None:
-    """Step 6: post-upload processors (release tagging etc.) for ``sbom_id``."""
-    _log_step_header(6, "Post-upload Processing")
+def _run_post_upload_processing(
+    config: "Config",
+    sbom_id: str,
+    artifact_kind: str = "sbom",
+    step_number: int = 6,
+) -> None:
+    """Post-upload processors (release tagging etc.) for ``sbom_id``.
+
+    ``artifact_kind="document"`` tags a document into the release instead --
+    the release-artifact endpoint keys the two differently.
+
+    ``step_number`` is where this lands in the caller's step sequence: 6 in the
+    SBOM pipeline, 2 in a document upload, which has no generate/augment/enrich
+    /finalize steps to number past.
+    """
+    _log_step_header(step_number, "Post-upload Processing")
     try:
         from sbomify_action._processors import ProcessorInput, ProcessorOrchestrator
 
@@ -1869,9 +2002,9 @@ def _run_post_upload_processing(config: "Config", sbom_id: str) -> None:
         # 15-minute default TTL on the originally minted token.
         if config.token_is_oidc_minted:
             from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
-            from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
+            from ..oidc import is_oidc_available, obtain_sbomify_token_via_oidc
 
-            if is_github_oidc_available():
+            if is_oidc_available():
                 try:
                     config.token = obtain_sbomify_token_via_oidc(
                         component_id=config.component_id,
@@ -1897,10 +2030,13 @@ def _run_post_upload_processing(config: "Config", sbom_id: str) -> None:
 
         processor_input = ProcessorInput(
             sbom_id=sbom_id,
-            sbom_file=config.output_file,
+            # A document run writes no OUTPUT_FILE, and naming one here would
+            # point processors at a path that does not exist.
+            sbom_file=None if artifact_kind == "document" else config.output_file,
             product_releases=pr_list,
             api_base_url=config.api_base_url,
             token=config.token,
+            artifact_kind=artifact_kind,
         )
 
         # Check if any processors are enabled
@@ -1910,16 +2046,16 @@ def _run_post_upload_processing(config: "Config", sbom_id: str) -> None:
             results = orchestrator.process_all(processor_input)
             # Raises SystemExit(1) if any processor failed (e.g. a 403 cutting
             # a release) so the failure isn't swallowed as a green run.
-            _finalize_post_upload(results)
+            _finalize_post_upload(results, step_number)
         else:
             logger.info("No processors enabled for this run")
-            _log_step_end(6)
+            _log_step_end(step_number)
     except Exception as e:
         # Crash in orchestrator setup. A processor's own failure already
         # comes back as a failure_result (handled above), so this only
         # catches setup/import errors; keep it non-fatal as before.
-        logger.error(f"Step 6 (post-upload processing) failed: {e}")
-        _log_step_end(6, success=False)
+        logger.error(f"Step {step_number} (post-upload processing) failed: {e}")
+        _log_step_end(step_number, success=False)
 
 
 def _finalize_run(config: "Config") -> None:
@@ -1943,6 +2079,53 @@ def _finalize_run(config: "Config") -> None:
     print_final_success()
 
 
+def _run_document_pipeline(config: "Config") -> None:
+    """Publish a document to sbomify, then tag it into any product releases.
+
+    Two steps rather than the SBOM pipeline's six: there is nothing to
+    generate, and rewriting the bytes of a signed report is the one thing this
+    path must never do.
+    """
+    _log_step_header(1, f"Uploading Document ({config.document_type})", emoji="📄")
+    if not config.document_file:  # pragma: no cover - guarded by is_document_upload
+        logger.error("No document file configured.")
+        _log_step_end(1, success=False)
+        sys.exit(1)
+
+    result = upload_document(
+        document_file=config.document_file,
+        token=config.token,
+        component_id=config.component_id,
+        api_base_url=config.api_base_url,
+        name=config.document_name,
+        version=config.document_version or "1.0",
+        document_type=config.document_type,
+        description=config.document_description,
+        compliance_subcategory=config.document_compliance_subcategory,
+    )
+
+    if not result.success:
+        if result.error_code == "COMPONENT_NOT_FOUND":
+            print_component_not_found_error(config.component_id)
+        logger.error(f"Document upload failed: {result.error_message}")
+        _log_step_end(1, success=False)
+        sys.exit(1)
+
+    _log_step_end(1)
+
+    if result.document_id and config.product_releases:
+        _run_post_upload_processing(config, result.document_id, artifact_kind="document", step_number=2)
+    elif config.product_releases:
+        _log_step_header(2, "Post-upload Processing - SKIPPED")
+        logger.warning("Product releases specified but the upload returned no document ID")
+        _log_step_end(2, success=False)
+
+    # The audit trail records modifications to an SBOM; a document has none by
+    # construction, so print the summary without writing a trail file next to
+    # an OUTPUT_FILE this run never produced.
+    print_final_success()
+
+
 def run_pipeline(config: Config) -> None:
     """
     Run the SBOM pipeline with the given configuration.
@@ -1962,6 +2145,8 @@ def run_pipeline(config: Config) -> None:
         audit_trail.input_file = config.lock_file
     elif config.docker_image:
         audit_trail.input_file = f"docker:{config.docker_image}"
+    elif config.document_file:
+        audit_trail.input_file = config.document_file
 
     # A version the run derived rather than was handed is exactly what an audit
     # trail is for: "8.21.0" on its own says nothing about whether a human
@@ -1990,9 +2175,9 @@ def run_pipeline(config: Config) -> None:
     # env, we skip silently — augmentation falls back to sbomify.json.
     if config.will_use_sbomify_api and not config.token and config.component_id:
         from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
-        from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
+        from ..oidc import is_oidc_available, obtain_sbomify_token_via_oidc
 
-        if is_github_oidc_available():
+        if is_oidc_available():
             try:
                 config.token = obtain_sbomify_token_via_oidc(
                     component_id=config.component_id,
@@ -2017,6 +2202,15 @@ def run_pipeline(config: Config) -> None:
                 "grants `permissions: id-token: write` for the runner."
             )
             sys.exit(1)
+
+    # Documents (PDFs and the like) are published as authored: no generation,
+    # no augmentation, no enrichment, no output file. Branch here rather than
+    # inside step 1 so none of that machinery has to learn about a file it
+    # cannot parse -- but after the OIDC exchange above, so trusted publishing
+    # works for documents exactly as it does for SBOMs.
+    if config.is_document_upload:
+        _run_document_pipeline(config)
+        return
 
     # Submodule mode: resolve the pin to a version and check whether the
     # submodule's component already published an SBOM at exactly that
@@ -2158,7 +2352,7 @@ def run_pipeline(config: Config) -> None:
                                 f"SPDX {actual_spec_version}; using {actual_spec_version}"
                             )
 
-                    gha_warning(
+                    log_warning(
                         "Using the SBOM published by Chainguard for this image. It covers the "
                         "packages in the Chainguard base image only — anything your Dockerfile "
                         "adds on top (your application binary, files brought in via COPY/ADD, "
@@ -2343,7 +2537,7 @@ def run_pipeline(config: Config) -> None:
                         f"Added {expansion_result.added_count} transitive dependencies (discovered {expansion_result.discovered_count} total)"
                     )
                     # Log discovered packages in collapsible group
-                    with gha_group("Discovered Transitive Dependencies"):
+                    with log_group("Discovered Transitive Dependencies"):
                         for dep in expansion_result.dependencies[:50]:
                             parent_info = f" (via {dep.parent})" if dep.parent else ""
                             print(f"  {dep.purl}{parent_info}")
@@ -2401,7 +2595,7 @@ def run_pipeline(config: Config) -> None:
 
         # Inform user if API augmentation is unavailable
         if not config.token or not config.component_id:
-            gha_notice(
+            log_notice(
                 "sbomify API augmentation skipped (TOKEN or COMPONENT_ID not set). "
                 "To add metadata, either create a sbomify.json file in your project "
                 "root, set TOKEN + COMPONENT_ID, or in GitHub Actions enable trusted "
@@ -2507,9 +2701,9 @@ def run_pipeline(config: Config) -> None:
         # this is where it should be young.
         if config.token_is_oidc_minted:
             from ..exceptions import OIDCBindingMissingError, OIDCExchangeError
-            from ..oidc import is_github_oidc_available, obtain_sbomify_token_via_oidc
+            from ..oidc import is_oidc_available, obtain_sbomify_token_via_oidc
 
-            if is_github_oidc_available():
+            if is_oidc_available():
                 try:
                     config.token = obtain_sbomify_token_via_oidc(
                         component_id=config.component_id,
@@ -3007,7 +3201,7 @@ def _cites_a_phantom_lockfile(value: object, directory: Path) -> bool:
     # wearing a different hat.
     if cited.is_absolute():
         return not cited.is_file()
-    return not (directory / cited).is_file() and not (Path(GITHUB_WORKSPACE) / cited).is_file()
+    return not (directory / cited).is_file() and _first_existing(cited) is None
 
 
 def _recommend_a_lock_file(lock_file: str | None) -> None:
@@ -3585,6 +3779,60 @@ def _parse_upload_destinations_callback(
     ),
 )
 @click.option(
+    "--document-file",
+    envvar="DOCUMENT_FILE",
+    type=click.Path(exists=False),
+    help=(
+        "Path to a document (PDF, Markdown, ...) to upload to a sbomify component of type "
+        "'document'. Use instead of --sbom-file/--lock-file: documents are published as "
+        "authored, with no generation, augmentation or enrichment. The EU CRA, FDA and PCI DSS "
+        "all ask for evidence an SBOM cannot carry -- a pentest report, a SOC 2 attestation, a "
+        "declaration of conformity -- and this is how that evidence reaches the same component "
+        "and the same release as the SBOM."
+    ),
+)
+@click.option(
+    "--document-name",
+    envvar="DOCUMENT_NAME",
+    default=None,
+    help="Name to show in sbomify for the uploaded document (default: the file name without its extension).",
+)
+@click.option(
+    "--document-type",
+    envvar="DOCUMENT_TYPE",
+    type=click.Choice(sorted(VALID_DOCUMENT_TYPES), case_sensitive=False),
+    default="other",
+    show_default=True,
+    help=(
+        "What kind of document this is. Auditors look for named evidence, so the type is what "
+        "makes a file findable: 'pentest-report' and 'threat-model' answer EU CRA Annex I "
+        "security-assessment duties, 'compliance' covers SOC 2 / ISO 27001 attestations, and "
+        "'license' or 'release-notes' back the documentation obligations."
+    ),
+)
+@click.option(
+    "--document-version",
+    envvar="DOCUMENT_VERSION",
+    default=None,
+    help="Version recorded for the document (default: COMPONENT_VERSION if set, otherwise 1.0).",
+)
+@click.option(
+    "--document-description",
+    envvar="DOCUMENT_DESCRIPTION",
+    default=None,
+    help="Free-text description stored with the document.",
+)
+@click.option(
+    "--document-compliance-subcategory",
+    envvar="DOCUMENT_COMPLIANCE_SUBCATEGORY",
+    type=click.Choice(sorted(VALID_COMPLIANCE_SUBCATEGORIES), case_sensitive=False),
+    default=None,
+    help=(
+        "Badge a --document-type=compliance document as an NDA, SOC 2 or ISO 27001 artifact so "
+        "the Trust Center can present it as the named attestation. Ignored for other types."
+    ),
+)
+@click.option(
     "-o",
     "--output-file",
     envvar="OUTPUT_FILE",
@@ -3692,7 +3940,13 @@ def _parse_upload_destinations_callback(
     "--spec-version",
     envvar="SPEC_VERSION",
     default=None,
-    help="Override the spec version for SBOM generation (e.g., '1.6', '2.3', '3.0.1').",
+    help=(
+        "Spec version for SBOM generation. CycloneDX 1.2-1.7 (default 1.6), "
+        "SPDX 2.2 or 2.3 (default 2.3). No generator here scans SPDX 3 out of "
+        "code, so reach it one of two ways: supply an existing document via "
+        "SBOM_FILE, or set LOCK_FILE=none and list ADDITIONAL_PACKAGES, which "
+        "builds a 3.0.1 document from that list."
+    ),
 )
 @click.option(
     "--oidc-audience",
@@ -3712,7 +3966,7 @@ def _parse_upload_destinations_callback(
     "--working-dir",
     envvar="WORKING_DIR",
     default=None,
-    help="Working directory (absolute, or relative to cwd locally / GITHUB_WORKSPACE in GHA). [env: WORKING_DIR]",
+    help="Working directory (absolute, or relative to the CI platform's checkout root). [env: WORKING_DIR]",
 )
 @click.option(
     "-v",
@@ -3738,6 +3992,12 @@ def cli(
     docker_image: Optional[str],
     lock_file: Optional[str],
     source_dir: Optional[str],
+    document_file: Optional[str],
+    document_name: Optional[str],
+    document_type: str,
+    document_version: Optional[str],
+    document_description: Optional[str],
+    document_compliance_subcategory: Optional[str],
     output_file: str,
     upload: bool,
     upload_destinations: Optional[list[str]],
@@ -3762,7 +4022,7 @@ def cli(
     """Generate, augment, enrich, and manage SBOMs in your CI/CD pipeline.
 
     Provide one of: --sbom-file, --lock-file, --source-dir, or --docker-image
-    as input.
+    as input, or --document-file to publish a document (PDF etc.) instead.
 
     \b
     Commands:
@@ -3780,6 +4040,9 @@ def cli(
 
       # Generate from Docker image with SPDX format
       sbomify-action --docker-image nginx:latest -f spdx -o sbom.spdx.json
+
+      # Upload a pentest report to a document component
+      sbomify-action --document-file pentest.pdf --document-type pentest-report --component-id abc123
 
       # Run the onboarding wizard interactively
       sbomify-action wizard
@@ -3799,10 +4062,14 @@ def cli(
         resolved = resolve_working_dir(working_dir)
         logger.info(f"Changing working directory to '{resolved}'")
         os.chdir(resolved)
-        # Verify cwd is still under workspace after chdir (TOCTOU mitigation)
-        if _in_github_actions():
+        # Verify cwd is still under workspace after chdir (TOCTOU mitigation).
+        # One platform for both halves: checking the cwd against a workspace
+        # belonging to a different platform than the one that demanded the
+        # check would defeat the point of making it.
+        platform = get_platform()
+        if platform.confines_working_dir:
             cwd = Path.cwd().resolve()
-            workspace = _github_workspace()
+            workspace = _resolved_workspace(platform)
             if not cwd.is_relative_to(workspace):
                 logger.error(f"Working directory '{cwd}' escaped workspace '{workspace}' after chdir. Aborting.")
                 ctx.exit(1)
@@ -3818,7 +4085,7 @@ def cli(
     # 0, so the action step went green having produced no SBOM. Silent, because
     # exit 0 is success -- the failure only surfaced downstream, where
     # something looked for the output file that was never written.
-    if not any([sbom_file, docker_image, lock_file, source_dir]):
+    if not any([sbom_file, docker_image, lock_file, source_dir, document_file]):
         # Check if additional packages are configured — user likely forgot --lock-file none
         from ..additional_packages import has_additional_packages_configured
 
@@ -3871,6 +4138,12 @@ def cli(
         docker_image=docker_image,
         lock_file=lock_file,
         source_dir=source_dir,
+        document_file=document_file,
+        document_name=document_name,
+        document_type=document_type,
+        document_version=document_version,
+        document_description=document_description,
+        document_compliance_subcategory=document_compliance_subcategory,
         output_file=output_file,
         upload=upload,
         upload_destinations=upload_destinations,
@@ -4109,11 +4382,7 @@ def _install_debug_buffer() -> "io.StringIO":
 
 def _wizard_in_ci() -> bool:
     """Refuse to launch the TUI under a non-interactive CI environment."""
-    for name in ("GITHUB_ACTIONS", "CI"):
-        value = os.environ.get(name)
-        if value is not None and value.strip().lower() in {"true", "1", "yes", "on"}:
-            return True
-    return False
+    return get_platform().is_ci
 
 
 def _run_wizard_cli(

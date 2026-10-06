@@ -1,7 +1,7 @@
 name: sbomify pipe
 image: sbomifyhub/sbomify-action:latest
 category: Security
-description: sbomfiy pipe for creating SBOMs from lock files or Docker images.
+description: sbomify pipe for creating SBOMs from lock files, container images or a directory.
 repository: https://bitbucket.org/sbomify/bitbucket-pipe
 maintainer:
   name: sbomify

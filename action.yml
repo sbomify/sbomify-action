@@ -14,6 +14,20 @@ inputs:
     description: 'Artifact type to record on upload: sbom (default), vex, cbom or hbom. Only the sbomify destination supports non-SBOM types; other upload-destinations entries are rejected for them. Non-SBOM types are uploaded verbatim: augmentation, enrichment, overrides, additional-package injection and the SBOM-specific finalization fixups are skipped.'
     required: false
     default: 'sbom'
+  sbom-format:
+    description: 'SBOM format to generate: cyclonedx (default) or spdx. Ignored when SBOM_FILE supplies an existing document.'
+    required: false
+    # An omitted input arrives as an empty string, not as absent, so without a
+    # default SBOM_FORMAT would be set to "" and the CLI's click.Choice would
+    # refuse it rather than fall back to cyclonedx.
+    default: 'cyclonedx'
+  spec-version:
+    description: 'Spec version to generate: CycloneDX 1.2-1.7 (default 1.6) or SPDX 2.2/2.3 (default 2.3). SPDX 3 cannot be scanned out of your code: supply one via SBOM_FILE, or set 3.0.1 with LOCK_FILE=none to build one from ADDITIONAL_PACKAGES. Ignored when SBOM_FILE names a real file.'
+    required: false
+    # No default on purpose: the per-format default lives in the CLI, which
+    # picks 1.6 for CycloneDX and 2.3 for SPDX. Empty is how it says
+    # "whichever the format wants", and --spec-version already defaults None.
+    default: ''
   oidc-audience:
     description: 'OIDC audience for trusted publishing (default: sbomify.com; override for self-hosted)'
     required: false
@@ -34,6 +48,8 @@ runs:
     WORKING_DIR: ${{ inputs['working-dir'] }}
     COMPONENT_PURL: ${{ inputs['component-purl'] }}
     BOM_TYPE: ${{ inputs['bom-type'] }}
+    SBOM_FORMAT: ${{ inputs['sbom-format'] }}
+    SPEC_VERSION: ${{ inputs['spec-version'] }}
     OIDC_AUDIENCE: ${{ inputs['oidc-audience'] }}
 branding:
   icon: 'upload-cloud'

@@ -19,7 +19,7 @@ from sbomify_action.serialization import (
 from sbomify_action.tool_checks import check_tool_for_input, format_no_tools_error
 from sbomify_action.validation import validate_sbom_file
 
-from .protocol import FormatVersion, GenerationInput, Generator
+from .protocol import CYCLONEDX_VERSIONS, SPDX_VERSIONS, FormatVersion, GenerationInput, Generator
 from .result import GenerationResult
 
 # Set in the Dockerfile. Inside our own image the toolset is fixed and known,
@@ -365,6 +365,32 @@ def _degraded_message(failed: str, remaining: list[str], error: str) -> str:
     )
 
 
+def _no_generator_message(input: GenerationInput) -> str:
+    """Why nothing here can generate that, in terms the caller can act on.
+
+    The versions come from the two canonical tuples rather than from what the
+    registered generators declare. Those declarations carry an internal marker
+    spelling, ``SPDX-2.3``, which selects nothing when a user sets it, and the
+    old message listed it beside ``2.3`` as though they were two versions.
+    """
+    generatable = SPDX_VERSIONS if input.output_format == "spdx" else CYCLONEDX_VERSIONS
+    display = format_display_name(input.output_format)
+    # A caller that asked for no particular version renders as "CycloneDX None"
+    # otherwise, which names a version nobody requested and sends the reader
+    # looking for where they set it.
+    asked_for = f" {input.spec_version}" if input.spec_version else " at any version this input allows"
+    message = f"Nothing here generates {display}{asked_for}. Generatable versions: {', '.join(generatable)}."
+    if input.output_format == "spdx" and str(input.spec_version).startswith("3"):
+        # The likeliest way to arrive here, and the only one where the answer
+        # is a different input rather than a different version.
+        message += (
+            " SPDX 3 is read, validated and written, but no generator produces"
+            " one, so supply an existing document with SBOM_FILE instead of"
+            " generating from a lock file or an image."
+        )
+    return message
+
+
 class GeneratorRegistry:
     """
     Registry for managing and querying SBOM generator plugins.
@@ -471,10 +497,7 @@ class GeneratorRegistry:
                 input_type = "lock_file"
             else:
                 # SBOM file input or other - these don't need generation tools
-                raise SBOMGenerationError(
-                    f"No generator found for input. "
-                    f"Requested: format={input.output_format}, version={input.spec_version}."
-                )
+                raise SBOMGenerationError(_no_generator_message(input))
 
             # Check if this is due to missing tools
             lock_file = input.lock_file if input.is_lock_file else None
@@ -486,12 +509,7 @@ class GeneratorRegistry:
                 raise ToolNotAvailableError(input_type, lock_file, error_msg)
             else:
                 # Tools available but don't support this format/version
-                available_formats = self._get_available_formats()
-                raise SBOMGenerationError(
-                    f"No generator found for input. "
-                    f"Requested: format={input.output_format}, version={input.spec_version}. "
-                    f"Available formats: {available_formats}"
-                )
+                raise SBOMGenerationError(_no_generator_message(input))
 
         # Try generators in priority order, collecting errors for better diagnostics
         generator_names = [g.name for g in generators]

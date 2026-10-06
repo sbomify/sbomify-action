@@ -19,9 +19,11 @@ from sbomify_action._processors.releases_api import (
     create_release,
     get_release_details,
     get_release_id,
+    tag_artifact_with_release,
     tag_sbom_with_release,
 )
 from sbomify_action.cli.main import SBOMIFY_PRODUCTION_API
+from sbomify_action.sbomify_api import SbomifyApiClient
 
 API_BASE = SBOMIFY_PRODUCTION_API
 TOKEN = "test-token"
@@ -116,6 +118,24 @@ def test_sbomify_api_provider_endpoint(mock_session_request: MagicMock) -> None:
     assert urls == ["https://app.sbomify.com/api/v1/sboms/component/test-component/meta"]
 
 
+def test_upload_document_endpoint(mock_session_request: MagicMock) -> None:
+    """Documents have their own endpoint, and the trailing slash matters: the
+    router mounts the create view at "/" under /documents."""
+    mock_session_request.return_value = _ok_response({"id": "doc-1"})
+    SbomifyApiClient(API_BASE, TOKEN).upload_document(COMPONENT_ID, b"%PDF-1.7", name="Report", document_type="report")
+
+    urls = _captured_urls(mock_session_request)
+    assert urls == ["https://app.sbomify.com/api/v1/documents/"]
+
+
+def test_tag_document_with_release_endpoint(mock_session_request: MagicMock) -> None:
+    mock_session_request.return_value = _ok_response({})
+    tag_artifact_with_release(API_BASE, TOKEN, "doc123", "release456", artifact_kind="document")
+
+    urls = _captured_urls(mock_session_request)
+    assert urls == ["https://app.sbomify.com/api/v1/releases/release456/artifacts"]
+
+
 def test_sbom_upload_url_construction() -> None:
     """Static check on the upload URL template (no session call required)."""
     sbom_format = "cyclonedx"
@@ -145,6 +165,7 @@ def test_all_endpoints_have_single_api_v1_prefix() -> None:
         f"{base}/api/v1/releases/{release_id}/artifacts",
         f"{base}/api/v1/sboms/component/{component_id}/meta",
         f"{base}/api/v1/sboms/artifact/{sbom_format}/{component_id}",
+        f"{base}/api/v1/documents/",
     ]
     for endpoint in endpoints:
         assert endpoint.count("/api/v1") == 1, endpoint

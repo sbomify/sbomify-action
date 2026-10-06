@@ -952,7 +952,16 @@ class TestRegistryGenerateWithFallback(unittest.TestCase):
         with self.assertRaises(SBOMGenerationError) as cm:
             registry.generate(input)
 
-        self.assertIn("No generator found", str(cm.exception))
+        message = str(cm.exception)
+        self.assertIn("Nothing here generates CycloneDX", message)
+        # The caller asked for no particular version; naming one it never
+        # requested sends the reader looking for where they set it.
+        self.assertNotIn("None", message)
+        # The versions come from the canonical tuple, so the internal
+        # "SPDX-2.3" marker some generators declare cannot leak into a list a
+        # user would then try to set.
+        self.assertIn("1.6", message)
+        self.assertNotIn("SPDX-2.3", message)
 
     @patch("sbomify_action._generation.registry.check_tool_for_input")
     def test_generate_no_tools_raises_tool_not_available_error(self, mock_check_tool):

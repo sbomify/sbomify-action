@@ -12,6 +12,7 @@ from sbomify_action.exceptions import (
     SBOMGenerationError,
     SBOMValidationError,
 )
+from tests.conftest import NoNetworkTransport
 
 # Use a bogus DSN to prevent any real Sentry events from being sent during tests
 MOCK_SENTRY_DSN = "https://00000000000000000000000000000000@example.com/0000000"
@@ -360,6 +361,9 @@ class TestSentryFiltering(unittest.TestCase):
 
             # CI platform should indicate unknown
             self.assertEqual(tags.get("ci.platform"), "unknown")
+            # The platform is named additively, so saved searches keyed on
+            # ci.platform:unknown keep matching while the detail is available.
+            self.assertEqual(tags.get("ci.vendor"), "local")
 
             # Verify action version is still present (not sensitive)
             self.assertEqual(tags.get("action.version"), SBOMIFY_VERSION)
@@ -538,6 +542,93 @@ class TestSentryFiltering(unittest.TestCase):
         contexts = captured_event.get("contexts", {})
         ci_context = contexts.get("ci", {})
         self.assertEqual(ci_context, {}, "No CI context should be sent for Bitbucket (no visibility API)")
+
+    @patch.dict(
+        os.environ,
+        {
+            # clear=True wipes setUp's patch, so both of these have to be
+            # restated here or initialize_sentry runs with telemetry defaulting
+            # to on and the production DSN it falls back to. Its six siblings
+            # above restate them; this one did not, and for a month it was the
+            # only thing in the live project still reporting a test exception.
+            "TELEMETRY": "true",
+            "SENTRY_DSN": MOCK_SENTRY_DSN,
+            "TEAMCITY_VERSION": "2024.12",
+            "BUILD_VCS_NUMBER": "abc123def4567890abc123def4567890abc123de",
+            "TEAMCITY_PROJECT_NAME": "MyProject",
+            "TEAMCITY_BUILDCONF_NAME": "Build",
+        },
+        clear=True,
+    )
+    def test_sentry_teamcity(self):
+        """
+        Test that TeamCity context is NOT sent (no visibility API).
+        TeamCity is overwhelmingly on-premises, so we treat all repos as
+        private by default -- same reasoning as Bitbucket.
+        """
+        clear_sentry_state()
+        initialize_sentry()
+
+        client = sentry_sdk.get_client()
+        captured_event = None
+
+        def capture_event(event, hint):
+            nonlocal captured_event
+            captured_event = event
+            return event
+
+        original_before_send = client.options.get("before_send")
+        client.options["before_send"] = lambda event, hint: capture_event(
+            original_before_send(event, hint) if original_before_send else event, hint
+        )
+
+        try:
+            raise SBOMGenerationError("Test exception in TeamCity")
+        except Exception:
+            sentry_sdk.capture_exception()
+
+        self.assertIsNotNone(captured_event, "Event should have been captured")
+
+        tags = captured_event.get("tags", {})
+        self.assertIsNone(tags.get("ci.repository"), "TeamCity project name should not be sent")
+        self.assertIsNone(tags.get("ci.ref"), "TeamCity branch name should not be sent")
+        self.assertEqual(tags.get("repo.public"), "False")
+        self.assertEqual(tags.get("ci.platform"), "teamcity")
+
+        contexts = captured_event.get("contexts", {})
+        ci_context = contexts.get("ci", {})
+        self.assertEqual(ci_context, {}, "No CI context should be sent for TeamCity (no visibility API)")
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_an_empty_environment_still_cannot_reach_the_live_project(self):
+        """The fallback DSN is real; the transport under test is not.
+
+        initialize_sentry falls back to the production DSN when SENTRY_DSN is
+        unset, and that is the shipped behaviour -- a user who installs the
+        action and sets nothing should get telemetry. What must not follow is
+        that forgetting the variable in a test sends the test's own exceptions
+        to that project, which is exactly what happened here.
+
+        So this asserts the guard rather than the DSN: whatever init decides,
+        the envelope stops in this process. The transport is checked before
+        anything is captured, so a regression fails here rather than shipping
+        the exception it was about to raise.
+        """
+        clear_sentry_state()
+        initialize_sentry()
+
+        client = sentry_sdk.get_client()
+        self.assertIsInstance(client.transport, NoNetworkTransport)
+
+        try:
+            raise SBOMGenerationError("Stays in the process")
+        except SBOMGenerationError:
+            sentry_sdk.capture_exception()
+
+        # Captured, and captured *here*: the filter still ran and still let a
+        # generation error through, so the assertion those tests make is not
+        # quietly passing because nothing happens any more.
+        self.assertEqual(len(client.transport.envelopes), 1)
 
     @patch.dict(os.environ, {"TELEMETRY": "false"}, clear=True)
     def test_sentry_telemetry_disabled(self):

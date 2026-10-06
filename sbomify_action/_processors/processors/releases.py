@@ -1,7 +1,8 @@
-"""sbomify releases processor for tagging SBOMs with product releases.
+"""sbomify releases processor for tagging artifacts with product releases.
 
 This processor handles the creation or retrieval of product releases
-in the sbomify platform and associates (tags) uploaded SBOMs with those releases.
+in the sbomify platform and associates (tags) uploaded artifacts -- SBOMs, or
+documents when ``ProcessorInput.artifact_kind`` says so -- with those releases.
 """
 
 from typing import List, Optional
@@ -17,7 +18,7 @@ from ..releases_api import (
     get_release_details,
     get_release_friendly_name,
     get_release_id,
-    tag_sbom_with_release,
+    tag_artifact_with_release,
 )
 from ..result import ProcessorResult
 
@@ -100,6 +101,7 @@ class SbomifyReleasesProcessor:
                     sbom_id=input.sbom_id,
                     product_id=product_id,
                     version=version,
+                    artifact_kind=input.artifact_kind,
                 )
 
                 if release_id:
@@ -140,6 +142,7 @@ class SbomifyReleasesProcessor:
         sbom_id: str,
         product_id: str,
         version: str,
+        artifact_kind: str = "sbom",
     ) -> Optional[str]:
         """
         Process a single release: check/create and tag.
@@ -199,13 +202,14 @@ class SbomifyReleasesProcessor:
             release_id = get_release_id(api_base_url, token, product_id, version)
 
         if release_id:
+            artifact_label = "SBOM" if artifact_kind == "sbom" else "document"
             # Use friendly name if we have release details
             if release_details:
                 friendly_name = get_release_friendly_name(release_details, version)
-                logger.info(f"Tagging SBOM {sbom_id} with {friendly_name} (ID: {release_id})")
+                logger.info(f"Tagging {artifact_label} {sbom_id} with {friendly_name} (ID: {release_id})")
             else:
-                logger.info(f"Tagging SBOM {sbom_id} with release {version} (ID: {release_id})")
-            tag_sbom_with_release(api_base_url, token, sbom_id, release_id)
+                logger.info(f"Tagging {artifact_label} {sbom_id} with release {version} (ID: {release_id})")
+            tag_artifact_with_release(api_base_url, token, sbom_id, release_id, artifact_kind=artifact_kind)
         else:
             logger.error(f"Could not get release ID for {product_id}:{version}")
 

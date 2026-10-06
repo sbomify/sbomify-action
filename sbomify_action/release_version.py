@@ -74,9 +74,11 @@ def tag_from_ci() -> str | None:
     ref = os.environ.get("GITHUB_REF", "")
     if ref.startswith("refs/tags/"):
         return ref[len("refs/tags/") :]
-    # GitLab and Bitbucket set these only on a tag build, so their presence is
-    # itself the signal.
-    return os.environ.get("CI_COMMIT_TAG") or os.environ.get("BITBUCKET_TAG") or None
+    # GitLab, Bitbucket and CircleCI set these only on a tag build, so their
+    # presence is itself the signal. CIRCLE_TAG is the only one of the three a
+    # CircleCI job publishes: its checkout is a detached HEAD, so asking git
+    # which tag this is would answer for any tag pointing at the commit.
+    return os.environ.get("CI_COMMIT_TAG") or os.environ.get("BITBUCKET_TAG") or os.environ.get("CIRCLE_TAG") or None
 
 
 #: Separators a project may put between its name and the version.

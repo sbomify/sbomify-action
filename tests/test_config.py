@@ -19,7 +19,7 @@ cli_main_module = import_module("sbomify_action.cli.main")
 class TestConfig(unittest.TestCase):
     """Test cases for the Config dataclass and related functionality."""
 
-    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=False)
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
     def test_config_validation_missing_token(self, _mock_oidc):
         """Test that Config raises ConfigurationError when token is missing and UPLOAD=true."""
         config = Config(token="", component_id="test-component", sbom_file="/path/to/sbom.json", upload=True)
@@ -225,7 +225,7 @@ class TestConfig(unittest.TestCase):
         # Should not raise any exception - sbomify credentials not required
         config.validate()
 
-    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=False)
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
     def test_config_validation_multi_destination_requires_sbomify_credentials(self, _mock_oidc):
         """Test that sbomify credentials ARE required when sbomify is one of multiple destinations."""
         config = Config(
@@ -243,7 +243,7 @@ class TestConfig(unittest.TestCase):
         self.assertIn("sbomify API token is not defined", str(cm.exception))
         self.assertIn("uploading to sbomify", str(cm.exception))
 
-    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=False)
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
     def test_config_validation_upload_requires_token(self, _mock_oidc):
         """Test that TOKEN is required when uploading to sbomify."""
         config = Config(
@@ -272,7 +272,7 @@ class TestConfig(unittest.TestCase):
         # Should not raise - augmentation can use sbomify.json without API credentials
         config.validate()
 
-    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=False)
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
     def test_config_validation_product_release_requires_token(self, _mock_oidc):
         """Test that TOKEN is required when PRODUCT_RELEASE is set even if UPLOAD=false."""
         config = Config(
@@ -290,7 +290,7 @@ class TestConfig(unittest.TestCase):
         self.assertIn("sbomify API token is not defined", str(cm.exception))
         self.assertIn("PRODUCT_RELEASE is set", str(cm.exception))
 
-    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=True)
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=True)
     def test_config_validation_oidc_available_no_token_required(self, _mock_oidc):
         """When GitHub OIDC is available, validate() should NOT raise for missing TOKEN."""
         config = Config(
@@ -303,7 +303,7 @@ class TestConfig(unittest.TestCase):
         # Should not raise — pipeline will perform OIDC exchange at runtime
         config.validate()
 
-    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=True)
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=True)
     def test_config_validation_oidc_available_still_requires_component_id(self, _mock_oidc):
         """OIDC bypasses the TOKEN requirement but COMPONENT_ID is still required."""
         config = Config(
@@ -461,7 +461,7 @@ class TestConfig(unittest.TestCase):
         self.assertFalse(config.upload)
         self.assertTrue(config.augment)
 
-    @patch("sbomify_action.oidc.is_github_oidc_available", return_value=False)
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
     @patch.dict(os.environ, {"TOKEN": "", "COMPONENT_ID": "test"})
     @patch("sys.exit")
     def test_load_config_exits_on_invalid_config(self, mock_exit, _mock_oidc):
@@ -1305,10 +1305,6 @@ class TestSpecVersionValidation(unittest.TestCase):
         config.validate()  # no error
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestSubmoduleConfig(unittest.TestCase):
     """Validation rules for submodule (attach-or-backfill) mode."""
 
@@ -1361,3 +1357,148 @@ class TestSubmoduleConfig(unittest.TestCase):
             ):
                 config = load_config()
         self.assertIsNone(config.submodule_path)
+
+
+class TestSpdx3AdviceIsRoutableAdvice(unittest.TestCase):
+    """The SPEC_VERSION guard sends the user somewhere. Everywhere it sends
+    them has to work for the version they asked for.
+    """
+
+    def _error(self, spec_version: str) -> str:
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            lock_file="/path/to/requirements.txt",
+            sbom_format="spdx",
+            spec_version=spec_version,
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        return str(cm.exception)
+
+    def test_300_gets_the_same_hint_as_301(self):
+        """The hint was pinned to the literal "3.0.1". 3.0 is what syft,
+        Microsoft sbom-tool, JFrog Xray and Yocto 5.x emit, so it is just as
+        likely to be asked for, and it fell through to the bare message."""
+        message = self._error("3.0.0")
+
+        self.assertIn("cannot be generated", message)
+        self.assertIn("SBOM_FILE", message)
+
+    def test_31_is_not_sent_to_a_route_that_also_refuses_it(self):
+        """SBOM_FILE only accepts what the reader accepts, and 3.1 is not in
+        that set, so offering it there would cost the user a second round
+        trip to the same answer."""
+        message = self._error("3.1.0")
+
+        self.assertIn("Nor is it read", message)
+        self.assertNotIn("pass an existing 3.1.0 document", message)
+
+    def test_it_names_the_versions_sbom_file_does_accept(self):
+        message = self._error("3.1.0")
+
+        self.assertIn("3.0.0", message)
+        self.assertIn("3.0.1", message)
+
+    def test_the_empty_sbom_route_says_which_version_it_writes(self):
+        """create_empty_sbom writes 3.0.1 whatever was asked for, so naming it
+        beats implying the request is honoured."""
+        message = self._error("3.0.0")
+
+        self.assertIn("which writes 3.0.1", message)
+
+
+class TestActionYmlExposesTheFormatKnobs(unittest.TestCase):
+    """SBOM_FORMAT and SPEC_VERSION had to be smuggled through a raw `env:`
+    block, because action.yml exposed neither.
+    """
+
+    @staticmethod
+    def _action_yml() -> dict:
+        import yaml
+
+        return yaml.safe_load((Path(__file__).parent.parent / "action.yml").read_text())
+
+    def test_both_are_inputs(self):
+        inputs = self._action_yml()["inputs"]
+
+        self.assertIn("sbom-format", inputs)
+        self.assertIn("spec-version", inputs)
+
+    def test_both_reach_the_container_as_their_environment_variables(self):
+        env = self._action_yml()["runs"]["env"]
+
+        self.assertEqual(env["SBOM_FORMAT"], "${{ inputs['sbom-format'] }}")
+        self.assertEqual(env["SPEC_VERSION"], "${{ inputs['spec-version'] }}")
+
+    def test_every_input_is_wired_to_an_environment_variable(self):
+        """An input that reaches nothing is worse than no input: it looks
+        supported and is silently dropped."""
+        action = self._action_yml()
+        wired = " ".join(str(v) for v in action["runs"]["env"].values())
+
+        for name in action["inputs"]:
+            self.assertIn(f"inputs['{name}']", wired, f"{name} is declared but reaches no env var")
+
+
+class TestTheInputsSurviveBeingOmitted(unittest.TestCase):
+    """GitHub Actions passes an omitted input as an empty string, not as
+    absent, so `env: X: ${{ inputs.x }}` sets X="" rather than leaving it
+    unset. A knob whose CLI option validates its value has to declare a
+    default here or it breaks the moment somebody does not set it.
+    """
+
+    @staticmethod
+    def _inputs() -> dict:
+        import yaml
+
+        return yaml.safe_load((Path(__file__).parent.parent / "action.yml").read_text())["inputs"]
+
+    def test_sbom_format_defaults_rather_than_arriving_empty(self):
+        """SBOM_FORMAT feeds a click.Choice, which refuses "" instead of
+        falling back to cyclonedx."""
+        self.assertEqual(self._inputs()["sbom-format"].get("default"), "cyclonedx")
+
+    def test_spec_version_defaults_to_empty_on_purpose(self):
+        """Its per-format default lives in the CLI: 1.6 for CycloneDX, 2.3 for
+        SPDX. Empty is how the input says "whichever the format wants"."""
+        self.assertEqual(self._inputs()["spec-version"].get("default"), "")
+
+    def test_every_input_with_a_validated_cli_option_has_a_default(self):
+        """bom-type is the precedent: it feeds a click.Choice and declares one."""
+        for name in ("bom-type", "sbom-format"):
+            with self.subTest(input=name):
+                self.assertIn("default", self._inputs()[name])
+
+
+class TestTheThreeZeroLineIsNotOfferedAsARoute(unittest.TestCase):
+    """ "3.0" is a key in SPDX_SCHEMAS so an alias-context document reaches a
+    schema at all. It is not a version anyone can send: both official schemas
+    pin @context with a const to their fully qualified URL, so a document
+    declaring the bare line fails whichever schema it is held to.
+    """
+
+    def _error(self, spec_version: str) -> str:
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            lock_file="/path/to/requirements.txt",
+            sbom_format="spdx",
+            spec_version=spec_version,
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        return str(cm.exception)
+
+    def test_it_is_not_sent_to_sbom_file(self):
+        message = self._error("3.0")
+
+        self.assertIn("Nor is it read", message)
+        self.assertNotIn("pass an existing 3.0 document", message)
+
+    def test_the_versions_that_are_readable_still_are(self):
+        self.assertIn("pass an existing 3.0.1 document", self._error("3.0.1"))
+
+
+if __name__ == "__main__":
+    unittest.main()

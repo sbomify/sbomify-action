@@ -1,0 +1,62 @@
+{
+  "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+  "@graph": [
+    {
+      "type": "SpdxDocument",
+      "@id": "urn:spdx.dev:doc-test",
+      "name": "test-document",
+      "element": [
+        "urn:spdx.dev:pkg-test",
+        "urn:spdx.dev:tool-test"
+      ],
+      "rootElement": [
+        "urn:spdx.dev:pkg-test"
+      ],
+      "creationInfo": {
+        "specVersion": "3.0.1",
+        "created": "2024-01-01T00:00:00Z",
+        "createdBy": [],
+        "createdUsing": ["urn:spdx.dev:tool-test"],
+        "profile": ["core", "software"]
+      }
+    },
+    {
+      "type": "software_Package",
+      "@id": "urn:spdx.dev:pkg-test",
+      "name": "test-package",
+      "packageVersion": "1.0.0",
+      "packageUrl": "pkg:pypi/test-package@1.0.0",
+      "downloadLocation": "https://example.com/test-package-1.0.0.tar.gz",
+      "creationInfo": {
+        "specVersion": "3.0.1",
+        "created": "2024-01-01T00:00:00Z",
+        "createdBy": [],
+        "profile": ["core", "software"]
+      }
+    },
+    {
+      "type": "Tool",
+      "@id": "urn:spdx.dev:tool-test",
+      "name": "test-tool",
+      "creationInfo": {
+        "specVersion": "3.0.1",
+        "created": "2024-01-01T00:00:00Z",
+        "createdBy": [],
+        "profile": ["core", "software"]
+      }
+    },
+    {
+      "type": "Relationship",
+      "@id": "urn:spdx.dev:rel-test",
+      "from": "urn:spdx.dev:doc-test",
+      "to": ["urn:spdx.dev:pkg-test"],
+      "relationshipType": "describes",
+      "creationInfo": {
+        "specVersion": "3.0.1",
+        "created": "2024-01-01T00:00:00Z",
+        "createdBy": [],
+        "profile": ["core", "software"]
+      }
+    }
+  ]
+}

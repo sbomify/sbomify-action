@@ -48,17 +48,19 @@
     },
     {
       "type": "Relationship",
-      "@id": "urn:spdx.dev:rel-describes",
       "from": "urn:spdx.dev:doc-multi",
-      "to": ["urn:spdx.dev:pkg-test"],
+      "to": [
+        "urn:spdx.dev:pkg-test"
+      ],
       "relationshipType": "describes",
-      "creationInfo": "_:CreationInfo0"
+      "creationInfo": "_:CreationInfo0",
+      "spdxId": "urn:spdx.dev:rel-describes"
     },
     {
       "type": "Tool",
-      "@id": "urn:spdx.dev:tool-test",
       "name": "test-tool",
-      "creationInfo": "_:CreationInfo0"
+      "creationInfo": "_:CreationInfo0",
+      "spdxId": "urn:spdx.dev:tool-test"
     },
     {
       "type": "security_Vulnerability",
@@ -81,7 +83,9 @@
       "creationInfo": "_:CreationInfo0",
       "from": "urn:spdx.dev:vuln-CVE-2024-0001",
       "relationshipType": "fixedIn",
-      "to": ["urn:spdx.dev:pkg-test"],
+      "to": [
+        "urn:spdx.dev:pkg-test"
+      ],
       "security_vexVersion": "1.0.0"
     },
     {
@@ -97,7 +101,9 @@
       "creationInfo": "_:CreationInfo0",
       "from": "urn:spdx.dev:build-recipe",
       "relationshipType": "hasInput",
-      "to": ["urn:spdx.dev:file-test"]
+      "to": [
+        "urn:spdx.dev:file-test"
+      ]
     },
     {
       "type": "simplelicensing_LicenseExpression",
@@ -111,8 +117,12 @@
       "spdxId": "urn:spdx.dev:sbom-root",
       "creationInfo": "_:CreationInfo0",
       "name": "test-sbom",
-      "rootElement": ["urn:spdx.dev:pkg-test"],
-      "software_sbomType": ["build"]
+      "rootElement": [
+        "urn:spdx.dev:pkg-test"
+      ],
+      "software_sbomType": [
+        "build"
+      ]
     }
   ]
 }

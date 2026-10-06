@@ -1,8 +1,8 @@
-ARG UV_VERSION=0.12.5
+ARG UV_VERSION=0.12.19
 
 
 # UV binary stage
-FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 AS uv-fetcher
+FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424 AS uv-fetcher
 
 # Python builder stage
 FROM python:3.14-slim-trixie AS builder
@@ -32,6 +32,11 @@ RUN uv sync --frozen --active --no-dev
 # the wheel is built. Those files are not part of the package, so a release
 # must carry the versions it was built against rather than expecting to read
 # them later -- see scripts/freeze_tool_versions.py.
+#
+# The build hook freezes every wheel anyway, whoever builds it. This stays as
+# the guard: --check fails the image build if the tree the wheel comes from
+# could not be resolved, rather than letting a wheel out that resolved to
+# something unexpected.
 RUN python scripts/freeze_tool_versions.py && python scripts/freeze_tool_versions.py --check
 RUN rm -rf dist/ && uv build
 RUN uv pip install dist/sbomify_action-*.whl
@@ -163,6 +168,17 @@ ENV COLORTERM=truecolor
 ENV SBOMIFY_GITHUB_ACTION_VERSION=${VERSION}
 ENV SBOMIFY_GITHUB_ACTION_COMMIT_SHA=${COMMIT_SHA}
 ENV SBOMIFY_GITHUB_ACTION_VCS_REF=${VCS_REF}
+
+# Default location for the bind-mounted repository, so `-v "$PWD:/workspace"`
+# is a complete invocation and no -w flag is needed. Without a WORKDIR the
+# container starts in / and every caller had to pass one, which is how the
+# GitHub-specific /github/workspace path ended up in docs for other CI systems.
+#
+# Nothing in the image depends on this path: GitHub Actions mounts the checkout
+# at /github/workspace and passes its own -w, and CI systems whose Docker
+# wrappers set the working directory to their agent's checkout path override it
+# too. Both keep working, as does an explicit -w from an existing pipeline.
+WORKDIR /workspace
 
 # nosemgrep: missing-user  # GitHub Action container must run as root to access the mounted workspace
 CMD ["sbomify-action"]

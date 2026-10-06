@@ -449,3 +449,110 @@ class TestAuthFailureClassification:
         event: dict[str, object] = {"message": "Failed to create release. [500] - Internal Server Error"}
         hint = {"exc_info": (APIError, APIError("Failed to create release. [500] - Internal Server Error"), None)}
         assert before_send(event, hint) is event
+
+
+class TestBareLicenseTextReachesEveryParser:
+    """GITHUB-ACTION-FW — one component's copyright header ended the run.
+
+    cdxgen writes the licence body straight into ``license.text``, where the
+    CycloneDX schema wants an attachedText object. cyclonedx-python-lib calls
+    ``.items()`` on it while deserializing, so the whole document fails with
+    ``AttributeError: 'str' object has no attribute 'items'`` -- naming
+    neither the component nor the field.
+
+    ``sanitize_cyclonedx_licenses`` has wrapped that string since the last
+    sweep, but only where someone remembered to call it. Four of the six
+    ``Bom.from_json`` call sites did; hash enrichment and dependency expansion
+    did not, and both still died on this payload. They parse the document the
+    user supplied, so neither is an unreachable path.
+    """
+
+    #: The shape from the real event: a licence name the schema accepts, and a
+    #: copyright line where an attachedText object belongs.
+    SBOM: dict[str, object] = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "version": 1,
+        "components": [
+            {
+                "type": "library",
+                "name": "re2",
+                "version": "2022-06-01",
+                "purl": "pkg:generic/re2@2022-06-01",
+                "licenses": [{"license": {"name": "BSD-3-Clause", "text": "Copyright 2022 Google"}}],
+            }
+        ],
+    }
+
+    def _sbom_file(self, tmp_path: Path) -> Path:
+        import json
+
+        path = tmp_path / "sbom.json"
+        path.write_text(json.dumps(self.SBOM))
+        return path
+
+    def test_the_loader_parses_what_the_raw_deserializer_refuses(self) -> None:
+        import copy
+
+        from cyclonedx.model.bom import Bom
+
+        from sbomify_action.serialization import load_cyclonedx_bom
+
+        with pytest.raises(AttributeError):
+            Bom.from_json(copy.deepcopy(self.SBOM))  # type: ignore[attr-defined]
+
+        bom = load_cyclonedx_bom(copy.deepcopy(self.SBOM))
+        assert len(bom.components) == 1
+
+    def test_hash_enrichment_survives_it(self, tmp_path: Path) -> None:
+        from sbomify_action._hash_enrichment.enricher import enrich_sbom_with_hashes
+
+        lock_file = tmp_path / "uv.lock"
+        lock_file.write_text("")
+
+        # Raised AttributeError from Bom.from_json before the loader existed.
+        enrich_sbom_with_hashes(str(self._sbom_file(tmp_path)), str(lock_file))
+
+    def test_dependency_expansion_survives_it(self, tmp_path: Path) -> None:
+        import copy
+
+        from sbomify_action._dependency_expansion.enricher import DependencyEnricher
+
+        # Same crash, second unguarded call site.
+        DependencyEnricher()._enrich_cyclonedx(self._sbom_file(tmp_path), copy.deepcopy(self.SBOM), [], "test")
+
+    def test_nothing_parses_a_cyclonedx_document_without_the_repair(self) -> None:
+        """``Bom.from_json`` belongs to ``load_cyclonedx_bom`` and nowhere else.
+
+        The repair and the parse were two statements a caller had to write in
+        the right order, and two callers out of six did not. Keeping the raw
+        deserializer to one function is what makes a seventh call site safe by
+        construction rather than by review.
+        """
+        import ast
+
+        package = Path(__file__).resolve().parents[1] / "sbomify_action"
+        offenders: list[str] = []
+
+        for path in sorted(package.rglob("*.py")):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                    continue
+                if node.func.attr != "from_json":
+                    continue
+                if getattr(node.func.value, "id", None) != "Bom":
+                    continue
+                enclosing = [
+                    fn.name
+                    for fn in ast.walk(tree)
+                    if isinstance(fn, ast.FunctionDef) and fn.lineno <= node.lineno <= (fn.end_lineno or fn.lineno)
+                ]
+                if "load_cyclonedx_bom" in enclosing:
+                    continue
+                offenders.append(f"{path.relative_to(package)}:{node.lineno}")
+
+        assert not offenders, (
+            "Bom.from_json outside load_cyclonedx_bom (the licence repair is skipped there):\n  "
+            + "\n  ".join(offenders)
+        )

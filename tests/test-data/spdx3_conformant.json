@@ -1,0 +1,103 @@
+{
+  "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+  "@graph": [
+    {
+      "type": "CreationInfo",
+      "@id": "_:creationinfo",
+      "specVersion": "3.0.1",
+      "created": "2026-08-01T00:00:00Z",
+      "createdBy": [
+        "urn:acme:agent"
+      ],
+      "createdUsing": [
+        "urn:acme:tool"
+      ]
+    },
+    {
+      "type": "Person",
+      "spdxId": "urn:acme:agent",
+      "creationInfo": "_:creationinfo",
+      "name": "Jane Doe",
+      "externalIdentifier": [
+        {
+          "type": "ExternalIdentifier",
+          "externalIdentifierType": "email",
+          "identifier": "jane@acme.test"
+        }
+      ]
+    },
+    {
+      "type": "Tool",
+      "spdxId": "urn:acme:tool",
+      "creationInfo": "_:creationinfo",
+      "name": "sbomify-action-1.2.3"
+    },
+    {
+      "type": "SpdxDocument",
+      "spdxId": "urn:acme:doc",
+      "creationInfo": "_:creationinfo",
+      "rootElement": [
+        "urn:acme:pkg1"
+      ],
+      "profileConformance": [
+        "core",
+        "software"
+      ]
+    },
+    {
+      "type": "software_Package",
+      "spdxId": "urn:acme:pkg1",
+      "creationInfo": "_:creationinfo",
+      "name": "my-app",
+      "software_packageVersion": "1.2.3",
+      "software_downloadLocation": "https://downloads.acme.test/my-app-1.2.3.tar.gz",
+      "verifiedUsing": [
+        {
+          "type": "Hash",
+          "algorithm": "sha256",
+          "hashValue": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "externalRef": [
+        {
+          "type": "ExternalRef",
+          "externalRefType": "vcs",
+          "locator": [
+            "https://github.com/acme/my-app"
+          ]
+        }
+      ],
+      "validUntilTime": "2030-01-01T00:00:00Z",
+      "originatedBy": [
+        "urn:acme:agent"
+      ],
+      "software_packageUrl": "pkg:pypi/my-app@1.2.3"
+    },
+    {
+      "type": "simplelicensing_LicenseExpression",
+      "spdxId": "urn:acme:lic1",
+      "creationInfo": "_:creationinfo",
+      "simplelicensing_licenseExpression": "MIT"
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:acme:rel1",
+      "creationInfo": "_:creationinfo",
+      "relationshipType": "hasConcludedLicense",
+      "from": "urn:acme:pkg1",
+      "to": [
+        "urn:acme:lic1"
+      ]
+    },
+    {
+      "type": "Relationship",
+      "spdxId": "urn:acme:rel2",
+      "creationInfo": "_:creationinfo",
+      "relationshipType": "hasDeclaredLicense",
+      "from": "urn:acme:pkg1",
+      "to": [
+        "urn:acme:lic1"
+      ]
+    }
+  ]
+}

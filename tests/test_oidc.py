@@ -435,3 +435,29 @@ class TestObtainAudienceDefault(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProviderSlugIsValidated(unittest.TestCase):
+    """The slug is interpolated into the URL a credential is issued at."""
+
+    def test_a_bare_slug_is_accepted(self):
+        """The real callers pass constants like "github"."""
+        from sbomify_action.oidc import _PROVIDER_SLUG_RE
+
+        for slug in ("github", "gitlab", "azure-devops", "buildkite2"):
+            self.assertTrue(_PROVIDER_SLUG_RE.fullmatch(slug), slug)
+
+    def test_a_slug_that_could_retarget_the_request_is_refused(self):
+        """No caller passes these today, and that is the only thing stopping them."""
+        for slug in ("../../admin", "a/b", "github/../evil", "GitHub", "", "git hub", "github%2f"):
+            with self.subTest(slug=slug):
+                with self.assertRaises(OIDCExchangeError) as ctx:
+                    exchange_for_sbomify_token("jwt", "component", "https://app.sbomify.com", provider_slug=slug)
+                self.assertIn("Refusing to build an OIDC exchange URL", str(ctx.exception))
+
+    def test_the_default_still_reaches_the_github_endpoint(self):
+        """Validation must not change where a normal exchange goes."""
+        with patch("sbomify_action.oidc.requests.post") as mock_post:
+            mock_post.return_value = Mock(status_code=200, json=lambda: {"access_token": "t", "expires_in": 900})
+            exchange_for_sbomify_token("jwt", "component", "https://app.sbomify.com")
+        assert mock_post.call_args.args[0] == "https://app.sbomify.com/api/v1/auth/oidc/github/exchange"

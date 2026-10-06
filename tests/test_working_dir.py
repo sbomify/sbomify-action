@@ -141,3 +141,32 @@ class TestWorkingDirCliWiring:
             result = runner.invoke(cli, [])
             assert result.exit_code == 0
             mock_chdir.assert_called_once_with(subdir.resolve())
+
+
+class TestPlatformIsResolvedOnce:
+    """The confinement decision and the path it checks come from one platform.
+
+    resolve_working_dir asks whether the platform confines the working
+    directory, and separately for the workspace to confine it to. Resolving the
+    platform twice means those two answers can come from different platforms if
+    anything changes in between -- and this is a containment check, so a
+    mismatch defeats the point of making it.
+    """
+
+    def test_the_workspace_comes_from_the_platform_that_demanded_the_check(self, tmp_path):
+        """Only one platform resolution happens per call."""
+        import sys
+        from unittest.mock import patch
+
+        # sys.modules, because `sbomify_action.cli` re-exports the click
+        # command as `main` and shadows the submodule of the same name.
+        _m = sys.modules["sbomify_action.cli.main"]
+
+        workspace = tmp_path / "ws"
+        (workspace / "sub").mkdir(parents=True)
+
+        real = _m.get_platform()
+        with patch.object(_m, "get_platform", wraps=lambda: real) as spy:
+            with patch.dict(os.environ, {"GITHUB_ACTIONS": "", "GITHUB_WORKSPACE": ""}, clear=False):
+                _m.resolve_working_dir(str(workspace / "sub"))
+            assert spy.call_count == 1, f"platform resolved {spy.call_count} times, expected once"

@@ -24,6 +24,8 @@ CI_VARS = (
     "CI_PROJECT_PATH",
     "BITBUCKET_TAG",
     "BITBUCKET_REPO_FULL_NAME",
+    "CIRCLE_TAG",
+    "CIRCLE_PROJECT_REPONAME",
     "VERSION_FROM_RELEASE_TAG",
     "NORMALIZE_VERSION",
     "SBOM_VERSION",
@@ -146,6 +148,56 @@ class TestAForeignTag:
 
         assert config.component_version == "meta-v1.3.0"
         assert config.component_version != "1.3.0"
+
+
+class TestCircleCI:
+    """CircleCI reaches the same decisions from its own variables.
+
+    A CircleCI job publishes the tag in ``CIRCLE_TAG`` and the repository in
+    ``CIRCLE_PROJECT_REPONAME``, which is what the checkout cannot tell us: it
+    is a detached HEAD, so git would answer for any tag pointing at the commit.
+    """
+
+    def _on_tag(self, monkeypatch, tag: str, repo: str = "widget"):
+        monkeypatch.setenv("CIRCLE_TAG", tag)
+        monkeypatch.setenv("CIRCLE_PROJECT_REPONAME", repo)
+
+    def test_opted_in_uses_the_tag(self, tmp_path, monkeypatch):
+        self._on_tag(monkeypatch, "v1.2.3")
+        monkeypatch.setenv("VERSION_FROM_RELEASE_TAG", "true")
+
+        config = _config(tmp_path)
+
+        assert config.component_version == "v1.2.3"
+        assert config.component_version_source == "release tag"
+
+    def test_a_branch_build_yields_nothing(self, tmp_path, monkeypatch):
+        """CIRCLE_TAG is absent unless a tag triggered the build."""
+        monkeypatch.setenv("CIRCLE_BRANCH", "main")
+        monkeypatch.setenv("CIRCLE_PROJECT_REPONAME", "widget")
+        monkeypatch.setenv("VERSION_FROM_RELEASE_TAG", "true")
+
+        config = _config(tmp_path)
+
+        assert config.component_version is None
+
+    def test_normalization(self, tmp_path, monkeypatch):
+        self._on_tag(monkeypatch, "curl-8_21_0", repo="curl")
+        monkeypatch.setenv("VERSION_FROM_RELEASE_TAG", "true")
+        monkeypatch.setenv("NORMALIZE_VERSION", "true")
+
+        config = _config(tmp_path)
+
+        assert config.component_version == "8.21.0"
+
+    def test_a_foreign_tag_is_not_used(self, tmp_path, monkeypatch):
+        """The repository name is what makes this decidable on CircleCI too."""
+        self._on_tag(monkeypatch, "meta-v1.3.0", repo="sdk")
+        monkeypatch.setenv("VERSION_FROM_RELEASE_TAG", "true")
+
+        config = _config(tmp_path)
+
+        assert config.component_version is None
 
 
 class TestProductRelease:
