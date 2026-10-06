@@ -387,6 +387,60 @@ def log_command_error(command_name: str, stderr: str, stdout: str, level: str = 
     log_fn(message)
 
 
+# Source schemes syft understands in front of an image reference. Only syft
+# accepts these: trivy takes an archive through `--input <path>` and cdxgen
+# takes a bare path, so handing either a prefixed value makes it try to pull
+# an image literally named "docker-archive:/tmp/image.tar".
+#
+# Matched against a fixed list rather than "anything before a colon", because
+# a bare reference is full of colons that are not schemes -- `alpine:3.20`,
+# `localhost:5000/app`.
+SYFT_SOURCE_SCHEMES = (
+    "docker",
+    "podman",
+    "containerd",
+    "registry",
+    "docker-archive",
+    "oci-archive",
+    "oci-dir",
+    "singularity",
+    "dir",
+    "file",
+)
+
+
+def image_ref_scheme(reference: str | None) -> str | None:
+    """The syft source scheme prefixing this reference, if any.
+
+    Returns None for a plain image reference, which every generator can read.
+    """
+    if not reference:
+        return None
+    prefix, _, rest = reference.partition(":")
+    if rest and prefix in SYFT_SOURCE_SCHEMES:
+        return prefix
+    return None
+
+
+# The daemon being unreachable is not the same as the image being absent, and
+# syft does not make that obvious: when it cannot reach the socket it falls
+# through to the registry, so the run fails with a registry error -- typically
+# "UNAUTHORIZED: authentication required" -- and the user goes looking at
+# their registry credentials for a permissions problem on /var/run/docker.sock.
+DOCKER_DAEMON_UNREACHABLE_PATTERNS = [
+    r"failed to connect to Docker daemon",
+    r"docker not available",
+    r"Cannot connect to the Docker daemon",
+    r"dial unix /var/run/docker\.sock",
+    r"permission denied while trying to connect to the Docker daemon",
+]
+
+
+def detect_docker_daemon_unreachable(output: str) -> bool:
+    """Whether this failure is the Docker daemon being out of reach."""
+    return any(re.search(pattern, output, re.IGNORECASE) for pattern in DOCKER_DAEMON_UNREACHABLE_PATTERNS)
+
+
 # Patterns that indicate a Docker image was not found in the registry
 # These are common error messages from trivy, syft, cdxgen, and Docker itself
 DOCKER_IMAGE_NOT_FOUND_PATTERNS = [
@@ -592,9 +646,33 @@ def run_command(
         stderr = e.stderr or ""
         stdout = e.stdout or ""
 
+        # Both classifications read the whole failure, not just stderr: cdxgen
+        # writes the sentence that says why to stdout, so a check against
+        # stderr alone misses it -- see combined_output.
+        output = combined_output(stderr, stdout)
+
+        # Say so when the daemon is the problem, and let that be the answer.
+        # syft falls back to the registry when it cannot reach the socket, so
+        # the tail of the output is a registry error -- commonly "pull access
+        # denied" or "UNAUTHORIZED" -- which the not-found patterns match.
+        # Reporting "image not found" there would send the user to check a
+        # registry and a tag that are both fine, so the not-found
+        # classification is skipped entirely while the daemon is the known
+        # cause, rather than merely being preceded by a warning about it.
+        daemon_unreachable = bool(docker_image) and detect_docker_daemon_unreachable(output)
+        if daemon_unreachable:
+            logger.warning(
+                f"Could not reach the Docker daemon while scanning '{docker_image}'. "
+                "The image was then looked for in a registry, so any authentication "
+                "or not-found error above is a symptom rather than the cause. Either "
+                "give the container access to /var/run/docker.sock, or scan the image "
+                "without a daemon by saving it first: "
+                "`docker save <image> -o image.tar` and DOCKER_IMAGE=docker-archive:image.tar"
+            )
+
         # Check if this is a Docker image not found error (user configuration issue)
         # Log at WARNING level since this isn't a bug - user specified a non-existent image
-        if docker_image and detect_docker_image_not_found(stderr):
+        if docker_image and not daemon_unreachable and detect_docker_image_not_found(output):
             logger.warning(f"Docker image '{docker_image}' not found")
             log_command_error(command_name, stderr, stdout, level="warning")
             raise DockerImageNotFoundError(
@@ -622,7 +700,7 @@ def run_command(
             log_command_error(command_name, stderr, stdout, level="debug")
 
         # Include error summary in the exception message for better diagnostics
-        error_summary = extract_error_summary(combined_output(stderr, stdout))
+        error_summary = extract_error_summary(output)
         message = f"{command_name} command failed with return code {e.returncode}"
         if error_summary:
             message += f": {error_summary}"

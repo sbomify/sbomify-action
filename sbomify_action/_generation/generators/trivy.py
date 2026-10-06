@@ -23,7 +23,7 @@ from ..protocol import (
     GenerationInput,
 )
 from ..result import GenerationResult
-from ..utils import DEFAULT_TIMEOUT, TRIVY_LOCK_FILES, run_command
+from ..utils import DEFAULT_TIMEOUT, TRIVY_LOCK_FILES, image_ref_scheme, run_command
 
 # Check tool availability once at module load
 _TRIVY_AVAILABLE, _TRIVY_PATH = check_tool_available("trivy")
@@ -225,6 +225,14 @@ class TrivyImageGenerator:
 
         # Only supports Docker images
         if not input.is_docker_image:
+            return False
+
+        # A scheme-prefixed reference is syft's syntax, and trivy has no
+        # equivalent: an archive reaches it through `--input <path>`, not
+        # through the positional argument. Passed one anyway it looks for an
+        # image literally named "docker-archive:/tmp/image.tar". Decline, and
+        # let the syft generator take it.
+        if image_ref_scheme(input.docker_image):
             return False
 
         # Check format
