@@ -18,6 +18,7 @@ Usage:
 """
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -67,6 +68,24 @@ SPDX_SCHEMAS = {
     "3.0": SPDX_SCHEMA_DIR / "spdx-3.0.0.schema.json",
 }
 
+#: A 3.0 patch release above the newest bundled one is held to the newest
+#: bundled 3.0 schema, unchanged, as the backend does. That schema pins
+#: @context to the 3.0.1 URL, so such a document passes only while it keeps
+#: the 3.0.1 context; one declaring a later patch context is refused on both
+#: ends.
+_SPDX30_PATCH = re.compile(r"3\.0\.[1-9]\d*")
+_NEWEST_SPDX30 = max((v for v in SPDX_SCHEMAS if v.startswith("3.0.")), key=lambda v: int(v.rsplit(".", 1)[1]))
+
+
+def spdx_schema_version(spec_version: str) -> str | None:
+    """The bundled SPDX schema a document declaring `spec_version` is held to."""
+    if spec_version in SPDX_SCHEMAS:
+        return spec_version
+    if _SPDX30_PATCH.fullmatch(spec_version):
+        return _NEWEST_SPDX30
+    return None
+
+
 #: What a caller sending an SPDX 3 version we do not accept is told. Worded to
 #: match the backend's own rejection in sbomify/apps/sboms/schemas.py, so a
 #: user who hits both hears one answer rather than two.
@@ -79,11 +98,9 @@ SPDX3_UNSUPPORTED_MESSAGE = (
 def _supported_spdx_versions() -> str:
     """The versions this message may honestly claim, from what is bundled.
 
-    The backend's wording says "3.0.x", which is true there: its schema takes a
-    semver pattern, so a later 3.0 patch validates. Here a schema is chosen by
-    exact key, so 3.0.2 is refused, and repeating "3.0.x" meant refusing a
-    3.0.x while claiming to accept it. Derived rather than written out, so
-    bundling a version updates the sentence with it.
+    Derived rather than written out, so bundling a version updates the
+    sentence with it. A later 3.0 patch is also accepted, through
+    `spdx_schema_version`.
 
     The "3.0" alias key is left out: it exists so an unversioned-context
     document reaches a schema at all, and is not a version anyone can send.
@@ -210,7 +227,8 @@ def get_schema_for_format(sbom_format: SBOMFormat, spec_version: str) -> dict[st
     if sbom_format == "cyclonedx":
         schema_path = CDX_SCHEMAS.get(spec_version)
     elif sbom_format == "spdx":
-        schema_path = SPDX_SCHEMAS.get(spec_version)
+        schema_version = spdx_schema_version(spec_version)
+        schema_path = SPDX_SCHEMAS.get(schema_version) if schema_version else None
     else:
         return None
 

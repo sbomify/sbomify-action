@@ -1499,6 +1499,9 @@ class TestTheThreeZeroLineIsNotOfferedAsARoute(unittest.TestCase):
     def test_the_versions_that_are_readable_still_are(self):
         self.assertIn("pass an existing 3.0.1 document", self._error("3.0.1"))
 
+    def test_a_later_30_patch_is_offered_sbom_file(self):
+        self.assertIn("pass an existing 3.0.2 document", self._error("3.0.2"))
+
 
 if __name__ == "__main__":
     unittest.main()
