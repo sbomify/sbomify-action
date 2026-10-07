@@ -778,9 +778,18 @@ class TestGeneratorOrchestrator(unittest.TestCase):
         self.assertEqual(len(generators), 1)
         self.assertEqual(generators[0]["name"], "cyclonedx-py")
 
+    @patch("sbomify_action._generation.generators.syft._SYFT_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cyclonedx_py._CYCLONEDX_PY_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.syft.run_command")
+    @patch("sbomify_action._generation.generators.cdxgen.run_command")
     @patch("sbomify_action._generation.generators.cyclonedx_py.run_command")
-    def test_generate_uses_first_matching_generator(self, mock_run):
-        """Test that generate uses the first matching generator by priority."""
+    def test_generate_uses_first_matching_generator(self, mock_run, mock_cdxgen_run, mock_syft_run):
+        """Test that generate uses the first matching generator by priority.
+
+        Every candidate is marked available, so the result depends on priority
+        order and not on which tools happen to be on PATH.
+        """
         mock_run.return_value = MagicMock(returncode=0)
 
         orchestrator = GeneratorOrchestrator()
@@ -791,6 +800,8 @@ class TestGeneratorOrchestrator(unittest.TestCase):
         # Should use cyclonedx-py (priority 10) for Python files
         self.assertTrue(result.success)
         self.assertEqual(result.generator_name, "cyclonedx-py")
+        mock_cdxgen_run.assert_not_called()
+        mock_syft_run.assert_not_called()
 
 
 @patch("sbomify_action._generation.generators.trivy._TRIVY_AVAILABLE", True)
