@@ -68,6 +68,12 @@ def test_request_401_raises_auth_error() -> None:
         client._request("GET", "/anything")
 
 
+def test_request_401_with_a_text_body_names_its_reason() -> None:
+    client, _ = _client_with([_FakeResponse(401, text="A compressed request body needs a valid API token")])
+    with pytest.raises(AuthError, match=r"\[401\] - A compressed request body needs a valid API token"):
+        client._request("GET", "/anything")
+
+
 def test_request_connection_error_raises_api_error() -> None:
     session = MagicMock(spec=requests.Session)
     session.request = MagicMock(side_effect=requests.exceptions.ConnectionError("boom"))
