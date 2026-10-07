@@ -51,7 +51,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
         self.assertEqual(formats["cyclonedx"].default_version, CARGO_CYCLONEDX_DEFAULT)
         # SPDX comes from converting the CycloneDX above, so only the one
         # version the converter emits is offered.
-        self.assertEqual(formats["spdx"].default_version, "SPDX-2.3")
+        self.assertEqual(formats["spdx"].default_version, "2.3")
 
     def test_supports_cargo_lock(self):
         """Test support for Cargo.lock files."""
@@ -175,6 +175,31 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
         self.assertEqual(result.sbom_format, "cyclonedx")
         self.assertEqual(result.spec_version, CARGO_CYCLONEDX_DEFAULT)
         self.assertEqual(result.generator_name, "cyclonedx-cargo")
+
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.convert_to_spdx")
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
+    def test_spdx_without_a_version_reports_2_3(self, mock_run, mock_convert):
+        """The internal "SPDX-2.3" marker is not a version. Reported as one, it
+        reached the log and matched no schema, so validation was skipped."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            project.mkdir()
+            (project / "Cargo.lock").write_text("")
+
+            def _run(cmd, name, timeout=None, cwd=None):
+                stem = cmd[cmd.index("--override-filename") + 1]
+                (Path(cwd) / f"{stem}.json").write_text('{"bomFormat": "CycloneDX"}')
+                return MagicMock(returncode=0)
+
+            mock_run.side_effect = _run
+            gen_input = GenerationInput(
+                lock_file=str(project / "Cargo.lock"), output_file=str(Path(tmp) / "sbom.json"), output_format="spdx"
+            )
+            result = self.generator.generate(gen_input)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.spec_version, "2.3")
 
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")

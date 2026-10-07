@@ -31,8 +31,12 @@ GOMOD_CYCLONEDX_DEFAULT = "1.6"
 #: actions/checkout and actions/setup-go, read out of .github/workflows and
 #: not part of the shipped software. The resolver knows the build closure; a
 #: scanner is guessing at it from files on disk.
+#:
+#: "SPDX-2.3" is an internal marker, not a version anyone sets: it keeps an
+#: explicit SPEC_VERSION of 2.3 on syft. The default is the version the
+#: conversion writes, which is what gets reported and validated.
 GOMOD_SPDX_VERSIONS = ("SPDX-2.3",)
-GOMOD_SPDX_DEFAULT = "SPDX-2.3"
+GOMOD_SPDX_DEFAULT = "2.3"
 
 
 def _has_go_source(lock_file: str | None) -> bool:
@@ -153,7 +157,8 @@ class CycloneDXGomodGenerator:
                 "-std",
                 str(project_dir),
             ]
-            logger.info(f"Running cyclonedx-gomod for {input.lock_file_name} (CycloneDX {spec_version})")
+            tool_version = GOMOD_CYCLONEDX_DEFAULT if wants_spdx else spec_version
+            logger.info(f"Running cyclonedx-gomod for {input.lock_file_name} (CycloneDX {tool_version})")
             run_command(cmd, "cyclonedx-gomod", timeout=600, cwd=str(project_dir))
             if wants_spdx:
                 if not produced.exists():

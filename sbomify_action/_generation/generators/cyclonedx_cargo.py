@@ -39,8 +39,12 @@ from ..utils import convert_to_spdx, has_required_manifest, run_command
 #: more packages for fd -- 122 against 65 -- but the extras are GitHub Actions
 #: read out of .github/workflows and crates for other target platforms,
 #: neither of which is in this build's closure.
+#:
+#: "SPDX-2.3" is an internal marker, not a version anyone sets: it keeps an
+#: explicit SPEC_VERSION of 2.3 on syft. The default is the version the
+#: conversion writes, which is what gets reported and validated.
 CARGO_SPDX_VERSIONS = ("SPDX-2.3",)
-CARGO_SPDX_DEFAULT = "SPDX-2.3"
+CARGO_SPDX_DEFAULT = "2.3"
 
 _CARGO_CYCLONEDX_AVAILABLE, _CARGO_CYCLONEDX_PATH = check_tool_available("cargo-cyclonedx")
 if not _CARGO_CYCLONEDX_AVAILABLE:

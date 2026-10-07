@@ -757,6 +757,21 @@ class TestCreateDefaultRegistry(unittest.TestCase):
         priorities = [g["priority"] for g in generators]
         self.assertEqual(priorities, sorted(priorities))
 
+    def test_every_default_version_is_one_a_user_can_set(self):
+        """A generator's default is the version it reports and validates as.
+
+        The internal "SPDX-2.3" marker was the default for the converting
+        generators, so an SPDX run with no SPEC_VERSION reported "SPDX-2.3",
+        matched no schema and skipped validation.
+        """
+        from sbomify_action._generation.protocol import CYCLONEDX_VERSIONS, SPDX_VERSIONS
+
+        settable = {"cyclonedx": CYCLONEDX_VERSIONS, "spdx": SPDX_VERSIONS}
+        for generator in create_default_registry().list_generators():
+            for fmt in generator["formats"]:
+                with self.subTest(generator=generator["name"], format=fmt["format"]):
+                    self.assertIn(fmt["default"], settable.get(fmt["format"], ()))
+
 
 class TestGeneratorOrchestrator(unittest.TestCase):
     """Tests for GeneratorOrchestrator."""
