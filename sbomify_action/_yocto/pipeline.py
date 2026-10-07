@@ -10,11 +10,12 @@ from sbomify_action._processors.releases_api import create_release, tag_sbom_wit
 from sbomify_action.augmentation import augment_sbom_from_file
 from sbomify_action.console import console
 from sbomify_action.enrichment import enrich_sbom
-from sbomify_action.exceptions import APIError, ConfigurationError, PlanLimitError
+from sbomify_action.exceptions import APIError, ConfigurationError, PlanLimitError, SBOMValidationError
 from sbomify_action.logging_config import logger
 from sbomify_action.release_version import is_prerelease
 from sbomify_action.spdx3 import is_spdx3
 from sbomify_action.upload import upload_sbom
+from sbomify_action.validation import validate_sbom_file_auto
 
 from .api import get_or_create_component, list_components, patch_component_visibility
 from .archive import extract_archive
@@ -31,6 +32,25 @@ def _prerelease_flag(version: str) -> bool | None:
     would assert "this is final" about a version nothing has judged.
     """
     return True if is_prerelease(version) else None
+
+
+def _check_before_upload(pkg_name: str, sbom_file: str) -> None:
+    """Hold SPDX 3 to its schema, and warn about an SPDX 2 document that fails.
+
+    Yocto writes relationship types that SPDX added in 2.3, such as AMENDS,
+    into documents that declare SPDX-2.2, and the 2.2 schema refuses them.
+    Nobody running the build can fix that, and refusing the document would
+    drop the package from the release, so an SPDX 2 failure is uploaded with a
+    warning that names the package and the reason.
+    """
+    result = validate_sbom_file_auto(sbom_file)
+    if result.valid is not False:
+        return
+    where = f" at {result.error_path}" if result.error_path else ""
+    reason = f"SPDX {result.spec_version} document failed validation{where}: {result.error_message}"
+    if result.spec_version.startswith("3"):
+        raise SBOMValidationError(f"{pkg_name}: {reason}")
+    logger.warning(f"{pkg_name}: {reason}. Uploading it anyway.")
 
 
 def _process_single_package(
@@ -69,6 +89,8 @@ def _process_single_package(
             validate=False,
         )
         working_file = enriched_file
+
+    _check_before_upload(pkg_name, working_file)
 
     result = upload_sbom(
         sbom_file=working_file,

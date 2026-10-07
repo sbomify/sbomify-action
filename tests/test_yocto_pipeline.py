@@ -118,6 +118,64 @@ class TestProcessSinglePackage:
         mock_enrich.assert_called_once()
 
 
+def _busybox_with_relationship(tmp_path: Path, relationship_type: str) -> str:
+    data = json.loads((YOCTO_TEST_DATA / "busybox.spdx.json").read_text())
+    package_id = data["packages"][0]["SPDXID"]
+    data["relationships"] = [
+        {"spdxElementId": package_id, "relationshipType": relationship_type, "relatedSpdxElement": "SPDXRef-DOCUMENT"}
+    ]
+    path = tmp_path / "busybox.spdx.json"
+    path.write_text(json.dumps(data))
+    return str(path)
+
+
+class TestValidationBeforeUpload:
+    """Yocto writes SPDX 2.3 relationship types into documents declaring 2.2.
+    Those are uploaded with a warning; SPDX 3 is held to its schema."""
+
+    @patch("sbomify_action._yocto.pipeline.logger")
+    @patch("sbomify_action._yocto.pipeline.upload_sbom")
+    def test_a_22_document_using_amends_is_uploaded_with_a_warning(self, mock_upload, mock_logger, tmp_path):
+        spdx_file = _busybox_with_relationship(tmp_path, "AMENDS")
+        mock_upload.return_value = UploadResult.success_result(destination_name="sbomify", sbom_id="sbom-123")
+        config = _make_config(str(tmp_path / "dummy.tar.gz"))
+
+        assert _process_single_package("busybox", spdx_file, "comp-1", config) == "sbom-123"
+
+        mock_upload.assert_called_once()
+        warning = mock_logger.warning.call_args.args[0]
+        assert warning.startswith("busybox: SPDX 2.2 document failed validation")
+        assert "AMENDS" in warning
+
+    @patch("sbomify_action._yocto.pipeline.logger")
+    @patch("sbomify_action._yocto.pipeline.upload_sbom")
+    def test_a_valid_22_document_is_uploaded_without_a_warning(self, mock_upload, mock_logger, tmp_path):
+        spdx_file = _busybox_with_relationship(tmp_path, "CONTAINS")
+        mock_upload.return_value = UploadResult.success_result(destination_name="sbomify", sbom_id="sbom-123")
+        config = _make_config(str(tmp_path / "dummy.tar.gz"))
+
+        assert _process_single_package("busybox", spdx_file, "comp-1", config) == "sbom-123"
+
+        mock_logger.warning.assert_not_called()
+
+    @patch("sbomify_action._yocto.pipeline.tag_sbom_with_release")
+    @patch("sbomify_action._yocto.pipeline.create_release")
+    @patch("sbomify_action._yocto.pipeline.upload_sbom")
+    def test_an_invalid_spdx3_document_is_not_uploaded(self, mock_upload, mock_create_release, mock_tag, tmp_path):
+        data = json.loads(json.dumps(SPDX3_DATA))
+        data["@graph"][3]["nonsense"] = True
+        path = tmp_path / "image.spdx.json"
+        path.write_text(json.dumps(data))
+        config = _make_config(str(path), component_id="comp-abc")
+
+        result = run_yocto_pipeline(config)
+
+        mock_upload.assert_not_called()
+        assert result.errors == 1
+        assert result.sboms_uploaded == 0
+        assert "SPDX 3.0.1 document failed validation" in result.error_messages[0]
+
+
 class TestRunYoctoPipeline:
     @patch("sbomify_action._yocto.pipeline.inject_yocto_purls_spdx22")
     @patch("sbomify_action._yocto.pipeline.tag_sbom_with_release")
@@ -341,29 +399,38 @@ SPDX3_DATA = {
     "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
     "@graph": [
         {
+            "type": "CreationInfo",
+            "@id": "_:ci",
+            "specVersion": "3.0.1",
+            "created": "2026-01-01T00:00:00Z",
+            "createdBy": ["urn:spdx:openembedded"],
+        },
+        {
+            "type": "Organization",
+            "spdxId": "urn:spdx:openembedded",
+            "name": "OpenEmbedded",
+            "creationInfo": "_:ci",
+        },
+        {
             "type": "SpdxDocument",
             "spdxId": "urn:spdx:doc",
             "name": "test-image",
-            "creationInfo": "urn:spdx:ci",
-        },
-        {
-            "type": "CreationInfo",
-            "spdxId": "urn:spdx:ci",
-            "specVersion": "3.0.1",
+            "creationInfo": "_:ci",
+            "rootElement": ["urn:spdx:pkg-busybox"],
         },
         {
             "type": "software_Package",
             "spdxId": "urn:spdx:pkg-busybox",
             "name": "busybox",
-            "packageVersion": "1.36.1",
-            "creationInfo": "urn:spdx:ci",
+            "software_packageVersion": "1.36.1",
+            "creationInfo": "_:ci",
         },
         {
             "type": "software_Package",
             "spdxId": "urn:spdx:pkg-zlib",
             "name": "zlib",
-            "packageVersion": "1.3.1",
-            "creationInfo": "urn:spdx:ci",
+            "software_packageVersion": "1.3.1",
+            "creationInfo": "_:ci",
         },
     ],
 }
