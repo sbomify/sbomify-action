@@ -3634,8 +3634,9 @@ def _apply_sbom_purl_override(sbom_file: str, config: "Config") -> None:
                         if old_purl != config.component_purl:
                             external_refs[existing_purl_idx]["referenceLocator"] = config.component_purl
                     else:
-                        # Add new PURL reference
-                        purl_category = "PACKAGE-MANAGER"
+                        # Add new PURL reference. PACKAGE_MANAGER is the one
+                        # spelling both SPDX 2.2 and 2.3 accept.
+                        purl_category = "PACKAGE_MANAGER"
                         if config.component_purl.startswith("pkg:docker/") or config.component_purl.startswith(
                             "pkg:oci/"
                         ):

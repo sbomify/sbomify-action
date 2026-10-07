@@ -2449,6 +2449,21 @@ class TestComponentPurlOverride:
         assert len(purl_refs) == 1
         assert purl_refs[0]["referenceLocator"] == "pkg:pypi/test-app@1.0.0"
 
+    def test_a_valid_spdx_22_document_stays_valid(self, tmp_path):
+        """2.2 accepts only the PACKAGE_MANAGER spelling of the category."""
+        from sbomify_action.cli.main import _apply_sbom_purl_override
+        from sbomify_action.validation import validate_sbom_file
+
+        sbom_file = tmp_path / "test.spdx.json"
+        sbom_file.write_text((Path(__file__).parent / "test-data" / "yocto" / "busybox.spdx.json").read_text())
+        before = validate_sbom_file(str(sbom_file), "spdx", "2.2")
+        assert before.valid is True, before.error_message
+
+        _apply_sbom_purl_override(str(sbom_file), MockPurlConfig("pkg:generic/busybox@1.36.1"))
+
+        result = validate_sbom_file(str(sbom_file), "spdx", "2.2")
+        assert result.valid is True, result.error_message
+
     def test_spdx_override_existing_purl(self, tmp_path):
         """Test overriding existing PURL on SPDX package."""
         from sbomify_action.cli.main import _apply_sbom_purl_override
