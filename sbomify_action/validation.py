@@ -139,10 +139,13 @@ class ValidationResult:
     - True: Validation passed
     - False: Validation failed
     - None: Validation was skipped (e.g., no schema available)
+
+    `sbom_format` is None only on a failure for a file that is missing, is not
+    JSON, or is neither CycloneDX nor SPDX, so it has no format to report.
     """
 
     valid: bool | None
-    sbom_format: SBOMFormat
+    sbom_format: SBOMFormat | None
     spec_version: str
     error_message: str | None = None
     error_path: str | None = None
@@ -155,7 +158,7 @@ class ValidationResult:
     @classmethod
     def failure(
         cls,
-        sbom_format: SBOMFormat,
+        sbom_format: SBOMFormat | None,
         spec_version: str,
         error_message: str,
         error_path: str | None = None,
@@ -383,7 +386,7 @@ def validate_sbom_file_auto(file_path: str) -> ValidationResult:
     path = Path(file_path)
     if not path.exists():
         return ValidationResult.failure(
-            sbom_format="cyclonedx",  # Default for error reporting
+            sbom_format=None,
             spec_version="unknown",
             error_message=f"File not found: {file_path}",
         )
@@ -393,7 +396,7 @@ def validate_sbom_file_auto(file_path: str) -> ValidationResult:
             sbom_data = json.load(f)
     except json.JSONDecodeError as e:
         return ValidationResult.failure(
-            sbom_format="cyclonedx",
+            sbom_format=None,
             spec_version="unknown",
             error_message=f"Invalid JSON: {e}",
         )
@@ -402,7 +405,7 @@ def validate_sbom_file_auto(file_path: str) -> ValidationResult:
 
     if sbom_format is None:
         return ValidationResult.failure(
-            sbom_format="cyclonedx",
+            sbom_format=None,
             spec_version="unknown",
             error_message="Could not detect SBOM format (not CycloneDX or SPDX)",
         )

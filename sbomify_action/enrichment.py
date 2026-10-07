@@ -1690,15 +1690,15 @@ def enrich_sbom(input_file: str, output_file: str, validate: bool = True) -> Non
     # Validate the enriched SBOM
     if validate:
         validation_result = validate_sbom_file_auto(str(output_path))
-        if validation_result.valid is None:
-            fmt = format_display_name(validation_result.sbom_format)
-            ver = validation_result.spec_version
-            logger.warning(f"Enriched SBOM could not be validated ({fmt} {ver}): {validation_result.error_message}")
-        elif not validation_result.valid:
+        if validation_result.valid is False:
             raise SBOMValidationError(f"Enriched SBOM failed validation: {validation_result.error_message}")
+        assert validation_result.sbom_format is not None  # only a failure can lack a format
+        fmt = format_display_name(validation_result.sbom_format)
+        ver = validation_result.spec_version
+        if validation_result.valid is None:
+            logger.warning(f"Enriched SBOM could not be validated ({fmt} {ver}): {validation_result.error_message}")
         else:
-            fmt = format_display_name(validation_result.sbom_format)
-            logger.info(f"Enriched SBOM validated: {fmt} {validation_result.spec_version}")
+            logger.info(f"Enriched SBOM validated: {fmt} {ver}")
 
 
 def _enrich_cyclonedx_sbom(data: Dict[str, Any], input_path: Path, output_path: Path, enricher: Enricher) -> None:

@@ -208,7 +208,22 @@ class TestValidateSBOMFileAuto(unittest.TestCase):
         """Test auto-validating non-existent file."""
         result = validate_sbom_file_auto("/nonexistent/file.json")
         self.assertFalse(result.valid)
+        self.assertIsNone(result.sbom_format)
         self.assertIn("not found", result.error_message.lower())
+
+    def test_invalid_json_has_no_format(self):
+        """A file that is not JSON is not reported as a CycloneDX document."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("not json")
+            temp_path = f.name
+
+        try:
+            result = validate_sbom_file_auto(temp_path)
+            self.assertFalse(result.valid)
+            self.assertIsNone(result.sbom_format)
+            self.assertIn("invalid json", result.error_message.lower())
+        finally:
+            Path(temp_path).unlink()
 
     def test_unknown_format(self):
         """Test auto-validating file with unknown format."""
@@ -220,6 +235,7 @@ class TestValidateSBOMFileAuto(unittest.TestCase):
         try:
             result = validate_sbom_file_auto(temp_path)
             self.assertFalse(result.valid)
+            self.assertIsNone(result.sbom_format)
             self.assertIn("could not detect", result.error_message.lower())
         finally:
             Path(temp_path).unlink()
