@@ -129,7 +129,7 @@ file or a container image in the first place.
 
 | Format | Generate | Validate | Default |
 | --- | --- | --- | --- |
-| CycloneDX (JSON) | 1.2–1.7 | 1.3–1.7 | 1.6 |
+| CycloneDX (JSON) | 1.2–1.7 | 1.2–1.7 | 1.6 |
 | SPDX (JSON) | 2.2, 2.3 | 2.2, 2.3 | 2.3 |
 | SPDX (JSON-LD) | additional packages only | 3.0.0, 3.0.1 | — |
 
@@ -139,10 +139,6 @@ says why. Two routes still produce it. Supply an existing document through `SBOM
 and it is validated against the official schema for the version it declares, then
 written back at that version rather than relabelled. Or set `LOCK_FILE: none` and list
 the packages in `ADDITIONAL_PACKAGES`, which builds a 3.0.1 document from that list.
-
-**CycloneDX 1.2 is the one gap in the other direction.** It can be generated, but no
-1.2 schema ships here, so a 1.2 document goes out unchecked. Pick 1.3 or higher if you
-want the schema check, and 1.6 or higher if you want the BSI floor below.
 
 Override the version with `SPEC_VERSION`, or the `spec-version` input.
 
