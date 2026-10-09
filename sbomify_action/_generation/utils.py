@@ -10,7 +10,7 @@ from typing import Optional
 
 from sbomify_action._runtime.git import git_safe_directory_env
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
-from sbomify_action.logging_config import logger
+from sbomify_action.logging_config import logger, skip_telemetry
 from sbomify_action.release_version import normalize_release_version, tag_from_ci
 from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled
 
@@ -615,7 +615,19 @@ def run_command(
         # still raised, and the orchestrator logs ERROR only if all generators
         # fail.
         if log_errors:
-            logger.error(f"{command_name} command failed with error: {e}")
+            # Two records, one failure. ``log_command_error`` carries the
+            # tool's own output and the fingerprint that groups variants of
+            # it together, so that is the one worth an issue; this line
+            # repeats the argv and the exit code, which the exception message
+            # below already states. Keep it visible in the build log, keep it
+            # out of Sentry -- unless the tool said nothing at all, in which
+            # case ``log_command_error`` returns without logging and this is
+            # the only account of the failure there is.
+            tool_said_something = bool(combined_output(stderr, stdout))
+            logger.error(
+                f"{command_name} command failed with error: {e}",
+                extra=skip_telemetry() if tool_said_something else None,
+            )
             log_command_error(command_name, stderr, stdout)
         else:
             logger.debug(f"{command_name} command failed (trying next generator): {e}")
@@ -627,12 +639,18 @@ def run_command(
         if error_summary:
             message += f": {error_summary}"
 
-        raise SBOMGenerationError(
+        failure = SBOMGenerationError(
             message,
             stderr=stderr,
             stdout=stdout,
             returncode=e.returncode,
         )
+        # Already logged at error level just above, so whichever step catches
+        # this should echo it without opening a second issue for it. Only
+        # when ``log_errors`` is set: a priority-chain generator logs at debug
+        # and its failure has not been reported anywhere yet.
+        failure.telemetry_reported = log_errors
+        raise failure
     except subprocess.TimeoutExpired:
         elapsed = int(time.time() - start_time)
         # Honor log_errors here too: a cdxgen timeout on, say, a Python
