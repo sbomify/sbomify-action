@@ -365,6 +365,19 @@ def _degraded_message(failed: str, remaining: list[str], error: str) -> str:
     )
 
 
+def _refusal(failed: str, remaining: list[str], error: str, telemetry_reported: bool) -> "_DowngradeRefused":
+    """A ``_DowngradeRefused`` that keeps the failed generator's telemetry verdict.
+
+    The refusal is a fresh exception describing the *same* occurrence, so it
+    has to carry the flag across: a tool that already logged its own output
+    must not be reported a second time when step 1 echoes this at the
+    boundary. Without this, every generator boundary silently reset it.
+    """
+    refusal = _DowngradeRefused(_degraded_message(failed, remaining, error))
+    refusal.telemetry_reported = telemetry_reported
+    return refusal
+
+
 def _no_generator_message(input: GenerationInput) -> str:
     """Why nothing here can generate that, in terms the caller can act on.
 
@@ -517,6 +530,10 @@ class GeneratorRegistry:
 
         errors: list[str] = []
         attempted_generators: list[str] = []
+        # Did any generator in the chain already log its own failure at error
+        # level? If so the aggregate below only re-states it, and the step
+        # that echoes the aggregate must not open a second issue for it.
+        reported = False
         strict = fallback_is_a_bug()
         # A generator that exits 0 having described nothing. Kept rather than
         # returned, because a project with no dependencies is entitled to an
@@ -556,11 +573,12 @@ class GeneratorRegistry:
 
                 remaining = [g.name for g in generators[index + 1 :]]
                 errors.append(f"{generator.name}: {result.error_message}")
+                reported = reported or result.telemetry_reported
                 if result.declined:
                     # A routing decision, not a defect: always hand on.
                     logger.info(f"Generator {generator.name} declined this input: {result.error_message}")
                 elif strict and remaining:
-                    raise _DowngradeRefused(_degraded_message(generator.name, remaining, str(result.error_message)))
+                    raise _refusal(generator.name, remaining, str(result.error_message), result.telemetry_reported)
                 else:
                     self._warn_degraded(generator.name, remaining, str(result.error_message))
             except _DowngradeRefused:
@@ -568,8 +586,9 @@ class GeneratorRegistry:
             except Exception as e:
                 remaining = [g.name for g in generators[index + 1 :]]
                 errors.append(f"{generator.name}: {e}")
+                reported = reported or getattr(e, "telemetry_reported", False)
                 if strict and remaining:
-                    raise _DowngradeRefused(_degraded_message(generator.name, remaining, str(e))) from e
+                    raise _refusal(generator.name, remaining, str(e), getattr(e, "telemetry_reported", False)) from e
                 self._warn_degraded(generator.name, remaining, str(e))
 
         # Nothing found components, but something did produce a well-formed
@@ -613,6 +632,7 @@ class GeneratorRegistry:
             sbom_format=input.output_format,
             spec_version=spec_version,
             generator_name="none",
+            telemetry_reported=reported,
         )
 
     def _warn_degraded(self, failed: str, remaining: list[str], error: str) -> None:

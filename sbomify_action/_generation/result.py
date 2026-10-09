@@ -20,6 +20,11 @@ class GenerationResult:
         error_message: Error message if generation failed
         validated: Whether the SBOM was validated against its schema
         validation_error: Validation error message if validation failed
+        telemetry_reported: True when an error-level record describing this
+            failure was already logged -- a tool whose own output went to the
+            log, say. Carried so the step that turns this result into an
+            exception can echo it without opening a second Sentry issue for
+            one occurrence. See ``logging_config.already_reported``.
         declined: True when the generator deliberately handed the input on
             rather than breaking. A decline is a routing decision (eg. a
             cargo workspace cyclonedx-cargo cannot express); a failure is a
@@ -36,6 +41,7 @@ class GenerationResult:
     validated: bool = False
     validation_error: Optional[str] = None
     declined: bool = False
+    telemetry_reported: bool = False
 
     def __post_init__(self) -> None:
         """Validate result state."""
@@ -96,6 +102,7 @@ class GenerationResult:
         sbom_format: SBOMFormat,
         spec_version: str,
         generator_name: str,
+        telemetry_reported: bool = False,
     ) -> "GenerationResult":
         """Create a failed generation result."""
         return cls(
@@ -107,4 +114,5 @@ class GenerationResult:
             error_message=error_message,
             validated=False,
             validation_error=None,
+            telemetry_reported=telemetry_reported,
         )

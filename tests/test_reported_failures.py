@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 import sentry_sdk
 
+from sbomify_action._generation.registry import _refusal
+from sbomify_action._generation.result import GenerationResult
 from sbomify_action._generation.utils import error_signature, log_command_error, run_command
 from sbomify_action._upload.destinations.dependency_track import (
     DependencyTrackConfig,
@@ -675,6 +677,33 @@ class TestEchoedFailuresAreReportedOnce:
         assert already_reported(DockerImageNotFoundError("example.com/no-such-image:v1.0.0")) == {
             TELEMETRY_SKIP_KEY: True
         }
+
+    def test_the_verdict_survives_every_boundary_it_crosses(self) -> None:
+        """GITHUB-ACTION-G1/G2/G3: one syft failure, three issues.
+
+        The flag has to cross two boundaries that build a *new* object for
+        the same occurrence -- the generator turning the exception into a
+        ``GenerationResult``, and the registry turning that into a refusal.
+        Each one silently reset it before, so suppressing the echo at step 1
+        would have done nothing for the generation path.
+        """
+        reported = SBOMGenerationError("syft command failed with return code 1")
+        reported.telemetry_reported = True
+
+        crossed_the_generator = GenerationResult.failure_result(
+            error_message=str(reported),
+            sbom_format="cyclonedx",
+            spec_version="1.6",
+            generator_name="syft-image",
+            telemetry_reported=reported.telemetry_reported,
+        )
+        assert crossed_the_generator.telemetry_reported is True
+
+        crossed_the_registry = _refusal("syft-image", ["cdxgen-image"], str(reported), True)
+        assert already_reported(crossed_the_registry) == {TELEMETRY_SKIP_KEY: True}
+
+        # And a refusal over a generator that stayed quiet still reports.
+        assert already_reported(_refusal("cdxgen-fs", ["syft-fs"], "cdxgen failed", False)) is None
 
     def test_run_command_marks_what_it_logged(self) -> None:
         """The exception carries the flag only when an error record was emitted."""

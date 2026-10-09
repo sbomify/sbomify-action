@@ -2401,7 +2401,9 @@ def run_pipeline(config: Config) -> None:
                         spec_version=config.spec_version,
                     )
                     if not result.success:
-                        raise SBOMGenerationError(result.error_message or "SBOM generation failed")
+                        failure = SBOMGenerationError(result.error_message or "SBOM generation failed")
+                        failure.telemetry_reported = result.telemetry_reported
+                        raise failure
             elif FILE_TYPE == "LOCK_FILE":
                 logger.info(f"Generating SBOM from lock file: {FILE}")
                 result = process_lock_file(
@@ -2411,7 +2413,9 @@ def run_pipeline(config: Config) -> None:
                     spec_version=config.spec_version,
                 )
                 if not result.success:
-                    raise SBOMGenerationError(result.error_message or "SBOM generation failed")
+                    failure = SBOMGenerationError(result.error_message or "SBOM generation failed")
+                    failure.telemetry_reported = result.telemetry_reported
+                    raise failure
             elif FILE_TYPE == "SOURCE_DIR":
                 # Says what it is: a walk of what is on disk, not a reading of
                 # what an ecosystem resolved. The distinction belongs in the
@@ -2425,7 +2429,9 @@ def run_pipeline(config: Config) -> None:
                     spec_version=config.spec_version,
                 )
                 if not result.success:
-                    raise SBOMGenerationError(result.error_message or "SBOM generation failed")
+                    failure = SBOMGenerationError(result.error_message or "SBOM generation failed")
+                    failure.telemetry_reported = result.telemetry_reported
+                    raise failure
             else:
                 logger.error("Unrecognized FILE_TYPE.")
                 sys.exit(1)
@@ -2835,15 +2841,15 @@ def run_pipeline(config: Config) -> None:
                 # type ``before_send`` filters instead of a bare APIError.
                 if set(failed_destinations) == set(duplicate_destinations):
                     raise DuplicateArtifactError(message)
-                failure = APIError(message)
+                upload_failure = APIError(message)
                 # Every destination listed here was logged at error level in
                 # the loop above, each subject to ``before_send`` on its own
                 # merits. The echo below adds no information and carries none
                 # of the detail those records were judged on -- a 403 dropped
                 # there reappeared as "Upload failed for destination(s):
                 # sbomify", which became the largest issue in the project.
-                failure.telemetry_reported = True
-                raise failure
+                upload_failure.telemetry_reported = True
+                raise upload_failure
 
             _log_step_end(5)
 

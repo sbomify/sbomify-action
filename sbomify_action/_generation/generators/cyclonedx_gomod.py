@@ -166,6 +166,7 @@ class CycloneDXGomodGenerator:
                 sbom_format=input.output_format,
                 spec_version=spec_version,
                 generator_name=self.name,
+                telemetry_reported=e.telemetry_reported,
             )
 
         if not output.exists():
