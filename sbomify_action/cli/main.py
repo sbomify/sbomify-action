@@ -59,7 +59,7 @@ from ..generation import (
     generate_sbom,
     process_lock_file,
 )
-from ..logging_config import logger
+from ..logging_config import TELEMETRY_SKIP_KEY, already_reported, logger, skip_telemetry
 from ..release_version import (
     names_another_package,
     normalize_release_version,
@@ -1153,6 +1153,16 @@ def initialize_sentry() -> None:
         Filter events before sending to Sentry.
         Don't send user input validation errors - these are expected user errors.
         """
+        # An error the action has already accounted for: either a user-side
+        # condition it cannot fix, or a step-level echo of a failure that was
+        # reported one layer down. Marked at the call site, because the call
+        # site is the only place that knows which -- inferring it from the
+        # message here is what let "Step 5 (upload) failed: Upload failed for
+        # destination(s): sbomify" become the largest issue in the project
+        # while every one of its causes was correctly dropped.
+        if (event.get("extra") or {}).get(TELEMETRY_SKIP_KEY):
+            return None
+
         # Filter exceptions
         if "exc_info" in hint:
             exc_type, exc_value, tb = hint["exc_info"]
@@ -1177,7 +1187,10 @@ def initialize_sentry() -> None:
                     # a stack trace in Sentry adds nothing.
                     InputPathNotFoundError,
                 ),
-            ):
+            ) or getattr(exc_value, "user_side", False):
+                # ``user_side`` extends the list above rather than replacing
+                # it: the attribute is what a step-level echo of the same
+                # exception is judged on, so the two cannot drift apart.
                 return None
 
             # A 401/403 raised rather than logged — the same user-side
@@ -2186,10 +2199,18 @@ def run_pipeline(config: Config) -> None:
                 )
                 config.token_is_oidc_minted = True
             except OIDCBindingMissingError as exc:
-                logger.error(str(exc))
+                # Always the user's to fix: the message names the component
+                # and the exact UI page that creates the binding.
+                logger.error(str(exc), extra=skip_telemetry())
                 sys.exit(1)
             except OIDCExchangeError as exc:
-                logger.error(f"OIDC trusted publishing failed: {exc}")
+                # A wrong component id or a workflow without `id-token: write`
+                # is configuration; a 5xx from the exchange endpoint is the
+                # backend falling over and still belongs in Sentry.
+                logger.error(
+                    f"OIDC trusted publishing failed: {exc}",
+                    extra=skip_telemetry() if exc.user_side else None,
+                )
                 sys.exit(1)
         elif config.requires_sbomify_api:
             # validate() let this config through assuming OIDC would be
@@ -2409,8 +2430,10 @@ def run_pipeline(config: Config) -> None:
                 logger.error("Unrecognized FILE_TYPE.")
                 sys.exit(1)
         except SBOMValidationError as e:
-            # User-provided SBOM validation errors - don't send to Sentry
-            logger.error(f"Step 1 failed: {e}")
+            # User-provided SBOM validation errors - don't send to Sentry.
+            # The type filter in ``before_send`` covers the *raised* form; this
+            # record is logged, not raised, so it needs saying here too.
+            logger.error(f"Step 1 failed: {e}", extra=skip_telemetry())
             if FILE_TYPE == "SBOM":
                 file_name = Path(FILE).name
                 logger.error(f"The provided SBOM file '{FILE}' appears to be invalid.")
@@ -2423,7 +2446,11 @@ def run_pipeline(config: Config) -> None:
             _log_step_end(1, success=False)
             sys.exit(1)
         except (FileProcessingError, SBOMGenerationError, ValueError) as e:
-            logger.error(f"Step 1 failed: {e}")
+            # A tool that failed has already logged its own output at error
+            # level; echoing it here is a second Sentry issue for one
+            # occurrence. A failure that surfaced *first* at this boundary
+            # carries no marker and is still reported.
+            logger.error(f"Step 1 failed: {e}", extra=already_reported(e))
             # The remedy is worth more here than on the happy path. A run that
             # produced nothing from a manifest is exactly the case where "no
             # lock file was committed" is the likely cause and "here is the
@@ -2649,7 +2676,7 @@ def run_pipeline(config: Config) -> None:
             _detect_sbom_format_silent(STEP_3_FILE)  # Silent validation
             _log_step_end(3)
         except (FileProcessingError, SBOMGenerationError, SBOMValidationError) as e:
-            logger.error(f"Step 3 (enrichment) failed: {e}")
+            logger.error(f"Step 3 (enrichment) failed: {e}", extra=already_reported(e))
             _log_step_end(3, success=False)
             sys.exit(1)
     else:
@@ -2776,6 +2803,15 @@ def run_pipeline(config: Config) -> None:
                         print_duplicate_sbom_error(
                             config.component_id, FORMAT, config.component_version, artifact_kind=artifact_label
                         )
+                    elif upload_result.error_code == "CONFIGURATION_ERROR":
+                        # The destination was asked for without the inputs it
+                        # needs (no DTRACK_PROJECT_ID and no name/version
+                        # pair). The message names them; there is nothing for
+                        # the action to fix.
+                        logger.error(
+                            f"Upload to {destination} failed: {upload_result.error_message}",
+                            extra=skip_telemetry(),
+                        )
                     elif upload_result.error_code == "COMPONENT_NOT_FOUND":
                         logger.error(
                             f"Upload to {destination} failed: component not found (component_id={config.component_id})"
@@ -2799,7 +2835,15 @@ def run_pipeline(config: Config) -> None:
                 # type ``before_send`` filters instead of a bare APIError.
                 if set(failed_destinations) == set(duplicate_destinations):
                     raise DuplicateArtifactError(message)
-                raise APIError(message)
+                failure = APIError(message)
+                # Every destination listed here was logged at error level in
+                # the loop above, each subject to ``before_send`` on its own
+                # merits. The echo below adds no information and carries none
+                # of the detail those records were judged on -- a 403 dropped
+                # there reappeared as "Upload failed for destination(s):
+                # sbomify", which became the largest issue in the project.
+                failure.telemetry_reported = True
+                raise failure
 
             _log_step_end(5)
 
@@ -2812,7 +2856,7 @@ def run_pipeline(config: Config) -> None:
             if isinstance(e, DuplicateArtifactError):
                 logger.warning(f"Step 5 (upload) failed: {e}")
             else:
-                logger.error(f"Step 5 (upload) failed: {e}")
+                logger.error(f"Step 5 (upload) failed: {e}", extra=already_reported(e))
             _log_step_end(5, success=False)
             sys.exit(1)
     else:

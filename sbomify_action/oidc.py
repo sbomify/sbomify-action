@@ -213,17 +213,20 @@ def exchange_for_sbomify_token(
     if response.status_code == 404:
         raise OIDCExchangeError(
             f"sbomify component '{component_id}' was not found (404). "
-            f"Verify COMPONENT_ID is correct. {f'Detail: {detail}' if detail else ''}".strip()
+            f"Verify COMPONENT_ID is correct. {f'Detail: {detail}' if detail else ''}".strip(),
+            user_side=True,
         )
     if response.status_code == 401:
         raise OIDCExchangeError(
             f"sbomify rejected the GitHub OIDC token (401). The token signature, "
-            f"audience, or expiry did not validate. {f'Detail: {detail}' if detail else ''}".strip()
+            f"audience, or expiry did not validate. {f'Detail: {detail}' if detail else ''}".strip(),
+            user_side=True,
         )
     if response.status_code == 429:
         raise OIDCExchangeError(
             "sbomify OIDC exchange is rate-limited (429). Retry after a short delay. "
-            f"{f'Detail: {detail}' if detail else ''}".strip()
+            f"{f'Detail: {detail}' if detail else ''}".strip(),
+            user_side=True,
         )
     raise OIDCExchangeError(
         f"sbomify OIDC exchange failed with HTTP {response.status_code}. "
@@ -250,7 +253,8 @@ def obtain_sbomify_token_via_oidc(
     if provider is None:
         raise OIDCExchangeError(
             f"No OIDC token is available on {get_platform().name}. On GitHub Actions, "
-            "ensure the workflow grants `permissions: id-token: write`."
+            "ensure the workflow grants `permissions: id-token: write`.",
+            user_side=True,
         )
 
     requested_audience = audience or default_audience_for(api_base_url)

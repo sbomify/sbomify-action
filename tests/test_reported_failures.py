@@ -13,7 +13,13 @@ from pathlib import Path
 import pytest
 import sentry_sdk
 
-from sbomify_action._generation.utils import error_signature, log_command_error
+from sbomify_action._generation.utils import error_signature, log_command_error, run_command
+from sbomify_action._upload.destinations.dependency_track import (
+    DependencyTrackConfig,
+    DependencyTrackDestination,
+)
+from sbomify_action._upload.protocol import UploadInput
+from sbomify_action._upload.result import UploadResult
 from sbomify_action.cli.main import (
     _format_search_locations,
     _is_auth_failure,
@@ -23,16 +29,73 @@ from sbomify_action.cli.main import (
 from sbomify_action.exceptions import (
     APIError,
     AuthError,
+    DockerImageNotFoundError,
     DuplicateArtifactError,
     FileProcessingError,
     InputPathNotFoundError,
+    OIDCBindingMissingError,
+    OIDCError,
+    OIDCExchangeError,
+    SBOMGenerationError,
 )
+from sbomify_action.logging_config import TELEMETRY_SKIP_KEY, already_reported
+from sbomify_action.oidc import exchange_for_sbomify_token
 from sbomify_action.serialization import (
     _canonical_spdx_license_id,
     _is_valid_spdx_license_id,
     sanitize_cyclonedx_licenses,
 )
 from sbomify_action.validation import validate_sbom_data
+
+
+def _exchange_failure(status: int) -> OIDCError:
+    """The ``OIDCError`` the exchange raises for ``status``, no network.
+
+    Driven through the real function so the classification under test is the
+    shipped one, not a restatement of it.
+    """
+
+    class _Response:
+        status_code = status
+        text = "{}"
+
+        @staticmethod
+        def json() -> dict[str, str]:
+            return {"detail": "nope"}
+
+    def _post(*_args: object, **_kwargs: object) -> _Response:
+        return _Response()
+
+    import sbomify_action.oidc as oidc_module
+
+    original_post = oidc_module.requests.post
+    original_sleep = oidc_module.time.sleep
+    oidc_module.requests.post = _post  # type: ignore[assignment]
+    oidc_module.time.sleep = lambda _s: None  # type: ignore[assignment]
+    try:
+        with pytest.raises(OIDCError) as raised:
+            exchange_for_sbomify_token("jwt", "cmpnt", "https://app.sbomify.com")
+        return raised.value
+    finally:
+        oidc_module.requests.post = original_post  # type: ignore[assignment]
+        oidc_module.time.sleep = original_sleep  # type: ignore[assignment]
+
+
+def _dependency_track_upload_without_a_project(tmp_path: Path) -> UploadResult:
+    """A dependency-track upload with neither a project id nor a name/version."""
+    destination = DependencyTrackDestination(
+        DependencyTrackConfig(api_key="k", api_url="https://dtrack.example.com/api", project_id=None)
+    )
+    sbom = tmp_path / "sbom.cdx.json"
+    sbom.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6", "components": []}')
+    return destination.upload(
+        UploadInput(
+            sbom_file=str(sbom),
+            sbom_format="cyclonedx",
+            component_name=None,
+            component_version=None,
+        )
+    )
 
 
 def _capture_fingerprints(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
@@ -556,3 +619,132 @@ class TestBareLicenseTextReachesEveryParser:
             "Bom.from_json outside load_cyclonedx_bom (the licence repair is skipped there):\n  "
             + "\n  ".join(offenders)
         )
+
+
+class TestEchoedFailuresAreReportedOnce:
+    """GITHUB-ACTION-E5 (62 events) and MN (21): the project's two largest
+    issues were both echoes.
+
+    Step 5 logs each destination's failure, then raises, then logs the
+    exception again as "Step 5 (upload) failed: Upload failed for
+    destination(s): sbomify". Both records become events, so one occurrence
+    opened two issues -- and the second one escaped the classification the
+    first was judged on, because the wrapper message carries none of the
+    detail ``_is_auth_failure`` matches on. Every single E5 event had a
+    filtered ``[403]`` sitting in its breadcrumbs.
+    """
+
+    def test_the_marker_is_honoured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        before_send = _capture_before_send(monkeypatch)
+
+        echo: dict[str, object] = {
+            "logentry": {"formatted": "Step 5 (upload) failed: Upload failed for destination(s): sbomify"},
+            "extra": {TELEMETRY_SKIP_KEY: True},
+        }
+        assert before_send(echo, {}) is None
+
+        # The same message without the marker is still reported: the marker
+        # is the whole of the decision, not the wording.
+        unmarked: dict[str, object] = {
+            "logentry": {"formatted": "Step 5 (upload) failed: Upload failed for destination(s): sbomify"},
+        }
+        assert before_send(unmarked, {}) is unmarked
+
+    def test_an_event_with_no_extra_at_all_is_unaffected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``extra`` is absent on exception events and may be an explicit None."""
+        before_send = _capture_before_send(monkeypatch)
+
+        for event in ({"message": "boom"}, {"message": "boom", "extra": None}):
+            assert before_send(dict(event), {}) is not None
+
+    def test_already_reported_marks_only_what_was_reported(self) -> None:
+        reported = SBOMGenerationError("syft command failed with return code 1")
+        reported.telemetry_reported = True
+        assert already_reported(reported) == {TELEMETRY_SKIP_KEY: True}
+
+        # "No SBOM file found from previous step" surfaces for the first time
+        # at the step boundary -- nothing logged it below, so it must report.
+        assert already_reported(FileProcessingError("No SBOM file found from previous step")) is None
+
+    def test_a_user_side_type_also_suppresses_its_echo(self) -> None:
+        """GITHUB-ACTION-K4: "Step 1 failed: ... Docker image ... not found".
+
+        ``before_send`` already dropped the raised ``DockerImageNotFoundError``;
+        the one-line echo that followed it went to Sentry anyway.
+        """
+        assert already_reported(DockerImageNotFoundError("example.com/no-such-image:v1.0.0")) == {
+            TELEMETRY_SKIP_KEY: True
+        }
+
+    def test_run_command_marks_what_it_logged(self) -> None:
+        """The exception carries the flag only when an error record was emitted."""
+        with pytest.raises(SBOMGenerationError) as logged:
+            run_command(["false"], "syft", log_errors=True)
+        assert logged.value.telemetry_reported is True
+
+        # Priority-chain fallback logs at debug, so nothing has been reported
+        # and the step boundary is the first and only chance to report it.
+        with pytest.raises(SBOMGenerationError) as quiet:
+            run_command(["false"], "syft", log_errors=False)
+        assert quiet.value.telemetry_reported is False
+
+
+class TestOidcFailuresAreClassifiedWhereTheyAreLogged:
+    """GITHUB-ACTION-EG / F4 / JZ / M6 / MP / MQ / NP / NR (403) and
+    GC / MR / NQ (404).
+
+    ``before_send`` lists ``OIDCError`` among the types it drops, with a
+    comment saying OIDC failures are user/setup issues. Every caller catches
+    them and *logs* instead of letting them propagate, so there is no
+    ``exc_info`` by the time Sentry looks -- the entry was dead code, and the
+    403s kept arriving. The 403 message says "(403)" in parentheses, so the
+    ``[403]`` marker test did not catch them either.
+    """
+
+    def test_a_missing_binding_is_user_side(self) -> None:
+        assert OIDCBindingMissingError("no binding").user_side is True
+
+    @pytest.mark.parametrize("status", [401, 403, 404, 429])
+    def test_the_exchange_classifies_user_side_statuses(self, status: int) -> None:
+        exc = _exchange_failure(status)
+        assert exc.user_side is True, f"HTTP {status} should not be reported as a defect"
+
+    @pytest.mark.parametrize("status", [500, 502, 503])
+    def test_backend_outages_are_still_reported(self, status: int) -> None:
+        """Same line ``_USER_SIDE_HTTP_STATUSES`` draws: a 5xx is ours."""
+        assert _exchange_failure(status).user_side is False
+
+    def test_no_runner_token_is_user_side(self) -> None:
+        """A workflow missing `permissions: id-token: write` is configuration."""
+        assert OIDCExchangeError("No OIDC token is available on GitHub Actions.", user_side=True).user_side is True
+
+    def test_the_real_403_message_is_not_caught_by_the_marker_test(self) -> None:
+        """Why the type had to carry the classification.
+
+        The message ``oidc.py`` builds for a 403, with a placeholder
+        component id. ``_is_auth_failure`` looks for ``[403]``; this says
+        ``(403)``, so the marker test reports False and the record went to
+        Sentry as a defect.
+        """
+        assert (
+            _is_auth_failure(
+                "sbomify rejected the OIDC token (403): no binding found for component "
+                "'aBcDeF123456' and this repository. Create an OIDC binding in the sbomify UI "
+                "(Component → Settings → Trusted Publishing). Detail: repository not bound to this component"
+            )
+            is False
+        )
+
+
+class TestDependencyTrackConfiguration:
+    """GITHUB-ACTION-MM, 12 events: DTRACK_PROJECT_ID was never set.
+
+    The user asked for the dependency-track destination without the inputs it
+    needs. Nothing for the action to fix, and the message already names them.
+    """
+
+    def test_the_failure_is_coded_as_configuration(self, tmp_path: Path) -> None:
+        result = _dependency_track_upload_without_a_project(tmp_path)
+        assert result.success is False
+        assert result.error_code == "CONFIGURATION_ERROR"
+        assert "DTRACK_PROJECT_ID" in (result.error_message or "")

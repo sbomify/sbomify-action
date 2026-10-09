@@ -101,3 +101,49 @@ def get_verbose_mode() -> bool:
 
 # Global logger instance
 logger = setup_logging()
+
+
+#: Key set on a log record (via ``extra=``) to say that an ERROR-level record
+#: is already accounted for and must not become a Sentry event.
+#:
+#: Two kinds of record carry it. A *user-side* condition -- an OIDC binding
+#: that was never created, a Dependency Track project the user never named --
+#: is not a defect in the action, and the message already says what to change.
+#: A *step-level echo* -- "Step 5 (upload) failed: ..." -- only re-states a
+#: failure that was logged one layer down, so reporting it again doubles every
+#: issue and, worse, smuggles the occurrence past the classification the first
+#: record was subject to: a 403 correctly dropped at the upload line came back
+#: as the largest issue in the project because the step that wrapped it said
+#: only "Upload failed for destination(s): sbomify".
+#:
+#: Sentry's logging integration copies unrecognised record attributes into
+#: ``event["extra"]``, which is where ``initialize_sentry``'s ``before_send``
+#: looks for this. The record itself is untouched -- the user still sees the
+#: error, at error level, in the build log.
+TELEMETRY_SKIP_KEY = "sbomify_telemetry_skip"
+
+
+def skip_telemetry() -> dict[str, bool]:
+    """``extra=`` payload marking a log record as "not for Sentry".
+
+    A fresh dict each call: ``logging`` copies it into the record, and a
+    shared constant would be one accidental ``update()`` away from marking
+    records nobody meant to mark.
+    """
+    return {TELEMETRY_SKIP_KEY: True}
+
+
+def already_reported(exc: BaseException) -> dict[str, bool] | None:
+    """``extra=`` for a log record that only re-states ``exc``.
+
+    Returns the skip marker when the occurrence is already accounted for --
+    the layer that raised it logged it at error level
+    (``telemetry_reported``), or the type says it is the user's to fix
+    (``user_side``, the same classification ``before_send`` applies to the
+    exception itself). Returns ``None`` -- the ``logging`` default --
+    otherwise, so a failure that surfaces for the first time at a step
+    boundary is still reported exactly once.
+    """
+    if getattr(exc, "telemetry_reported", False) or getattr(exc, "user_side", False):
+        return skip_telemetry()
+    return None
