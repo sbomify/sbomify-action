@@ -124,32 +124,40 @@ jobs:
       # workflow_run github.ref is the default branch, so the
       # determine-version action would always report a staging build —
       # derive the version/docker_tag and the environment-specific endpoint,
-      # audience and product-release id from head_branch/head_sha instead.
+      # audience and product releases from head_branch/head_sha instead.
       - id: cfg
         env:
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          SBOM_TOOLS_PRODUCT_ID: ${{ vars.SBOM_TOOLS_PRODUCT_ID }}
         run: |
           SHORT_SHA="${HEAD_SHA:0:7}"
           if [[ "$HEAD_BRANCH" == v* ]]; then
-            # Production — version tag
+            # Production — version tag. The SBOMs also go into the sbom-tools
+            # product release this version pins, so that release lists every
+            # action version running it.
+            RELEASES="\"IeIn1dGJXULh:${HEAD_BRANCH}\""
+            if [[ -n "$SBOM_TOOLS_PRODUCT_ID" ]]; then
+              TOOLS_RELEASE=$(sed -n 's/^tools_release = "\(.*\)"$/\1/p' sbomify_action/tools.toml)
+              RELEASES="${RELEASES}, \"${SBOM_TOOLS_PRODUCT_ID}:${TOOLS_RELEASE}\""
+            fi
             {
+              echo "product_release=[${RELEASES}]"
               echo "is_prod=true"
               echo "version=${HEAD_BRANCH}"
               echo "docker_tag=${HEAD_BRANCH#v}"
               echo "api_base_url=https://app.sbomify.com"
               echo "oidc_audience=sbomify.com"
-              echo "product_release_id=IeIn1dGJXULh"
             } >> "$GITHUB_OUTPUT"
           else
             # Staging — master build
             {
+              echo "product_release=[\"Engh9j4XTTwD:${SHORT_SHA}\"]"
               echo "is_prod=false"
               echo "version=${SHORT_SHA}"
               echo "docker_tag=latest"
               echo "api_base_url=https://stage.sbomify.com"
               echo "oidc_audience=stage.sbomify.com"
-              echo "product_release_id=Engh9j4XTTwD"
             } >> "$GITHUB_OUTPUT"
           fi
       - uses: sbomify/sbomify-action@master
@@ -163,7 +171,7 @@ jobs:
           DOCKER_IMAGE: ${{ matrix.kind == 'container' && format('ghcr.io/sbomify/sbomify-action:{0}', steps.cfg.outputs.docker_tag) || '' }}
           LOCK_FILE: ${{ matrix.lockfile }}
           ADDITIONAL_PACKAGES_FILE: ${{ matrix.kind == 'container' && 'container_additional_packages.txt' || '' }}
-          PRODUCT_RELEASE: '["${{ steps.cfg.outputs.product_release_id }}:${{ steps.cfg.outputs.version }}"]'
+          PRODUCT_RELEASE: ${{ steps.cfg.outputs.product_release }}
           SBOM_FORMAT: ${{ matrix.sbom_format }}
           UPLOAD: 'true'
           AUGMENT: 'true'
