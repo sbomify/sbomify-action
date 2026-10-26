@@ -76,6 +76,11 @@ def tag_artifact_with_release(
     _client(api_base_url, token).tag_artifact_with_release(artifact_id, release_id, artifact_kind=artifact_kind)
 
 
+def link_release(api_base_url: str, token: str, release_id: str, product_id: str, version: str) -> None:
+    """Link another product's release into a release; idempotent on an existing link."""
+    _client(api_base_url, token).link_release(release_id, product_id, version)
+
+
 def get_release_friendly_name(release_details: Optional[dict[str, Any]], version: str) -> str:
     """Return a user-friendly release label.
 

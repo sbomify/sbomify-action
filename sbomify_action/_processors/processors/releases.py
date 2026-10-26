@@ -18,6 +18,7 @@ from ..releases_api import (
     get_release_details,
     get_release_friendly_name,
     get_release_id,
+    link_release,
     tag_artifact_with_release,
 )
 from ..result import ProcessorResult
@@ -105,6 +106,13 @@ class SbomifyReleasesProcessor:
                 )
 
                 if release_id:
+                    # A product release includes whole releases of other products,
+                    # such as the toolchain it ships with. The link is made from
+                    # this release, so the included release is never touched.
+                    for include in input.release_includes or []:
+                        include_product, include_version = include.split(":", 1)
+                        logger.info(f"Including {include_product}:{include_version} in release {version}")
+                        link_release(api_base_url, token, release_id, include_product, include_version)
                     release_ids.append(release_id)
                     processed += 1
                 else:
