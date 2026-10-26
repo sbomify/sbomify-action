@@ -129,20 +129,15 @@ jobs:
         env:
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          SBOM_TOOLS_PRODUCT_ID: ${{ vars.SBOM_TOOLS_PRODUCT_ID }}
         run: |
           SHORT_SHA="${HEAD_SHA:0:7}"
           if [[ "$HEAD_BRANCH" == v* ]]; then
-            # Production — version tag. The SBOMs also go into the sbom-tools
-            # product release this version pins, so that release lists every
-            # action version running it.
-            RELEASES="\"IeIn1dGJXULh:${HEAD_BRANCH}\""
-            if [[ -n "$SBOM_TOOLS_PRODUCT_ID" ]]; then
-              TOOLS_RELEASE=$(sed -n 's/^tools_release = "\(.*\)"$/\1/p' sbomify_action/tools.toml)
-              RELEASES="${RELEASES}, \"${SBOM_TOOLS_PRODUCT_ID}:${TOOLS_RELEASE}\""
-            fi
+            # Production — version tag. The SBOMs also go into the release of
+            # the sbom-tools product (nPl9UJxUECM6) this version pins, so that
+            # release lists every action version running it.
+            TOOLS_RELEASE=$(sed -n 's/^tools_release = "\(.*\)"$/\1/p' sbomify_action/tools.toml)
             {
-              echo "product_release=[${RELEASES}]"
+              echo "product_release=[\"IeIn1dGJXULh:${HEAD_BRANCH}\", \"nPl9UJxUECM6:${TOOLS_RELEASE}\"]"
               echo "is_prod=true"
               echo "version=${HEAD_BRANCH}"
               echo "docker_tag=${HEAD_BRANCH#v}"
