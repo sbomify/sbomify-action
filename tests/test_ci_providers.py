@@ -667,6 +667,8 @@ class TestVcsAugmentationIntegration(unittest.TestCase):
             CreationInfo,
             Document,
             Package,
+            Relationship,
+            RelationshipType,
         )
 
         from sbomify_action.augmentation import _add_vcs_info_to_spdx
@@ -681,7 +683,11 @@ class TestVcsAugmentationIntegration(unittest.TestCase):
             created=datetime.now(),
         )
         package = Package(spdx_id="SPDXRef-Package", name="test-pkg", download_location="NOASSERTION")
-        document = Document(creation_info=creation_info, packages=[package])
+        document = Document(
+            creation_info=creation_info,
+            packages=[package],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-Package")],
+        )
 
         augmentation_data = {
             "vcs_url": "https://github.com/owner/repo",
@@ -715,6 +721,8 @@ class TestVcsAugmentationIntegration(unittest.TestCase):
             CreationInfo,
             Document,
             Package,
+            Relationship,
+            RelationshipType,
         )
 
         from sbomify_action.augmentation import _add_vcs_info_to_spdx
@@ -730,7 +738,11 @@ class TestVcsAugmentationIntegration(unittest.TestCase):
         package = Package(
             spdx_id="SPDXRef-Package", name="test-pkg", download_location="https://existing.com/download.tar.gz"
         )
-        document = Document(creation_info=creation_info, packages=[package])
+        document = Document(
+            creation_info=creation_info,
+            packages=[package],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-Package")],
+        )
 
         augmentation_data = {
             "vcs_url": "https://github.com/owner/repo",

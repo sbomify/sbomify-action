@@ -104,6 +104,7 @@ from .generation import (
 )
 from .logging_config import logger
 from .serialization import (
+    get_spdx_root_package,
     link_root_dependencies,
     load_cyclonedx_bom,
     restore_spdx_document_describes,
@@ -290,7 +291,7 @@ def _enrich_lockfile_packages(document: Document) -> int:
 
     Instead of removing lockfiles, we enrich them with:
     - Description: Human-readable description based on lockfile type
-    - Supplier: Same as the main package (first package in document)
+    - Supplier: Same as the main package (the one the document describes)
     - Version: Inherited from main package or set to "0"
 
     Note: SPDX spdx_id already serves as the unique identifier.
@@ -302,17 +303,15 @@ def _enrich_lockfile_packages(document: Document) -> int:
     if not lockfile_packages:
         return 0
 
-    # Get supplier and version from the main package (usually first package represents the described component)
+    # Get supplier and version from the main package: the one the document
+    # describes, not the first dependency that happens to have them
     root_supplier = None
     root_version = None
-    if document.packages:
-        for pkg in document.packages:
-            if pkg.supplier and not isinstance(pkg.supplier, (SpdxNoAssertion, SpdxNone)):
-                root_supplier = pkg.supplier
-            if pkg.version and pkg.version != "NOASSERTION":
-                root_version = pkg.version
-            if root_supplier and root_version:
-                break
+    if (root := get_spdx_root_package(document)) is not None:
+        if root.supplier and not isinstance(root.supplier, (SpdxNoAssertion, SpdxNone)):
+            root_supplier = root.supplier
+        if root.version and root.version != "NOASSERTION":
+            root_version = root.version
 
     for pkg in lockfile_packages:
         # Add description if not present
@@ -1159,11 +1158,10 @@ def _enrich_self_referencing_packages(document: Document) -> int:
     Returns:
         Number of packages enriched
     """
-    if not document.packages:
+    main_package = get_spdx_root_package(document)
+    if main_package is None:
         return 0
 
-    # First package is usually the main/root package
-    main_package = document.packages[0]
     root_name = main_package.name
     if not root_name:
         return 0
@@ -1174,9 +1172,9 @@ def _enrich_self_referencing_packages(document: Document) -> int:
         return 0
 
     enriched_count = 0
-    for package in document.packages[1:]:  # Skip first (main) package
+    for package in document.packages:
         # Check if package name matches root package (self-referencing)
-        if package.name == root_name:
+        if package is not main_package and package.name == root_name:
             if not package.supplier or isinstance(package.supplier, (SpdxNoAssertion, SpdxNone)):
                 package.supplier = root_supplier
                 _add_enrichment_source_comment(package, "root-package")

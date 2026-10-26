@@ -72,20 +72,18 @@ class TestSpdx2VersionOverride(unittest.TestCase):
         dep_pkg = next(p for p in result["packages"] if p["SPDXID"] == "SPDXRef-Dep")
         self.assertEqual(dep_pkg["versionInfo"], "0.1.0")
 
-    def test_fallback_to_packages_0_when_no_document_describes(self):
-        """Without documentDescribes, should fall back to packages[0]."""
+    def test_no_package_versioned_when_no_document_describes(self):
+        """Without documentDescribes, packages[0] is a dependency, not the root."""
         sbom = _make_spdx2_json()
         del sbom["documentDescribes"]
         result = self._write_and_override(sbom, "v3.0.0")
 
-        # packages[0] gets the override as fallback
-        self.assertEqual(result["packages"][0]["versionInfo"], "v3.0.0")
+        self.assertEqual(result["packages"], sbom["packages"])
 
-    def test_invalid_document_describes_type_falls_back(self):
-        """If documentDescribes is not a list, should fall back to packages[0]."""
+    def test_invalid_document_describes_type_versions_nothing(self):
+        """If documentDescribes is not a list, nothing is described."""
         sbom = _make_spdx2_json()
         sbom["documentDescribes"] = {"invalid": "type"}
         result = self._write_and_override(sbom, "v4.0.0")
 
-        # Falls back to packages[0]
-        self.assertEqual(result["packages"][0]["versionInfo"], "v4.0.0")
+        self.assertEqual(result["packages"], sbom["packages"])

@@ -272,7 +272,7 @@ class TestCRAComplianceSPDX:
 
     def test_augmented_spdx_is_cra_compliant(self, cra_metadata, tmp_path):
         """Test that augmented SPDX SBOM with CRA fields IS compliant."""
-        from spdx_tools.spdx.model import CreationInfo, Document, Package
+        from spdx_tools.spdx.model import CreationInfo, Document, Package, Relationship, RelationshipType
         from spdx_tools.spdx.writer.write_anything import write_file as spdx_write_file
 
         # Create a minimal SPDX document
@@ -294,7 +294,7 @@ class TestCRAComplianceSPDX:
                     version="1.0.0",
                 ),
             ],
-            relationships=[],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-main")],
         )
 
         # Augment with CRA metadata
@@ -461,6 +461,7 @@ class TestCRACheckerUnit:
         """Test detection of all CRA fields in SPDX."""
         data = {
             "spdxVersion": "SPDX-2.3",
+            "documentDescribes": ["SPDXRef-main"],
             "packages": [
                 {
                     "name": "test-app",
@@ -499,6 +500,7 @@ class TestCRACheckerUnit:
         """Test support period detection from external ref (fallback from validUntilDate)."""
         data = {
             "spdxVersion": "SPDX-2.3",
+            "documentDescribes": ["SPDXRef-main"],
             "packages": [
                 {
                     "name": "test-app",
