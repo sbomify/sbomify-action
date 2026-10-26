@@ -22,7 +22,7 @@ from sbomify_action._generation.generators import (
     TrivyFsGenerator,
     TrivyImageGenerator,
 )
-from sbomify_action.exceptions import SBOMGenerationError, ToolNotAvailableError
+from sbomify_action.exceptions import ProjectResolutionError, SBOMGenerationError, ToolNotAvailableError
 
 
 class TestRunCommandErrorLogging(unittest.TestCase):
@@ -57,6 +57,57 @@ class TestRunCommandErrorLogging(unittest.TestCase):
             with self.assertRaises(SBOMGenerationError):
                 utils.run_command(["syft", "."], "syft", log_errors=True)
             mock_logger.error.assert_called()
+
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_exit_status_line_is_not_an_error_when_output_explains_it(self, mock_run: MagicMock) -> None:
+        """The bare exit status was one Sentry issue holding every failure of
+        a tool; with output in hand only the output is reported as an error."""
+        from sbomify_action._generation import utils
+
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd=["syft", "."], stderr="boom", output="")
+        with patch.object(utils, "logger") as mock_logger:
+            with self.assertRaises(SBOMGenerationError):
+                utils.run_command(["syft", "."], "syft")
+            errors = [c.args[0] for c in mock_logger.error.call_args_list]
+            self.assertEqual(errors, ["[syft] error: boom"])
+            warnings = [c.args[0] for c in mock_logger.warning.call_args_list]
+            self.assertTrue(any("returned non-zero exit status 1" in w for w in warnings))
+
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_exit_status_line_stays_an_error_without_output(self, mock_run: MagicMock) -> None:
+        from sbomify_action._generation import utils
+
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd=["syft", "."], stderr="", output="")
+        with patch.object(utils, "logger") as mock_logger:
+            with self.assertRaises(SBOMGenerationError):
+                utils.run_command(["syft", "."], "syft")
+            mock_logger.error.assert_called_once()
+            self.assertIn("returned non-zero exit status 1", mock_logger.error.call_args.args[0])
+
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_unresolvable_project_is_a_warning_and_its_own_error_type(self, mock_run: MagicMock) -> None:
+        from sbomify_action._generation import utils
+
+        mock_run.side_effect = subprocess.CalledProcessError(
+            returncode=1, cmd=["tool"], stderr="error: failed to parse manifest\nTOOL GAVE UP", output=""
+        )
+        with patch.object(utils, "logger") as mock_logger:
+            with self.assertRaises(ProjectResolutionError) as ctx:
+                utils.run_command(["tool"], "tool", project_unresolvable=lambda out: "TOOL GAVE UP" in out)
+            mock_logger.error.assert_not_called()
+            mock_logger.warning.assert_called()
+        self.assertIn("failed to parse manifest", str(ctx.exception))
+        self.assertEqual(ctx.exception.returncode, 1)
+
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_unrecognised_failure_is_not_treated_as_the_projects(self, mock_run: MagicMock) -> None:
+        from sbomify_action._generation import utils
+
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd=["tool"], stderr="segfault", output="")
+        with patch.object(utils, "logger"):
+            with self.assertRaises(SBOMGenerationError) as ctx:
+                utils.run_command(["tool"], "tool", project_unresolvable=lambda out: False)
+        self.assertNotIsInstance(ctx.exception, ProjectResolutionError)
 
 
 class TestFormatVersion(unittest.TestCase):

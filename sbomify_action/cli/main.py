@@ -48,6 +48,7 @@ from ..exceptions import (
     ForbiddenError,
     InputPathNotFoundError,
     OIDCError,
+    ProjectResolutionError,
     SBOMGenerationError,
     SBOMValidationError,
     ToolNotAvailableError,
@@ -1176,6 +1177,9 @@ def initialize_sentry() -> None:
                     # there. The message already lists every location searched;
                     # a stack trace in Sentry adds nothing.
                     InputPathNotFoundError,
+                    # The package manager rejected the user's project (a
+                    # manifest that does not parse, an unreachable registry).
+                    ProjectResolutionError,
                 ),
             ):
                 return None
@@ -2420,6 +2424,12 @@ def run_pipeline(config: Config) -> None:
                 if file_name in ALL_LOCK_FILES:
                     logger.error(f"'{file_name}' is a lock file, not an SBOM.")
                     logger.error(f"Please use LOCK_FILE instead of SBOM_FILE for '{file_name}'.")
+            _log_step_end(1, success=False)
+            sys.exit(1)
+        except ProjectResolutionError as e:
+            # The project, not this tool, needs fixing. The prefix is what
+            # keeps the record out of Sentry; see before_send.
+            logger.error(f"Configuration error: Step 1 failed: {e}")
             _log_step_end(1, success=False)
             sys.exit(1)
         except (FileProcessingError, SBOMGenerationError, ValueError) as e:

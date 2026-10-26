@@ -12,7 +12,7 @@ import pytest
 from sbomify_action._generation.protocol import FormatVersion, GenerationInput
 from sbomify_action._generation.registry import GeneratorRegistry, fallback_is_a_bug
 from sbomify_action._generation.result import GenerationResult
-from sbomify_action.exceptions import SBOMGenerationError
+from sbomify_action.exceptions import ProjectResolutionError, SBOMGenerationError
 
 
 class _Stub:
@@ -35,6 +35,8 @@ class _Stub:
     def generate(self, input):
         if self._outcome == "raise-sbomgen":
             raise SBOMGenerationError(self._error)
+        if self._outcome == "unresolvable":
+            raise ProjectResolutionError(self._error)
         if self._outcome == "success":
             return GenerationResult.success_result(
                 output_file=input.output_file,
@@ -105,6 +107,32 @@ def test_native_exception_also_aborts_in_container(in_container, tmp_path):
 
     with pytest.raises(SBOMGenerationError, match="cargo not found"):
         registry.generate(_input(tmp_path), validate=False)
+
+
+def test_unresolvable_project_is_not_called_an_image_bug(in_container, tmp_path):
+    """The user's project is broken, not the image: keep the type, drop the blame."""
+    registry = GeneratorRegistry()
+    registry.register(_Stub("cyclonedx-cargo", 10, "unresolvable", "failed to parse manifest"))
+    registry.register(_Stub("syft-fs", 35, "success"))
+
+    with pytest.raises(ProjectResolutionError) as exc:
+        registry.generate(_input(tmp_path), validate=False)
+
+    message = str(exc.value)
+    assert "failed to parse manifest" in message
+    assert "bug in the sbomify image" not in message
+    assert "SBOMIFY_ALLOW_GENERATOR_FALLBACK=1" in message
+    assert "syft-fs" in message
+
+
+def test_unresolvable_project_falls_back_outside_the_container(outside_container, tmp_path):
+    registry = GeneratorRegistry()
+    registry.register(_Stub("cyclonedx-cargo", 10, "unresolvable", "failed to parse manifest"))
+    registry.register(_Stub("syft-fs", 35, "success"))
+
+    result = registry.generate(_input(tmp_path), validate=False)
+
+    assert result.generator_name == "syft-fs"
 
 
 def test_decline_still_falls_through_in_container(in_container, tmp_path):

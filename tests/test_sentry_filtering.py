@@ -9,6 +9,7 @@ import sentry_sdk
 from sbomify_action.cli.main import SBOMIFY_VERSION, initialize_sentry
 from sbomify_action.exceptions import (
     ConfigurationError,
+    ProjectResolutionError,
     SBOMGenerationError,
     SBOMValidationError,
 )
@@ -110,6 +111,16 @@ class TestSentryFiltering(unittest.TestCase):
 
             result = before_send(event, hint)
             self.assertIsNone(result, "ConfigurationError should be filtered from Sentry")
+
+    def test_sentry_filters_project_resolution_errors(self):
+        """A project its package manager cannot read is the user's to fix."""
+        initialize_sentry()
+
+        before_send = sentry_sdk.get_client().options["before_send"]
+        error = ProjectResolutionError("cargo-cyclonedx could not resolve this project")
+        event = {"exception": {"values": [{"type": "ProjectResolutionError"}]}}
+
+        self.assertIsNone(before_send(event, {"exc_info": (ProjectResolutionError, error, None)}))
 
     def test_sentry_filters_configuration_error_log_messages(self):
         """

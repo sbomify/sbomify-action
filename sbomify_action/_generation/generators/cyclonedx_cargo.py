@@ -13,7 +13,7 @@ Supported outputs:
 import shutil
 from pathlib import Path
 
-from sbomify_action.exceptions import SBOMGenerationError
+from sbomify_action.exceptions import ProjectResolutionError, SBOMGenerationError
 from sbomify_action.logging_config import logger
 from sbomify_action.runtimes import can_provide, ensure_runtime
 from sbomify_action.tool_checks import check_tool_available
@@ -41,6 +41,18 @@ from ..utils import convert_to_spdx, has_required_manifest, run_command
 #: neither of which is in this build's closure.
 CARGO_SPDX_VERSIONS = ("SPDX-2.3",)
 CARGO_SPDX_DEFAULT = "SPDX-2.3"
+
+#: cargo-cyclonedx's last words when `cargo metadata` refused the project:
+#: a manifest that does not parse, a missing workspace member, a registry or
+#: git dependency the runner cannot reach or authenticate to. The lines above
+#: it carry cargo's own reason, which is what the user needs to see.
+_CARGO_METADATA_FAILED = "`cargo metadata` exited with an error"
+
+
+def _cargo_could_not_resolve(output: str) -> bool:
+    """Whether cargo-cyclonedx failed because cargo could not read the project."""
+    return _CARGO_METADATA_FAILED in output
+
 
 _CARGO_CYCLONEDX_AVAILABLE, _CARGO_CYCLONEDX_PATH = check_tool_available("cargo-cyclonedx")
 if not _CARGO_CYCLONEDX_AVAILABLE:
@@ -144,6 +156,17 @@ class CycloneDXCargoGenerator:
         # in _generate, since this generator has a single execution path.
         try:
             return self._generate(input, spec_version)
+        except ProjectResolutionError as e:
+            # Not this generator's failure to report: the registry decides
+            # whether a fallback may run, and the user needs cargo's reason.
+            raise ProjectResolutionError(
+                f"{e}\ncargo could not read this project. Check that `cargo metadata` succeeds in "
+                "this checkout: every Cargo.toml parses, every workspace member is present, and "
+                "every private registry and git dependency is reachable from this runner.",
+                stderr=e.stderr,
+                stdout=e.stdout,
+                returncode=e.returncode,
+            ) from e
         except SBOMGenerationError as e:
             return GenerationResult.failure_result(
                 error_message=str(e),
@@ -205,7 +228,13 @@ class CycloneDXCargoGenerator:
         produced: list[Path] = []
         try:
             # run_command raises SBOMGenerationError on failure (uses check=True)
-            run_command(cmd, "cargo-cyclonedx", timeout=300, cwd=str(project_dir))
+            run_command(
+                cmd,
+                "cargo-cyclonedx",
+                timeout=300,
+                cwd=str(project_dir),
+                project_unresolvable=_cargo_could_not_resolve,
+            )
 
             produced = sorted(project_dir.rglob(f"{scratch_stem}.json"))
 
