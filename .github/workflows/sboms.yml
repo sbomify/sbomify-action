@@ -124,7 +124,7 @@ jobs:
       # workflow_run github.ref is the default branch, so the
       # determine-version action would always report a staging build —
       # derive the version/docker_tag and the environment-specific endpoint,
-      # audience and product releases from head_branch/head_sha instead.
+      # audience and product-release id from head_branch/head_sha instead.
       - id: cfg
         env:
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
@@ -132,27 +132,24 @@ jobs:
         run: |
           SHORT_SHA="${HEAD_SHA:0:7}"
           if [[ "$HEAD_BRANCH" == v* ]]; then
-            # Production — version tag. The SBOMs also go into the release of
-            # the sbom-tools product (nPl9UJxUECM6) this version pins, so that
-            # release lists every action version running it.
-            TOOLS_RELEASE=$(sed -n 's/^tools_release = "\(.*\)"$/\1/p' sbomify_action/tools.toml)
+            # Production — version tag
             {
-              echo "product_release=[\"IeIn1dGJXULh:${HEAD_BRANCH}\", \"nPl9UJxUECM6:${TOOLS_RELEASE}\"]"
               echo "is_prod=true"
               echo "version=${HEAD_BRANCH}"
               echo "docker_tag=${HEAD_BRANCH#v}"
               echo "api_base_url=https://app.sbomify.com"
               echo "oidc_audience=sbomify.com"
+              echo "product_release_id=IeIn1dGJXULh"
             } >> "$GITHUB_OUTPUT"
           else
             # Staging — master build
             {
-              echo "product_release=[\"Engh9j4XTTwD:${SHORT_SHA}\"]"
               echo "is_prod=false"
               echo "version=${SHORT_SHA}"
               echo "docker_tag=latest"
               echo "api_base_url=https://stage.sbomify.com"
               echo "oidc_audience=stage.sbomify.com"
+              echo "product_release_id=Engh9j4XTTwD"
             } >> "$GITHUB_OUTPUT"
           fi
       - uses: sbomify/sbomify-action@master
@@ -166,7 +163,7 @@ jobs:
           DOCKER_IMAGE: ${{ matrix.kind == 'container' && format('ghcr.io/sbomify/sbomify-action:{0}', steps.cfg.outputs.docker_tag) || '' }}
           LOCK_FILE: ${{ matrix.lockfile }}
           ADDITIONAL_PACKAGES_FILE: ${{ matrix.kind == 'container' && 'container_additional_packages.txt' || '' }}
-          PRODUCT_RELEASE: ${{ steps.cfg.outputs.product_release }}
+          PRODUCT_RELEASE: '["${{ steps.cfg.outputs.product_release_id }}:${{ steps.cfg.outputs.version }}"]'
           SBOM_FORMAT: ${{ matrix.sbom_format }}
           UPLOAD: 'true'
           AUGMENT: 'true'
