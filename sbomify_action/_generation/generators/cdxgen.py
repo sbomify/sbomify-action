@@ -305,6 +305,7 @@ class CdxgenFsGenerator:
                 sbom_format="cyclonedx",
                 spec_version=input.spec_version or CDXGEN_CYCLONEDX_DEFAULT,
                 generator_name=self.name,
+                telemetry_reported=e.telemetry_reported,
             )
         finally:
             # A lock file we created is ours to remove. It is a working file,
@@ -463,4 +464,5 @@ class CdxgenImageGenerator:
                 sbom_format="cyclonedx",
                 spec_version=input.spec_version or CDXGEN_CYCLONEDX_DEFAULT,
                 generator_name=self.name,
+                telemetry_reported=e.telemetry_reported,
             )

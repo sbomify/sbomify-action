@@ -150,6 +150,7 @@ class CycloneDXCargoGenerator:
                 sbom_format="cyclonedx",
                 spec_version=spec_version,
                 generator_name=self.name,
+                telemetry_reported=e.telemetry_reported,
             )
 
     def _generate(self, input: GenerationInput, spec_version: str) -> GenerationResult:
