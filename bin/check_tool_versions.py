@@ -80,7 +80,26 @@ def _tools_from_manifest() -> list[ToolInfo]:
     ]
 
 
-TOOLS = _tools_from_manifest()
+#: The sbom-tools release every bundle is fetched from. Not a tool of its own
+#: in tools.toml -- it is the one line that decides which build of all of them
+#: a release of this action runs -- but it goes stale the same way, so it is
+#: audited and bumped alongside them.
+SBOM_TOOLS = "sbom-tools"
+SBOM_TOOLS_REPO = "sbomify/sbom-tools"
+_SBOM_TOOLS_TAG_PREFIX = "tools-"
+
+
+def _sbom_tools_from_manifest() -> ToolInfo:
+    return ToolInfo(
+        name=SBOM_TOOLS,
+        env_var="",
+        github_repo=SBOM_TOOLS_REPO,
+        stage="release",
+        current_version=tool_manifest.pinned_tools_release().removeprefix(_SBOM_TOOLS_TAG_PREFIX),
+    )
+
+
+TOOLS = [*_tools_from_manifest(), _sbom_tools_from_manifest()]
 
 
 def find_project_root() -> Path:
@@ -379,6 +398,18 @@ def update_pins(dockerfile_path: Path, tools: list[ToolInfo]) -> int:
             continue
         if tool.stage == STAGE_RUNTIME:
             skipped.append(tool)
+            continue
+
+        if tool.name == SBOM_TOOLS:
+            old_release = f'tools_release = "{_SBOM_TOOLS_TAG_PREFIX}{tool.current_version}"'
+            if old_release not in manifest:
+                print("  Could not find tools_release in tools.toml")
+                continue
+            manifest = manifest.replace(
+                old_release, f'tools_release = "{_SBOM_TOOLS_TAG_PREFIX}{tool.latest_version}"', 1
+            )
+            print(f"  Updated {tool.name}: {tool.current_version} -> {tool.latest_version}")
+            updated_count += 1
             continue
 
         old_pin = f'version = "{tool.current_version}"'

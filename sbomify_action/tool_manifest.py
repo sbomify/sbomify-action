@@ -13,14 +13,21 @@ has to be recorded somewhere that both can agree on.
 
 from __future__ import annotations
 
+import os
 import re
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 _MANIFEST = Path(__file__).with_name("tools.toml")
+
+#: What an sbom-tools release tag looks like. The override ends up in a URL
+#: path, so anything else -- a slash, a dot-dot -- is refused rather than
+#: allowed to point the download somewhere else.
+_TOOLS_RELEASE_RE = re.compile(r"tools-[A-Za-z0-9][A-Za-z0-9.-]*")
 
 #: Where the bundles come from. Only the release moves; the file names inside
 #: it follow from the bundle and the architecture.
@@ -28,9 +35,15 @@ _BUNDLE_BASE = "https://github.com/sbomify/sbom-tools/releases/download"
 _ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
 
 #: Where our own tool builds are published. Master replaces the assets on this
-#: rolling pre-release on every push; the image build stamps a release tag in
-#: its place, so a cut release fetches the binaries it was built against.
+#: rolling pre-release on every push. It is never the committed pin: images
+#: built from master opt into it through TOOLS_RELEASE_ENV.
 TOOLS_RELEASE = "tools-rolling"
+
+#: Overrides the sbom-tools release committed in tools.toml. The image build
+#: sets it to TOOLS_RELEASE for master, so :latest tracks sbom-tools master
+#: while a tagged release, a PyPI wheel and a local install all fetch the
+#: release that was pinned and tested. Empty means "use the pin".
+TOOLS_RELEASE_ENV = "SBOMIFY_TOOLS_RELEASE"
 _TOOLS_RELEASE_BASE = "https://github.com/sbomify/sbomify-action/releases/download"
 _ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
 
@@ -440,7 +453,7 @@ def load_tools() -> dict[str, Tool]:
         if is_built:
             if assets:
                 raise ManifestError(f"{name}: a tool we build must not also pin a vendor download")
-            assets = _built_assets(name, str(raw_root.get("tools_release") or TOOLS_RELEASE))
+            assets = _built_assets(name, _tools_release(raw_root))
 
         if stage == STAGE_RUNTIME:
             # A runtime tool with no assets cannot be fetched, and the failure
@@ -497,11 +510,37 @@ def load_tools() -> dict[str, Tool]:
     return tools
 
 
+def _pinned_release(raw: dict[str, Any]) -> str:
+    pinned = raw.get("tools_release")
+    if not isinstance(pinned, str) or not _TOOLS_RELEASE_RE.fullmatch(pinned):
+        raise ManifestError("tools.toml must pin tools_release to an sbom-tools release tag")
+    # The rolling pre-release changes under every release that names it, which
+    # is the non-determinism the pin exists to remove. Master images reach it
+    # through the override, never through the committed pin.
+    if pinned == TOOLS_RELEASE:
+        raise ManifestError(f"tools.toml must pin a cut sbom-tools release, not {TOOLS_RELEASE}")
+    return pinned
+
+
+def pinned_tools_release() -> str:
+    """The sbom-tools release committed in tools.toml, ignoring any override."""
+    return _pinned_release(tomllib.loads(_MANIFEST.read_text(encoding="utf-8")))
+
+
+def _tools_release(raw: dict[str, Any]) -> str:
+    """The override when one is set, else the pin."""
+    if override := os.environ.get(TOOLS_RELEASE_ENV, "").strip():
+        if not _TOOLS_RELEASE_RE.fullmatch(override):
+            raise ManifestError(f"{TOOLS_RELEASE_ENV}={override!r} is not an sbom-tools release tag")
+        return override
+    return _pinned_release(raw)
+
+
 @lru_cache(maxsize=1)
 def load_bundles() -> dict[str, Bundle]:
     """Parse the bundle section of tools.toml."""
     raw = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))
-    release = str(raw.get("tools_release") or "tools-rolling")
+    release = _tools_release(raw)
     bundles: dict[str, Bundle] = {}
     for name, body in (raw.get("bundle") or {}).items():
         provides = tuple(body.get("provides") or ())

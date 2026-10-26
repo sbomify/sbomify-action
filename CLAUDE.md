@@ -147,6 +147,24 @@ GIT_COMMITTER_NAME="..." GIT_COMMITTER_EMAIL="..." git commit ...
 
 When committing on behalf of the repo maintainer, match the identity used on their existing *feature-branch* commits (`git --no-pager log --format='%an <%ae>'` on a feature branch) — not the `@users.noreply.github.com` identity that appears on squash-merged commits on master.
 
+## Releasing and the sbom-tools pin
+
+The ecosystem bundles are downloaded at run time from
+[sbomify/sbom-tools](https://github.com/sbomify/sbom-tools). Which release
+they come from is `tools_release` in `sbomify_action/tools.toml`:
+
+- It always pins a cut release (`tools-YY.MM.N`), never `tools-rolling`.
+  Bump it in its own PR; `bin/check_tool_versions.py --update` rewrites it.
+- Images built from master set `SBOMIFY_TOOLS_RELEASE=tools-rolling`, so
+  `:latest` and `@master` track sbom-tools master. Tags, pull requests,
+  PyPI wheels and local installs use the pin.
+
+To cut a release: merge the "Bump version to X" PR, then run
+`scripts/release.sh` (try `--dry-run` first). It tags a commit one step off
+master whose `action.yml` names the `:X` image, pushes only the tag, and
+creates the GitHub release with the sbom-tools release in its notes. Do not
+tag master by hand: CI refuses a tag whose `action.yml` still says `:latest`.
+
 ## Wizard TUI (Textual) Design Rules
 
 The wizard (`sbomify_action/cli/wizard/`) must be **fit-to-viewport, never scrolling** — scrolling is not a normal TUI paradigm, and a scrolling page hides the primary CTA (e.g. a Start button pushed off-screen). Make content fit the terminal via progressive disclosure, not scrollbars.

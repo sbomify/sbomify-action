@@ -37,12 +37,101 @@ concurrency:
   group: sboms-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 jobs:
+  # ---------------------------------------------------------------------
+  # The product release, and the sbom-tools release it runs.
+  # ---------------------------------------------------------------------
+  # The image does not contain the ecosystem bundles; it downloads them from
+  # sbomify/sbom-tools at run time. A release of this action is therefore
+  # its own SBOMs *and* the bundle SBOMs sbom-tools uploads for the release
+  # it fetches from -- tools.toml's pin for a tag, tools-rolling for master.
+  #
+  # The release is created here, ahead of the SBOM jobs, so that it is
+  # created with a description naming that toolchain; the SBOM jobs then find
+  # it rather than creating it with the generic one. After they finish, the
+  # toolchain job tags the bundle SBOMs into the same release.
+  release:
+    name: release-${{ github.event.workflow_run.head_branch == 'master' && 'staging' || 'production' }}
+    if: >-
+      github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.conclusion == 'success'
+      && (github.event.workflow_run.head_branch == 'master'
+          || startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required to mint the GitHub OIDC JWT
+      contents: read
+    outputs:
+      is_prod: ${{ steps.cfg.outputs.is_prod }}
+      version: ${{ steps.cfg.outputs.version }}
+      api_base_url: ${{ steps.cfg.outputs.api_base_url }}
+      oidc_audience: ${{ steps.cfg.outputs.oidc_audience }}
+      product_release_id: ${{ steps.cfg.outputs.product_release_id }}
+      auth_component: ${{ steps.cfg.outputs.auth_component }}
+      tools_release: ${{ steps.cfg.outputs.tools_release }}
+      tools_version: ${{ steps.cfg.outputs.tools_version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      # Same split as the sbom job's cfg step below. The bundle SBOMs are
+      # uploaded under the sbom-tools release tag in production, and under
+      # the short SHA of the sbom-tools master commit tools-rolling was built
+      # from in staging.
+      - id: cfg
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$HEAD_BRANCH" == v* ]]; then
+            TOOLS_RELEASE=$(python3 -c 'import tomllib; print(tomllib.load(open("sbomify_action/tools.toml", "rb"))["tools_release"])')
+            {
+              echo "is_prod=true"
+              echo "version=${HEAD_BRANCH}"
+              echo "api_base_url=https://app.sbomify.com"
+              echo "oidc_audience=sbomify.com"
+              echo "product_release_id=IeIn1dGJXULh"
+              echo "auth_component=Gu9wem8mkX"
+              echo "tools_release=${TOOLS_RELEASE}"
+              echo "tools_version=${TOOLS_RELEASE}"
+            } >> "$GITHUB_OUTPUT"
+          else
+            ROLLING_SHA=$(gh release view tools-rolling --repo sbomify/sbom-tools --json targetCommitish --jq .targetCommitish)
+            {
+              echo "is_prod=false"
+              echo "version=${HEAD_SHA:0:7}"
+              echo "api_base_url=https://stage.sbomify.com"
+              echo "oidc_audience=stage.sbomify.com"
+              echo "product_release_id=Engh9j4XTTwD"
+              echo "auth_component=XNsX40tonzvv"
+              echo "tools_release=tools-rolling"
+              echo "tools_version=${ROLLING_SHA:0:7}"
+            } >> "$GITHUB_OUTPUT"
+          fi
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+      - name: Create the release with its toolchain in the description
+        run: >-
+          uv run --locked --no-dev python scripts/toolchain_release.py create
+          --api-base-url "${{ steps.cfg.outputs.api_base_url }}"
+          --audience "${{ steps.cfg.outputs.oidc_audience }}"
+          --auth-component "${{ steps.cfg.outputs.auth_component }}"
+          --product-id "${{ steps.cfg.outputs.product_release_id }}"
+          --version "${{ steps.cfg.outputs.version }}"
+          --tools-release "${{ steps.cfg.outputs.tools_release }}"
+
   sbom:
     name: ${{ matrix.name }}-${{ github.event.workflow_run.head_branch == 'master' && 'staging' || 'production' }}
     # Only for successful push-triggered pipeline runs (skips pull_request
     # runs). head_branch == 'master' -> staging; a v* tag -> production.
+    #
+    # Runs whether or not the release job managed to create the release: the
+    # SBOMs matter more than the description, and the action creates the
+    # release itself if it is still missing.
+    needs: release
     if: >-
-      github.event.workflow_run.event == 'push'
+      !cancelled()
+      && github.event.workflow_run.event == 'push'
       && github.event.workflow_run.conclusion == 'success'
       && (github.event.workflow_run.head_branch == 'master'
           || startsWith(github.event.workflow_run.head_branch, 'v'))
@@ -188,3 +277,49 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'
+
+  toolchain:
+    name: toolchain-${{ needs.release.outputs.is_prod == 'true' && 'production' || 'staging' }}
+    needs: [release, sbom]
+    if: >-
+      !cancelled()
+      && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required to mint the GitHub OIDC JWT
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+      # The bundle components sbom-tools' sboms workflow uploads to, by
+      # bundle. Production is strict: a release whose toolchain is missing
+      # from it is the gap this job closes, so it fails rather than shipping
+      # half a bill of materials. Staging tracks a moving tools-rolling and
+      # only warns.
+      - name: Tag the sbom-tools bundle SBOMs into the release
+        env:
+          IS_PROD: ${{ needs.release.outputs.is_prod }}
+        run: |
+          set -euo pipefail
+          if [[ "$IS_PROD" == "true" ]]; then
+            STRICT=--strict
+            COMPONENTS=(go=f2EIcOesNBBZ rust=LYBjrvuwGdyC syft=Ro74uVXBfQSW sigstore=qVe2lfAnW5h2
+                        cdxgen=eRNnEiShDEaa jvm=hpeisMIpRHU7 dotnet=WRDnZcyYlXLB)
+          else
+            STRICT=
+            COMPONENTS=(go=F7TPEUB0vmhr rust=eHOagG2h7bp4 syft=XuUbFaWyXnmJ sigstore=l7qIZjVDNF4J
+                        cdxgen=WMs0DX7QKg83 jvm=mOTJsOzjZPi4 dotnet=awnaRBPzntLv)
+          fi
+          ARGS=()
+          for component in "${COMPONENTS[@]}"; do ARGS+=(--component "$component"); done
+          uv run --locked --no-dev python scripts/toolchain_release.py link $STRICT \
+            --api-base-url "${{ needs.release.outputs.api_base_url }}" \
+            --audience "${{ needs.release.outputs.oidc_audience }}" \
+            --auth-component "${{ needs.release.outputs.auth_component }}" \
+            --product-id "${{ needs.release.outputs.product_release_id }}" \
+            --version "${{ needs.release.outputs.version }}" \
+            --tools-release "${{ needs.release.outputs.tools_release }}" \
+            --tools-version "${{ needs.release.outputs.tools_version }}" \
+            "${ARGS[@]}"
