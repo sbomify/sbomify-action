@@ -251,7 +251,7 @@ class SbomifyDestination:
             True if valid, False if invalid
         """
         try:
-            with Path(sbom_file_path).open("r") as f:
+            with Path(sbom_file_path).open("r", encoding="utf-8") as f:
                 sbom_data = json.load(f)
 
             # Check for basic CycloneDX structure

@@ -186,6 +186,8 @@ LOCKFILE_DESCRIPTIONS = {
     # C++
     "conan.lock": "C++ Conan lockfile",
     "vcpkg.json": "C++ vcpkg manifest",
+    # Embedded
+    "platformio.ini": "PlatformIO project (installed libraries)",
 }
 
 # CycloneDX component type for operating system
@@ -1000,9 +1002,10 @@ def _apply_metadata_to_spdx_package(
             return True
         return False
 
-    # Registry URL (sanitized)
+    # Registry URL (sanitized). OTHER, because SPDX allows only purl,
+    # maven-central, npm, nuget and bower as PACKAGE-MANAGER reference types.
     if metadata.registry_url:
-        if _add_external_ref(ExternalPackageRefCategory.PACKAGE_MANAGER, "url", metadata.registry_url):
+        if _add_external_ref(ExternalPackageRefCategory.OTHER, "url", metadata.registry_url):
             added_fields.append("externalRef (registry)")
 
     # Documentation URL (sanitized)
@@ -1663,7 +1666,7 @@ def enrich_sbom(input_file: str, output_file: str, validate: bool = True) -> Non
 
     # Parse input file
     try:
-        with open(input_path, "r") as f:
+        with open(input_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
         raise FileNotFoundError(f"Input SBOM file not found: {input_file}")
@@ -1748,7 +1751,7 @@ def _enrich_cyclonedx_sbom(data: Dict[str, Any], input_path: Path, output_path: 
     if not components:
         logger.warning("No components with PURLs found in SBOM, skipping enrichment")
         serialized = _sanitize_and_serialize_cyclonedx(bom, spec_version)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(serialized)
         return
 
@@ -1769,7 +1772,7 @@ def _enrich_cyclonedx_sbom(data: Dict[str, Any], input_path: Path, output_path: 
     # Write output
     try:
         serialized = _sanitize_and_serialize_cyclonedx(bom, spec_version)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(serialized)
         logger.info(f"Enriched SBOM written to: {output_path}")
     except Exception as e:

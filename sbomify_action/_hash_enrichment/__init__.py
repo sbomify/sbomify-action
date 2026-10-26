@@ -9,6 +9,7 @@ Supported lockfile formats:
 - Rust: Cargo.lock
 - Dart: pubspec.lock
 - JavaScript: package-lock.json, yarn.lock, pnpm-lock.yaml
+- PlatformIO: platformio.ini (registry checksums for installed libraries)
 
 Example usage:
     from sbomify_action._hash_enrichment import enrich_sbom_with_hashes

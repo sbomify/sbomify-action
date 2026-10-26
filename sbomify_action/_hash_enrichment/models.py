@@ -205,6 +205,11 @@ def normalize_package_name(name: str, ecosystem: str) -> str:
     elif ecosystem == "pub":
         # Dart pub packages are lowercase with underscores only
         return name.lower()
+    elif ecosystem == "platformio":
+        # SPDX conversion folds the registry owner into the name
+        # ("bblanchon/ArduinoJson"); the registry itself matches names
+        # case-insensitively.
+        return name.rsplit("/", 1)[-1].lower()
     else:
         # Default: lowercase
         return name.lower()

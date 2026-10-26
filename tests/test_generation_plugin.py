@@ -1656,6 +1656,20 @@ class TestExtractErrorSummary(unittest.TestCase):
         self.assertIn("ERROR: second error", result)
         self.assertIn(" | ", result)
 
+    def test_strips_escape_sequences_from_remote_output(self):
+        """A git remote's sideband text must not carry terminal escapes into the summary."""
+        from sbomify_action._generation.utils import extract_error_summary
+
+        output = (
+            "remote: \x1b]0;pwned\x07fatal: repository not found\n"
+            "remote: \x1b]8;;https://evil.example\x1b\\click\x1b]8;;\x1b\\ error: denied\r\x1b[2Kerror: spoofed"
+        )
+        result = extract_error_summary(output)
+        self.assertNotIn("\x1b", result)
+        self.assertNotIn("\x07", result)
+        self.assertNotIn("\r", result)
+        self.assertIn("fatal: repository not found", result)
+
     def test_fallback_to_full_output(self):
         """Test fallback to full output when no error patterns found."""
         from sbomify_action._generation.utils import extract_error_summary

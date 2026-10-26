@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from sbomify_action import format_display_name
+from sbomify_action._platformio import PLATFORMIO_INI, lib_deps_are_pinned
 from sbomify_action.exceptions import SBOMGenerationError, ToolNotAvailableError
 from sbomify_action.logging_config import logger
 from sbomify_action.serialization import (
@@ -147,6 +148,10 @@ RECOMMENDED_ACTION = {
         "Gradle has no lock file by default; enable dependency locking, or run the CycloneDX Gradle plugin in your build",
     ),
     "build.sbt": ("", "sbt has no lock file; generate from the build with sbt-sbom instead"),
+    "platformio.ini": (
+        "",
+        "PlatformIO has no lock file; pin every lib_deps entry to one version (owner/Name@1.2.3, or a git URL with #<tag-or-commit>)",
+    ),
 }
 
 
@@ -207,7 +212,7 @@ def _requirements_txt_is_pinned(path: str) -> bool:
     way is a document that claims to be a record when it is a guess.
     """
     try:
-        text = pathlib.Path(path).read_text(errors="replace")
+        text = pathlib.Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
 
@@ -256,6 +261,8 @@ def records_a_resolution(path: str) -> bool:
     name = os.path.basename(path)
     if name == "requirements.txt":
         return _requirements_txt_is_pinned(path)
+    if name == PLATFORMIO_INI:
+        return lib_deps_are_pinned(pathlib.Path(path))
     return name not in UNRESOLVED_MANIFESTS
 
 
@@ -277,6 +284,11 @@ def resolution_was_inferred(lock_file: str | None) -> bool:
     # same filename.
     if name == "requirements.txt":
         return not _requirements_txt_is_pinned(lock_file)
+
+    # Same question for PlatformIO: the installed libraries are what one
+    # build resolved, and lib_deps decides whether the next build agrees.
+    if name == PLATFORMIO_INI:
+        return not lib_deps_are_pinned(pathlib.Path(lock_file))
 
     if name not in UNRESOLVED_MANIFESTS:
         return False

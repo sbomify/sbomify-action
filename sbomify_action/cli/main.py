@@ -126,7 +126,7 @@ def _get_package_version() -> str:
 
         pyproject_path = Path(__file__).parent.parent.parent / "pyproject.toml"
         if pyproject_path.exists():
-            with open(pyproject_path, "r") as f:
+            with open(pyproject_path, "r", encoding="utf-8") as f:
                 pyproject_data = toml.load(f)
             return str(pyproject_data.get("project", {}).get("version", "unknown"))
     except ImportError:
@@ -1781,7 +1781,7 @@ def load_sbom_from_file(file_path: str) -> tuple[str, dict[str, Any], object]:
         SBOMValidationError: If SBOM cannot be parsed
     """
     try:
-        with Path(file_path).open("r") as f:
+        with Path(file_path).open("r", encoding="utf-8") as f:
             sbom_json = json.load(f)
 
         # Detect format silently (format should already be known at this point)
@@ -2895,7 +2895,7 @@ def _validate_cyclonedx_sbom(sbom_file_path: str) -> bool | None:
 
     try:
         # Basic JSON validation - ensure it's valid JSON and has required CycloneDX fields
-        with Path(sbom_file_path).open("r") as f:
+        with Path(sbom_file_path).open("r", encoding="utf-8") as f:
             sbom_data = json.load(f)
 
         # Check for basic CycloneDX structure
@@ -3030,7 +3030,7 @@ def _apply_sbom_version_override(sbom_file: str, config: "Config") -> None:
                 if spec_version is None:
                     raise SBOMValidationError("CycloneDX SBOM is missing required 'specVersion' field")
                 serialized = serialize_cyclonedx_bom(parsed_object, spec_version)
-                with Path(sbom_file).open("w") as f:
+                with Path(sbom_file).open("w", encoding="utf-8") as f:
                     f.write(serialized)
 
         elif sbom_format == "spdx":
@@ -3070,7 +3070,7 @@ def _apply_sbom_version_override(sbom_file: str, config: "Config") -> None:
                 else:
                     logger.warning("SPDX SBOM has no packages - cannot set version override")
 
-                with Path(sbom_file).open("w") as f:
+                with Path(sbom_file).open("w", encoding="utf-8") as f:
                     json.dump(original_json, f, indent=2)
 
     except Exception as e:
@@ -3130,7 +3130,7 @@ def _apply_sbom_name_override(sbom_file: str, config: "Config") -> None:
                     if spec_version is None:
                         raise SBOMValidationError("CycloneDX SBOM is missing required 'specVersion' field")
                     serialized = serialize_cyclonedx_bom(parsed_object, spec_version)
-                    with Path(sbom_file).open("w") as f:
+                    with Path(sbom_file).open("w", encoding="utf-8") as f:
                         f.write(serialized)
 
         elif sbom_format == "spdx":
@@ -3161,7 +3161,7 @@ def _apply_sbom_name_override(sbom_file: str, config: "Config") -> None:
                     # Record to audit trail
                     audit_trail.record_component_name_override(config.component_name, old_name)
 
-                    with Path(sbom_file).open("w") as f:
+                    with Path(sbom_file).open("w", encoding="utf-8") as f:
                         json.dump(original_json, f, indent=2)
 
     except Exception as e:
@@ -3442,7 +3442,7 @@ def _disclose_inferred_resolution(sbom_file: str, config: "Config") -> None:
         # and serialisation steps downstream rewrite it before anyone sees it.
         # Checked, rather than assumed -- the shipped artifact is formatted by
         # those later steps, so the choice here is invisible either way.
-        Path(sbom_file).write_text(json.dumps(document))
+        Path(sbom_file).write_text(json.dumps(document), encoding="utf-8")
         get_audit_trail().record_augmentation(
             "sbom.resolution", "inferred-at-build-time", name, source="sbomify-action"
         )
@@ -3571,7 +3571,7 @@ def _repair_directory_derived_purl(sbom_file: str, config: "Config") -> None:
         spec_version = original_json.get("specVersion")
         if spec_version is None:
             raise SBOMValidationError("CycloneDX SBOM is missing required 'specVersion' field")
-        with Path(sbom_file).open("w") as handle:
+        with Path(sbom_file).open("w", encoding="utf-8") as handle:
             handle.write(serialize_cyclonedx_bom(parsed_object, spec_version))
     except Exception as e:  # noqa: BLE001 - identity repair must never fail a run
         logger.debug(f"Could not check the root component's PURL: {e}")
@@ -3644,7 +3644,7 @@ def _apply_sbom_purl_override(sbom_file: str, config: "Config") -> None:
                     if spec_version is None:
                         raise SBOMValidationError("CycloneDX SBOM is missing required 'specVersion' field")
                     serialized = serialize_cyclonedx_bom(parsed_object, spec_version)
-                    with Path(sbom_file).open("w") as f:
+                    with Path(sbom_file).open("w", encoding="utf-8") as f:
                         f.write(serialized)
 
         elif sbom_format == "spdx":
@@ -3701,7 +3701,7 @@ def _apply_sbom_purl_override(sbom_file: str, config: "Config") -> None:
                     # Record to audit trail
                     audit_trail.record_component_purl_override(config.component_purl, old_purl)
 
-                    with Path(sbom_file).open("w") as f:
+                    with Path(sbom_file).open("w", encoding="utf-8") as f:
                         json.dump(original_json, f, indent=2)
                 else:
                     logger.warning("SPDX SBOM has no packages - cannot set PURL override")

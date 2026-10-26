@@ -604,7 +604,7 @@ def _prefix_matches(prefix: Path, expected: str) -> bool:
     """Whether an existing prefix was built from the digests we now expect."""
     marker = prefix / _READY
     try:
-        return marker.read_text().strip() == expected
+        return marker.read_text(encoding="utf-8").strip() == expected
     except OSError:
         return False
 
@@ -685,7 +685,7 @@ def _materialize(spec: RuntimeSpec, arch: str, prefix: Path) -> None:
             if spec.member:
                 (bin_dir / spec.member).chmod(0o755)
 
-        (staging / _READY).write_text(_digest_line(spec, arch) + "\n")
+        (staging / _READY).write_text(_digest_line(spec, arch) + "\n", encoding="utf-8")
         # Atomic when it wins; another process getting there first is fine,
         # since both prefixes were built from the same pinned digest.
         try:
@@ -826,7 +826,7 @@ def _apply_bundle_manifest(prefix: Path) -> Path:
     manifest = prefix / "bundle.toml"
     if not manifest.exists():
         raise SBOMGenerationError(f"{prefix.name} has no bundle.toml; it is not a bundle we can use")
-    declared = tomllib.loads(manifest.read_text())
+    declared = tomllib.loads(manifest.read_text(encoding="utf-8"))
     body = declared.get("bundle") or {}
     bin_dirs = [str(d) for d in (body.get("bin_dirs") or ["bin"])]
 
@@ -890,7 +890,7 @@ def ensure_bundle(bundle: Bundle) -> Path:
                         _reject_traversal(member.name)
                     tar.extractall(unpacked)  # noqa: S202 - every member checked above
                 archive.unlink()
-                (unpacked / _READY).write_text(f"{bundle.name} {bundle.release} {arch}\n")
+                (unpacked / _READY).write_text(f"{bundle.name} {bundle.release} {arch}\n", encoding="utf-8")
                 # Belt and braces behind the file lock, for the cache that
                 # could not take one. Losing this race is not an error: both
                 # prefixes were unpacked from the same pinned, attested
@@ -926,7 +926,7 @@ def bundle_plugin_version(tool: str, plugin: str) -> str:
     manifest = prefix / "bundle.toml"
     if not manifest.exists():
         raise SBOMGenerationError(f"{prefix.name} has no bundle.toml; it cannot say which {plugin} to apply")
-    plugins = tomllib.loads(manifest.read_text()).get("plugins") or {}
+    plugins = tomllib.loads(manifest.read_text(encoding="utf-8")).get("plugins") or {}
     version = plugins.get(plugin)
     if not version:
         raise SBOMGenerationError(
@@ -957,7 +957,7 @@ def bundle_wrappers(tool: str) -> dict[str, dict[str, str]]:
     manifest = prefix / "bundle.toml"
     if not manifest.exists():
         return {}
-    declared = tomllib.loads(manifest.read_text()).get("wrappers") or {}
+    declared = tomllib.loads(manifest.read_text(encoding="utf-8")).get("wrappers") or {}
     return {
         str(name): {str(key): str(value) for key, value in body.items()}
         for name, body in declared.items()

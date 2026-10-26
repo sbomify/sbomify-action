@@ -45,7 +45,7 @@ class PnpmLockParser:
         Returns:
             List of PackageHash objects for all packages with integrity hashes.
         """
-        with lock_file_path.open("r") as f:
+        with lock_file_path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         hashes: list[PackageHash] = []

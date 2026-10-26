@@ -975,7 +975,7 @@ def _spdx_license_ids() -> tuple[frozenset[str], dict[str, str]]:
     try:
         from cyclonedx.schema._res import SPDX_JSON
 
-        with open(SPDX_JSON) as handle:
+        with open(SPDX_JSON, encoding="utf-8") as handle:
             enum = json.load(handle).get("enum") or []
     except Exception:  # noqa: BLE001 - fall back rather than fail the run
         logger.debug("Could not load the SPDX id enum; falling back to expression parsing", exc_info=True)

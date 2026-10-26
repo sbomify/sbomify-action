@@ -301,6 +301,9 @@ def check_tool_for_input(input_type: str, lock_file: Optional[str] = None) -> tu
         elif filename == "pubspec.lock":
             # Dart - cdxgen and syft support it
             relevant_tools = ["cdxgen", "syft"]
+        elif filename == "platformio.ini":
+            # Read natively from what PlatformIO installed; no external tool
+            relevant_tools = []
         elif filename == ".terraform.lock.hcl":
             # Terraform - only syft
             relevant_tools = ["syft"]

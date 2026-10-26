@@ -69,7 +69,7 @@ class DependencyEnricher:
         # Load SBOM early so we can report accurate original_count
         # even when no transitive dependencies are discovered or
         # expansion is skipped entirely.
-        with sbom_path.open("r") as f:
+        with sbom_path.open("r", encoding="utf-8") as f:
             sbom_data = json.load(f)
 
         # Find applicable expander
@@ -200,7 +200,7 @@ class DependencyEnricher:
         # Serialize back
         spec_version = sbom_data.get("specVersion", "1.6")
         serialized = serialize_cyclonedx_bom(bom, spec_version)
-        with sbom_path.open("w") as f:
+        with sbom_path.open("w", encoding="utf-8") as f:
             f.write(serialized)
 
         logger.info(
@@ -334,7 +334,7 @@ class DependencyEnricher:
         sbom_data["relationships"] = relationships
 
         # Write back
-        with sbom_path.open("w") as f:
+        with sbom_path.open("w", encoding="utf-8") as f:
             json.dump(sbom_data, f, indent=2)
 
         logger.info(

@@ -10,6 +10,7 @@ from typing import Optional
 
 from sbomify_action._runtime.git import git_safe_directory_env
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
+from sbomify_action.logging_config import ESCAPE_RE as _ANSI_RE
 from sbomify_action.logging_config import logger, skip_telemetry
 from sbomify_action.release_version import normalize_release_version, tag_from_ci
 from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled
@@ -133,6 +134,11 @@ SCALA_LOCK_FILES = ["build.sbt"]
 
 TERRAFORM_LOCK_FILES = [".terraform.lock.hcl"]
 
+# PlatformIO (Arduino, ESP32 and other embedded targets). Not a lock file:
+# the generator reads what `pio pkg install` recorded under .pio/libdeps --
+# see sbomify_action._platformio.
+PLATFORMIO_LOCK_FILES = ["platformio.ini"]
+
 # All supported lock files
 ALL_LOCK_FILES = (
     PYTHON_LOCK_FILES
@@ -152,6 +158,7 @@ ALL_LOCK_FILES = (
     + HASKELL_LOCK_FILES
     + ERLANG_LOCK_FILES
     + CLOJURE_LOCK_FILES
+    + PLATFORMIO_LOCK_FILES
 )
 
 # =============================================================================
@@ -252,17 +259,17 @@ def convert_to_spdx(cyclonedx: Path, output: Path, cwd: Path) -> None:
     because the bundles that carry a native generator carry syft too.
     """
     ensure_runtime("syft")
+    # Absolute, because syft runs in the project directory and the caller's
+    # paths are relative to wherever sbomify-action was started. With
+    # LOCK_FILE in a subdirectory and a relative OUTPUT_FILE, syft looked
+    # for the staged document inside the project and failed.
     run_command(
-        ["syft", "convert", str(cyclonedx), "-o", f"spdx-json={output}"],
+        ["syft", "convert", str(cyclonedx.resolve()), "-o", f"spdx-json={output.resolve()}"],
         "syft",
         timeout=600,
         cwd=str(cwd),
     )
 
-
-# ANSI SGR sequences. cdxgen colours its diagnostics, and the escape bytes end
-# up inside the log message (and therefore inside the Sentry issue title).
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 # Volatile fragments that differ between runs of the *same* failure: absolute
 # paths, hex ids, line/column numbers, durations.
@@ -473,7 +480,9 @@ def extract_error_summary(output: str | None, max_chars: int = 500) -> str:
     if not output:
         return ""
 
-    output = output.strip()
+    # The summary ends up in the SBOMGenerationError message, which the
+    # registry logs when it falls back to the next generator.
+    output = _ANSI_RE.sub("", output).strip()
 
     # Try to find error-specific lines
     error_lines = []

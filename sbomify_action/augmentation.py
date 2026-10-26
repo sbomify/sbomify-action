@@ -1995,7 +1995,7 @@ def augment_sbom_from_file(
         import json
 
         try:
-            with open(input_path, "r") as f:
+            with open(input_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except FileNotFoundError:
             raise FileNotFoundError(f"Input SBOM file not found: {input_file}")
@@ -2041,7 +2041,7 @@ def augment_sbom_from_file(
 
             output_path = Path(output_file)
             try:
-                with open(output_path, "w") as f:
+                with open(output_path, "w", encoding="utf-8") as f:
                     f.write(serialized)
             except PermissionError:
                 raise PermissionError(f"Permission denied writing output file: {output_file}")
