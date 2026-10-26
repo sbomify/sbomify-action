@@ -149,21 +149,11 @@ When committing on behalf of the repo maintainer, match the identity used on the
 
 ## Releasing and the sbom-tools pin
 
-The ecosystem bundles are downloaded at run time from
-[sbomify/sbom-tools](https://github.com/sbomify/sbom-tools). Which release
-they come from is `tools_release` in `sbomify_action/tools.toml`:
-
-- It always pins a cut release (`tools-YY.MM.N`), never `tools-rolling`.
-  Bump it in its own PR; `bin/check_tool_versions.py --update` rewrites it.
-- Images built from master set `SBOMIFY_TOOLS_RELEASE=tools-rolling`, so
-  `:latest` and `@master` track sbom-tools master. Tags, pull requests,
-  PyPI wheels and local installs use the pin.
-
-To cut a release: merge the "Bump version to X" PR, then run
-`scripts/release.sh` (try `--dry-run` first). It tags a commit one step off
-master whose `action.yml` names the `:X` image, pushes only the tag, and
-creates the GitHub release with the sbom-tools release in its notes. Do not
-tag master by hand: CI refuses a tag whose `action.yml` still says `:latest`.
+`tools_release` in `sbomify_action/tools.toml` pins the sbom-tools release the
+bundles come from; bump it with `bin/check_tool_versions.py --update`. Master
+images override it with `tools-rolling`. Cut releases with
+`scripts/release.sh`, never by tagging master: it pins `action.yml` to the
+version's image on a tag-only commit, which CI requires.
 
 ## Wizard TUI (Textual) Design Rules
 

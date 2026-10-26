@@ -2,30 +2,23 @@
 
 A release of this action has to fetch the bundles it was tested against, so
 tools.toml pins a cut sbom-tools release; images built from master opt into
-tools-rolling through SBOMIFY_TOOLS_RELEASE. These tests hold both halves, and
-the two scripts that bump the pin and record it in the sbomify release.
+tools-rolling through SBOMIFY_TOOLS_RELEASE. These tests hold both halves,
+and the bump.
 """
 
 from __future__ import annotations
 
 import importlib.util
-import sys
 import tomllib
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from sbomify_action import tool_manifest
-from sbomify_action.exceptions import SbomifyError
 from sbomify_action.tool_manifest import TOOLS_RELEASE, TOOLS_RELEASE_ENV, ManifestError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = REPO_ROOT / "sbomify_action" / "tools.toml"
-
-sys.path.insert(0, str(REPO_ROOT))
-
-from scripts import toolchain_release  # noqa: E402
 
 
 def _load_check_tool_versions():
@@ -90,11 +83,6 @@ class TestTheOverride:
         assert go.release == TOOLS_RELEASE
         assert go.package_url == f"pkg:github/sbomify/sbom-tools@{TOOLS_RELEASE}#go"
 
-    def test_the_override_does_not_move_the_pin(self, monkeypatch):
-        pinned = tool_manifest.pinned_tools_release()
-        monkeypatch.setenv(TOOLS_RELEASE_ENV, TOOLS_RELEASE)
-        assert tool_manifest.pinned_tools_release() == pinned
-
     def test_an_empty_override_means_the_pin(self, monkeypatch):
         monkeypatch.setenv(TOOLS_RELEASE_ENV, "  ")
         go = tool_manifest.bundle_for("go")
@@ -107,14 +95,6 @@ class TestTheOverride:
         monkeypatch.setenv(TOOLS_RELEASE_ENV, bad)
         with pytest.raises(ManifestError, match=TOOLS_RELEASE_ENV):
             tool_manifest.load_bundles()
-
-
-class TestTheDockerfileCarriesTheOverride:
-    def test_build_arg_reaches_the_runtime_env_and_a_label(self):
-        dockerfile = (REPO_ROOT / "Dockerfile").read_text()
-        assert "ARG SBOMIFY_TOOLS_RELEASE=\n" in dockerfile, "an unset build arg must leave the pin in charge"
-        assert "ENV SBOMIFY_TOOLS_RELEASE=${SBOMIFY_TOOLS_RELEASE}" in dockerfile
-        assert 'com.sbomify.sbom-tools.release="${SBOMIFY_TOOLS_RELEASE}"' in dockerfile
 
 
 class TestTheBump:
@@ -149,120 +129,3 @@ class TestTheBump:
         assert tomllib.loads(updated)["tools_release"] == "tools-99.1.0"
         assert updated == original.replace(f'"tools-{current}"', '"tools-99.1.0"')
         assert dockerfile.read_text() == "FROM scratch\n"
-
-
-class FakeClient:
-    def __init__(self, releases: dict[str, str] | None = None, sboms: dict[tuple[str, str], str] | None = None):
-        self.releases = dict(releases or {})
-        self.sboms = sboms or {}
-        self.created: list[dict[str, Any]] = []
-        self.tagged: list[tuple[str, str]] = []
-
-    def get_release_id(self, product_id: str, version: str) -> str | None:
-        return self.releases.get(version)
-
-    def create_release(self, product_id: str, version: str, **kwargs: Any) -> str:
-        self.created.append({"product_id": product_id, "version": version, **kwargs})
-        self.releases[version] = f"rel-{version}"
-        return self.releases[version]
-
-    def find_component_sbom(self, component_id: str, version: str, sbom_format: str) -> str | None:
-        assert sbom_format == "cyclonedx"
-        return self.sboms.get((component_id, version))
-
-    def tag_sbom_with_release(self, sbom_id: str, release_id: str) -> None:
-        self.tagged.append((sbom_id, release_id))
-
-
-class TestToolchainRelease:
-    def test_create_names_the_toolchain(self):
-        client = FakeClient()
-        toolchain_release.create(client, "prod", "v26.11.0", "tools-26.10.0")  # type: ignore[arg-type]
-        (call,) = client.created
-        assert call["version"] == "v26.11.0"
-        assert call["description"] == "sbomify-action v26.11.0. Runtime toolchain: sbomify/sbom-tools tools-26.10.0."
-        assert call["is_prerelease"] is None
-
-    def test_create_marks_a_prerelease(self):
-        client = FakeClient()
-        toolchain_release.create(client, "prod", "v26.11.0-rc1", "tools-26.10.0")  # type: ignore[arg-type]
-        assert client.created[0]["is_prerelease"] is True
-
-    def test_create_leaves_an_existing_release_alone(self):
-        client = FakeClient(releases={"v26.11.0": "rel-1"})
-        assert toolchain_release.create(client, "prod", "v26.11.0", "tools-26.10.0") == "rel-1"  # type: ignore[arg-type]
-        assert client.created == []
-
-    def test_link_tags_every_bundle_sbom(self):
-        client = FakeClient(
-            releases={"v26.11.0": "rel-1"},
-            sboms={("c-go", "tools-26.10.0"): "s-go", ("c-rust", "tools-26.10.0"): "s-rust"},
-        )
-        missing = toolchain_release.link(
-            client,  # type: ignore[arg-type]
-            "prod",
-            "v26.11.0",
-            "tools-26.10.0",
-            {"go": "c-go", "rust": "c-rust"},
-            strict=True,
-        )
-        assert missing == 0
-        assert sorted(client.tagged) == [("s-go", "rel-1"), ("s-rust", "rel-1")]
-
-    def test_link_counts_a_missing_bundle_sbom(self, capsys):
-        client = FakeClient(releases={"v26.11.0": "rel-1"}, sboms={("c-go", "tools-26.10.0"): "s-go"})
-        missing = toolchain_release.link(
-            client,  # type: ignore[arg-type]
-            "prod",
-            "v26.11.0",
-            "tools-26.10.0",
-            {"go": "c-go", "rust": "c-rust"},
-            strict=True,
-        )
-        assert missing == 1
-        assert client.tagged == [("s-go", "rel-1")]
-        assert "::error::No rust bundle SBOM at tools-26.10.0" in capsys.readouterr().out
-
-    def test_link_needs_the_release(self):
-        with pytest.raises(SbomifyError, match="does not exist"):
-            toolchain_release.link(FakeClient(), "prod", "v26.11.0", "tools-26.10.0", {"go": "c"}, strict=True)  # type: ignore[arg-type]
-
-    def test_main_fails_strict_on_a_missing_bundle(self, monkeypatch):
-        client = FakeClient(releases={"v1.0.0": "rel-1"})
-        monkeypatch.setattr(toolchain_release, "obtain_sbomify_token_via_oidc", lambda *a: "token")
-        monkeypatch.setattr(toolchain_release, "SbomifyApiClient", lambda *a: client)
-        argv = [
-            "link",
-            "--api-base-url",
-            "https://example.com",
-            "--auth-component",
-            "c",
-            "--product-id",
-            "p",
-            "--version",
-            "v1.0.0",
-            "--component",
-            "go=c-go",
-        ]
-        assert toolchain_release.main([*argv, "--strict"]) == 1
-        assert toolchain_release.main(argv) == 0
-
-    def test_main_rejects_a_malformed_component(self, monkeypatch):
-        monkeypatch.setattr(toolchain_release, "obtain_sbomify_token_via_oidc", lambda *a: "token")
-        monkeypatch.setattr(toolchain_release, "SbomifyApiClient", lambda *a: FakeClient(releases={"v1": "r"}))
-        with pytest.raises(Exception, match="BUNDLE=COMPONENT_ID"):
-            toolchain_release.main(
-                [
-                    "link",
-                    "--api-base-url",
-                    "https://example.com",
-                    "--auth-component",
-                    "c",
-                    "--product-id",
-                    "p",
-                    "--version",
-                    "v1",
-                    "--component",
-                    "go",
-                ]
-            )

@@ -13,15 +13,9 @@
 # trusted because it is written down. That is also what makes the rolling
 # release usable at all, since its bytes change on every push to master.
 
-# Which sbom-tools release to fetch from. Always a cut release, never
-# "tools-rolling": this is what a tagged image, a PyPI wheel and a local
-# install fetch, so a release of this action keeps fetching the bundles it
-# was tested against for as long as it exists. Bump it in a PR like any other
-# pin (bin/check_tool_versions.py --update does it).
-#
-# Images built from master fetch "tools-rolling" instead, through the
-# SBOMIFY_TOOLS_RELEASE override the image build sets, so :latest and @master
-# track sbom-tools master without this pin moving.
+# The sbom-tools release to fetch from: always a cut release, bumped by PR
+# (bin/check_tool_versions.py --update). Master images override it with
+# tools-rolling through SBOMIFY_TOOLS_RELEASE.
 tools_release = "tools-26.10.0"
 
 # ---------------------------------------------------------------------------

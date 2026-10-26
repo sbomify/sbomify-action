@@ -24,9 +24,7 @@ from typing import Any
 
 _MANIFEST = Path(__file__).with_name("tools.toml")
 
-#: What an sbom-tools release tag looks like. The override ends up in a URL
-#: path, so anything else -- a slash, a dot-dot -- is refused rather than
-#: allowed to point the download somewhere else.
+#: An sbom-tools release tag. It lands in a download URL, so nothing else passes.
 _TOOLS_RELEASE_RE = re.compile(r"tools-[A-Za-z0-9][A-Za-z0-9.-]*")
 
 #: Where the bundles come from. Only the release moves; the file names inside
@@ -39,10 +37,7 @@ _ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
 #: built from master opt into it through TOOLS_RELEASE_ENV.
 TOOLS_RELEASE = "tools-rolling"
 
-#: Overrides the sbom-tools release committed in tools.toml. The image build
-#: sets it to TOOLS_RELEASE for master, so :latest tracks sbom-tools master
-#: while a tagged release, a PyPI wheel and a local install all fetch the
-#: release that was pinned and tested. Empty means "use the pin".
+#: Overrides the pinned sbom-tools release; master images set it to TOOLS_RELEASE.
 TOOLS_RELEASE_ENV = "SBOMIFY_TOOLS_RELEASE"
 _TOOLS_RELEASE_BASE = "https://github.com/sbomify/sbomify-action/releases/download"
 _ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
@@ -514,9 +509,6 @@ def _pinned_release(raw: dict[str, Any]) -> str:
     pinned = raw.get("tools_release")
     if not isinstance(pinned, str) or not _TOOLS_RELEASE_RE.fullmatch(pinned):
         raise ManifestError("tools.toml must pin tools_release to an sbom-tools release tag")
-    # The rolling pre-release changes under every release that names it, which
-    # is the non-determinism the pin exists to remove. Master images reach it
-    # through the override, never through the committed pin.
     if pinned == TOOLS_RELEASE:
         raise ManifestError(f"tools.toml must pin a cut sbom-tools release, not {TOOLS_RELEASE}")
     return pinned

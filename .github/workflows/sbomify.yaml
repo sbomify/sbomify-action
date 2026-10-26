@@ -1075,10 +1075,7 @@ jobs:
             IMAGE_TAG="latest"
           fi
 
-          # Which sbom-tools release the image fetches bundles from. Master
-          # pushes publish :latest, which tracks sbom-tools master; everything
-          # else -- tags, and pull requests, which test what a release would
-          # ship -- uses the release pinned in tools.toml.
+          # :latest tracks sbom-tools master; tags and PRs use the pin.
           PINNED_TOOLS_RELEASE=$(python3 -c 'import tomllib; print(tomllib.load(open("sbomify_action/tools.toml", "rb"))["tools_release"])')
           if [[ "${GH_EVENT_NAME}" == "push" && "${GH_REF_TYPE}" == "branch" ]]; then
             TOOLS_RELEASE="tools-rolling"
@@ -1087,10 +1084,7 @@ jobs:
           fi
 
           if [[ "${GH_REF_TYPE}" == "tag" ]]; then
-            # A release must be pinned end to end. action.yml is read from the
-            # tag, so an image of :latest there would hand every
-            # `uses: sbomify/sbomify-action@vX` the master image -- and with
-            # it sbom-tools master. scripts/release.sh writes both pins.
+            # action.yml is read from the tag; :latest there would run master.
             if [[ "${PINNED_TOOLS_RELEASE}" == "tools-rolling" ]]; then
               echo "::error file=sbomify_action/tools.toml::tools_release must pin a cut sbom-tools release, not tools-rolling"
               exit 1
