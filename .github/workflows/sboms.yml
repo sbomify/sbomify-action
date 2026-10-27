@@ -27,7 +27,7 @@
 # head_sha so the workspace matches the built commit/tag.
 name: sboms
 on:
-  workflow_run:
+  workflow_run:  # zizmor: ignore[dangerous-triggers] the job's if: admits only push runs of this repo
     workflows: ['CI/CD Pipeline']
     types: [completed]
 # Serialize runs per triggering ref so two master pushes (or re-runs of the
@@ -36,6 +36,8 @@ on:
 concurrency:
   group: sboms-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
+permissions:
+  contents: read
 jobs:
   sbom:
     name: ${{ matrix.name }}-${{ github.event.workflow_run.head_branch == 'master' && 'staging' || 'production' }}
@@ -47,6 +49,7 @@ jobs:
       && (github.event.workflow_run.head_branch == 'master'
           || startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       id-token: write   # required to mint the GitHub OIDC JWT
       contents: read
@@ -113,10 +116,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+      # Key the cache by day, seeded from the newest entry of the same month.
+      # A fixed key is saved once and then restored forever (actions/cache
+      # skips the save on an exact hit); this saves new data daily and
+      # starts clean each month, so nothing stale outlives its month. Each
+      # matrix row has its own key: the rows run in parallel, and with one
+      # shared key the first to finish saved and the rest were discarded.
+      - id: cache-date
+        run: |
+          echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+          echo "day=$(date -u +%d)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: .sbomify-cache
-          key: sbomify-${{ runner.os }}
+          key: sbomify-${{ runner.os }}-${{ matrix.name }}-${{ steps.cache-date.outputs.month }}-${{ steps.cache-date.outputs.day }}
+          restore-keys: |
+            sbomify-${{ runner.os }}-${{ matrix.name }}-${{ steps.cache-date.outputs.month }}-
       - name: Generate additional packages from Dockerfile
         if: matrix.kind == 'container'
         run: ./scripts/generate_additional_packages.sh > container_additional_packages.txt
@@ -152,7 +167,7 @@ jobs:
               echo "product_release_id=Engh9j4XTTwD"
             } >> "$GITHUB_OUTPUT"
           fi
-      - uses: sbomify/sbomify-action@master
+      - uses: sbomify/sbomify-action@master  # zizmor: ignore[unpinned-uses] dogfoods this repo's own master
         env:
           API_BASE_URL: ${{ steps.cfg.outputs.api_base_url }}
           OIDC_AUDIENCE: ${{ steps.cfg.outputs.oidc_audience }}
@@ -163,14 +178,43 @@ jobs:
           DOCKER_IMAGE: ${{ matrix.kind == 'container' && format('ghcr.io/sbomify/sbomify-action:{0}', steps.cfg.outputs.docker_tag) || '' }}
           LOCK_FILE: ${{ matrix.lockfile }}
           ADDITIONAL_PACKAGES_FILE: ${{ matrix.kind == 'container' && 'container_additional_packages.txt' || '' }}
-          PRODUCT_RELEASE: '["${{ steps.cfg.outputs.product_release_id }}:${{ steps.cfg.outputs.version }}"]'
           SBOM_FORMAT: ${{ matrix.sbom_format }}
-          UPLOAD: 'true'
+          # Generate only: the check below has to pass before anything is
+          # uploaded or attached to the product release.
+          UPLOAD: 'false'
           AUGMENT: 'true'
           ENRICH: 'true'
           OUTPUT_FILE: ${{ matrix.output_file }}
           SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
           SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
+      # A generator that cannot read its input still exits 0 with a valid SBOM
+      # listing nothing. SPDX counts the described root as a package; skip it.
+      - name: Fail if the SBOM lists no components
+        env:
+          SBOM: ${{ matrix.output_file }}
+        run: |
+          jq -e 'if .spdxVersion then
+              [.packages[]?.SPDXID] - [.documentDescribes[]?,
+                (.relationships[]? | select(.relationshipType == "DESCRIBES") | .relatedSpdxElement)]
+            else .components end | length > 0' "$SBOM"
+      # Upload the document that was just checked, as it is: no generation,
+      # augmentation or enrichment, so what lands in sbomify is what the
+      # attestation below covers.
+      - uses: sbomify/sbomify-action@master  # zizmor: ignore[unpinned-uses] dogfoods this repo's own master
+        env:
+          API_BASE_URL: ${{ steps.cfg.outputs.api_base_url }}
+          OIDC_AUDIENCE: ${{ steps.cfg.outputs.oidc_audience }}
+          COMPONENT_ID: ${{ steps.cfg.outputs.is_prod == 'true' && matrix.prod_id || matrix.staging_id }}
+          COMPONENT_NAME: ${{ matrix.component_name }}
+          COMPONENT_VERSION: ${{ steps.cfg.outputs.version }}
+          COMPONENT_PURL: ${{ (matrix.kind == 'container' || matrix.is_action) && format('pkg:docker/sbomify/sbomify-action@{0}?repository_url=ghcr.io', steps.cfg.outputs.docker_tag) || '' }}
+          SBOM_FILE: ${{ matrix.output_file }}
+          PRODUCT_RELEASE: '["${{ steps.cfg.outputs.product_release_id }}:${{ steps.cfg.outputs.version }}"]'
+          SBOM_FORMAT: ${{ matrix.sbom_format }}
+          UPLOAD: 'true'
+          AUGMENT: 'false'
+          ENRICH: 'false'
+          OUTPUT_FILE: ${{ matrix.output_file }}
       # ---------------------------------------------------------------------
       # Build-provenance attestation (SLSA v1)
       # ---------------------------------------------------------------------

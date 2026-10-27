@@ -1,0 +1,40 @@
+---
+name: zizmor
+
+# Static analysis of this repo's GitHub Actions workflows and actions
+# (https://docs.zizmor.sh). Fails on high-severity findings: fix the finding,
+# or put `# zizmor: ignore[<audit>] <reason>` on the line it points at.
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Without advanced-security this reports through annotations and the
+      # exit code alone, so it needs no security-events permission and works
+      # the same on fork PRs. The zizmor version is locked by the action.
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          min-severity: high
+          advanced-security: false
+          annotations: true

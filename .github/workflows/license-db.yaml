@@ -11,6 +11,9 @@ on:
         required: false
         default: 'all'
 
+permissions:
+  contents: read
+
 jobs:
   # The matrix is derived from the generator's own configuration rather than
   # duplicated here, so a new distro release cannot be added to the code and
@@ -18,6 +21,9 @@ jobs:
   prepare-matrix:
     name: Resolve Distro Matrix
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     outputs:
       matrix: ${{ steps.resolve.outputs.matrix }}
     steps:
@@ -33,8 +39,9 @@ jobs:
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "${{ env.UV_VERSION }}"
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          # Off: this workflow publishes release assets, so it must not
+          # restore a cache that other jobs in this repository can write.
+          enable-cache: false
 
       - name: Install dependencies
         run: uv sync --locked
@@ -56,6 +63,9 @@ jobs:
     name: Generate License Databases
     needs: prepare-matrix
     runs-on: ubuntu-latest
+    # Ubuntu 22.04 has taken over four hours to generate. 360 is the most a
+    # GitHub-hosted runner allows.
+    timeout-minutes: 360
     permissions:
       contents: write
     strategy:
@@ -75,8 +85,9 @@ jobs:
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "${{ env.UV_VERSION }}"
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          # Off: this workflow publishes release assets, so it must not
+          # restore a cache that other jobs in this repository can write.
+          enable-cache: false
 
       - name: Install dependencies
         run: uv sync --locked
