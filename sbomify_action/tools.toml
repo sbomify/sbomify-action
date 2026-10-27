@@ -13,9 +13,8 @@
 # trusted because it is written down. That is also what makes the rolling
 # release usable at all, since its bytes change on every push to master.
 
-# The sbom-tools release to fetch from: always a cut release, bumped by PR
-# (bin/check_tool_versions.py --update). Master images override it with
-# tools-rolling through SBOMIFY_TOOLS_RELEASE.
+# The sbom-tools release to fetch from: a cut release, bumped by PR. An image
+# built from master fetches tools-rolling instead (tool_manifest._bundle_release).
 tools_release = "tools-26.10.1"
 
 # ---------------------------------------------------------------------------

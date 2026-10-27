@@ -49,10 +49,6 @@ ARG VERSION=0.0.0
 ARG COMMIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ARG VCS_REF=unknown
-# The sbom-tools release to fetch bundles from. Empty uses the release pinned
-# in sbomify_action/tools.toml; CI passes tools-rolling for master builds so
-# :latest tracks sbom-tools master, and the pin itself for everything else.
-ARG SBOMIFY_TOOLS_RELEASE=
 
 # OCI Image Labels (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 LABEL org.opencontainers.image.title="sbomify action" \
@@ -76,8 +72,7 @@ LABEL com.sbomify.maintainer="sbomify <hello@sbomify.com>" \
       com.sbomify.vcs.type="git" \
       com.sbomify.vcs.url="https://github.com/sbomify/sbomify-action.git" \
       com.sbomify.vcs.branch="${VCS_REF}" \
-      com.sbomify.vcs.commit="${COMMIT_SHA}" \
-      com.sbomify.sbom-tools.release="${SBOMIFY_TOOLS_RELEASE}"
+      com.sbomify.vcs.commit="${COMMIT_SHA}"
 
 # git is needed at runtime: the wizard reads repo facts (remote name,
 # branch, visibility) from the bind-mounted workspace, and slim images
@@ -126,7 +121,6 @@ ENV COLORTERM=truecolor
 ENV SBOMIFY_GITHUB_ACTION_VERSION=${VERSION}
 ENV SBOMIFY_GITHUB_ACTION_COMMIT_SHA=${COMMIT_SHA}
 ENV SBOMIFY_GITHUB_ACTION_VCS_REF=${VCS_REF}
-ENV SBOMIFY_TOOLS_RELEASE=${SBOMIFY_TOOLS_RELEASE}
 
 # Default location for the bind-mounted repository, so `-v "$PWD:/workspace"`
 # is a complete invocation and no -w flag is needed. Without a WORKDIR the

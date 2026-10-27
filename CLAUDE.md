@@ -147,14 +147,6 @@ GIT_COMMITTER_NAME="..." GIT_COMMITTER_EMAIL="..." git commit ...
 
 When committing on behalf of the repo maintainer, match the identity used on their existing *feature-branch* commits (`git --no-pager log --format='%an <%ae>'` on a feature branch) — not the `@users.noreply.github.com` identity that appears on squash-merged commits on master.
 
-## Releasing and the sbom-tools pin
-
-`tools_release` in `sbomify_action/tools.toml` pins the sbom-tools release the
-bundles come from; bump it with `bin/check_tool_versions.py --update`. Master
-images override it with `tools-rolling`. Cut releases with
-`scripts/release.sh`, never by tagging master: it pins `action.yml` to the
-version's image on a tag-only commit, which CI requires.
-
 ## Wizard TUI (Textual) Design Rules
 
 The wizard (`sbomify_action/cli/wizard/`) must be **fit-to-viewport, never scrolling** — scrolling is not a normal TUI paradigm, and a scrolling page hides the primary CTA (e.g. a Start button pushed off-screen). Make content fit the terminal via progressive disclosure, not scrollbars.

@@ -1047,14 +1047,12 @@ jobs:
       ghcr_repo: ${{ steps.meta.outputs.ghcr_repo }}
       dockerhub_repo: ${{ steps.meta.outputs.dockerhub_repo }}
       build_date: ${{ steps.meta.outputs.build_date }}
-      tools_release: ${{ steps.meta.outputs.tools_release }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Prepare build metadata
         id: meta
         env:
-          GH_EVENT_NAME: ${{ github.event_name }}
           GH_REF_TYPE: ${{ github.ref_type }}
           GH_REF_NAME: ${{ github.ref_name }}
           GH_SHA: ${{ github.sha }}
@@ -1075,28 +1073,6 @@ jobs:
             IMAGE_TAG="latest"
           fi
 
-          # :latest tracks sbom-tools master; tags and PRs use the pin.
-          PINNED_TOOLS_RELEASE=$(python3 -c 'import tomllib; print(tomllib.load(open("sbomify_action/tools.toml", "rb"))["tools_release"])')
-          if [[ "${GH_EVENT_NAME}" == "push" && "${GH_REF_TYPE}" == "branch" ]]; then
-            TOOLS_RELEASE="tools-rolling"
-          else
-            TOOLS_RELEASE="${PINNED_TOOLS_RELEASE}"
-          fi
-
-          if [[ "${GH_REF_TYPE}" == "tag" ]]; then
-            # action.yml is read from the tag; :latest there would run master.
-            if [[ "${PINNED_TOOLS_RELEASE}" == "tools-rolling" ]]; then
-              echo "::error file=sbomify_action/tools.toml::tools_release must pin a cut sbom-tools release, not tools-rolling"
-              exit 1
-            fi
-            EXPECTED_IMAGE="docker://ghcr.io/sbomify/sbomify-action:${VERSION}"
-            ACTION_IMAGE=$(sed -n "s/^[[:space:]]*image:[[:space:]]*'\(.*\)'[[:space:]]*$/\1/p" action.yml)
-            if [[ "${ACTION_IMAGE}" != "${EXPECTED_IMAGE}" ]]; then
-              echo "::error file=action.yml::image is '${ACTION_IMAGE}', expected '${EXPECTED_IMAGE}'. Cut releases with scripts/release.sh."
-              exit 1
-            fi
-          fi
-
           GHCR_REPO="ghcr.io/$(echo "${GH_REPO_OWNER}/${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
           DOCKERHUB_REPO="sbomifyhub/${IMAGE_NAME}"
           BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
@@ -1107,7 +1083,6 @@ jobs:
             echo "ghcr_repo=${GHCR_REPO}"
             echo "dockerhub_repo=${DOCKERHUB_REPO}"
             echo "build_date=${BUILD_DATE}"
-            echo "tools_release=${TOOLS_RELEASE}"
           } >> "$GITHUB_OUTPUT"
 
   build-images:
@@ -1172,7 +1147,6 @@ jobs:
             COMMIT_SHA=${{ github.sha }}
             BUILD_DATE=${{ needs.docker-meta.outputs.build_date }}
             VCS_REF=${{ github.ref_name }}
-            SBOMIFY_TOOLS_RELEASE=${{ needs.docker-meta.outputs.tools_release }}
           outputs: ${{ github.event_name == 'push' && format('type=image,"name={0},{1}",push-by-digest=true,name-canonical=true,push=true', needs.docker-meta.outputs.ghcr_repo, needs.docker-meta.outputs.dockerhub_repo) || 'type=cacheonly' }}
           cache-from: type=gha,scope=build-${{ matrix.slug }}
           cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope=build-{0}', matrix.slug) || '' }}
