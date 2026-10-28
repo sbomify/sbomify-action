@@ -13,10 +13,11 @@
 # trusted because it is written down. That is also what makes the rolling
 # release usable at all, since its bytes change on every push to master.
 
-# Which sbom-tools release to fetch from. "tools-rolling" tracks master;
-# scripts/freeze_tool_versions.py stamps a release tag in its place when the
-# image is built, so a cut release keeps fetching the bundles it was tested
-# against for as long as it exists.
+# Which sbom-tools release to fetch from. "tools-rolling" tracks master, and
+# nothing replaces it at build time (scripts/freeze_tool_versions.py freezes
+# only the lockfile-derived tool versions), so every release fetches whatever
+# tools-rolling holds that day. Set a tools-* tag here to make a release keep
+# fetching the bundles it was tested against.
 tools_release = "tools-rolling"
 
 # ---------------------------------------------------------------------------
