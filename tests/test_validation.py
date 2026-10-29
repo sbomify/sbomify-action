@@ -7,6 +7,7 @@ from pathlib import Path
 
 from sbomify_action.spdx3 import extract_spdx3_version
 from sbomify_action.validation import (
+    CDX_SCHEMAS,
     ValidationResult,
     detect_sbom_format_and_version,
     validate_sbom_data,
@@ -88,6 +89,29 @@ class TestValidateSBOMData(unittest.TestCase):
         }
         result = validate_sbom_data(data, "cyclonedx", "1.3")
         self.assertTrue(result.valid)
+
+    def test_valid_cyclonedx_1_2_minimal(self):
+        """1.2 can be generated, so it is checked like the other versions."""
+        data = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.2",
+            "version": 1,
+            "components": [
+                {"type": "library", "name": "requests", "version": "2.32.3", "licenses": [{"license": {"id": "MIT"}}]}
+            ],
+        }
+        result = validate_sbom_data(data, "cyclonedx", "1.2")
+        self.assertIs(result.valid, True, result.error_message or "skipped rather than checked")
+
+    def test_invalid_cyclonedx_1_2_says_so(self):
+        data = {"bomFormat": "CycloneDX", "specVersion": "1.2", "version": "not_an_integer"}
+        result = validate_sbom_data(data, "cyclonedx", "1.2")
+        self.assertIs(result.valid, False, "a skip reports valid=None, which is not a rejection")
+
+    def test_every_generatable_cyclonedx_version_has_a_schema(self):
+        from sbomify_action._generation.protocol import CYCLONEDX_VERSIONS
+
+        self.assertEqual([v for v in CYCLONEDX_VERSIONS if v not in CDX_SCHEMAS], [])
 
     def test_invalid_cyclonedx_wrong_type(self):
         """Test validating CycloneDX with wrong field type."""
