@@ -73,6 +73,7 @@ from ..serialization import (
     _fix_purl_encoding_bugs_in_json,
     get_spdx_json_root_package,
     load_cyclonedx_bom,
+    sanitize_cyclonedx_json_file_purls,
     sanitize_spdx_licenses,
     serialize_cyclonedx_bom,
 )
@@ -2682,6 +2683,16 @@ def run_pipeline(config: Config) -> None:
         # Check if the parent directory exists; if not, create it recursively
         if parent_dir != Path(".") and not parent_dir.exists():
             parent_dir.mkdir(parents=True, exist_ok=True)
+
+        # Enrichment clears file:, link: and path PURLs as it writes its
+        # output. Without it they would reach the final SBOM, so do it here.
+        # Best effort, like step 1's SPDX licence clean-up: a PURL left in place
+        # is better than a run that dies before writing or uploading anything.
+        if is_sbom and not config.enrich:
+            try:
+                sanitize_cyclonedx_json_file_purls(final_sbom_file)
+            except (OSError, ValueError) as e:
+                logger.warning(f"PURL clean-up skipped, the SBOM keeps its PURLs as they were: {e}")
 
         _write_final_output(final_sbom_file, config.output_file, config.bom_type)
 
