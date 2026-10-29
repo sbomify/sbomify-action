@@ -510,6 +510,11 @@ def _bundle_release(raw: dict[str, Any]) -> str:
     return str(raw["tools_release"])
 
 
+def tools_release() -> str:
+    """The sbom-tools release this build fetches from: its bundles, and its license databases."""
+    return _bundle_release(tomllib.loads(_MANIFEST.read_text(encoding="utf-8")))
+
+
 @lru_cache(maxsize=1)
 def load_bundles() -> dict[str, Bundle]:
     """Parse the bundle section of tools.toml."""
