@@ -132,8 +132,13 @@ jobs:
         run: |
           SHORT_SHA="${HEAD_SHA:0:7}"
           if [[ "$HEAD_BRANCH" == v* ]]; then
-            # Production — version tag
+            # Production — version tag. The release includes the sbom-tools
+            # release (product PmdIuuj43CV3) this version pins in tools.toml:
+            # its bundles are what the action downloads at run time. sbom-tools
+            # versions its product releases without the tag's "v" (v26.10.3 -> 26.10.3).
+            TOOLS_RELEASE=$(sed -n 's/^tools_release = "\(.*\)"$/\1/p' sbomify_action/tools.toml)
             {
+              echo "release_includes=[\"PmdIuuj43CV3:${TOOLS_RELEASE#v}\"]"
               echo "is_prod=true"
               echo "version=${HEAD_BRANCH}"
               echo "docker_tag=${HEAD_BRANCH#v}"
@@ -164,6 +169,7 @@ jobs:
           LOCK_FILE: ${{ matrix.lockfile }}
           ADDITIONAL_PACKAGES_FILE: ${{ matrix.kind == 'container' && 'container_additional_packages.txt' || '' }}
           PRODUCT_RELEASE: '["${{ steps.cfg.outputs.product_release_id }}:${{ steps.cfg.outputs.version }}"]'
+          RELEASE_INCLUDES: ${{ steps.cfg.outputs.release_includes }}
           SBOM_FORMAT: ${{ matrix.sbom_format }}
           UPLOAD: 'true'
           AUGMENT: 'true'
