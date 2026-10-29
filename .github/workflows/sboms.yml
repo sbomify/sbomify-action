@@ -157,7 +157,11 @@ jobs:
               echo "product_release_id=Engh9j4XTTwD"
             } >> "$GITHUB_OUTPUT"
           fi
-      - uses: sbomify/sbomify-action@master
+      # ./ runs the action.yml of the commit checked out above (head_sha), not
+      # whatever master's says. That action.yml still pulls the :latest image,
+      # i.e. master's newest build, even on a tag run; pinning the image by
+      # digest is tracked separately.
+      - uses: ./
         env:
           API_BASE_URL: ${{ steps.cfg.outputs.api_base_url }}
           OIDC_AUDIENCE: ${{ steps.cfg.outputs.oidc_audience }}
