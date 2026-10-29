@@ -255,6 +255,7 @@ class Config:
     component_name: Optional[str] = None
     component_purl: Optional[str] = None
     product_releases: Optional[str | list[str]] = None
+    release_includes: Optional[str | list[str]] = None
     submodule_path: Optional[str] = None
     api_base_url: str = SBOMIFY_PRODUCTION_API
     sbom_format: SBOMFormat = "cyclonedx"
@@ -649,6 +650,13 @@ class Config:
                     raise  # Re-raise ConfigurationError as-is
                 raise ConfigurationError(f"Error parsing PRODUCT_RELEASE: {e}")
 
+        if self.release_includes:
+            self.release_includes = _parse_release_includes(self.release_includes)
+            if not self.product_releases:
+                raise ConfigurationError(
+                    "RELEASE_INCLUDES needs PRODUCT_RELEASE: it says what the releases in PRODUCT_RELEASE include."
+                )
+
         # Validate API base URL format with proper parsing
         self._validate_api_url()
 
@@ -727,6 +735,23 @@ def _version_from_tag_enabled() -> bool:
     checkout. Opt in, and the wizard asks.
     """
     return _flag("VERSION_FROM_RELEASE_TAG")
+
+
+def _parse_release_includes(value: str | list[str]) -> list[str]:
+    """RELEASE_INCLUDES as a list of "product_id:version", in PRODUCT_RELEASE's format."""
+    try:
+        includes = value if isinstance(value, list) else json.loads(value)
+    except json.JSONDecodeError as e:
+        raise ConfigurationError(f"Invalid JSON format for RELEASE_INCLUDES: {e}")
+    if not isinstance(includes, list):
+        raise ConfigurationError('RELEASE_INCLUDES must be a JSON list like ["product_id:v1.2.3"]')
+    for include in includes:
+        product_id, _, version = include.partition(":") if isinstance(include, str) else ("", "", "")
+        if not product_id.strip() or not version.strip():
+            raise ConfigurationError(
+                f"Invalid RELEASE_INCLUDES entry: {include!r}. Expected format: 'product_id:version'"
+            )
+    return includes
 
 
 def _normalize_version_enabled() -> bool:
@@ -841,6 +866,7 @@ def build_config(
     component_name: Optional[str] = None,
     component_purl: Optional[str] = None,
     product_releases: Optional[str] = None,
+    release_includes: Optional[str] = None,
     submodule_path: Optional[str] = None,
     api_base_url: str = SBOMIFY_PRODUCTION_API,
     sbom_format: str = "cyclonedx",
@@ -1013,6 +1039,7 @@ def build_config(
         component_name=final_component_name,
         component_purl=component_purl,
         product_releases=product_releases,
+        release_includes=release_includes,
         submodule_path=normalized_submodule_path,
         api_base_url=api_base_url,
         sbom_format=sbom_format_lower,
@@ -1071,6 +1098,7 @@ def load_config() -> Config:
         component_name=os.getenv("COMPONENT_NAME"),
         component_purl=os.getenv("COMPONENT_PURL"),
         product_releases=os.getenv("PRODUCT_RELEASE"),
+        release_includes=os.getenv("RELEASE_INCLUDES"),
         submodule_path=os.getenv("SUBMODULE_PATH"),
         api_base_url=os.getenv("API_BASE_URL", SBOMIFY_PRODUCTION_API),
         sbom_format=os.getenv("SBOM_FORMAT", "cyclonedx"),
@@ -2039,6 +2067,7 @@ def _run_post_upload_processing(
             # point processors at a path that does not exist.
             sbom_file=None if artifact_kind == "document" else config.output_file,
             product_releases=pr_list,
+            release_includes=config.release_includes if isinstance(config.release_includes, list) else None,
             api_base_url=config.api_base_url,
             token=config.token,
             artifact_kind=artifact_kind,
@@ -3903,6 +3932,15 @@ def _parse_upload_destinations_callback(
     help="Tag SBOM with product releases (JSON array: '[\"product_id:v1.0.0\"]').",
 )
 @click.option(
+    "--release-includes",
+    "release_includes",
+    envvar="RELEASE_INCLUDES",
+    help=(
+        "Releases of other products that each --product-release includes, such as a toolchain it ships with "
+        "(JSON array: '[\"product_id:v2.0.0\"]')."
+    ),
+)
+@click.option(
     "--submodule-path",
     envvar="SUBMODULE_PATH",
     default=None,
@@ -4009,6 +4047,7 @@ def cli(
     component_name: Optional[str],
     component_purl: Optional[str],
     product_releases: Optional[str],
+    release_includes: Optional[str],
     submodule_path: Optional[str],
     api_base_url: str,
     sbom_format: str,
@@ -4155,6 +4194,7 @@ def cli(
         component_name=component_name,
         component_purl=component_purl,
         product_releases=product_releases,
+        release_includes=release_includes,
         submodule_path=submodule_path,
         api_base_url=api_base_url,
         sbom_format=sbom_format,
