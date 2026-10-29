@@ -60,6 +60,7 @@ from ..generation import (
     generate_sbom,
     process_lock_file,
 )
+from ..job_summary import field_coverage, publish_run_summary
 from ..logging_config import logger
 from ..release_version import (
     names_another_package,
@@ -2524,6 +2525,10 @@ def run_pipeline(config: Config) -> None:
             "additional_packages.txt file) is present and correctly formatted."
         )
 
+    # What the document carried before any enrichment step touched it, so the
+    # job summary can show what enrichment added.
+    coverage_before = field_coverage(STEP_1_FILE) if is_sbom else None
+
     # Step 1.4: Transitive Dependency Discovery (for lockfiles that support expansion)
     # Note: Steps 1.x are substeps of the main SBOM generation step (Step 1).
     # These run after initial generation but before Step 2 (Validation/Augmentation).
@@ -2839,6 +2844,7 @@ def run_pipeline(config: Config) -> None:
         logger.warning("Product releases specified but no SBOM ID available (upload may have been disabled or failed)")
         _log_step_end(6, success=False)
 
+    publish_run_summary(config, FORMAT, coverage_before, sbom_id)
     _finalize_run(config)
 
 

@@ -63,6 +63,23 @@ class LogFormatter(Protocol):
         """
         ...
 
+    @property
+    def annotates_warnings(self) -> bool:
+        """Whether logged warnings should also be raised as annotations.
+
+        False where the platform has no annotation channel: the log line is
+        already all the user will see, and repeating it adds nothing.
+        """
+        ...
+
+    def job_summary(self, markdown: str) -> None:
+        """Append Markdown to the run's summary page (no-op where there is none)."""
+        ...
+
+    def set_output(self, name: str, value: str) -> None:
+        """Expose a value to later steps (no-op where there are no step outputs)."""
+        ...
+
     def group_start(self, title: str) -> None:
         """Open a collapsible output group (no-op where unsupported)."""
         ...
