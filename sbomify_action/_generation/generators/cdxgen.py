@@ -11,6 +11,7 @@ Verified capabilities (cdxgen 12.0.0):
 - Version selection: --spec-version
 """
 
+import json
 from pathlib import Path
 
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
@@ -81,6 +82,16 @@ CDXGEN_TYPE_MAP = {
 RECURSE_ECOSYSTEMS = {"java", "scala", "dotnet"}
 
 
+def _has_crypto_asset(path: str) -> bool:
+    """True when the CycloneDX document at ``path`` lists a cryptographic asset."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            components = json.load(handle).get("components") or []
+    except (OSError, ValueError, AttributeError):
+        return False
+    return any(isinstance(c, dict) and c.get("type") == "cryptographic-asset" for c in components)
+
+
 class CdxgenFsGenerator:
     """
     cdxgen filesystem scanner for lock files.
@@ -106,6 +117,11 @@ class CdxgenFsGenerator:
     def priority(self) -> int:
         # Comprehensive multi-ecosystem, higher priority than Trivy/Syft
         return 20
+
+    @property
+    def supports_crypto(self) -> bool:
+        # The one generator that can emit cryptographic assets (--include-crypto).
+        return True
 
     @property
     def supported_formats(self) -> list[FormatVersion]:
@@ -242,6 +258,14 @@ class CdxgenFsGenerator:
         # Add type flag to restrict to detected ecosystem
         if cdxgen_type:
             cmd.extend(["-t", cdxgen_type])
+            # cdxgen 12.8.x scans for certificates and keystores only on its
+            # multi-type path, and one -t never reaches it. The same type twice
+            # is deduplicated back to one, so the copy is upper-cased: types
+            # match case-sensitively, so it selects no ecosystem of its own
+            # and the scan stays scoped to this one. Dropping -t instead found
+            # the assets too, but ran a nested build.gradle along the way.
+            if input.include_crypto:
+                cmd.extend(["-t", cdxgen_type.upper()])
 
         # For ecosystems with parent/child structures (Maven, Gradle), allow recursion
         # The -t flag will still restrict scanning to only that ecosystem
@@ -259,6 +283,18 @@ class CdxgenFsGenerator:
         # entire transitive closure along with the h1: hashes from go.sum. See issue #231.
         if ecosystem != "go":
             cmd.append("--required-only")
+
+        # Cryptographic asset detection (CBOM). In this action that means
+        # certificate, key and keystore files. cdxgen's source-level algorithm
+        # detection does not run here: its atom path needs @appthreat/atom and
+        # a JVM, which the bundle omits, and its Babel path throws under bun.
+        if input.include_crypto:
+            cmd.append("--include-crypto")
+            # cdxgen's Ruby handling fires for any -t, and on the multi-type
+            # path so does CocoaPods for swift. Their commands, `bundle
+            # install` and `pod install`, sit behind this flag: with it, a
+            # top-level Gemfile was no longer evaluated.
+            cmd.append("--no-install-deps")
 
         # Fail on error to ensure we catch issues early
         cmd.append("--fail-on-error")
@@ -288,6 +324,22 @@ class CdxgenFsGenerator:
             if not Path(output_file_abs).exists():
                 return GenerationResult.failure_result(
                     error_message="cdxgen completed but output file not created",
+                    sbom_format="cyclonedx",
+                    spec_version=version,
+                    generator_name=self.name,
+                )
+
+            # A crypto run that found nothing has written a dependency SBOM,
+            # and uploading that as bom_type=cbom would claim an inventory it
+            # does not contain.
+            if input.include_crypto and not _has_crypto_asset(output_file_abs):
+                return GenerationResult.failure_result(
+                    error_message=(
+                        "cdxgen found no cryptographic assets, so there is no CBOM to upload. Here it "
+                        "inventories certificate, key and keystore files (.pem, .cer, .key, .pub, .gpg, "
+                        ".p12, .jks, .jceks, .bks, .keystore) in the LOCK_FILE directory, and in its "
+                        "subdirectories for Java, Scala and .NET; it does not detect algorithms in source code."
+                    ),
                     sbom_format="cyclonedx",
                     spec_version=version,
                     generator_name=self.name,
@@ -382,7 +434,8 @@ class CdxgenImageGenerator:
         """
         Check if this generator supports the given input.
 
-        Supports Docker images for CycloneDX format only.
+        Supports Docker images for CycloneDX format only. Declines
+        include_crypto inputs (container-image CBOMs are out of scope).
         Does not support SPDX or lock files (use CdxgenFsGenerator).
         """
         # Check if cdxgen is installed
@@ -391,6 +444,11 @@ class CdxgenImageGenerator:
 
         # Only supports Docker images
         if not input.is_docker_image:
+            return False
+
+        # Container-image CBOMs are out of scope; decline crypto requests
+        # explicitly rather than relying on registry selection order.
+        if input.include_crypto:
             return False
 
         # Only supports CycloneDX format (cdxgen doesn't output SPDX)
