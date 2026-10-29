@@ -2,7 +2,8 @@
 
 Downloads and uses pre-computed license databases from GitHub Releases
 to provide license information for Linux distro packages (Alpine, Wolfi,
-Ubuntu, Rocky, Alma, CentOS, Fedora, Amazon Linux).
+Ubuntu, Rocky, Alma, CentOS, Fedora, Amazon Linux). The databases are
+built and published by sbomify/sbom-tools, alongside the tool bundles.
 
 The databases are keyed by PURL for fast lookups and contain SPDX-validated
 license expressions extracted from package copyright files (Ubuntu) or
@@ -10,8 +11,10 @@ package metadata (APK, RPM).
 
 Strategy:
 1. Check local cache first
-2. Try to download from recent GitHub releases (checks up to 5 releases)
-3. Cache the result locally for future use
+2. Download from the sbom-tools release this build pins (tools.toml), the
+   same release its bundles come from
+3. Fall back to recent sbomify-action releases (checks up to 5 releases)
+4. Cache the result locally for future use
 """
 
 import gzip
@@ -27,10 +30,16 @@ import requests
 from packageurl import PackageURL
 
 from sbomify_action.logging_config import logger
+from sbomify_action.tool_manifest import tools_release
 
 from ..metadata import NormalizedMetadata
 
-# GitHub repository hosting the license databases
+# Where the license databases are published, under the sbom-tools release tag.
+SBOM_TOOLS_DOWNLOAD = "https://github.com/sbomify/sbom-tools/releases/download"
+
+# Where they were published before they moved to sbom-tools. Every sbomify-action
+# release up to now carries them, so this stays as the fallback until tools.toml
+# pins an sbom-tools release that does.
 GITHUB_REPO = "sbomify/sbomify-action"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 
@@ -60,14 +69,6 @@ def _github_auth_headers() -> Dict[str, str]:
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     return {"Authorization": f"Bearer {token}"} if token else {}
 
-
-# Local generation is disabled by default (too slow for Ubuntu/Debian - takes hours)
-# Set SBOMIFY_ENABLE_LICENSE_DB_GENERATION=true to enable local generation fallback
-DISABLE_LOCAL_GENERATION = os.environ.get("SBOMIFY_ENABLE_LICENSE_DB_GENERATION", "").lower() not in (
-    "1",
-    "true",
-    "yes",
-)
 
 # Supported distros and their database file patterns
 SUPPORTED_DISTROS: Dict[str, Dict[str, Any]] = {
@@ -384,8 +385,7 @@ class LicenseDBSource:
         2. Acquire lock to prevent race conditions
         3. Double-check cache after acquiring lock
         4. Check local file cache
-        5. Try to download from latest GitHub release
-        6. Fallback: generate locally if download fails
+        5. Try to download from GitHub releases
 
         Args:
             distro: Distribution name (ubuntu, rocky, etc.)
@@ -401,7 +401,7 @@ class LicenseDBSource:
         if cache_key in _db_cache:
             return _db_cache[cache_key]
 
-        # Acquire lock to prevent race conditions during download/generation
+        # Acquire lock to prevent race conditions during download
         with _db_lock:
             # Double-check cache after acquiring lock (another thread may have loaded it)
             if cache_key in _db_cache:
@@ -419,7 +419,7 @@ class LicenseDBSource:
                     logger.warning(f"Failed to load cached database {cache_file}: {e}")
                     cache_file.unlink(missing_ok=True)
 
-            # Try to download from latest GitHub Release
+            # Try to download from GitHub Releases
             downloaded_db = self._download_from_release(distro, version, session)
             if downloaded_db:
                 _db_cache[cache_key] = downloaded_db
@@ -430,14 +430,6 @@ class LicenseDBSource:
                 except Exception as e:
                     logger.warning(f"Failed to save database to cache: {e}")
                 return downloaded_db
-
-            # Fallback: generate locally
-            if not DISABLE_LOCAL_GENERATION:
-                logger.info(f"Database not found in release, generating locally for {distro}-{version}...")
-                generated_db = self._generate_locally(distro, version, cache_file)
-                if generated_db:
-                    _db_cache[cache_key] = generated_db
-                    return generated_db
 
             logger.debug(f"No license database available for {distro}-{version}")
             return None
@@ -456,7 +448,7 @@ class LicenseDBSource:
 
     def _download_from_release(self, distro: str, version: str, session: requests.Session) -> Optional[Dict[str, Any]]:
         """
-        Download database from GitHub Releases, checking recent releases.
+        Download database from the pinned sbom-tools release, else recent sbomify-action releases.
 
         Args:
             distro: Distribution name
@@ -467,6 +459,11 @@ class LicenseDBSource:
             Loaded database dict or None
         """
         filename = f"{distro}-{version}.json.gz"
+
+        # A direct download, not an API call, so it is not rate limited.
+        db = self._download_asset(f"{SBOM_TOOLS_DOWNLOAD}/{tools_release()}/{filename}", session)
+        if db:
+            return db
 
         # Get assets from recent releases
         assets = self._get_release_assets(session)
@@ -552,6 +549,9 @@ class LicenseDBSource:
         try:
             logger.info(f"Downloading license database: {url}")
             response = session.get(url, timeout=DOWNLOAD_TIMEOUT)
+            if response.status_code == 404:
+                logger.debug(f"License database not published at {url}")
+                return None
             response.raise_for_status()
 
             # Decompress and parse using BytesIO for reliability
@@ -562,60 +562,6 @@ class LicenseDBSource:
         except Exception as e:
             logger.warning(f"Failed to download license database: {e}")
             return None
-
-    def _generate_locally(self, distro: str, version: str, output_path: Path) -> Optional[Dict[str, Any]]:
-        """
-        Generate the license database locally as a fallback.
-
-        This imports and calls the generator functions directly.
-
-        Args:
-            distro: Distribution name
-            version: Distribution version
-            output_path: Where to save the generated database
-
-        Returns:
-            Loaded database dict or None
-        """
-        try:
-            # Import generator functions
-            from ..license_db_generator import (
-                generate_alpine_db,
-                generate_debian_db,
-                generate_rpm_db,
-                generate_ubuntu_db,
-                generate_wolfi_db,
-            )
-
-            # Ensure output directory exists
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-
-            logger.info(f"Generating license database locally for {distro}-{version}...")
-
-            if distro == "alpine":
-                generate_alpine_db(version, output_path)
-            elif distro == "wolfi":
-                generate_wolfi_db(output_path)
-            elif distro == "ubuntu":
-                generate_ubuntu_db(version, output_path)
-            elif distro == "debian":
-                generate_debian_db(version, output_path)
-            elif distro in ("rocky", "almalinux", "fedora", "amazonlinux", "centos"):
-                generate_rpm_db(distro, version, output_path)
-            else:
-                logger.warning(f"Unknown distro for local generation: {distro}")
-                return None
-
-            # Load the generated database
-            if output_path.exists():
-                db = self._load_from_file(output_path)
-                logger.info(f"Successfully generated license database: {output_path}")
-                return db
-
-        except Exception as e:
-            logger.warning(f"Failed to generate license database locally: {e}")
-
-        return None
 
     def _build_arch_agnostic_index(self, db: Dict[str, Any]) -> Dict[Tuple[str, str, str, str], list[Any]]:
         """

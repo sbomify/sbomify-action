@@ -1,7 +1,8 @@
 """Lifecycle data for SBOM enrichment with CLE (Common Lifecycle Enumeration) fields.
 
 This module centralizes lifecycle data for:
-1. Linux distributions (used by license_db_generator and license_db source)
+1. Linux distributions (used by the lifecycle enrichment source, and imported by
+   the license database generator in sbomify/sbom-tools)
 2. Language runtimes and frameworks (used by lifecycle enrichment source)
 
 CLE fields follow ECMA-428 specification:

@@ -49,7 +49,6 @@ Changelog = "https://github.com/sbomify/sbomify-action/releases"
 
 [project.scripts]
 sbomify-action = "sbomify_action.cli.main:main"
-sbomify-license-db = "sbomify_action._enrichment.license_db_generator:main"
 
 [dependency-groups]
 dev = [
