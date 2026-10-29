@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 from collections.abc import Callable
@@ -8,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, TypeVar, cast
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     import io
@@ -20,6 +22,7 @@ import sentry_sdk
 # Add cyclonedx imports for proper SBOM handling
 from .. import format_display_name
 from .._runtime import CIPlatform, get_platform, legacy_workspaces, workspace_candidates
+from .._runtime.redaction import scrub_secrets
 from .._upload import VALID_BOM_TYPES, VALID_DESTINATIONS
 from ..additional_packages import inject_additional_packages
 from ..augmentation import augment_sbom_from_file
@@ -1131,6 +1134,57 @@ def _is_auth_failure(message: str) -> bool:
     return any(status in message for status in _USER_SIDE_HTTP_STATUSES)
 
 
+def _scrub_event(event: dict[str, Any], paths: list[tuple[str, str]]) -> dict[str, Any]:
+    """Cut tokens and local paths out of the free text of a Sentry event.
+
+    Error messages, log lines and tool output quote whatever they were handed:
+    the checkout path, the home directory (and with it the user name), and now
+    and then a token an upstream echoed back. ``paths`` maps each local path to
+    the placeholder that replaces it, longest first.
+
+    Log parameters, ``extra=`` values and breadcrumb data can hold a path at
+    any depth, so those are walked whole rather than field by field.
+    """
+    # A path of two or more components (/home/alice) is never part of a URL,
+    # so it is replaced wherever it appears: after a flag (-I/home/alice/x),
+    # before a full stop, or at the start of a sibling (/home/alice2 becomes
+    # <home>2, keeping no part of the user name). A lone component such as
+    # /workspace, the image's WORKDIR, is generic, so it is matched only as a
+    # whole path: .../v1/workspaces and a URL's /workspace/ segment survive.
+    patterns = [
+        (re.escape(path) if len(Path(path).parts) > 2 else rf"(?<![\w.-]){re.escape(path)}(?![\w-]|\.\w)", placeholder)
+        for path, placeholder in paths
+    ]
+
+    def scrub(value: Any) -> Any:
+        if isinstance(value, str):
+            value = scrub_secrets(value)
+            for pattern, placeholder in patterns:
+                value = re.sub(pattern, placeholder, value)
+            return value
+        if isinstance(value, dict):
+            return {scrub(key): scrub(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [scrub(item) for item in value]
+        return value
+
+    def scrub_keys(holder: dict[str, Any], *keys: str) -> None:
+        for key in keys:
+            if key in holder:
+                holder[key] = scrub(holder[key])
+
+    # sentry-sdk's argv integration attaches the command line, --token included.
+    (event.get("extra") or {}).pop("sys.argv", None)
+    scrub_keys(event, "message", "logentry", "extra")
+    for exception in (event.get("exception") or {}).get("values") or []:
+        scrub_keys(exception, "value")
+        for frame in (exception.get("stacktrace") or {}).get("frames") or []:
+            scrub_keys(frame, "abs_path")
+    for crumb in (event.get("breadcrumbs") or {}).get("values") or []:
+        scrub_keys(crumb, "message", "data")  # data: subprocess cwd, HTTP url and query string
+    return event
+
+
 def initialize_sentry() -> None:
     """Initialize Sentry for error tracking.
 
@@ -1149,6 +1203,15 @@ def initialize_sentry() -> None:
         return
 
     sentry_dsn = os.getenv("SENTRY_DSN", "https://84e8d6d0a7d0872a4bba8add571a554c@sentry.vikpire.com/4")
+
+    # Never "/" or an unexpanded "~": replacing those would rewrite every path.
+    local_paths = [(str(path), "<workspace>") for path in workspace_candidates()]
+    local_paths.append((os.path.expanduser("~"), "<home>"))
+    local_paths = sorted(
+        ((path, placeholder) for path, placeholder in local_paths if len(Path(path).parts) > 1),
+        key=lambda pair: len(pair[0]),
+        reverse=True,
+    )
 
     def before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
         """
@@ -1204,19 +1267,36 @@ def initialize_sentry() -> None:
         if _is_auth_failure(message):
             return None
 
-        return event
+        return _scrub_event(event, local_paths)
 
     sentry_sdk.init(
         dsn=sentry_dsn,
-        send_default_pii=True,
-        traces_sample_rate=1.0,
-        profiles_sample_rate=1.0,
+        send_default_pii=False,
+        # None would make sentry-sdk fill in socket.gethostname(), which on a
+        # developer laptop is the laptop's name. An empty string is kept as is.
+        server_name="",
+        # The profile rate applies only to transactions the trace rate already
+        # kept, so 0.1 of 0.1 profiles 1% of them. The CLI starts no
+        # transactions of its own today; these bound any that appear later.
+        traces_sample_rate=0.1,
+        profiles_sample_rate=0.1,
         before_send=before_send,  # type: ignore[arg-type]
         release=f"sbomify-action@{SBOMIFY_VERSION}",
         # Don't capture frame locals — they can hold OIDC JWTs / Bearer tokens
         # if an unexpected exception fires inside sbomify_action.oidc.
         include_local_variables=False,
+        # Inside a sampled transaction the SDK would otherwise add sentry-trace
+        # and baggage headers (trace ID, environment, release) to every outgoing
+        # HTTP request: package registries and a user's own Dependency-Track
+        # alike. The CLI starts no transactions today; this keeps it that way.
+        trace_propagation_targets=[],
     )
+    # An empty DSN leaves the SDK off: nothing is sent, so nothing to disclose.
+    if host := urlsplit(sentry_dsn).hostname:
+        logger.info(
+            f"Telemetry is on: error reports go to Sentry at {host}. "
+            "Set TELEMETRY=false or pass --no-telemetry to turn it off."
+        )
 
     # Set the action version as a tag (always safe to send)
     sentry_sdk.set_tag("action.version", SBOMIFY_VERSION)
