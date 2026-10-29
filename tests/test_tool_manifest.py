@@ -168,14 +168,14 @@ def test_lockfiles_are_the_ones_dependabot_watches():
     assert (root / "uv.lock").exists(), "uv.lock is missing"
 
     config = (root / ".github" / "dependabot.yml").read_text()
-    for ecosystem in ("uv", "bun", "docker", "github-actions"):
+    for ecosystem in ("uv", "docker", "github-actions"):
         assert f'package-ecosystem: "{ecosystem}"' in config, f"{ecosystem} is not configured"
 
     # Everything that pinned a tool moved to sbomify/sbom-tools with the tool,
     # and is watched there. Watching any of it here would open PRs against
     # manifests this repository no longer has -- and, while both copies
     # existed, let the two disagree about which plugin version we apply.
-    for ecosystem in ("gomod", "cargo", "maven", "gradle"):
+    for ecosystem in ("gomod", "cargo", "maven", "gradle", "bun"):
         assert f'package-ecosystem: "{ecosystem}"' not in config, (
             f"{ecosystem} is still watched here, but what it pinned moved to sbom-tools"
         )

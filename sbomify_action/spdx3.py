@@ -1437,7 +1437,9 @@ def get_spdx3_root_package(payload: Payload) -> Package | None:
     """Find the root package (referenced by ``SpdxDocument.root_element``).
 
     Returns the first Package found among the document's ``root_element``
-    references, or ``None``.
+    references, or ``None``. Never the first package in the payload: that is
+    a dependency as often as not, and callers write the component's name,
+    version and PURL to whatever this returns.
     """
     doc = get_spdx3_document(payload)
     if doc is None:
@@ -1451,9 +1453,7 @@ def get_spdx3_root_package(payload: Payload) -> Package | None:
         except KeyError:
             continue
 
-    # Fallback: return first package
-    packages = get_spdx3_packages(payload)
-    return packages[0] if packages else None
+    return None
 
 
 def spdx3_ids_stating_a_license(payload: Payload, relationship_type: str = "hasDeclaredLicense") -> set[str]:

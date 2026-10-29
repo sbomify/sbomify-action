@@ -1920,7 +1920,7 @@ wheels = [
 
 [[package]]
 name = "sbomify-action"
-version = "26.10.2"
+version = "26.10.3"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

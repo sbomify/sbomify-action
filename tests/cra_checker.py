@@ -30,6 +30,8 @@ SPDX (2.2 and 2.3):
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from sbomify_action.serialization import get_spdx_json_root_package
+
 # ISO-8601 date regex (YYYY-MM-DD format)
 # Reserved for future date validation of lifecycle fields
 ISO8601_DATE_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -199,12 +201,11 @@ class CRAComplianceChecker:
         missing: List[str] = []
         values: Dict[str, Any] = {}
 
-        # Get main package (first package is typically the main one)
-        packages = data.get("packages", [])
-        if not packages:
+        # The package the document describes; packages[0] is usually a dependency
+        main_package = get_spdx_json_root_package(data)
+        if main_package is None:
             return (False, [], cls.REQUIRED_FIELDS + cls.RECOMMENDED_FIELDS, {})
 
-        main_package = packages[0]
         ext_refs = main_package.get("externalRefs", [])
 
         # 1. Security Contact (Required for CRA)

@@ -71,6 +71,7 @@ from ..sbomify_api import VALID_COMPLIANCE_SUBCATEGORIES, VALID_DOCUMENT_TYPES
 from ..serialization import (
     _add_compositions_if_missing,
     _fix_purl_encoding_bugs_in_json,
+    get_spdx_json_root_package,
     load_cyclonedx_bom,
     sanitize_spdx_licenses,
     serialize_cyclonedx_bom,
@@ -3008,17 +3009,8 @@ def _apply_sbom_version_override(sbom_file: str, config: "Config") -> None:
                 else:
                     logger.warning("SPDX 3 SBOM has no root package - cannot set version override")
             else:
-                # SPDX 2.x - find root package via documentDescribes, not packages[0]
-                main_package = None
-                if "packages" in original_json and original_json["packages"]:
-                    described_refs = original_json.get("documentDescribes")
-                    if isinstance(described_refs, list) and described_refs and isinstance(described_refs[0], str):
-                        for pkg in original_json["packages"]:
-                            if pkg.get("SPDXID") == described_refs[0]:
-                                main_package = pkg
-                                break
-                    if main_package is None:
-                        main_package = original_json["packages"][0]  # fallback
+                # SPDX 2.x - the package the document describes, not packages[0]
+                main_package = get_spdx_json_root_package(original_json)
                 if main_package is not None:
                     old_version = main_package.get("versionInfo")
                     main_package["versionInfo"] = config.component_version
@@ -3028,7 +3020,7 @@ def _apply_sbom_version_override(sbom_file: str, config: "Config") -> None:
                     # Record to audit trail
                     audit_trail.record_component_version_override(config.component_version, old_version)
                 else:
-                    logger.warning("SPDX SBOM has no packages - cannot set version override")
+                    logger.warning("SPDX SBOM describes no package - cannot set version override")
 
                 with Path(sbom_file).open("w", encoding="utf-8") as f:
                     json.dump(original_json, f, indent=2)
@@ -3624,9 +3616,8 @@ def _apply_sbom_purl_override(sbom_file: str, config: "Config") -> None:
                     logger.warning("SPDX 3 SBOM has no root package - cannot set PURL override")
             else:
                 # SPDX 2.x - apply PURL override to external references
-                packages = original_json.get("packages", [])
-                if packages:
-                    main_package = packages[0]
+                main_package = get_spdx_json_root_package(original_json)
+                if main_package is not None:
                     external_refs = main_package.get("externalRefs", [])
 
                     # Find existing PURL reference
@@ -3664,7 +3655,7 @@ def _apply_sbom_purl_override(sbom_file: str, config: "Config") -> None:
                     with Path(sbom_file).open("w", encoding="utf-8") as f:
                         json.dump(original_json, f, indent=2)
                 else:
-                    logger.warning("SPDX SBOM has no packages - cannot set PURL override")
+                    logger.warning("SPDX SBOM describes no package - cannot set PURL override")
 
     except Exception as e:
         logger.warning(f"Failed to apply component PURL override: {e}")
