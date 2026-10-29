@@ -33,7 +33,8 @@ inputs:
     required: false
 runs:
   using: 'docker'
-  # Bump/pin this to release
+  # Master runs :latest, which every master build replaces. Release tags pin
+  # a digest instead: release.yml rewrites this line in the tagged commit.
   image: 'docker://ghcr.io/sbomify/sbomify-action:latest'
   env:
     WORKING_DIR: ${{ inputs['working-dir'] }}
