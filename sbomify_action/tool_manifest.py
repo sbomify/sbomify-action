@@ -13,12 +13,14 @@ has to be recorded somewhere that both can agree on.
 
 from __future__ import annotations
 
+import os
 import re
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 _MANIFEST = Path(__file__).with_name("tools.toml")
 
@@ -27,10 +29,9 @@ _MANIFEST = Path(__file__).with_name("tools.toml")
 _BUNDLE_BASE = "https://github.com/sbomify/sbom-tools/releases/download"
 _ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
 
-#: Where our own tool builds are published. Master replaces the assets on this
-#: rolling pre-release on every push; the image build stamps a release tag in
-#: its place, so a cut release fetches the binaries it was built against.
-TOOLS_RELEASE = "tools-rolling"
+#: The pre-release sbom-tools master replaces on every push. An image built from
+#: our own master fetches from it; everything else fetches the pin in tools.toml.
+TOOLS_RELEASE = "rolling"
 _TOOLS_RELEASE_BASE = "https://github.com/sbomify/sbomify-action/releases/download"
 _ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
 
@@ -497,11 +498,23 @@ def load_tools() -> dict[str, Tool]:
     return tools
 
 
+def _bundle_release(raw: dict[str, Any]) -> str:
+    """The sbom-tools release to fetch bundles from.
+
+    The pinned release in tools.toml, so a released action keeps fetching the
+    bundles it shipped with. An image built from master (its VCS ref, set at
+    build time) fetches sbom-tools master instead.
+    """
+    if os.environ.get("SBOMIFY_GITHUB_ACTION_VCS_REF") == "master":
+        return TOOLS_RELEASE
+    return str(raw["tools_release"])
+
+
 @lru_cache(maxsize=1)
 def load_bundles() -> dict[str, Bundle]:
     """Parse the bundle section of tools.toml."""
     raw = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))
-    release = str(raw.get("tools_release") or "tools-rolling")
+    release = _bundle_release(raw)
     bundles: dict[str, Bundle] = {}
     for name, body in (raw.get("bundle") or {}).items():
         provides = tuple(body.get("provides") or ())
