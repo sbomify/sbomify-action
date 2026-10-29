@@ -31,7 +31,7 @@ _ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
 
 #: The pre-release sbom-tools master replaces on every push. An image built from
 #: our own master fetches from it; everything else fetches the pin in tools.toml.
-TOOLS_RELEASE = "tools-rolling"
+TOOLS_RELEASE = "rolling"
 _TOOLS_RELEASE_BASE = "https://github.com/sbomify/sbomify-action/releases/download"
 _ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
 

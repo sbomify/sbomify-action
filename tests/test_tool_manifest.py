@@ -540,11 +540,11 @@ class TestPomVersions:
             tool_manifest._version_from_pom(self._pom(tmp_path), "nothing-like-this")
 
 
-@pytest.mark.parametrize(("vcs_ref", "expected"), [("master", "tools-rolling"), ("v26.10.3", None), (None, None)])
+@pytest.mark.parametrize(("vcs_ref", "expected"), [("master", "rolling"), ("v26.10.3", None), (None, None)])
 def test_bundles_come_from_the_pin_except_on_a_master_build(monkeypatch, vcs_ref, expected):
     """A released action fetches the sbom-tools release it pins; a master build fetches sbom-tools master."""
     pinned = tomllib.loads((REPO_ROOT / "sbomify_action" / "tools.toml").read_text())["tools_release"]
-    assert pinned != "tools-rolling", "tools.toml must pin a cut sbom-tools release"
+    assert pinned != "rolling", "tools.toml must pin a cut sbom-tools release"
     if vcs_ref is None:
         monkeypatch.delenv("SBOMIFY_GITHUB_ACTION_VCS_REF", raising=False)
     else:

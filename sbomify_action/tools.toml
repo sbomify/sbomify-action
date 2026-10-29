@@ -14,8 +14,8 @@
 # release usable at all, since its bytes change on every push to master.
 
 # The sbom-tools release to fetch from: a cut release, bumped by PR. An image
-# built from master fetches tools-rolling instead (tool_manifest._bundle_release).
-tools_release = "tools-26.10.3"
+# built from master fetches the rolling release instead (tool_manifest._bundle_release).
+tools_release = "v26.10.3"
 
 # ---------------------------------------------------------------------------
 # Bundles. `provides` is the lookup that decides what to download when a
