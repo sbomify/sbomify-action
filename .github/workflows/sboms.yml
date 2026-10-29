@@ -133,11 +133,12 @@ jobs:
           SHORT_SHA="${HEAD_SHA:0:7}"
           if [[ "$HEAD_BRANCH" == v* ]]; then
             # Production — version tag. The release includes the sbom-tools
-            # release (product nPl9UJxUECM6) this version pins in tools.toml:
-            # its bundles are what the action downloads at run time.
+            # release (product PmdIuuj43CV3) this version pins in tools.toml:
+            # its bundles are what the action downloads at run time. sbom-tools
+            # versions its product releases without the tag's "tools-" prefix.
             TOOLS_RELEASE=$(sed -n 's/^tools_release = "\(.*\)"$/\1/p' sbomify_action/tools.toml)
             {
-              echo "release_includes=[\"nPl9UJxUECM6:${TOOLS_RELEASE}\"]"
+              echo "release_includes=[\"PmdIuuj43CV3:${TOOLS_RELEASE#tools-}\"]"
               echo "is_prod=true"
               echo "version=${HEAD_BRANCH}"
               echo "docker_tag=${HEAD_BRANCH#v}"
