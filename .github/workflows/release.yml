@@ -1,0 +1,147 @@
+---
+# Release workflow: publishes a version's Docker image, pins its digest into
+# action.yml and pipe.yml, and leaves a draft GitHub Release to publish.
+#
+# Why: action.yml on master runs ghcr.io/sbomify/sbomify-action at :latest,
+# which every master build re-pushes, so a user pinned to @vX or to a commit
+# SHA still ran whatever master built last. A tag can only carry the image
+# digest if the image exists before the tag does, so this workflow builds
+# :X first and commits the digest; tag pushes no longer build, and the
+# CI/CD Pipeline's verify-release-pin job checks the tagged pin instead.
+#
+# To release X (e.g. 26.10.3):
+#   1. Merge a PR that bumps pyproject.toml to X and wait for the CI/CD
+#      Pipeline on master to pass.
+#   2. Actions -> Release -> Run workflow on master with version X. It
+#      pushes :X to GHCR and Docker Hub, commits the pin to a new branch
+#      release/vX and creates a draft release vX targeting that commit.
+#   3. Review the draft and publish it. Publishing creates tag vX, which
+#      runs the CI/CD Pipeline, PyPI and license-db, and after CI the
+#      production SBOMs, as before. release/vX can be deleted afterwards.
+#
+# If the pin job fails, fix the cause and use "Re-run failed jobs". The
+# re-run keeps this run's digest, and scripts/draft_release.sh reuses
+# release/vX and a draft vX that already hold this pin. "Re-run all jobs"
+# stops at check because release/vX exists, which is deliberate: building
+# again would move :X to a new digest. To start over anyway, delete
+# release/vX and any draft vX, then run the workflow again.
+#
+# This workflow does not create the tag or publish the release itself:
+# events made with GITHUB_TOKEN do not start other workflows, so PyPI,
+# license-db and the production SBOMs would silently not run.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, as in pyproject.toml (e.g. 26.10.3)
+        type: string
+        required: true
+
+# One release at a time, never cancelled midway. Two runs for the same version
+# could both pass `check` before either pushes release/vX, and the second image
+# push would move :X off the digest the first run pinned.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check Release Preconditions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.check.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Check master is ready to release
+        id: check
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The workflow files that build and pin must be master's too.
+          if [ "${GITHUB_REF}" != refs/heads/master ]; then
+            echo "::error::Run this workflow on master, not ${GITHUB_REF}."
+            exit 1
+          fi
+          SHA=$(git rev-parse HEAD)
+
+          PROJECT_VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          if [ "${PROJECT_VERSION}" != "${VERSION}" ]; then
+            echo "::error::master (${SHA}) is at ${PROJECT_VERSION}, not ${VERSION}. Merge the version bump first."
+            exit 1
+          fi
+
+          # A published release always has its tag, and a draft left by an
+          # earlier run of this workflow has its release/v<version> branch.
+          # A draft whose branch was deleted is invisible to this read-only
+          # token; draft_release.sh in the pin job refuses it instead.
+          EXISTING=$(git ls-remote origin "refs/tags/v${VERSION}" "refs/heads/release/v${VERSION}")
+          if [ -n "${EXISTING}" ]; then
+            echo "::error::v${VERSION} is already released or under way: ${EXISTING}"
+            exit 1
+          fi
+
+          CONCLUSION=$(gh run list --workflow sbomify.yaml --commit "${SHA}" --branch master --event push \
+            --limit 1 --json conclusion --jq '.[0].conclusion // ""')
+          if [ "${CONCLUSION}" != success ]; then
+            echo "::error::CI/CD Pipeline on ${SHA} has not passed (conclusion: '${CONCLUSION}'). Wait for it or fix it first."
+            exit 1
+          fi
+
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+  images:
+    name: Docker Images
+    needs: check
+    permissions:
+      packages: write
+      contents: read
+      id-token: write      # image-build.yml's push-images job asks for these two
+      attestations: write
+    # A called workflow resolves at this commit either way; actionlint 1.7.12
+    # still rejects the $/ form zizmor asks for.
+    uses: ./.github/workflows/image-build.yml # zizmor: ignore[self-repository]
+    with:
+      version: ${{ inputs.version }}
+      image_tag: ${{ inputs.version }}
+      ref: ${{ needs.check.outputs.sha }}
+      push: true
+    secrets:
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  pin:
+    name: Pin Digest and Draft Release
+    needs:
+      - check
+      - images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          persist-credentials: true # pushes release/vX below
+
+      - name: Commit the pin and draft the release
+        env:
+          VERSION: ${{ inputs.version }}
+          DIGEST: ${{ needs.images.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: scripts/draft_release.sh "${VERSION}" "${DIGEST}"
