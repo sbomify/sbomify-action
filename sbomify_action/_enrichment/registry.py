@@ -40,6 +40,49 @@ def _can_contribute(source: object, missing: set[str]) -> bool:
     return bool(set(provides) & missing)
 
 
+def _no_registry_has(purl: PackageURL) -> bool:
+    """Whether no public registry could know this package.
+
+    Asking anyway costs a round trip per source that cannot succeed -- 421
+    Yocto recipes were twelve minutes of it -- and where a local crate's name
+    is taken upstream, it brings back a stranger's licence.
+
+    A `repository_url` pointing away from the default registry is deliberately
+    not a reason: it is as often a corporate proxy of crates.io or Maven
+    Central, where skipping would strip enrichment from public packages.
+    """
+    # YOCTO_PURL_TYPE, spelled out: importing _yocto pulls in its pipeline,
+    # which imports enrichment, which imports this. The test that enriches a
+    # generate_yocto_purl() result is what keeps the two in step.
+    if purl.type == "yocto":  # a type we mint; no registry carries it
+        return True
+    if "vcs_url" in (purl.qualifiers or {}):  # built from a git checkout, not a release
+        return True
+    # Central never hosts one; Maven's own test ignores case. A resolved,
+    # timestamped snapshot (1.0-20240101.123456-1) is left alone: from the
+    # purl alone it reads like a date-stamped release.
+    if purl.type == "maven" and (purl.version or "").upper().endswith("-SNAPSHOT"):
+        return True
+    # A file:, link: or relative-path reference, in the version or a qualifier.
+    # Not _is_invalid_purl, which sanitize_purls uses on CycloneDX: it also
+    # rejects a `root` namespace, and npm has a real @root scope.
+    version = purl.version or ""
+    if version.startswith(("./", "../")):
+        return True
+    return any(_is_local_url(value) for value in (version, *(purl.qualifiers or {}).values()))
+
+
+def _is_local_url(value: str) -> bool:
+    """Whether a value's URL scheme is file: or link:, VCS prefix and case aside.
+
+    By scheme, not substring: `permalink:` partway down a path is not a local
+    reference, while `FILE:` and `git+file:` are. Split by hand rather than
+    with urlsplit, which raises on a malformed value such as `http://[::1`.
+    """
+    scheme, colon, _ = value.strip().partition(":")
+    return bool(colon) and scheme.lower().rsplit("+", 1)[-1] in ("file", "link")
+
+
 class SourceRegistry:
     """
     Registry for managing and querying data source plugins.
@@ -63,6 +106,8 @@ class SourceRegistry:
     def __init__(self) -> None:
         """Initialize an empty registry."""
         self._sources: List[DataSource] = []
+        #: Lookups kept to local sources by _no_registry_has, for the run summary.
+        self.unpublished_skipped = 0
 
     def register(self, source: DataSource) -> None:
         """
@@ -88,6 +133,12 @@ class SourceRegistry:
             sorted by priority (lowest/highest priority first)
         """
         applicable = [s for s in self._sources if s.supports(purl)]
+        if _no_registry_has(purl):
+            # Only sources that declare `offline` answer without the network;
+            # one that does not say is assumed to need it.
+            logger.debug(f"{purl.name}: no public registry publishes it, asking local sources only")
+            self.unpublished_skipped += 1
+            applicable = [s for s in applicable if getattr(s, "offline", False)]
         return sorted(applicable, key=lambda s: s.priority)
 
     def fetch_metadata(
