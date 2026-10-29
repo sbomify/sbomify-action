@@ -75,24 +75,6 @@ jobs:
             lockfile: uv.lock
             sbom_format: spdx
             output_file: sbomify-action.spdx.json
-          - name: javascript-cyclonedx
-            kind: source
-            is_action: false
-            component_name: JavaScript Dependencies
-            staging_id: PGyKXNbQd5eq
-            prod_id: IxwrYSb9rGql
-            lockfile: bun.lock
-            sbom_format: cyclonedx
-            output_file: sbomify-action-frontend.cdx.json
-          - name: javascript-spdx
-            kind: source
-            is_action: false
-            component_name: JavaScript Dependencies
-            staging_id: PGyKXNbQd5eq
-            prod_id: IxwrYSb9rGql
-            lockfile: bun.lock
-            sbom_format: spdx
-            output_file: sbomify-action-frontend.spdx.json
           - name: container-cyclonedx
             kind: container
             is_action: false
