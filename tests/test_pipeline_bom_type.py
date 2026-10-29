@@ -143,7 +143,7 @@ def test_validate_sbom_accepts_utf8_bom(tmp_path):
     from sbomify_action.cli.main import validate_sbom
 
     good = tmp_path / "bom.json"
-    good.write_bytes(b'\xef\xbb\xbf{"bomFormat": "CycloneDX"}')
+    good.write_bytes(b'\xef\xbb\xbf{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
     assert validate_sbom(str(good)) == "cyclonedx"
 
 

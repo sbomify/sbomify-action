@@ -1,7 +1,9 @@
+import contextvars
 import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -16,6 +18,7 @@ if TYPE_CHECKING:
 
 import click
 import sentry_sdk
+from cyclonedx.exception import CycloneDxException
 
 # Add cyclonedx imports for proper SBOM handling
 from .. import format_display_name
@@ -73,11 +76,14 @@ from ..serialization import (
     _fix_purl_encoding_bugs_in_json,
     get_spdx_json_root_package,
     load_cyclonedx_bom,
+    load_sbom_json,
+    sanitize_cyclonedx_licenses,
     sanitize_spdx_licenses,
     serialize_cyclonedx_bom,
 )
 from ..spdx3 import is_spdx3
 from ..upload import upload_document, upload_sbom
+from ..validation import validate_sbom_data
 
 
 # Import version for tool metadata with multiple fallback mechanisms
@@ -241,6 +247,7 @@ class Config:
     augment: bool = False
     enrich: bool = False
     override_sbom_metadata: bool = False
+    allow_empty_sbom: bool = False
     override_name: bool = False
     component_version: Optional[str] = None
     component_version_source: Optional[str] = None
@@ -837,6 +844,7 @@ def build_config(
     augment: bool = False,
     enrich: bool = False,
     override_sbom_metadata: bool = False,
+    allow_empty_sbom: bool = False,
     component_version: Optional[str] = None,
     component_name: Optional[str] = None,
     component_purl: Optional[str] = None,
@@ -1007,6 +1015,7 @@ def build_config(
         augment=augment,
         enrich=enrich,
         override_sbom_metadata=override_sbom_metadata,
+        allow_empty_sbom=allow_empty_sbom,
         override_name=final_override_name,
         component_version=final_component_version,
         component_version_source=version_source,
@@ -1067,6 +1076,7 @@ def load_config() -> Config:
         override_sbom_metadata=evaluate_boolean(
             os.getenv("OVERRIDE_SBOM_METADATA", "False"), source="OVERRIDE_SBOM_METADATA"
         ),
+        allow_empty_sbom=evaluate_boolean(os.getenv("ALLOW_EMPTY_SBOM", "False"), source="ALLOW_EMPTY_SBOM"),
         component_version=os.getenv("COMPONENT_VERSION"),
         component_name=os.getenv("COMPONENT_NAME"),
         component_purl=os.getenv("COMPONENT_PURL"),
@@ -1540,24 +1550,22 @@ def _expand_lock_file_or_substitute(path: str) -> str:
 
     substitute = candidates[0]
     downgrade = (
-        "\n  It is a manifest rather than a lock file, so the versions in this\n"
-        "  SBOM will be resolved now rather than read -- see the notice below.\n"
+        " It is a manifest rather than a lock file, so the versions in this SBOM will be resolved now "
+        "rather than read -- see the notice below."
         if not locks
         else ""
     )
-    logger.warning(
-        "\n"
-        "  ┌───────────────────────────────────────────────────────────────┐\n"
-        "  │  USING A DIFFERENT INPUT THAN THE ONE YOU CONFIGURED          │\n"
-        "  └───────────────────────────────────────────────────────────────┘\n"
-        f"  LOCK_FILE names '{named.name}', which is not in this repository.\n"
-        f"  '{substitute.name}' is, and it describes the same ecosystem\n"
-        f"  ({ecosystem}), so that is what this SBOM was built from.\n"
-        f"{downgrade}"
-        "\n"
-        "  This usually means the project changed package manager. Update\n"
-        f"  LOCK_FILE to '{substitute.name}' to make the choice explicit, or\n"
-        "  set it to the file you actually want."
+    # An annotation rather than a log record, so it reaches the run page and
+    # not only a log nobody opens on a green run. One line, because a GitHub
+    # annotation ends at the first newline. The names go through !r because a
+    # .csproj is named by whoever wrote the repository, and a newline in one
+    # would end this annotation and start a workflow command.
+    log_warning(
+        f"LOCK_FILE names {named.name!r}, which is not in this repository, so this SBOM was built from "
+        f"{substitute.name!r} instead: it describes the same ecosystem ({ecosystem}).{downgrade} "
+        f"This usually means the project changed package manager. Set LOCK_FILE to {substitute.name!r} "
+        f"to make the choice explicit, or to the file you actually want.",
+        title="Using a different input than the one you configured",
     )
     return str(substitute)
 
@@ -1670,8 +1678,7 @@ def validate_sbom(file_path: str) -> str:
         SBOMValidationError: If SBOM is invalid or unsupported format
     """
     try:
-        with Path(file_path).open("r", encoding="utf-8-sig") as f:
-            data = json.load(f)
+        data = load_sbom_json(file_path)
     except json.JSONDecodeError:
         raise SBOMValidationError("Invalid JSON format")
     except UnicodeDecodeError:
@@ -1684,12 +1691,66 @@ def validate_sbom(file_path: str) -> str:
     # Detect artifact type (only log once during initial validation)
     if data.get("bomFormat") == "CycloneDX":
         logger.info("Detected CycloneDX SBOM.")
+        _check_cyclonedx_readable(data)
         return "cyclonedx"
     elif data.get("spdxVersion") is not None or is_spdx3(data):
         logger.info("Detected SPDX SBOM.")
         return "spdx"
     else:
         raise SBOMValidationError("Neither CycloneDX nor SPDX format found in JSON file")
+
+
+def _check_cyclonedx_readable(data: dict[str, Any]) -> None:
+    """Refuse a supplied CycloneDX document the CycloneDX library cannot read.
+
+    The overrides, augmentation and enrichment all read the document with
+    ``load_cyclonedx_bom``, so one it cannot read -- ``"components": "oops"``,
+    a serialNumber that is not a UUID -- is refused here, before they run.
+
+    A schema failure the library reads past is left to
+    :func:`_check_cyclonedx_schema` on the final document. The library drops
+    a property it does not model and fills in the version 1.4 requires, so
+    such an input ends as a valid SBOM once a step re-serialises it, and
+    refusing it here failed runs that would have published a valid document.
+
+    The trial load runs in an empty context because the licence repairs it
+    makes are written to the audit trail, and the real load records them.
+    """
+    if not data.get("specVersion"):
+        raise SBOMValidationError("CycloneDX SBOM has no specVersion, which the CycloneDX schema requires")
+    try:
+        contextvars.Context().run(load_cyclonedx_bom, data)
+    except Exception as e:  # noqa: BLE001 - a broken shape raises AttributeError or TypeError as often as its own types
+        raise SBOMValidationError(f"The CycloneDX library cannot read this document: {e}") from e
+
+
+def _check_cyclonedx_schema(data: dict[str, Any]) -> None:
+    """Refuse a final CycloneDX document that fails its schema.
+
+    Nothing checked SBOM_FILE against its schema: ``"components": "oops"``
+    passed Step 1 and was written out unchanged with exit 0, so a document no
+    consumer can read was published as if it were fine. This runs on the
+    document about to be written and uploaded, not on the input, so it judges
+    what is published.
+
+    Passed through verbatim, the licence shapes ``load_cyclonedx_bom``
+    repairs -- Trivy's non-SPDX ids in ``license.id``, cdxgen's bare string
+    in ``license.text`` -- reach here unrepaired and fail the schema, and
+    refusing them would break inputs the pipeline already handles. So they
+    are repaired first, as generation does before it validates. This trial
+    repair runs in an empty context because repairs are written to the audit
+    trail, and the file itself is not changed.
+    """
+    spec_version = data.get("specVersion")
+    try:
+        contextvars.Context().run(sanitize_cyclonedx_licenses, data)
+    except Exception:  # noqa: BLE001 - best effort, as in generation; the schema below is the judge
+        pass
+    # Quiet, because the step that catches this logs the message it raises.
+    result = validate_sbom_data(data, "cyclonedx", str(spec_version), log_failure=False)
+    if result.valid is False:
+        where = f" at '{result.error_path}'" if result.error_path else ""
+        raise SBOMValidationError(f"Not a valid CycloneDX {spec_version} document{where}: {result.error_message}")
 
 
 def _detect_external_vex_format(file_path: str) -> Optional[str]:
@@ -1736,8 +1797,7 @@ def _detect_sbom_format_silent(file_path: str) -> str:
         SBOMValidationError: If SBOM is invalid or unsupported format
     """
     try:
-        with Path(file_path).open("r", encoding="utf-8-sig") as f:
-            data = json.load(f)
+        data = load_sbom_json(file_path)
     except json.JSONDecodeError:
         raise SBOMValidationError("Invalid JSON format")
     except UnicodeDecodeError:
@@ -1773,8 +1833,7 @@ def load_sbom_from_file(file_path: str) -> tuple[str, dict[str, Any], object]:
         SBOMValidationError: If SBOM cannot be parsed
     """
     try:
-        with Path(file_path).open("r", encoding="utf-8") as f:
-            sbom_json = json.load(f)
+        sbom_json = load_sbom_json(file_path)
 
         # Detect format silently (format should already be known at this point)
         if sbom_json.get("bomFormat") == "CycloneDX":
@@ -1785,7 +1844,7 @@ def load_sbom_from_file(file_path: str) -> tuple[str, dict[str, Any], object]:
             # load_cyclonedx_bom a bare license.text drops
             # COMPONENT_VERSION/NAME/PURL on the floor with only a warning,
             # rather than failing loudly.
-            parsed_object = load_cyclonedx_bom(sbom_json)
+            parsed_object: object = load_cyclonedx_bom(sbom_json)
             logger.debug(f"Successfully loaded CycloneDX SBOM from {file_path}")
         elif sbom_json.get("spdxVersion") is not None or is_spdx3(sbom_json):
             sbom_format = "spdx"
@@ -2131,6 +2190,17 @@ def _run_document_pipeline(config: "Config") -> None:
     print_final_success()
 
 
+#: What the optional steps after generation -- transitive dependency
+#: discovery and hash enrichment -- are expected to run into: a registry or a
+#: tool that is not there (OSError covers requests' errors too), a lock file
+#: or SBOM that does not parse, or a document the CycloneDX library will not
+#: serialise. The SBOM is still correct without what those steps add, so these
+#: are warnings. Anything else is a bug, and catching it as well meant a bug
+#: shipped an SBOM without the step's additions, exit 0, and never reached
+#: telemetry, which records errors and not warnings.
+_OPTIONAL_STEP_FAILURES = (OSError, ValueError, subprocess.SubprocessError, SBOMValidationError, CycloneDxException)
+
+
 def run_pipeline(config: Config) -> None:
     """
     Run the SBOM pipeline with the given configuration.
@@ -2393,6 +2463,7 @@ def run_pipeline(config: Config) -> None:
                     output_file=STEP_1_FILE,
                     output_format=config.sbom_format,
                     spec_version=config.spec_version,
+                    allow_empty_sbom=config.allow_empty_sbom,
                 )
                 if not result.success:
                     raise SBOMGenerationError(result.error_message or "SBOM generation failed")
@@ -2566,7 +2637,7 @@ def run_pipeline(config: Config) -> None:
 
                 _log_step_end(1.4)
 
-            except Exception as e:
+            except _OPTIONAL_STEP_FAILURES as e:
                 logger.warning(f"Transitive dependency discovery failed (non-fatal): {e}")
                 _log_step_end(1.4, success=False)
                 # Don't fail the entire process - this is an enhancement
@@ -2595,7 +2666,7 @@ def run_pipeline(config: Config) -> None:
 
             _log_step_end(1.5)
 
-        except Exception as e:
+        except _OPTIONAL_STEP_FAILURES as e:
             logger.warning(f"Hash enrichment failed (non-fatal): {e}")
             _log_step_end(1.5, success=False)
             # Don't fail the entire process for hash enrichment issues
@@ -2638,7 +2709,7 @@ def run_pipeline(config: Config) -> None:
             logger.info(f"{format_display_name(sbom_format)} SBOM augmentation completed")
             _log_step_end(2)
 
-        except (FileProcessingError, APIError, SBOMValidationError) as e:
+        except (FileProcessingError, APIError, SBOMValidationError, ConfigurationError) as e:
             logger.error(f"Step 2 (augmentation) failed: {e}")
             _log_step_end(2, success=False)
             sys.exit(1)
@@ -2676,6 +2747,13 @@ def run_pipeline(config: Config) -> None:
         if not final_sbom_file:
             raise FileProcessingError("No SBOM file found to finalize")
 
+        # Steps 2 and 3 validate what they write and fail the run on an
+        # invalid document, so checking again after them would only repeat
+        # their work. What they did not see is a supplied document neither of
+        # them re-serialised: one published as supplied, or after an override.
+        if FILE_TYPE == "SBOM" and FORMAT == "cyclonedx" and not (config.augment or config.enrich):
+            _check_cyclonedx_schema(load_sbom_json(final_sbom_file))
+
         # Get the parent directory of the file path
         parent_dir = Path(config.output_file).parent
 
@@ -2695,6 +2773,11 @@ def run_pipeline(config: Config) -> None:
         logger.info(f"Final {artifact_label} saved to: {config.output_file}")
         _log_step_end(4)
 
+    except SBOMValidationError as e:
+        # Before the write, so an invalid document is neither saved nor uploaded.
+        logger.error(f"Step 4 failed: {e}")
+        _log_step_end(4, success=False)
+        sys.exit(1)
     except (FileProcessingError, OSError) as e:
         logger.error(f"Failed to finalize output: {e}")
         _log_step_end(4, success=False)
@@ -3882,6 +3965,18 @@ def _parse_upload_destinations_callback(
     help="Override existing SBOM metadata with values from augmentation. [env: OVERRIDE_SBOM_METADATA]",
 )
 @click.option(
+    "--allow-empty-sbom/--no-allow-empty-sbom",
+    default=False,
+    show_default=True,
+    callback=_make_bool_envvar_callback("ALLOW_EMPTY_SBOM", False),
+    is_eager=True,
+    help=(
+        "Accept an SBOM with no components from a lock file that is not empty. Off by default: an empty "
+        "SBOM reads as 'no dependencies' to anyone checking NTIA minimum elements or EU CRA compliance. "
+        "[env: ALLOW_EMPTY_SBOM]"
+    ),
+)
+@click.option(
     "--component-version",
     envvar="COMPONENT_VERSION",
     help="Override the component version in the SBOM.",
@@ -4005,6 +4100,7 @@ def cli(
     augment: bool,
     enrich: bool,
     override_sbom_metadata: bool,
+    allow_empty_sbom: bool,
     component_version: Optional[str],
     component_name: Optional[str],
     component_purl: Optional[str],
@@ -4151,6 +4247,7 @@ def cli(
         augment=augment,
         enrich=enrich,
         override_sbom_metadata=override_sbom_metadata,
+        allow_empty_sbom=allow_empty_sbom,
         component_version=component_version,
         component_name=component_name,
         component_purl=component_purl,

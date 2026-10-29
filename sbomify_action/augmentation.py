@@ -74,6 +74,7 @@ from .serialization import (
     get_spdx_root_package,
     link_root_dependencies,
     load_cyclonedx_bom,
+    load_sbom_json,
     restore_spdx_document_describes,
     sanitize_dependency_graph,
     sanitize_spdx_json_file,
@@ -1987,8 +1988,7 @@ def augment_sbom_from_file(
         import json
 
         try:
-            with open(input_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = load_sbom_json(input_file)
         except FileNotFoundError:
             raise FileNotFoundError(f"Input SBOM file not found: {input_file}")
         except json.JSONDecodeError as e:
