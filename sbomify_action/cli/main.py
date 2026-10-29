@@ -22,7 +22,7 @@ from .. import format_display_name
 from .._runtime import CIPlatform, get_platform, legacy_workspaces, workspace_candidates
 from .._upload import VALID_BOM_TYPES, VALID_DESTINATIONS
 from ..additional_packages import inject_additional_packages
-from ..augmentation import augment_sbom_from_file
+from ..augmentation import SBOMIFY_TOOL_NAME, SBOMIFY_VENDOR_NAME, _is_cdx_version_at_least, augment_sbom_from_file
 from ..console import (
     get_audit_trail,
     log_group,
@@ -153,8 +153,6 @@ SBOMIFY_VERSION = _get_package_version()
 # Constants for magic strings/numbers
 SPDX_LOGICAL_OPERATORS = [" OR ", " AND ", " WITH "]
 SBOMIFY_PRODUCTION_API = "https://app.sbomify.com"
-SBOMIFY_TOOL_NAME = "sbomify-action"
-SBOMIFY_VENDOR_NAME = "sbomify"
 LOCALHOST_PATTERNS = ["127.0.0.1", "localhost", "0.0.0.0"]
 VALID_SBOM_FORMATS: tuple[str, ...] = ("cyclonedx", "spdx")
 NONE_SENTINEL = "none"
@@ -241,6 +239,7 @@ class Config:
     augment: bool = False
     enrich: bool = False
     override_sbom_metadata: bool = False
+    keep_vulnerabilities: bool = False
     override_name: bool = False
     component_version: Optional[str] = None
     component_version_source: Optional[str] = None
@@ -837,6 +836,7 @@ def build_config(
     augment: bool = False,
     enrich: bool = False,
     override_sbom_metadata: bool = False,
+    keep_vulnerabilities: bool = False,
     component_version: Optional[str] = None,
     component_name: Optional[str] = None,
     component_purl: Optional[str] = None,
@@ -1007,6 +1007,7 @@ def build_config(
         augment=augment,
         enrich=enrich,
         override_sbom_metadata=override_sbom_metadata,
+        keep_vulnerabilities=keep_vulnerabilities,
         override_name=final_override_name,
         component_version=final_component_version,
         component_version_source=version_source,
@@ -1066,6 +1067,9 @@ def load_config() -> Config:
         enrich=evaluate_boolean(os.getenv("ENRICH", "False"), source="ENRICH"),
         override_sbom_metadata=evaluate_boolean(
             os.getenv("OVERRIDE_SBOM_METADATA", "False"), source="OVERRIDE_SBOM_METADATA"
+        ),
+        keep_vulnerabilities=evaluate_boolean(
+            os.getenv("KEEP_VULNERABILITIES", "False"), source="KEEP_VULNERABILITIES"
         ),
         component_version=os.getenv("COMPONENT_VERSION"),
         component_name=os.getenv("COMPONENT_NAME"),
@@ -1876,6 +1880,180 @@ def _write_final_output(src_path: str, dst_path: str, bom_type: Optional[str]) -
         f.write(content)
 
 
+def _finalize_sbom_fields(sbom_file: str, config: "Config") -> None:
+    """Write the document fields CISA 2026 asks for that only the pipeline knows.
+
+    Runs last, after augmentation and enrichment, so it only fills what is
+    still missing: a value from sbomify.json or the sbomify API, or one the
+    generator wrote itself, stands. A supplied SBOM_FILE keeps its own, and
+    only loses vulnerability data, which BSI does not allow in an SBOM, unless
+    KEEP_VULNERABILITIES is set.
+    """
+    path = Path(sbom_file)
+    # utf-8-sig, as in step 1: a supplied SBOM_FILE may start with a byte-order mark.
+    document = json.loads(path.read_text(encoding="utf-8-sig"))
+    changed = False if config.keep_vulnerabilities else _strip_vulnerabilities(document)
+    supplied = bool(config.sbom_file) and not config.is_additional_packages_only
+    if not supplied:
+        changed |= _list_sbomify_action_as_tool(document)
+
+    # Generation context (CISA 2026 "SBOM Generation Context") follows from what
+    # the action was given. CycloneDX 1.6 defines pre-build as information
+    # "obtained prior to a build process [that] may contain source files and
+    # development artifacts and manifests" -- a lock file, or a scan of the
+    # source tree -- and post-build as information "obtained after a build
+    # process has completed": a built image. A document assembled from
+    # ADDITIONAL_PACKAGES alone was not produced either way, so it gets none.
+    if not supplied and not config.is_additional_packages_only:
+        phase = "post-build" if config.docker_image else "pre-build"
+        if _declare_generation_context(document, phase):
+            changed = True
+            logger.info(f"Declared SBOM generation context: {phase}")
+            get_audit_trail().record_lifecycle_added(phase, source="sbomify-action")
+
+    if changed:
+        path.write_text(json.dumps(document, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _strip_vulnerabilities(document: dict[str, Any]) -> bool:
+    """Remove a CycloneDX SBOM's ``vulnerabilities``; True if any were removed.
+
+    BSI TR-03183-2 v2.1 (sections 3.1 and 8.1.14): an SBOM "MUST NOT contain
+    vulnerability information", which goes out separately as a VEX or VDR
+    (BOM_TYPE=vex, uploaded verbatim). None of the bundled generators fills
+    the array as the action runs them, so this is mostly a supplied SBOM_FILE
+    from a scanner such as grype, or trivy with ``--scanners vuln``. SPDX 2
+    has no vulnerability section.
+    """
+    vulnerabilities = document.get("vulnerabilities")
+    if not vulnerabilities or document.get("bomFormat") != "CycloneDX":
+        return False
+    if not document.get("components"):
+        # Removing them would leave nothing: this is a VEX with the wrong type.
+        logger.warning(
+            f"This document lists {len(vulnerabilities)} vulnerabilities and no components, so it "
+            "looks like a VEX rather than an SBOM. It was left as it is; set BOM_TYPE=vex to "
+            "upload it as one."
+        )
+        return False
+    ids = [str(v.get("id")) for v in vulnerabilities if isinstance(v, dict) and v.get("id")]
+    shown = ", ".join(ids[:10]) + (f" and {len(ids) - 10} more" if len(ids) > 10 else "")
+    del document["vulnerabilities"]
+    _drop_references(document, {v["bom-ref"] for v in vulnerabilities if isinstance(v, dict) and "bom-ref" in v})
+    noun = "vulnerability" if len(vulnerabilities) == 1 else "vulnerabilities"
+    logger.warning(
+        f"Removed {len(vulnerabilities)} {noun} from the SBOM ({shown}). BSI TR-03183-2 does not allow "
+        "vulnerability data in an SBOM; upload it separately with BOM_TYPE=vex, or set "
+        "KEEP_VULNERABILITIES=true to keep it."
+    )
+    get_audit_trail().record_augmentation(
+        "vulnerabilities", "removed", f"{len(vulnerabilities)} entries", source="sbomify-action"
+    )
+    return True
+
+
+def _drop_references(document: dict[str, Any], refs: set[str]) -> None:
+    """Remove ``refs`` from CycloneDX 1.5+ compositions and annotations.
+
+    Both may point at a vulnerability's bom-ref. A composition left with
+    nothing to describe, or an annotation left with no subject, goes too.
+    """
+    if not refs:
+        return
+    compositions = []
+    for composition in document.get("compositions", []):
+        if "vulnerabilities" in composition:
+            kept = [ref for ref in composition["vulnerabilities"] if ref not in refs]
+            if kept:
+                composition["vulnerabilities"] = kept
+            else:
+                del composition["vulnerabilities"]
+            if not any(key in composition for key in ("assemblies", "dependencies", "vulnerabilities")):
+                continue
+        compositions.append(composition)
+    annotations = []
+    for annotation in document.get("annotations", []):
+        subjects = annotation.get("subjects", [])
+        if any(ref in refs for ref in subjects):
+            annotation["subjects"] = [ref for ref in subjects if ref not in refs]
+            if not annotation["subjects"]:
+                continue
+        annotations.append(annotation)
+    for key, kept_items in (("compositions", compositions), ("annotations", annotations)):
+        if key not in document:
+            continue
+        if kept_items:
+            document[key] = kept_items
+        else:
+            del document[key]
+
+
+def _list_sbomify_action_as_tool(document: dict[str, Any]) -> bool:
+    """Name sbomify-action and its version among the document's tools; True if added.
+
+    CISA 2026 asks for the tool name and version. Generators list themselves,
+    but sbomify-action -- which ran the generator and rewrote its output, and
+    wrote the whole document for a gradle.lockfile or ADDITIONAL_PACKAGES --
+    was only listed when AUGMENT was on. It uses augmentation's name, so the
+    document names one tool; "sbomify-action", the spelling the
+    ADDITIONAL_PACKAGES, PlatformIO and SPDX 3 writers use, counts as listed.
+    """
+    names = (SBOMIFY_TOOL_NAME, "sbomify-action")
+    if "spdxVersion" in document:
+        creators = document.setdefault("creationInfo", {}).setdefault("creators", [])
+        if any(creator.startswith(f"Tool: {name}") for creator in creators for name in names):
+            return False
+        creators.append(f"Tool: {SBOMIFY_TOOL_NAME}-{SBOMIFY_VERSION}")
+    elif document.get("bomFormat") == "CycloneDX":
+        metadata = document.setdefault("metadata", {})
+        if "tools" not in metadata:
+            metadata["tools"] = {} if _is_cdx_version_at_least(document.get("specVersion"), 1, 5) else []
+        tools = metadata["tools"]
+        # 1.5 replaced the tool array with components and services; the array is
+        # still valid there, so a document keeps whichever shape it has.
+        listed = tools if isinstance(tools, list) else [*tools.get("components", []), *tools.get("services", [])]
+        if any(tool.get("name") in names for tool in listed):
+            return False
+        if isinstance(tools, list):
+            tools.append({"vendor": SBOMIFY_VENDOR_NAME, "name": SBOMIFY_TOOL_NAME, "version": SBOMIFY_VERSION})
+        else:
+            tools.setdefault("components", []).append(
+                {
+                    "type": "application",
+                    "group": SBOMIFY_VENDOR_NAME,
+                    "name": SBOMIFY_TOOL_NAME,
+                    "version": SBOMIFY_VERSION,
+                }
+            )
+    else:
+        return False
+    get_audit_trail().record_tool_added(SBOMIFY_TOOL_NAME, SBOMIFY_VERSION)
+    return True
+
+
+def _declare_generation_context(document: dict[str, Any], phase: str) -> bool:
+    """Record ``phase`` unless the document already declares one; True if written.
+
+    CycloneDX has ``metadata.lifecycles`` from 1.5. SPDX 2 has no field for it,
+    so the phase goes in ``creationInfo.comment`` in the form augmentation
+    already writes. SPDX 3 is never generated from a lock file or an image.
+    """
+    if "spdxVersion" in document:
+        info = document.setdefault("creationInfo", {})
+        comment = info.get("comment") or ""
+        if "Lifecycle phase:" in comment:
+            return False
+        info["comment"] = f"{comment} | Lifecycle phase: {phase}" if comment else f"Lifecycle phase: {phase}"
+        return True
+    if document.get("bomFormat") != "CycloneDX" or not _is_cdx_version_at_least(document.get("specVersion"), 1, 5):
+        return False
+    metadata = document.setdefault("metadata", {})
+    if metadata.get("lifecycles"):
+        return False
+    metadata["lifecycles"] = [{"phase": phase}]
+    return True
+
+
 def _finalize_output_content(content: str, bom_type: Optional[str]) -> str:
     """Return the content to upload after format-specific output fixes.
 
@@ -2675,6 +2853,9 @@ def run_pipeline(config: Config) -> None:
         final_sbom_file = get_last_sbom_from_last_step()
         if not final_sbom_file:
             raise FileProcessingError("No SBOM file found to finalize")
+
+        if is_sbom:
+            _finalize_sbom_fields(final_sbom_file, config)
 
         # Get the parent directory of the file path
         parent_dir = Path(config.output_file).parent
@@ -3882,6 +4063,18 @@ def _parse_upload_destinations_callback(
     help="Override existing SBOM metadata with values from augmentation. [env: OVERRIDE_SBOM_METADATA]",
 )
 @click.option(
+    "--keep-vulnerabilities/--no-keep-vulnerabilities",
+    default=False,
+    show_default=True,
+    callback=_make_bool_envvar_callback("KEEP_VULNERABILITIES", False),
+    is_eager=True,
+    help=(
+        "Keep a CycloneDX SBOM's vulnerabilities[]. Off by default, because BSI TR-03183-2 does not allow "
+        "vulnerability data in an SBOM and expects it in a separate VEX (BOM_TYPE=vex). CISA 2026 and NTIA "
+        "allow it. [env: KEEP_VULNERABILITIES]"
+    ),
+)
+@click.option(
     "--component-version",
     envvar="COMPONENT_VERSION",
     help="Override the component version in the SBOM.",
@@ -3935,7 +4128,11 @@ def _parse_upload_destinations_callback(
     type=click.Choice(list(VALID_BOM_TYPES), case_sensitive=False),
     default="sbom",
     show_default=True,
-    help="Artifact type recorded on upload. Non-SBOM types are uploaded verbatim.",
+    help=(
+        "Artifact type recorded on upload. Non-SBOM types are uploaded verbatim. An sbom has any "
+        "CycloneDX vulnerabilities removed, because BSI TR-03183-2 does not allow vulnerability "
+        "data in an SBOM: send VEX or VDR data as vex."
+    ),
 )
 @click.option(
     "--spec-version",
@@ -4005,6 +4202,7 @@ def cli(
     augment: bool,
     enrich: bool,
     override_sbom_metadata: bool,
+    keep_vulnerabilities: bool,
     component_version: Optional[str],
     component_name: Optional[str],
     component_purl: Optional[str],
@@ -4151,6 +4349,7 @@ def cli(
         augment=augment,
         enrich=enrich,
         override_sbom_metadata=override_sbom_metadata,
+        keep_vulnerabilities=keep_vulnerabilities,
         component_version=component_version,
         component_name=component_name,
         component_purl=component_purl,

@@ -823,6 +823,15 @@ def _apply_metadata_to_cyclonedx_component(
             component.supplier = OrganizationalEntity(name=sanitized_supplier)
             added_fields.append("supplier")
 
+    # sbomqs's NTIA, FSCT and Interlynk checks read `supplier`, never
+    # `publisher`. With no registry supplier, the maintainer found above is the
+    # best one known: CycloneDX says the supplier "may often be the
+    # manufacturer". Only a publisher this enrichment set is promoted; one the
+    # generator wrote (syft's deb `Name <email>`) is left as it is.
+    if not component.supplier and "publisher" in added_fields and component.publisher:
+        component.supplier = OrganizationalEntity(name=component.publisher)
+        added_fields.append("supplier")
+
     # External references helper (with URL sanitization)
     def _add_external_ref(ref_type: ExternalReferenceType, url: str, field_name: str = "url") -> bool:
         sanitized_url = sanitize_url(url, field_name=field_name) if url else None
@@ -1069,6 +1078,13 @@ def _enrich_os_component(component: Component) -> List[str]:
             component.publisher = supplier
             added_fields.append(f"publisher ({supplier})")
 
+    # The distribution is the supplier as well: it built and ships the OS.
+    if not component.supplier:
+        supplier = NAMESPACE_TO_SUPPLIER.get(os_name)
+        if supplier:
+            component.supplier = OrganizationalEntity(name=supplier)
+            added_fields.append(f"supplier ({supplier})")
+
     # Add CLE (Common Lifecycle Enumeration) properties
     if os_name and os_version:
         lifecycle = get_distro_lifecycle(os_name, os_version)
@@ -1141,6 +1157,8 @@ def _enrich_self_referencing_components(bom: Bom) -> int:
         # Check if component name matches root component (self-referencing)
         if component.name == root_name and not component.publisher:
             component.publisher = supplier_name
+            if not component.supplier:
+                component.supplier = root_supplier
             _add_enrichment_source_property(component, "root-component")
             logger.info(f"Enriched self-referencing component: {component.name} with publisher: {supplier_name}")
             enriched_count += 1

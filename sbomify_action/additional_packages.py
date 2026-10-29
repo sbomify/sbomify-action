@@ -34,6 +34,7 @@ from spdx_tools.spdx.model import (  # type: ignore[attr-defined]
 from spdx_tools.spdx.parser.parse_anything import parse_file as spdx_parse_file
 from spdx_tools.spdx.writer.write_anything import write_file as spdx_write_file
 
+from . import __version__
 from .logging_config import logger
 from .serialization import (
     load_cyclonedx_bom,
@@ -420,7 +421,7 @@ def create_empty_sbom(output_file: str, sbom_format: str, spec_version: str | No
             spdx_id="SPDXRef-DOCUMENT",
             name="additional-packages-sbom",
             document_namespace=f"https://sbomify.com/additional-packages/{uuid.uuid4()}",
-            creators=[Actor(ActorType.TOOL, "sbomify-action")],
+            creators=[Actor(ActorType.TOOL, f"sbomify-action-{__version__}")],
             created=datetime.now(timezone.utc),
         )
         document = Document(creation_info=creation_info)
@@ -445,7 +446,7 @@ def _create_empty_spdx3(output_file: str) -> str:
     creation_info = make_spdx3_creation_info()
 
     tool_id = make_spdx3_spdx_id()
-    tool = Spdx3Tool(spdx_id=tool_id, name="sbomify-action", creation_info=creation_info)
+    tool = Spdx3Tool(spdx_id=tool_id, name=f"sbomify-action-{__version__}", creation_info=creation_info)
 
     doc_id = make_spdx3_spdx_id()
     doc = SpdxDocument(
