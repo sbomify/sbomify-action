@@ -10,9 +10,28 @@ from sbomify_action import format_display_name
 from sbomify_action.exceptions import APIError, AuthError
 from sbomify_action.logging_config import logger
 from sbomify_action.sbomify_api import SbomifyApiClient, clean_validation_error
+from sbomify_action.spdx3 import is_spdx3
+from sbomify_action.validation import validate_sbom_file_auto
 
 from ..protocol import UploadInput
 from ..result import UploadResult
+
+
+def _reads_as_spdx2(path: str) -> bool:
+    """Whether the file is shaped as an SPDX 2 document, whatever version it states.
+
+    The version a document declares is only a claim: an SPDX 3 document can
+    state "2.3" in its CreationInfo. The SPDX 2 upload allowance follows the
+    structure instead: a top-level ``spdxVersion`` of ``SPDX-2.x`` and no
+    SPDX 3 ``@context``.
+    """
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and not is_spdx3(data) and str(data.get("spdxVersion", "")).startswith("SPDX-2")
+
 
 # Default sbomify production API
 SBOMIFY_PRODUCTION_API = "https://app.sbomify.com"
@@ -90,6 +109,39 @@ class SbomifyDestination:
             if not validation_result:
                 validation_error = "SBOM validation failed"
                 logger.warning("SBOM validation failed, but proceeding with upload")
+        elif input.validate_before_upload and input.sbom_format == "spdx":
+            # Every SPDX 3 write path runs before this point, so this is the one
+            # check they all pass through. SPDX 3 is held to its schema. An SPDX 2
+            # failure is usually the producer's (Yocto writes 2.3 relationship
+            # types into 2.2 documents), so it is uploaded with a warning. Only a
+            # document read as SPDX 2 gets that allowance: one whose version could
+            # not be read says nothing about which rule applies, so it is held back.
+            validated = True
+            logger.info("Checking the SPDX document against its schema before upload")
+            try:
+                result = validate_sbom_file_auto(input.sbom_file)
+            except Exception as e:
+                validation_error = f"Could not check the SPDX document: {e}"
+                return UploadResult.failure_result(
+                    destination_name=self.name,
+                    error_message=f"{validation_error}. Not uploading it.",
+                    validated=validated,
+                    validation_error=validation_error,
+                )
+            # A skipped check (no schema for the version the document states) is
+            # not a pass, so it gets the same treatment as a failure.
+            if result.valid is not True:
+                where = f" at {result.error_path}" if result.error_path else ""
+                outcome = "failed validation" if result.valid is False else "could not be checked"
+                validation_error = f"SPDX {result.spec_version} document {outcome}{where}: {result.error_message}"
+                if not _reads_as_spdx2(input.sbom_file):
+                    return UploadResult.failure_result(
+                        destination_name=self.name,
+                        error_message=f"{validation_error}. Not uploading it.",
+                        validated=validated,
+                        validation_error=validation_error,
+                    )
+                logger.warning(f"{validation_error}. Uploading it anyway.")
 
         # Read SBOM file
         try:

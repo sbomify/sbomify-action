@@ -552,7 +552,7 @@ class Config:
                 # sbom-tool, JFrog Xray and Yocto 5.x emit, so it is just as
                 # likely to be asked for, and it hit the bare message.
                 if self.spec_version.startswith("3"):
-                    from ..validation import SPDX_SCHEMAS
+                    from ..validation import SPDX_SCHEMAS, spdx_schema_version
 
                     # "3.0" is a key in SPDX_SCHEMAS so an alias-context
                     # document reaches a schema at all, but it is not a version
@@ -561,7 +561,8 @@ class Config:
                     # declaring the bare 3.0 line fails whichever schema it is
                     # held to. Offering SBOM_FILE for it would cost a round
                     # trip to the same refusal.
-                    readable = self.spec_version in SPDX_SCHEMAS and self.spec_version != "3.0"
+                    schema_version = spdx_schema_version(self.spec_version)
+                    readable = schema_version is not None and self.spec_version != "3.0"
                     hint = (
                         f" SPDX {self.spec_version} cannot be generated from a lock file or"
                         " Docker image -- no generator plugin emits any SPDX 3."
@@ -576,6 +577,14 @@ class Config:
                             " additional-packages-only mode (LOCK_FILE=none or SBOM_FILE=none),"
                             " which writes 3.0.1."
                         )
+                        if schema_version != self.spec_version:
+                            # A later patch is held to an older bundled schema,
+                            # which pins @context to its own URL, so a document
+                            # declaring its own patch context is refused.
+                            hint += (
+                                f" An SBOM_FILE at {self.spec_version} validates only if it keeps"
+                                f" the {schema_version} @context."
+                            )
                     else:
                         # Do not send them off to write a document we would
                         # then refuse: SBOM_FILE only accepts what we can read.
@@ -2746,7 +2755,7 @@ def run_pipeline(config: Config) -> None:
                     component_name=config.component_name,
                     component_version=config.component_version,
                     destination=destination,
-                    validate_before_upload=(FORMAT == "cyclonedx"),
+                    validate_before_upload=(FORMAT in ("cyclonedx", "spdx")),
                     bom_type=config.bom_type,
                 )
 
