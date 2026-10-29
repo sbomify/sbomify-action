@@ -186,7 +186,7 @@ class WelcomeScreen(WizardScreen):
                     "[b]composer.lock[/], [b]Gemfile.lock[/], "
                     "[b]Package.resolved[/], and a handful of manifests.\n\n"
                     "Full list: [#8A7DFF u]https://github.com/sbomify/"
-                    "sbomify-action#supported-lockfiles[/]",
+                    "sbomify-action#supported-lock-files[/]",
                     classes="wizard-muted",
                 )
 

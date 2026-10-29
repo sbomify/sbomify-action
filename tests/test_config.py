@@ -290,6 +290,31 @@ class TestConfig(unittest.TestCase):
         self.assertIn("sbomify API token is not defined", str(cm.exception))
         self.assertIn("PRODUCT_RELEASE is set", str(cm.exception))
 
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
+    def test_missing_token_error_offers_running_without_upload(self, _mock_oidc):
+        """UPLOAD defaults to true and a first run has no account, so the error
+        has to name the switch that produces an SBOM without one."""
+        config = Config(token="", component_id="", sbom_file="/path/to/sbom.json")
+
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+
+        self.assertIn("UPLOAD=false", str(cm.exception))
+        self.assertIn("--no-upload", str(cm.exception))
+
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
+    def test_missing_token_error_does_not_offer_no_upload_when_it_cannot_help(self, _mock_oidc):
+        """PRODUCT_RELEASE needs the API with or without an upload, and a
+        document is nothing but an upload, so UPLOAD=false fixes neither."""
+        for config in (
+            Config(token="", component_id="c", sbom_file="/path/to/sbom.json", product_releases='["p:v1"]'),
+            Config(token="", component_id="c", document_file="/path/to/report.pdf"),
+        ):
+            with self.subTest(config=config):
+                with self.assertRaises(ConfigurationError) as cm:
+                    config.validate()
+                self.assertNotIn("UPLOAD=false", str(cm.exception))
+
     @patch("sbomify_action.oidc.is_oidc_available", return_value=True)
     def test_config_validation_oidc_available_no_token_required(self, _mock_oidc):
         """When GitHub OIDC is available, validate() should NOT raise for missing TOKEN."""
@@ -353,6 +378,30 @@ class TestConfig(unittest.TestCase):
         )
         self.assertFalse(config.requires_sbomify_api)
         self.assertFalse(config.will_use_sbomify_api)
+
+    class _StopAtStepOne(Exception):
+        pass
+
+    def _logs_api_target(self, **overrides) -> bool:
+        """Run the pipeline up to step 1 and report whether it named the API."""
+        config = Config(lock_file="requirements.txt", **overrides)
+        # Stopping at step 1's header ends the run after the API line and
+        # before anything is generated or sent.
+        with (
+            patch.object(cli_main_module, "_log_step_header", side_effect=self._StopAtStepOne),
+            patch.object(cli_main_module, "logger") as mock_logger,
+            self.assertRaises(self._StopAtStepOne),
+        ):
+            cli_main_module.run_pipeline(config)
+        return any("API" in str(call) for call in mock_logger.info.call_args_list)
+
+    def test_no_upload_run_does_not_name_the_api(self):
+        """A run that uploads nothing but logs "Using production API" reads as
+        if the SBOM is being sent there."""
+        self.assertFalse(self._logs_api_target(token="", component_id="", upload=False))
+
+    def test_upload_run_names_the_api(self):
+        self.assertTrue(self._logs_api_target(token="t", component_id="c", upload=True))
 
     def test_config_token_excluded_from_repr(self):
         """field(repr=False) keeps the token out of repr(config) so accidental

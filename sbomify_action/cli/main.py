@@ -406,12 +406,20 @@ class Config:
                     if self.product_releases:
                         operations.append("PRODUCT_RELEASE is set")
                     reason = " or ".join(operations)
+                    # UPLOAD defaults to true, so a first run with no account
+                    # lands here. Name the way out, unless the run needs the API
+                    # anyway: PRODUCT_RELEASE, or a document, which is only an upload.
+                    no_upload_hint = ""
+                    if not (self.product_releases or self.is_document_upload):
+                        no_upload_hint = (
+                            " To generate the SBOM without an sbomify account, set UPLOAD=false (or pass --no-upload)."
+                        )
                     raise ConfigurationError(
                         f"sbomify API token is not defined (required when {reason}). "
                         "Either set SBOMIFY_TOKEN (or TOKEN), pass --token, or in GitHub Actions "
                         "enable trusted publishing by granting `permissions: id-token: write` in "
                         "the workflow (and create an OIDC binding for the component in the "
-                        "sbomify UI)."
+                        f"sbomify UI).{no_upload_hint}"
                     )
             if not self.component_id:
                 operations = []
@@ -2164,11 +2172,13 @@ def run_pipeline(config: Config) -> None:
             source=config.component_version_source,
         )
 
-    # Log the API base URL being used for transparency
-    if config.api_base_url != SBOMIFY_PRODUCTION_API:
-        logger.info(f"Using custom API base URL: {config.api_base_url}")
-    else:
-        logger.info(f"Using production API: {config.api_base_url}")
+    # Log the API base URL being used for transparency, but only when the run is
+    # set to call it: on a no-upload run the line reads as if the SBOM is sent.
+    if config.will_use_sbomify_api:
+        if config.api_base_url != SBOMIFY_PRODUCTION_API:
+            logger.info(f"Using custom API base URL: {config.api_base_url}")
+        else:
+            logger.info(f"Using production API: {config.api_base_url}")
 
     # OIDC trusted publishing (GitHub Actions): when TOKEN is missing but the
     # workflow granted id-token: write and we know which component to scope to,

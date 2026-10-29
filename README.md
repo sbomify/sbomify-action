@@ -43,15 +43,28 @@ The wizard is interactive, so the `-it` flags are required, and it must run on y
 ### Or configure it by hand
 
 ```yaml
-- uses: sbomify/sbomify-action@master
-  env:
-    LOCK_FILE: requirements.txt
-    OUTPUT_FILE: sbom.cdx.json
-    ENRICH: true
-    UPLOAD: false
+on: push
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest  # a container action, so Linux runners only
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: sbomify/sbomify-action@57ca9ba7de2232b073a3799bc8c0dc002e6777b9  # v26.10.2
+        env:
+          LOCK_FILE: requirements.txt
+          OUTPUT_FILE: sbom.cdx.json
+          ENRICH: true
+          UPLOAD: false
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: sbom
+          path: sbom.cdx.json
 ```
 
-That generates a CycloneDX SBOM from your lock file and enriches it with metadata from package registries. No account required. For SPDX, set `SBOM_FORMAT: spdx`.
+That generates a CycloneDX SBOM from your lock file, enriches it from package registries with the supplier, license and description fields that [NTIA](https://sbomify.com/compliance/ntia-minimum-elements/) and the [EU CRA](https://sbomify.com/compliance/eu-cra/) ask for, and keeps it as a workflow artifact named `sbom`. No account required. Point `LOCK_FILE` at your own [lock file](#supported-lock-files); for SPDX, set `SBOM_FORMAT: spdx`.
 
 On any other CI, pass the same variables to the container image:
 
@@ -79,7 +92,7 @@ This tool wraps generation in three more steps — inject, augment, enrich — a
 
 ## Features
 
-- **Generate** from lock files across 17 ecosystems, container images, or a directory, in CycloneDX or SPDX
+- **Generate** from lock files across 18 ecosystems, container images, or a directory, in CycloneDX or SPDX
 - **Native generators** per ecosystem — `cyclonedx-py`, `cargo-cyclonedx`, `cyclonedx-gomod`, `cyclonedx-maven`, `cyclonedx-gradle`, `cyclonedx-sbt` — with cdxgen and Syft as fallbacks
 - **Chainguard SBOM reuse** — detects Chainguard base images and uses the publisher's SBOM instead of scanning
 - **Yocto/OpenEmbedded** — batch process SPDX SBOMs from Yocto builds
@@ -193,13 +206,22 @@ augmented, enriched or re-serialized, so a signed report stays byte-for-byte the
 signed.
 
 ```yaml
-- uses: sbomify/sbomify-action@master
-  env:
-    TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
-    COMPONENT_ID: ${{ vars.DOCS_COMPONENT_ID }}
-    DOCUMENT_FILE: reports/pentest-2026.pdf
-    DOCUMENT_TYPE: pentest-report
-    DOCUMENT_VERSION: '2026.1'
+on: workflow_dispatch  # publish once per version, not on every push
+
+jobs:
+  pentest-report:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: sbomify/sbomify-action@57ca9ba7de2232b073a3799bc8c0dc002e6777b9  # v26.10.2
+        env:
+          TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
+          COMPONENT_ID: ${{ vars.DOCS_COMPONENT_ID }}
+          DOCUMENT_FILE: reports/pentest-2026.pdf
+          DOCUMENT_TYPE: pentest-report
+          DOCUMENT_VERSION: '2026.1'
 ```
 
 The component must be of type **document** in sbomify; a component created for SBOMs (type `bom`)
@@ -254,7 +276,7 @@ In this repository:
 
 **Trivy** is currently not shipped, after [compromised releases in March 2026](https://sbomify.com/2026/03/26/trivy-compromise-hardening-sbomify-action/). The remaining generators cover every supported ecosystem.
 
-**Pinning.** Examples here use `@master` so they stay correct as the action moves. Do not ship that: pin to a release tag, or for production to a full 40-character commit SHA — see [SECURITY.md](https://github.com/sbomify/sbomify-action/blob/master/SECURITY.md). The wizard does this automatically for the workflows it generates.
+**Pinning.** Examples here pin each action to the full 40-character commit SHA of a release, with the tag in a comment; bump both together when you upgrade. Ship it that way, or at least on a release tag, never on `@master` — see [SECURITY.md](https://github.com/sbomify/sbomify-action/blob/master/SECURITY.md). The wizard does this automatically for the workflows it generates.
 
 ## Security
 
