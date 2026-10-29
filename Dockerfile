@@ -1,17 +1,19 @@
-ARG UV_VERSION=0.13.4
-
-
-# UV binary stage
-FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b AS uv-fetcher
-
 # Python builder stage
 FROM python:3.14-slim-trixie AS builder
 
 ARG VERSION=0.0.0
 
-COPY --from=uv-fetcher /uv /uvx /usr/local/bin/
-
 WORKDIR /app
+
+# uv is installed at the version uv.lock pins, which Dependabot's uv bumps
+# update. A separate UV_VERSION ARG here was left behind by those bumps, so
+# every one of them failed CI. --require-hashes checks the wheel against the
+# sha256 in uv.lock; the image digest pin used to do that job. uv.lock is
+# copied on its own so this layer stays cached until the lock changes.
+COPY uv.lock /app/
+RUN python -c 'import tomllib; uv = next(p for p in tomllib.load(open("uv.lock", "rb"))["package"] if p["name"] == "uv"); print(f"uv=={uv["version"]}", *(f"--hash={w["hash"]}" for w in uv["wheels"]))' > /tmp/uv-requirements.txt && \
+    pip install --no-cache-dir --no-deps --only-binary=:all: --require-hashes -r /tmp/uv-requirements.txt
+
 COPY . /app/
 
 # Override version from build arg

@@ -95,4 +95,3 @@ version_from = { file = "uv.lock", package = "uv" }
 stage = "build"
 purl = "pkg:pypi/uv@{version}"
 github_repo = "astral-sh/uv"
-dockerfile_arg = "UV_VERSION"
