@@ -55,8 +55,10 @@ __all__ = [
     "VcsInfo",
     "create_default_registry",
     "get_platform",
+    "inside_working_dir",
     "legacy_workspaces",
     "set_platform",
+    "set_working_dir",
     "reset_platform",
     "use_platform",
     "workspace_candidates",
@@ -64,6 +66,9 @@ __all__ = [
 
 #: Explicit override, set by :func:`set_platform` / :func:`use_platform`.
 _override: CIPlatform | None = None
+
+#: The directory WORKING_DIR moved this run into, set by :func:`set_working_dir`.
+_working_dir: Path | None = None
 
 
 def create_default_registry() -> PlatformRegistry:
@@ -132,6 +137,29 @@ def workspace_candidates() -> tuple[Path, ...]:
         if candidate not in seen:
             seen.append(candidate)
     return tuple(seen)
+
+
+def set_working_dir(path: Path | None) -> None:
+    """Record the directory WORKING_DIR moved this run into, or None to clear it."""
+    global _working_dir
+    _working_dir = path
+
+
+def inside_working_dir(path: Path) -> bool:
+    """Whether a lookup may use ``path``: always, unless WORKING_DIR is set and it lies outside.
+
+    The checkout roots in :func:`workspace_candidates` are searched because a
+    runtime can mount the repository away from where the command runs. Once
+    WORKING_DIR has picked a package, those roots are the repository *around*
+    it, and in a uv, npm or Cargo workspace the lock file there lists every
+    package's dependencies. An SBOM built from it describes the whole
+    repository and passes every check. So a lookup that reaches a root keeps
+    only what is inside the working directory -- including a path written
+    relative to the root that lands there, such as ``packages/api/uv.lock``.
+    ``sbomify.json`` is the exception: it falls back to the root and says so,
+    see ``JsonConfigProvider._find_config_file``.
+    """
+    return _working_dir is None or path.resolve().is_relative_to(_working_dir)
 
 
 def get_platform() -> CIPlatform:

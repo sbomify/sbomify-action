@@ -4,7 +4,7 @@ description: 'A GitHub Action to upload an SBOM CycloneDX or SPDX to sbomify'
 author: 'sbomify'
 inputs:
   working-dir:
-    description: 'Working directory, relative to repo root or absolute (must be under $GITHUB_WORKSPACE). Example: packages/my-app'
+    description: 'Working directory, relative to repo root or absolute (must be under $GITHUB_WORKSPACE). Example: packages/my-app. A relative LOCK_FILE, SBOM_FILE, SOURCE_DIR or DOCUMENT_FILE is only looked up inside it, so a monorepo package''s SBOM lists that package''s dependencies rather than the whole repository''s. To use a file outside it, give its path relative to this directory (../../uv.lock) or an absolute path. sbomify.json is read from this directory, or else from the repository root, so one org-wide supplier and author config can serve every package.'
     required: false
     default: ''
   component-purl:

@@ -19,7 +19,14 @@ import sentry_sdk
 
 # Add cyclonedx imports for proper SBOM handling
 from .. import format_display_name
-from .._runtime import CIPlatform, get_platform, legacy_workspaces, workspace_candidates
+from .._runtime import (
+    CIPlatform,
+    get_platform,
+    inside_working_dir,
+    legacy_workspaces,
+    set_working_dir,
+    workspace_candidates,
+)
 from .._upload import VALID_BOM_TYPES, VALID_DESTINATIONS
 from ..additional_packages import inject_additional_packages
 from ..augmentation import augment_sbom_from_file
@@ -1369,10 +1376,10 @@ def _format_search_locations(*candidates: Path) -> str:
 
 
 def _first_existing(path: str | Path) -> Path | None:
-    """Return the first workspace candidate that holds ``path`` as a file."""
+    """Return the first workspace candidate that holds ``path`` as a file inside WORKING_DIR."""
     for workspace in workspace_candidates():
         candidate = workspace / path
-        if candidate.is_file():
+        if candidate.is_file() and inside_working_dir(candidate):
             return candidate
     return None
 
@@ -1447,7 +1454,28 @@ def path_expansion(path: str) -> str:
         raise InputPathNotFoundError(
             f"Specified input file '{path}' not found. "
             f"Searched in: {_format_search_locations(Path(path), relative_path, *workspace_paths)}"
+            + _outside_working_dir_hint([p for p in workspace_paths if p.is_file()])
         )
+
+
+def _outside_working_dir_hint(found: list[Path]) -> str:
+    """Explain a file or directory a lookup found at a checkout root and refused.
+
+    Without WORKING_DIR anything found there is used, so ``found`` holds
+    something only when WORKING_DIR refused it -- and by then the CLI has
+    changed into that directory, which is why ``Path.cwd()`` stands for it.
+    """
+    if not found:
+        return ""
+    here = Path.cwd()
+    other = found[0]
+    return (
+        f". '{other}' exists, but it is outside WORKING_DIR ('{here}') and was not used: "
+        "in a monorepo what sits at the repository root describes the whole repository, not this "
+        "package, and an SBOM built from it would list dependencies this component does not have. "
+        f"To use it anyway, give its path relative to WORKING_DIR ('{os.path.relpath(other.resolve(), here)}') "
+        "or as an absolute path."
+    )
 
 
 def _expand_lock_file_or_substitute(path: str) -> str:
@@ -1477,6 +1505,12 @@ def _expand_lock_file_or_substitute(path: str) -> str:
         return path_expansion(path)
     except FileProcessingError as missing:
         original = missing
+
+    # The named file is there, only outside WORKING_DIR. The project did not
+    # change package manager, so there is nothing to substitute, and the error
+    # already says how to use that file on purpose.
+    if any((root / path).is_file() for root in workspace_candidates()):
+        raise original
 
     named = Path(path)
     ecosystem = get_lock_file_ecosystem(named.name)
@@ -1516,7 +1550,10 @@ def _expand_lock_file_or_substitute(path: str) -> str:
         searched = (named.parent, Path.cwd(), *roots)
     else:
         searched = (Path.cwd() / named.parent, *(root / named.parent for root in roots))
-    directories = {d.resolve() for d in searched if d.is_dir()}
+    # The legacy roots alone do not keep the repository root out: inside the
+    # action's container the mount point *is* the root. So under WORKING_DIR
+    # only directories inside it are scanned; see inside_working_dir.
+    directories = {d.resolve() for d in searched if d.is_dir() and inside_working_dir(d)}
 
     # .NET project files are matched by suffix rather than by name, so a scan
     # over fixed names alone could never substitute one -- a stale
@@ -1615,7 +1652,7 @@ def directory_expansion(path: str) -> str:
     workspace_paths = tuple(workspace / path for workspace in workspace_candidates())
 
     logger.debug(f"Searching for directory '{path}'...")
-    for candidate in (Path(path), relative_path, *workspace_paths):
+    for candidate in (Path(path), relative_path, *filter(inside_working_dir, workspace_paths)):
         if candidate.is_dir():
             logger.info(f"Using source directory '{candidate}'.")
             return str(candidate if candidate.is_absolute() else current_dir / candidate)
@@ -1623,6 +1660,7 @@ def directory_expansion(path: str) -> str:
     raise InputPathNotFoundError(
         f"Specified source directory '{path}' not found. "
         f"Searched in: {_format_search_locations(Path(path), relative_path, *workspace_paths)}"
+        + _outside_working_dir_hint([p for p in workspace_paths if p.is_dir()])
     )
 
 
@@ -4005,7 +4043,11 @@ def _parse_upload_destinations_callback(
     "--working-dir",
     envvar="WORKING_DIR",
     default=None,
-    help="Working directory (absolute, or relative to the CI platform's checkout root). [env: WORKING_DIR]",
+    help=(
+        "Working directory (absolute, or relative to the CI platform's checkout root). Relative input "
+        "paths are looked up only inside it, so a monorepo package's SBOM lists its own dependencies, "
+        "not the whole repository's; sbomify.json falls back to the repository root's. [env: WORKING_DIR]"
+    ),
 )
 @click.option(
     "-v",
@@ -4113,6 +4155,10 @@ def cli(
             if not cwd.is_relative_to(workspace):
                 logger.error(f"Working directory '{cwd}' escaped workspace '{workspace}' after chdir. Aborting.")
                 ctx.exit(1)
+        # Input lookups keep only what is inside it from here on; see
+        # inside_working_dir. Cleared with the context so it ends with the run.
+        set_working_dir(resolved)
+        ctx.call_on_close(lambda: set_working_dir(None))
 
     # If a subcommand was invoked, don't run the default pipeline
     if ctx.invoked_subcommand is not None:
