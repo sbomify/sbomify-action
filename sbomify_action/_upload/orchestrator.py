@@ -15,6 +15,7 @@ def create_registry_with_sbomify(
     token: Optional[str] = None,
     component_id: Optional[str] = None,
     api_base_url: Optional[str] = None,
+    allow_insecure_http: bool = False,
 ) -> DestinationRegistry:
     """
     Create a DestinationRegistry with sbomify and other destinations.
@@ -26,6 +27,7 @@ def create_registry_with_sbomify(
         token: sbomify API token
         component_id: sbomify component ID
         api_base_url: sbomify API base URL
+        allow_insecure_http: API_ALLOW_INSECURE_HTTP for the sbomify destination
 
     Returns:
         Configured DestinationRegistry
@@ -38,6 +40,7 @@ def create_registry_with_sbomify(
             token=token,
             component_id=component_id,
             api_base_url=api_base_url,
+            allow_insecure_http=allow_insecure_http,
         )
     )
 
@@ -80,6 +83,7 @@ class UploadOrchestrator:
         sbomify_component_id: Optional[str] = None,
         sbomify_api_base_url: Optional[str] = None,
         registry: Optional[DestinationRegistry] = None,
+        sbomify_allow_insecure_http: bool = False,
     ) -> None:
         """
         Initialize the UploadOrchestrator.
@@ -89,6 +93,7 @@ class UploadOrchestrator:
             sbomify_component_id: sbomify component ID
             sbomify_api_base_url: sbomify API base URL
             registry: Optional custom registry (overrides other params)
+            sbomify_allow_insecure_http: API_ALLOW_INSECURE_HTTP for the sbomify destination
         """
         if registry:
             self._registry = registry
@@ -97,6 +102,7 @@ class UploadOrchestrator:
                 token=sbomify_token,
                 component_id=sbomify_component_id,
                 api_base_url=sbomify_api_base_url,
+                allow_insecure_http=sbomify_allow_insecure_http,
             )
 
     @property

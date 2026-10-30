@@ -103,6 +103,7 @@ class SbomifyReleasesProcessor:
                     product_id=product_id,
                     version=version,
                     artifact_kind=input.artifact_kind,
+                    allow_insecure_http=input.allow_insecure_http,
                 )
 
                 if release_id:
@@ -151,6 +152,7 @@ class SbomifyReleasesProcessor:
         product_id: str,
         version: str,
         artifact_kind: str = "sbom",
+        allow_insecure_http: bool = False,
     ) -> Optional[str]:
         """
         Process a single release: check/create and tag.
@@ -161,12 +163,16 @@ class SbomifyReleasesProcessor:
         release_details = None
 
         # Check if release exists
-        release_exists = check_release_exists(api_base_url, token, product_id, version)
+        release_exists = check_release_exists(
+            api_base_url, token, product_id, version, allow_insecure_http=allow_insecure_http
+        )
 
         if release_exists:
             # Get release details for user-friendly logging
             try:
-                release_details = get_release_details(api_base_url, token, product_id, version)
+                release_details = get_release_details(
+                    api_base_url, token, product_id, version, allow_insecure_http=allow_insecure_http
+                )
                 friendly_name = get_release_friendly_name(release_details, version)
                 logger.info(f"{friendly_name} already exists for product {product_id}")
                 release_id = release_details.get("id") if release_details else None
@@ -194,12 +200,15 @@ class SbomifyReleasesProcessor:
                 product_id,
                 version,
                 is_prerelease=True if prerelease else None,
+                allow_insecure_http=allow_insecure_http,
             )
             if created_release_id:
                 release_id = created_release_id
             # Get details after creation for consistent logging
             try:
-                release_details = get_release_details(api_base_url, token, product_id, version)
+                release_details = get_release_details(
+                    api_base_url, token, product_id, version, allow_insecure_http=allow_insecure_http
+                )
                 if not release_id and release_details:
                     release_id = release_details.get("id")
             except APIError as e:
@@ -207,7 +216,9 @@ class SbomifyReleasesProcessor:
 
         # Fall back to explicit lookup if we still don't know the release ID
         if not release_id:
-            release_id = get_release_id(api_base_url, token, product_id, version)
+            release_id = get_release_id(
+                api_base_url, token, product_id, version, allow_insecure_http=allow_insecure_http
+            )
 
         if release_id:
             artifact_label = "SBOM" if artifact_kind == "sbom" else "document"
@@ -217,7 +228,14 @@ class SbomifyReleasesProcessor:
                 logger.info(f"Tagging {artifact_label} {sbom_id} with {friendly_name} (ID: {release_id})")
             else:
                 logger.info(f"Tagging {artifact_label} {sbom_id} with release {version} (ID: {release_id})")
-            tag_artifact_with_release(api_base_url, token, sbom_id, release_id, artifact_kind=artifact_kind)
+            tag_artifact_with_release(
+                api_base_url,
+                token,
+                sbom_id,
+                release_id,
+                artifact_kind=artifact_kind,
+                allow_insecure_http=allow_insecure_http,
+            )
         else:
             logger.error(f"Could not get release ID for {product_id}:{version}")
 

@@ -24,6 +24,7 @@ class YoctoConfig:
     product_id: str
     release_version: str
     api_base_url: str = "https://app.sbomify.com"
+    api_allow_insecure_http: bool = False
     augment: bool = False
     enrich: bool = False
     dry_run: bool = False

@@ -50,6 +50,16 @@ class TestProcessSinglePackage:
         assert result == "sbom-123"
 
     @patch("sbomify_action._yocto.pipeline.upload_sbom")
+    def test_passes_api_allow_insecure_http_to_upload(self, mock_upload, tmp_path):
+        spdx_file = str(YOCTO_TEST_DATA / "busybox.spdx.json")
+        mock_upload.return_value = UploadResult.success_result(destination_name="sbomify", sbom_id="sbom-123")
+        config = _make_config(str(tmp_path / "dummy.tar.gz"), api_allow_insecure_http=True)
+
+        _process_single_package("busybox", spdx_file, "comp-1", config)
+
+        assert mock_upload.call_args.kwargs["allow_insecure_http"] is True
+
+    @patch("sbomify_action._yocto.pipeline.upload_sbom")
     def test_duplicate_artifact_returns_none(self, mock_upload, tmp_path):
         spdx_file = str(YOCTO_TEST_DATA / "busybox.spdx.json")
         mock_upload.return_value = UploadResult.failure_result(
@@ -223,7 +233,7 @@ class TestRunYoctoPipeline:
         )
 
         with patch("sbomify_action._yocto.pipeline.get_or_create_component") as mock_goc:
-            mock_goc.side_effect = lambda url, tok, name, cache: (cache.get(name, "x"), False)
+            mock_goc.side_effect = lambda url, tok, name, cache, **_: (cache.get(name, "x"), False)
             result = run_yocto_pipeline(config)
 
         assert result.sboms_skipped == 3
@@ -240,7 +250,7 @@ class TestRunYoctoPipeline:
         # First package succeeds, then plan limit hit on second
         call_count = {"n": 0}
 
-        def goc_side_effect(url, tok, name, cache):
+        def goc_side_effect(url, tok, name, cache, **_):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return ("comp-1", True)
@@ -272,7 +282,7 @@ class TestRunYoctoPipeline:
 
         with patch("sbomify_action._yocto.pipeline.get_or_create_component") as mock_goc:
             # busybox: cached (not created), base-files + zlib: created
-            def goc_side_effect(url, tok, name, cache):
+            def goc_side_effect(url, tok, name, cache, **_):
                 if name in cache:
                     return cache[name], False
                 cache[name] = f"new-{name}"
@@ -319,7 +329,7 @@ class TestRunYoctoPipeline:
         mock_upload.return_value = UploadResult.success_result(destination_name="sbomify", sbom_id="sbom-001")
         call_count = {"n": 0}
 
-        def goc_side_effect(url, tok, name, cache):
+        def goc_side_effect(url, tok, name, cache, **_):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return ("comp-1", True)
@@ -412,7 +422,7 @@ class TestSpdx3Pipeline:
         assert result.sboms_uploaded == 1
         assert result.errors == 0
         assert result.release_id == "release-s3"
-        mock_tag.assert_called_once_with(API_BASE, TOKEN, "sbom-s3", "release-s3")
+        mock_tag.assert_called_once_with(API_BASE, TOKEN, "sbom-s3", "release-s3", allow_insecure_http=False)
 
     @patch("sbomify_action._yocto.pipeline.upload_sbom")
     def test_spdx3_dry_run(self, mock_upload, tmp_path):
@@ -449,8 +459,10 @@ class TestSpdx3Pipeline:
         assert result.release_id == "rel-200"
         # None, not False: 1.0.0 is not a prerelease, and the client omits the
         # field when it is None so the backend's own default stands.
-        mock_create_release.assert_called_once_with(API_BASE, TOKEN, "test-product", "1.0.0", is_prerelease=None)
-        mock_tag.assert_called_once_with(API_BASE, TOKEN, "sbom-100", "rel-200")
+        mock_create_release.assert_called_once_with(
+            API_BASE, TOKEN, "test-product", "1.0.0", is_prerelease=None, allow_insecure_http=False
+        )
+        mock_tag.assert_called_once_with(API_BASE, TOKEN, "sbom-100", "rel-200", allow_insecure_http=False)
 
 
 class TestYoctoPipelineResult:

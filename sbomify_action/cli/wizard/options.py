@@ -35,3 +35,6 @@ class WizardOptions:
     logs to an in-memory buffer that's dumped to stdout once the TUI
     exits — screens can read this flag to show extra detail in their
     UI if they want."""
+    api_allow_insecure_http: bool = False
+    """API_ALLOW_INSECURE_HTTP from the root command: accept an http://
+    api_base_url on a host other than localhost."""

@@ -33,9 +33,10 @@ import requests
 
 from ._runtime import OidcProvider, get_platform
 from ._runtime.redaction import scrub_secrets as _scrub_secrets
-from .exceptions import OIDCBindingMissingError, OIDCExchangeError
+from .exceptions import ConfigurationError, OIDCBindingMissingError, OIDCExchangeError
 from .http_client import get_default_headers
 from .logging_config import logger
+from .sbomify_api import validate_api_base_url
 
 DEFAULT_OIDC_AUDIENCE = "sbomify.com"
 SBOMIFY_PRODUCTION_API = "https://app.sbomify.com"
@@ -123,6 +124,7 @@ def exchange_for_sbomify_token(
     component_id: str,
     api_base_url: str,
     provider_slug: str = "github",
+    allow_insecure_http: bool = False,
 ) -> tuple[str, int]:
     """Exchange a CI-issued OIDC JWT for a short-lived sbomify access token.
 
@@ -133,6 +135,8 @@ def exchange_for_sbomify_token(
         provider_slug: Issuer path segment, from the provider's
             ``exchange_slug``. Defaults to GitHub, the only issuer the backend
             currently accepts.
+        allow_insecure_http: API_ALLOW_INSECURE_HTTP. The JWT is a credential,
+            so api_base_url gets the same check as every other sbomify call.
 
     Returns:
         (access_token, expires_in) — the access token to use as a Bearer
@@ -156,6 +160,11 @@ def exchange_for_sbomify_token(
             f"Refusing to build an OIDC exchange URL from provider slug {provider_slug!r}: "
             "expected a bare slug of lowercase letters, digits and hyphens."
         )
+
+    try:
+        validate_api_base_url(api_base_url, allow_insecure_http)
+    except ConfigurationError as e:
+        raise OIDCExchangeError(str(e)) from e
 
     url = f"{api_base_url.rstrip('/')}/api/v1/auth/oidc/{provider_slug}/exchange"
     headers = get_default_headers(token=oidc_jwt, content_type="application/json")
@@ -235,6 +244,7 @@ def obtain_sbomify_token_via_oidc(
     component_id: str,
     api_base_url: str,
     audience: str | None = None,
+    allow_insecure_http: bool = False,
 ) -> str:
     """Convenience: mint an OIDC JWT via the active platform and exchange it.
 
@@ -260,7 +270,11 @@ def obtain_sbomify_token_via_oidc(
     )
     oidc_jwt = provider.request_token(requested_audience)
     access_token, expires_in = exchange_for_sbomify_token(
-        oidc_jwt, component_id, api_base_url, provider_slug=provider.exchange_slug
+        oidc_jwt,
+        component_id,
+        api_base_url,
+        provider_slug=provider.exchange_slug,
+        allow_insecure_http=allow_insecure_http,
     )
     logger.info(f"Obtained short-lived sbomify token via OIDC (expires in {expires_in}s)")
     return access_token

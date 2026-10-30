@@ -58,6 +58,7 @@ def _process_single_package(
             token=config.token,
             component_id=component_id,
             validate=False,
+            allow_insecure_http=config.api_allow_insecure_http,
         )
         working_file = augmented_file
 
@@ -77,6 +78,7 @@ def _process_single_package(
         component_id=component_id,
         api_base_url=config.api_base_url,
         validate_before_upload=False,
+        allow_insecure_http=config.api_allow_insecure_http,
     )
 
     if result.success and result.sbom_id:
@@ -183,10 +185,17 @@ def _run_spdx3_pipeline(config: YoctoConfig, data: dict[str, Any]) -> YoctoPipel
                 config.product_id,
                 config.release_version,
                 is_prerelease=_prerelease_flag(config.release_version),
+                allow_insecure_http=config.api_allow_insecure_http,
             )
             if release_id:
                 result.release_id = release_id
-                tag_sbom_with_release(config.api_base_url, config.token, sbom_id, release_id)
+                tag_sbom_with_release(
+                    config.api_base_url,
+                    config.token,
+                    sbom_id,
+                    release_id,
+                    allow_insecure_http=config.api_allow_insecure_http,
+                )
                 console.print(f"  Tagged SBOM with release {release_id}")
         else:
             result.sboms_skipped = 1
@@ -253,7 +262,9 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
 
         # Step 3: Cache existing components
         console.print("[bold]Fetching existing components...[/bold]")
-        component_cache = list_components(config.api_base_url, config.token)
+        component_cache = list_components(
+            config.api_base_url, config.token, allow_insecure_http=config.api_allow_insecure_http
+        )
 
         # Step 4: Process each package
         collected_sbom_ids: list[str] = []
@@ -263,12 +274,22 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
 
             try:
                 comp_id, was_created = get_or_create_component(
-                    config.api_base_url, config.token, pkg.name, component_cache
+                    config.api_base_url,
+                    config.token,
+                    pkg.name,
+                    component_cache,
+                    allow_insecure_http=config.api_allow_insecure_http,
                 )
                 if was_created:
                     result.components_created += 1
                     if config.visibility:
-                        patch_component_visibility(config.api_base_url, config.token, comp_id, config.visibility)
+                        patch_component_visibility(
+                            config.api_base_url,
+                            config.token,
+                            comp_id,
+                            config.visibility,
+                            allow_insecure_http=config.api_allow_insecure_http,
+                        )
 
                 sbom_id = _process_single_package(pkg.name, pkg.spdx_file, comp_id, config)
 
@@ -304,11 +325,18 @@ def run_yocto_pipeline(config: YoctoConfig) -> YoctoPipelineResult:
                     config.product_id,
                     config.release_version,
                     is_prerelease=_prerelease_flag(config.release_version),
+                    allow_insecure_http=config.api_allow_insecure_http,
                 )
                 if release_id:
                     result.release_id = release_id
                     for sbom_id in collected_sbom_ids:
-                        tag_sbom_with_release(config.api_base_url, config.token, sbom_id, release_id)
+                        tag_sbom_with_release(
+                            config.api_base_url,
+                            config.token,
+                            sbom_id,
+                            release_id,
+                            allow_insecure_http=config.api_allow_insecure_http,
+                        )
                     console.print(f"  Tagged {len(collected_sbom_ids)} SBOMs with release {release_id}")
             except APIError as e:
                 result.errors += 1

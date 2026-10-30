@@ -64,6 +64,7 @@ def upload_sbom(
     destination: str = "sbomify",
     validate_before_upload: bool = True,
     bom_type: Optional[str] = None,
+    allow_insecure_http: bool = False,
 ) -> UploadResult:
     """
     Upload an SBOM to a specific destination.
@@ -82,6 +83,8 @@ def upload_sbom(
             Meaningful only for the sbomify destination, which records it via
             ?bom_type=; other destinations (e.g. dependency-track) ignore it and
             may re-encode the payload. None uploads a plain SBOM.
+        allow_insecure_http: API_ALLOW_INSECURE_HTTP, for an http:// api_base_url
+            on a host other than localhost (sbomify destination)
 
     Returns:
         UploadResult with success status, sbom_id, and metadata
@@ -117,6 +120,7 @@ def upload_sbom(
         sbomify_token=token,
         sbomify_component_id=component_id,
         sbomify_api_base_url=api_base_url,
+        sbomify_allow_insecure_http=allow_insecure_http,
     )
 
     return orchestrator.upload(input_params, destination=destination)
@@ -132,6 +136,7 @@ def upload_to_all(
     component_version: Optional[str] = None,
     validate_before_upload: bool = True,
     bom_type: Optional[str] = None,
+    allow_insecure_http: bool = False,
 ) -> List[UploadResult]:
     """
     Upload an SBOM to all configured destinations.
@@ -153,6 +158,8 @@ def upload_to_all(
             Meaningful only for the sbomify destination, which records it via
             ?bom_type=; other destinations (e.g. dependency-track) ignore it and
             may re-encode the payload. None uploads a plain SBOM.
+        allow_insecure_http: API_ALLOW_INSECURE_HTTP, for an http:// api_base_url
+            on a host other than localhost (sbomify destination)
 
     Returns:
         List of UploadResult from each configured destination
@@ -183,6 +190,7 @@ def upload_to_all(
         sbomify_token=token,
         sbomify_component_id=component_id,
         sbomify_api_base_url=api_base_url,
+        sbomify_allow_insecure_http=allow_insecure_http,
     )
 
     return orchestrator.upload_all(input_params)
@@ -193,6 +201,7 @@ def upload_document(
     token: Optional[str] = None,
     component_id: Optional[str] = None,
     api_base_url: Optional[str] = None,
+    allow_insecure_http: bool = False,
     name: Optional[str] = None,
     version: str = "1.0",
     document_type: str = "other",
@@ -210,6 +219,8 @@ def upload_document(
         token: sbomify API token
         component_id: sbomify component ID -- must be a component of type "document"
         api_base_url: sbomify API base URL
+        allow_insecure_http: API_ALLOW_INSECURE_HTTP, for an http:// api_base_url
+            on a host other than localhost
         name: Document name in sbomify (defaults to the file name without its suffix)
         version: Document version
         document_type: One of VALID_DOCUMENT_TYPES (e.g. "pentest-report", "compliance")
@@ -240,6 +251,7 @@ def upload_document(
         token=token,
         component_id=component_id,
         api_base_url=api_base_url,
+        allow_insecure_http=allow_insecure_http,
     )
 
 

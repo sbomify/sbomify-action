@@ -225,6 +225,39 @@ class TestConfig(unittest.TestCase):
         # Should not raise any exception - sbomify credentials not required
         config.validate()
 
+    def _dtrack_config(self, upload: bool = True) -> Config:
+        return Config(
+            token="",
+            component_id="",
+            sbom_file="/path/to/sbom.json",
+            upload=upload,
+            upload_destinations=["dependency-track"],
+        )
+
+    @patch.dict(os.environ, {"DTRACK_API_KEY": "k", "DTRACK_API_URL": "http://dtrack.corp/api"})
+    def test_config_validation_rejects_plain_http_dtrack_url(self):
+        """The DT API key goes out with the upload, so an http:// URL fails at
+        config time, before an SBOM is generated."""
+        with self.assertRaises(ConfigurationError) as cm:
+            self._dtrack_config().validate()
+        self.assertIn("DTRACK_API_URL", str(cm.exception))
+        self.assertIn("DTRACK_ALLOW_INSECURE_HTTP", str(cm.exception))
+
+    @patch.dict(
+        os.environ,
+        {"DTRACK_API_KEY": "k", "DTRACK_API_URL": "http://dtrack.corp/api", "DTRACK_ALLOW_INSECURE_HTTP": "true"},
+    )
+    def test_config_validation_allows_http_dtrack_url_when_opted_in(self):
+        self._dtrack_config().validate()
+
+    @patch.dict(os.environ, {"DTRACK_API_KEY": "k", "DTRACK_API_URL": "http://dtrack.corp/api"})
+    def test_config_validation_ignores_dtrack_url_when_not_uploading(self):
+        self._dtrack_config(upload=False).validate()
+
+    @patch.dict(os.environ, {"DTRACK_API_KEY": "k", "DTRACK_API_URL": "https://dtrack.corp/api"})
+    def test_config_validation_accepts_https_dtrack_url(self):
+        self._dtrack_config().validate()
+
     @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
     def test_config_validation_multi_destination_requires_sbomify_credentials(self, _mock_oidc):
         """Test that sbomify credentials ARE required when sbomify is one of multiple destinations."""
@@ -388,7 +421,7 @@ class TestConfig(unittest.TestCase):
         with self.assertRaises(ConfigurationError) as cm:
             config.validate()
 
-        self.assertIn("API base URL must start with http:// or https://", str(cm.exception))
+        self.assertIn("API_BASE_URL must start with http:// or https://", str(cm.exception))
 
     def test_config_url_validation_missing_hostname(self):
         """Test that Config raises ConfigurationError for URLs without hostname."""
@@ -399,11 +432,10 @@ class TestConfig(unittest.TestCase):
         with self.assertRaises(ConfigurationError) as cm:
             config.validate()
 
-        self.assertIn("API base URL must include a valid hostname", str(cm.exception))
+        self.assertIn("API_BASE_URL must include a valid hostname", str(cm.exception))
 
-    @patch.object(cli_main_module, "logger")
-    def test_config_url_validation_http_warning(self, mock_logger):
-        """Test that Config issues warning for HTTP on non-localhost."""
+    def test_config_url_validation_http_rejected(self):
+        """Plain HTTP to a non-loopback host would send the token unencrypted."""
         config = Config(
             token="test-token",
             component_id="test-component",
@@ -411,10 +443,41 @@ class TestConfig(unittest.TestCase):
             api_base_url="http://example.com/api",
         )
 
-        config.validate()
-        mock_logger.warning.assert_called_with(
-            "Using HTTP (not HTTPS) for API communication - consider using HTTPS in production"
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+
+        self.assertIn("API_BASE_URL", str(cm.exception))
+        self.assertIn("https://", str(cm.exception))
+        self.assertIn("API_ALLOW_INSECURE_HTTP", str(cm.exception))
+
+    def test_config_url_validation_http_allowed_with_opt_in(self):
+        """A self-hosted sbomify on a private network can opt in, with a warning."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            sbom_file="/path/to/sbom.json",
+            api_base_url="http://sbomify.corp/api",
+            api_allow_insecure_http=True,
         )
+
+        with self.assertLogs("sbomify_action.http_client", "WARNING") as logs:
+            config.validate()
+
+        self.assertIn("API_ALLOW_INSECURE_HTTP", logs.output[0])
+        self.assertIn("unencrypted", logs.output[0])
+
+    @patch.dict(
+        os.environ,
+        {
+            "TOKEN": "t",
+            "COMPONENT_ID": "c",
+            "SBOM_FILE": "tests/test-data/valid_json.json",
+            "API_BASE_URL": "http://sbomify.corp",
+            "API_ALLOW_INSECURE_HTTP": "true",
+        },
+    )
+    def test_load_config_reads_api_allow_insecure_http(self):
+        self.assertTrue(load_config().api_allow_insecure_http)
 
     @patch.object(cli_main_module, "logger")
     def test_config_url_validation_http_localhost_no_warning(self, mock_logger):

@@ -14,9 +14,9 @@ from typing import Any, Iterator
 from sbomify_action.sbomify_api import SbomifyApiClient
 
 
-def _client(api_base_url: str, token: str) -> SbomifyApiClient:
-    """Build a fresh client for a single Yocto-style call."""
-    return SbomifyApiClient(api_base_url, token)
+def _client(api_base_url: str, token: str, allow_insecure_http: bool = False) -> SbomifyApiClient:
+    """Build a fresh client for a single Yocto-style call (flag: API_ALLOW_INSECURE_HTTP)."""
+    return SbomifyApiClient(api_base_url, token, allow_insecure_http=allow_insecure_http)
 
 
 def _iter_components(api_base_url: str, token: str, error_context: str) -> Iterator[dict[str, Any]]:
@@ -28,9 +28,9 @@ def _iter_components(api_base_url: str, token: str, error_context: str) -> Itera
     return _client(api_base_url, token).iter_components(error_context=error_context)
 
 
-def list_components(api_base_url: str, token: str) -> dict[str, str]:
+def list_components(api_base_url: str, token: str, allow_insecure_http: bool = False) -> dict[str, str]:
     """Fetch all components and return a ``{name: id}`` mapping."""
-    return _client(api_base_url, token).list_components_by_name()
+    return _client(api_base_url, token, allow_insecure_http).list_components_by_name()
 
 
 def get_component_id_by_name(api_base_url: str, token: str, name: str) -> str | None:
@@ -49,15 +49,19 @@ def create_component(api_base_url: str, token: str, name: str) -> tuple[str, boo
     return _client(api_base_url, token).create_component(name, component_type="bom")
 
 
-def patch_component_visibility(api_base_url: str, token: str, component_id: str, visibility: str) -> None:
+def patch_component_visibility(
+    api_base_url: str, token: str, component_id: str, visibility: str, allow_insecure_http: bool = False
+) -> None:
     """Best-effort visibility patch — logs on failure rather than raising."""
-    _client(api_base_url, token).patch_component_visibility(component_id, visibility)
+    _client(api_base_url, token, allow_insecure_http).patch_component_visibility(component_id, visibility)
 
 
-def get_or_create_component(api_base_url: str, token: str, name: str, cache: dict[str, str]) -> tuple[str, bool]:
+def get_or_create_component(
+    api_base_url: str, token: str, name: str, cache: dict[str, str], allow_insecure_http: bool = False
+) -> tuple[str, bool]:
     """Look the name up in ``cache``; on miss, create the component (and update cache).
 
     Passes ``component_type='bom'`` so newly-created Yocto components get
     the correct backend type (see ``create_component`` above).
     """
-    return _client(api_base_url, token).get_or_create_component(name, cache, component_type="bom")
+    return _client(api_base_url, token, allow_insecure_http).get_or_create_component(name, cache, component_type="bom")

@@ -44,6 +44,7 @@ class SbomifyDestination:
         token: str | None = None,
         component_id: str | None = None,
         api_base_url: str | None = None,
+        allow_insecure_http: bool = False,
     ):
         """
         Initialize sbomify destination.
@@ -52,10 +53,12 @@ class SbomifyDestination:
             token: sbomify API token
             component_id: Component ID to upload to
             api_base_url: API base URL (defaults to production)
+            allow_insecure_http: API_ALLOW_INSECURE_HTTP, passed to the client
         """
         self._token = token
         self._component_id = component_id
         self._api_base_url = api_base_url or SBOMIFY_PRODUCTION_API
+        self._allow_insecure_http = allow_insecure_http
 
     @property
     def name(self) -> str:
@@ -129,7 +132,9 @@ class SbomifyDestination:
             else:
                 logger.debug("Gzip compression did not reduce size, sending uncompressed")
 
-        client = SbomifyApiClient(self._api_base_url, self._token, timeout=UPLOAD_TIMEOUT)
+        client = SbomifyApiClient(
+            self._api_base_url, self._token, timeout=UPLOAD_TIMEOUT, allow_insecure_http=self._allow_insecure_http
+        )
         try:
             response = client.upload_sbom(
                 component_id=str(self._component_id),

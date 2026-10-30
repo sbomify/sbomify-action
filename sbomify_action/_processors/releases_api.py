@@ -13,19 +13,23 @@ from typing import Any, Optional
 from sbomify_action.sbomify_api import SbomifyApiClient
 
 
-def _client(api_base_url: str, token: str) -> SbomifyApiClient:
-    """One-shot client for a single call."""
-    return SbomifyApiClient(api_base_url, token)
+def _client(api_base_url: str, token: str, allow_insecure_http: bool = False) -> SbomifyApiClient:
+    """One-shot client for a single call. ``allow_insecure_http`` is API_ALLOW_INSECURE_HTTP."""
+    return SbomifyApiClient(api_base_url, token, allow_insecure_http=allow_insecure_http)
 
 
-def check_release_exists(api_base_url: str, token: str, product_id: str, version: str) -> bool:
+def check_release_exists(
+    api_base_url: str, token: str, product_id: str, version: str, allow_insecure_http: bool = False
+) -> bool:
     """Return True iff a release with ``version`` exists for ``product_id``."""
-    return _client(api_base_url, token).check_release_exists(product_id, version)
+    return _client(api_base_url, token, allow_insecure_http).check_release_exists(product_id, version)
 
 
-def get_release_id(api_base_url: str, token: str, product_id: str, version: str) -> Optional[str]:
+def get_release_id(
+    api_base_url: str, token: str, product_id: str, version: str, allow_insecure_http: bool = False
+) -> Optional[str]:
     """Return the release ID matching ``version``, or None."""
-    return _client(api_base_url, token).get_release_id(product_id, version)
+    return _client(api_base_url, token, allow_insecure_http).get_release_id(product_id, version)
 
 
 def get_release_id_by_name(api_base_url: str, token: str, product_id: str, name: str) -> Optional[str]:
@@ -33,9 +37,11 @@ def get_release_id_by_name(api_base_url: str, token: str, product_id: str, name:
     return _client(api_base_url, token).get_release_id_by_name(product_id, name)
 
 
-def get_release_details(api_base_url: str, token: str, product_id: str, version: str) -> Optional[dict[str, Any]]:
+def get_release_details(
+    api_base_url: str, token: str, product_id: str, version: str, allow_insecure_http: bool = False
+) -> Optional[dict[str, Any]]:
     """Fetch full release details for ``(product_id, version)``, or None."""
-    return _client(api_base_url, token).get_release_details(product_id, version)
+    return _client(api_base_url, token, allow_insecure_http).get_release_details(product_id, version)
 
 
 def create_release(
@@ -45,6 +51,7 @@ def create_release(
     version: str,
     *,
     is_prerelease: Optional[bool] = None,
+    allow_insecure_http: bool = False,
 ) -> Optional[str]:
     """Create a release (or recover an existing one on DUPLICATE_NAME).
 
@@ -57,12 +64,16 @@ def create_release(
     on, so every release the action created was recorded as a final one --
     alphas and release candidates included.
     """
-    return _client(api_base_url, token).create_release(product_id, version, is_prerelease=is_prerelease)
+    return _client(api_base_url, token, allow_insecure_http).create_release(
+        product_id, version, is_prerelease=is_prerelease
+    )
 
 
-def tag_sbom_with_release(api_base_url: str, token: str, sbom_id: str, release_id: str) -> None:
+def tag_sbom_with_release(
+    api_base_url: str, token: str, sbom_id: str, release_id: str, allow_insecure_http: bool = False
+) -> None:
     """Associate an SBOM with a release; idempotent on DUPLICATE_ARTIFACT."""
-    _client(api_base_url, token).tag_sbom_with_release(sbom_id, release_id)
+    _client(api_base_url, token, allow_insecure_http).tag_sbom_with_release(sbom_id, release_id)
 
 
 def tag_artifact_with_release(
@@ -71,9 +82,12 @@ def tag_artifact_with_release(
     artifact_id: str,
     release_id: str,
     artifact_kind: str = "sbom",
+    allow_insecure_http: bool = False,
 ) -> None:
     """Associate an SBOM or a document with a release; idempotent on DUPLICATE_ARTIFACT."""
-    _client(api_base_url, token).tag_artifact_with_release(artifact_id, release_id, artifact_kind=artifact_kind)
+    _client(api_base_url, token, allow_insecure_http).tag_artifact_with_release(
+        artifact_id, release_id, artifact_kind=artifact_kind
+    )
 
 
 def link_release(api_base_url: str, token: str, release_id: str, product_id: str, version: str) -> None:

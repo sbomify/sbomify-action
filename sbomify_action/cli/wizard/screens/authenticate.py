@@ -67,6 +67,7 @@ def _resolve_profile_workspace(
     token: str,
     workspaces: list[dict[str, object]],
     picked_key: str | None,
+    allow_insecure_http: bool = False,
 ) -> tuple[str | None, list[dict[str, object]]]:
     """Return ``(team_key, contact_profiles)`` for the workspace the token can read.
 
@@ -100,7 +101,9 @@ def _resolve_profile_workspace(
 
     def _probe(key: str) -> tuple[str, list[dict[str, object]] | None]:
         try:
-            return key, SbomifyApiClient(base_url, token).list_contact_profiles(key)
+            return key, SbomifyApiClient(
+                base_url, token, allow_insecure_http=allow_insecure_http
+            ).list_contact_profiles(key)
         except APIError as e:
             logger.debug("Contact-profile probe failed for workspace %s: %s", key, e)
             return key, None
@@ -110,7 +113,9 @@ def _resolve_profile_workspace(
     # exactly one request.
     picked = candidates[0]
     try:
-        return picked, SbomifyApiClient(base_url, token).list_contact_profiles(picked)
+        return picked, SbomifyApiClient(base_url, token, allow_insecure_http=allow_insecure_http).list_contact_profiles(
+            picked
+        )
     except ForbiddenError:
         # Scope denial — the token can't read the picked workspace. Fall
         # through to probing the others.
@@ -246,7 +251,8 @@ class AuthenticateScreen(WizardScreen):
         in parallel.
         """
         base_url = self.wizard.opts.api_base_url
-        client = SbomifyApiClient(base_url, token)
+        allow_insecure_http = self.wizard.opts.api_allow_insecure_http
+        client = SbomifyApiClient(base_url, token, allow_insecure_http=allow_insecure_http)
         try:
             client.whoami()
         except AuthError as e:
@@ -276,20 +282,20 @@ class AuthenticateScreen(WizardScreen):
         # back to the first usable entry, and surface a warning when
         # the token spans multiple workspaces so the user notices.
         try:
-            workspaces = SbomifyApiClient(base_url, token).list_workspaces()
+            workspaces = SbomifyApiClient(base_url, token, allow_insecure_http=allow_insecure_http).list_workspaces()
         except APIError as e:
             logger.warning("Could not list workspaces: %s", e)
             workspaces = []
         team_key = _pick_default_workspace_key(workspaces)
 
         def _list_products() -> list[dict[str, object]]:
-            return SbomifyApiClient(base_url, token).list_products()
+            return SbomifyApiClient(base_url, token, allow_insecure_http=allow_insecure_http).list_products()
 
         def _list_components() -> list[dict[str, object]]:
-            return SbomifyApiClient(base_url, token).list_components()
+            return SbomifyApiClient(base_url, token, allow_insecure_http=allow_insecure_http).list_components()
 
         def _list_profiles() -> tuple[str | None, list[dict[str, object]]]:
-            return _resolve_profile_workspace(base_url, token, workspaces, team_key)
+            return _resolve_profile_workspace(base_url, token, workspaces, team_key, allow_insecure_http)
 
         try:
             with ThreadPoolExecutor(max_workers=3) as pool:
