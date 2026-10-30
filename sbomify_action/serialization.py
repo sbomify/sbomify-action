@@ -9,6 +9,7 @@ import functools
 import hashlib
 import json
 import re
+import uuid
 import warnings
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
@@ -884,6 +885,28 @@ def _add_compositions_if_missing(json_str: str) -> str:
     data["compositions"] = [composition]
 
     return _json.dumps(data, indent=2, ensure_ascii=False)
+
+
+def _add_serial_number_if_missing(json_str: str) -> str:
+    """Give a CycloneDX document a ``serialNumber`` if it has none.
+
+    The serial is the document's SBOM-URI under BSI TR-03183-2 §5.2.3, and it
+    is how a signature or attestation over the file can be tied back to one
+    document. cyclonedx-python-lib mints one whenever it serializes a Bom, but
+    a document that never passes through it -- an SBOM_FILE uploaded as-is,
+    or the hand-built gradle.lockfile document when hash enrichment fails --
+    would otherwise leave without one. An existing serial is never replaced.
+    """
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError:
+        return json_str
+
+    if not isinstance(data, dict) or data.get("serialNumber"):
+        return json_str
+
+    data["serialNumber"] = f"urn:uuid:{uuid.uuid4()}"
+    return json.dumps(data, indent=2, ensure_ascii=False)
 
 
 # ============================================================================

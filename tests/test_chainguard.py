@@ -489,6 +489,30 @@ class TestFetchChainguardSbom:
 
     @patch("sbomify_action._generation.chainguard.ensure_runtime")
     @patch("sbomify_action._generation.chainguard._run_cosign")
+    def test_replaces_the_namespace_apko_gives_every_sbom(self, mock_cosign, mock_which):
+        # apko writes https://spdx.org/spdxdocs/apko/ into every image SBOM, so
+        # it identifies none of them; the document written out needs its own.
+        mock_cosign.return_value = _make_cosign_attestation_output(SAMPLE_SPDX_SBOM)
+        info = ChainguardBaseImage(image_ref="cgr.dev/chainguard/python", digest="sha256:abc123")
+
+        first = fetch_chainguard_sbom(info)["documentNamespace"]
+        second = fetch_chainguard_sbom(info)["documentNamespace"]
+
+        assert first != SAMPLE_SPDX_SBOM["documentNamespace"]
+        assert first.startswith("https://")
+        assert first != second
+
+    @patch("sbomify_action._generation.chainguard.ensure_runtime")
+    @patch("sbomify_action._generation.chainguard._run_cosign")
+    def test_keeps_a_namespace_unique_to_the_document(self, mock_cosign, mock_which):
+        namespace = "https://example.com/spdxdocs/python-0f8c2a"
+        mock_cosign.return_value = _make_cosign_attestation_output({**SAMPLE_SPDX_SBOM, "documentNamespace": namespace})
+        info = ChainguardBaseImage(image_ref="cgr.dev/chainguard/python", digest="sha256:abc123")
+
+        assert fetch_chainguard_sbom(info)["documentNamespace"] == namespace
+
+    @patch("sbomify_action._generation.chainguard.ensure_runtime")
+    @patch("sbomify_action._generation.chainguard._run_cosign")
     def test_no_spdx_attestation_raises(self, mock_cosign, mock_which):
         # Return a non-SPDX attestation
         payload = {"predicateType": "https://slsa.dev/provenance/v1", "predicate": {}}

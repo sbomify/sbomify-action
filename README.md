@@ -227,6 +227,115 @@ too — no token needed on GitHub Actions.
 
 Documents are capped at 50 MB each.
 
+## Sign your SBOM
+
+CISA's [2026 minimum elements](https://sbomify.com/compliance/cisa-minimum-elements/) list an SBOM
+author signature, and [BSI TR-03183-2](https://sbomify.com/compliance/bsi-tr-03183/), the
+technical reading of the [EU CRA](https://sbomify.com/compliance/eu-cra/), recommends signing. A
+signed SBOM lets whoever receives it check that it came from your pipeline and was not changed on
+the way, without trusting anything in between.
+
+Sign `OUTPUT_FILE` after the action has written it, and change nothing afterwards: the signature
+covers the exact bytes. Every CycloneDX SBOM the action writes carries a `serialNumber`, and every
+SPDX 2 SBOM a `documentNamespace` (one is minted if the input has none). BSI TR-03183-2 calls that
+identifier the SBOM-URI, and `actions/attest` will not take a CycloneDX file without one.
+
+### On GitHub
+
+GitHub's attestation action binds the SBOM to your build artifact's SHA-256 digest and signs it
+with Sigstore:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write # Sigstore signing certificate
+  attestations: write # store the attestation
+
+steps:
+  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  - run: make dist/my-app # your build
+  - uses: sbomify/sbomify-action@master
+    env:
+      LOCK_FILE: requirements.txt
+      OUTPUT_FILE: sbom.cdx.json
+      UPLOAD: false
+  - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+    with:
+      subject-path: dist/my-app
+      sbom-path: sbom.cdx.json
+```
+
+For a container image, pass `subject-name` and `subject-digest` instead of `subject-path`.
+Attestations work in public repositories on every GitHub plan. Private and internal repositories
+need GitHub Enterprise Cloud, and GitHub Enterprise Server does not support them.
+
+Anyone with the artifact can verify it:
+
+```bash
+gh attestation verify dist/my-app --repo OWNER/REPO --predicate-type https://cyclonedx.org/bom
+```
+
+For SPDX, use `--predicate-type https://spdx.dev/Document/v2.3` (or `v2.2` for an SPDX 2.2
+document). Without the flag, `gh` looks for build provenance rather than an SBOM. `actions/attest`
+reads CycloneDX and SPDX 2, not SPDX 3.
+
+### On GitLab, Bitbucket and private GitHub repositories
+
+Where GitHub attestations are not available, attach the SBOM to your container image with
+[cosign](https://github.com/sigstore/cosign). On GitLab.com, keyless signing uses the job's OIDC
+token, so there is no key to manage:
+
+```yaml
+sign-sbom:
+  image: alpine:3
+  needs: [build] # writes sbom.cdx.json, and IMAGE_DIGEST to a dotenv report
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  variables:
+    COSIGN_YES: "true"
+  script:
+    - apk add --no-cache cosign
+    - cosign login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD"
+    - cosign attest --type cyclonedx --predicate sbom.cdx.json "$CI_REGISTRY_IMAGE@$IMAGE_DIGEST"
+```
+
+Use `--type spdxjson` for an SPDX SBOM. On a private GitHub repository, the same command picks up
+the workflow's OIDC token once the job has `id-token: write` and `packages: write`:
+
+```yaml
+- uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+- run: |
+    echo "$GITHUB_TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+    cosign attest --yes --type cyclonedx --predicate sbom.cdx.json "ghcr.io/${GITHUB_REPOSITORY,,}@$DIGEST"
+  env:
+    GITHUB_TOKEN: ${{ github.token }}
+    DIGEST: ${{ steps.build.outputs.digest }}
+```
+
+Keyless signing goes through the public Sigstore instance, whose transparency log records the
+signing identity: for a private repository, that publishes the repository and workflow names.
+
+Bitbucket Pipelines is not one of the OIDC issuers the public Sigstore CA accepts, so keyless
+signing is not available there. Sign with a key pair instead: run `cosign generate-key-pair` once,
+store the key and its password as the secured repository variables `COSIGN_PRIVATE_KEY` and
+`COSIGN_PASSWORD`, and add `--key env://COSIGN_PRIVATE_KEY` to the `cosign attest` command.
+
+To verify a keyless attestation, name the identity that must have signed it:
+
+```bash
+cosign verify-attestation --type cyclonedx \
+  --certificate-identity "https://gitlab.com/GROUP/PROJECT//.gitlab-ci.yml@refs/heads/main" \
+  --certificate-oidc-issuer https://gitlab.com \
+  registry.gitlab.com/GROUP/PROJECT@sha256:DIGEST
+```
+
+For GitHub, the identity is
+`https://github.com/OWNER/REPO/.github/workflows/WORKFLOW.yml@refs/heads/main` and the issuer
+`https://token.actions.githubusercontent.com`. For a key pair, pass `--key cosign.pub` instead of
+both. To sign a file rather than an image, `cosign attest-blob` and
+`cosign verify-blob-attestation` take the same flags plus `--bundle sbom.sigstore.json`.
+
 ## Documentation
 
 | Topic | |
