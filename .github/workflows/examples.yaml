@@ -1,0 +1,40 @@
+---
+name: Examples
+
+# actionlint over the copy-paste GitHub workflows in examples/. The GitLab and
+# Bitbucket files, and the settings every example passes, are checked by
+# tests/test_examples.py in the main pipeline's pytest run.
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'examples/**'
+      - '.github/workflows/examples.yaml'
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'examples/**'
+      - '.github/workflows/examples.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Lint GitHub Actions examples
+        # The image bundles shellcheck, so run: blocks are checked too.
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color examples/github/*.yml

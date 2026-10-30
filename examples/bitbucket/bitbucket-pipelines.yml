@@ -1,0 +1,16 @@
+# Bitbucket Pipelines: a CycloneDX SBOM from a lock file, run in the
+# sbomify-action container image and kept as a step artifact, so no sbomify
+# account is needed. Save as bitbucket-pipelines.yml, or add the step to yours.
+pipelines:
+  default:
+    - step:
+        name: SBOM
+        image: ghcr.io/sbomify/sbomify-action:26.10.2
+        script:
+          # LOCK_FILE: any supported lock file, e.g. package-lock.json, go.mod.
+          # UPLOAD=true uploads to sbomify; also export COMPONENT_ID=... and add
+          # a secured repository variable SBOMIFY_TOKEN.
+          - export LOCK_FILE=uv.lock OUTPUT_FILE=sbom.cdx.json ENRICH=true UPLOAD=false
+          - sbomify-action
+        artifacts:
+          - sbom.cdx.json
