@@ -170,6 +170,33 @@ class TestItNeverDeletesSomeoneElsesFile:
 
         assert resolve_npm_lockfile(project) == project / "bun.lock"
 
+    @pytest.mark.parametrize("name", ["bun.lock", "bun.lockb", "package-lock.json"])
+    def test_a_symlinked_lock_stops_it_running(self, project, monkeypatch, name):
+        """A dangling link is not a file, so it read as "no lock". bun then
+        replaced the committed link with its own lock, and the cleanup
+        deleted that, leaving the checkout without the entry it started with."""
+        monkeypatch.setattr(utils.shutil, "which", lambda n: "/usr/bin/bun")
+        (project / name).symlink_to(project.parent / "outside-the-project")
+        monkeypatch.setattr(utils.subprocess, "run", lambda *a, **k: pytest.fail("resolved over a symlink"))
+
+        assert resolve_npm_lockfile(project) is None
+        assert (project / name).is_symlink()
+
+    def test_a_lock_that_is_not_a_regular_file_inside_the_project_is_not_returned(self, project, monkeypatch):
+        """Checked after bun runs as well: whatever is handed back is deleted."""
+        outside = project.parent / f"{project.name}-outside.lock"
+        outside.write_text("not ours")
+        monkeypatch.setattr(utils.shutil, "which", lambda n: "/usr/bin/bun")
+
+        def leaves_a_link(cmd, **kwargs):
+            (project / "bun.lock").symlink_to(outside)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(utils.subprocess, "run", leaves_a_link)
+
+        assert resolve_npm_lockfile(project) is None
+        assert outside.read_text() == "not ours"
+
 
 def test_a_failed_cleanup_does_not_mask_the_real_error(tmp_path, monkeypatch, caplog):
     """An unlink raising inside a finally replaces the exception that brought

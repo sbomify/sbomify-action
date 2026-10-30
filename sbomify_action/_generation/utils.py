@@ -1,9 +1,11 @@
 """Shared utilities for SBOM generation."""
 
+import json
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -856,7 +858,14 @@ def resolve_npm_lockfile(directory: Path) -> Path | None:
     bun is unavailable, or when resolution fails -- all of which leave the
     previous behaviour untouched.
     """
-    if any((directory / name).is_file() for name in _js_lock_files()):
+    # lstat, not stat. A dangling symlink is not a file, so it read as "no
+    # lock": bun 1.3.14 then replaced the committed link with its own lock,
+    # and the cleanup deleted that, leaving the checkout without the entry it
+    # started with.
+    if linked := [name for name in _js_lock_files() if (directory / name).is_symlink()]:
+        logger.warning(f"{linked[0]} is a symlink; not resolving package.json over it")
+        return None
+    if any((directory / name).exists() for name in _js_lock_files()):
         return None
 
     # Resolving reaches the registry, so it honours the same opt-out as
@@ -880,7 +889,7 @@ def resolve_npm_lockfile(directory: Path) -> Path | None:
     # missing one is a committed file removed from a checkout. Ownership is
     # recorded instead of inferred.
     candidates = (directory / "bun.lock", directory / "bun.lockb")
-    pre_existing = {c for c in candidates if c.is_file()}
+    pre_existing = {c for c in candidates if c.is_symlink() or c.exists()}
 
     try:
         subprocess.run(
@@ -902,9 +911,18 @@ def resolve_npm_lockfile(directory: Path) -> Path | None:
 
     # Whichever bun actually wrote, and only if it was not there before.
     for candidate in candidates:
-        if candidate.is_file() and candidate not in pre_existing:
-            logger.info(f"Resolved package.json into a temporary {candidate.name} for this run only")
-            return candidate
+        if candidate in pre_existing or not (candidate.is_symlink() or candidate.exists()):
+            continue
+        # The caller deletes it, so it has to be a regular file in the project.
+        if (
+            candidate.is_symlink()
+            or not candidate.is_file()
+            or not candidate.resolve().is_relative_to(directory.resolve())
+        ):
+            logger.warning(f"bun left a {candidate.name} that is not a regular file inside the project; not using it")
+            return None
+        logger.info(f"Resolved package.json into a temporary {candidate.name} for this run only")
+        return candidate
     return None
 
 
@@ -922,6 +940,233 @@ def ensure_php_installed() -> None:
     resolves it, so most PHP on GitHub arrives as a manifest and nothing else.
     """
     ensure_runtime("composer")
+
+
+def resolve_composer_lockfile(directory: Path) -> Path | None:
+    """Resolve a bare composer.json into a composer.lock cdxgen can read.
+
+    cdxgen used to do this itself with ``composer update``, which runs the
+    root package's scripts -- code from the repository being scanned. It now
+    runs with --no-install-deps and does nothing for a bare composer.json:
+    measured on the symfony-demo fixture with its lock removed, it writes no
+    document at all, which aborts the run in the image.
+
+    So the resolution happens here instead, as ``resolve_npm_lockfile`` does
+    for package.json. --no-install resolves without fetching package
+    contents, and --no-scripts and --no-plugins keep the project's code from
+    running. Same fixture: 101 components, the count cdxgen's own install
+    reached, and a canary in its pre-update-cmd never fires.
+
+    The versions are a resolution performed now, not a record, which is why
+    the document says so -- see ``_disclose_inferred_resolution``. That only
+    works if the lock is gone again by then, so the caller removes it.
+
+    Returns the lock file created, or None when one is already committed.
+
+    Raises:
+        SBOMGenerationError: when Composer is unavailable or cannot resolve
+            the manifest. Before, cdxgen failed here too; the message now
+            says what to commit.
+    """
+    lock = directory / "composer.lock"
+    advice = "Commit a composer.lock beside composer.json (run `composer update`) and point LOCK_FILE at it."
+
+    # lstat, not stat. A dangling symlink is not a file, so it read as "no
+    # lock"; Composer would then write through it, and the caller's cleanup
+    # would delete whatever it pointed at.
+    if lock.is_symlink():
+        raise SBOMGenerationError(f"composer.lock is a symlink, so it is neither read nor resolved over. {advice}")
+    if lock.exists():
+        return None
+
+    # The manifest is the scanned repository's, and resolving it reaches the
+    # network from inside CI. So: only when fetching is allowed at all, only
+    # against Packagist, and only over TLS.
+    if not fetching_is_enabled():
+        raise SBOMGenerationError(
+            "composer.json has no composer.lock beside it, and resolving one means reaching Packagist, "
+            f"which SBOMIFY_FETCH_RUNTIMES rules out. {advice}"
+        )
+    if refusal := _composer_manifest_refusal(directory / "composer.json"):
+        raise SBOMGenerationError(f"Not resolving composer.json: {refusal}. {advice}")
+
+    try:
+        ensure_php_installed()
+    except SBOMGenerationError as e:
+        raise SBOMGenerationError(
+            f"composer.json has no composer.lock beside it, and Composer is not available to resolve one: {e} {advice}"
+        ) from e
+    if not shutil.which("composer"):
+        raise SBOMGenerationError(
+            f"composer.json has no composer.lock beside it, and Composer is not on PATH to resolve one. {advice}"
+        )
+
+    logger.info("No composer.lock beside composer.json; resolving one without running the project's scripts")
+    cmd = [
+        "composer",
+        "update",
+        "--no-install",
+        "--no-scripts",
+        "--no-plugins",
+        "--ignore-platform-reqs",
+        "--no-interaction",
+    ]
+    try:
+        with tempfile.TemporaryDirectory(prefix="sbomify-composer-") as home:
+            subprocess.run(
+                cmd,
+                cwd=str(directory),
+                capture_output=True,
+                text=True,
+                timeout=DEFAULT_TIMEOUT,
+                check=True,
+                env=_composer_env(Path(home)),
+            )
+    except subprocess.CalledProcessError as e:
+        raise SBOMGenerationError(
+            f"Composer could not resolve composer.json:\n{combined_output(e.stderr, e.stdout)[-2000:]}\n{advice}"
+        ) from e
+    except (subprocess.TimeoutExpired, OSError) as e:
+        raise SBOMGenerationError(f"Composer could not resolve composer.json: {e}. {advice}") from e
+
+    if not lock.is_symlink() and not lock.exists():
+        raise SBOMGenerationError(f"Composer reported success but wrote no composer.lock. {advice}")
+    # Checked again before the caller registers it for deletion: whatever is
+    # there now has to be a file we made, in the project, and nothing else.
+    if lock.is_symlink() or not lock.is_file() or not lock.resolve().is_relative_to(directory.resolve()):
+        raise SBOMGenerationError(
+            f"Composer left a composer.lock that is not a regular file inside {directory}; not using it. {advice}"
+        )
+    logger.info("Resolved composer.json into a temporary composer.lock for this run only")
+    return lock
+
+
+#: What Composer gets from the job's environment: PATH to find itself and
+#: PHP, and what a runner may need to reach Packagist at all. Nothing else --
+#: the job holds TOKEN, DTRACK_API_KEY, GITHUB_TOKEN and the like, Composer
+#: needs none of them, and COMPOSER_AUTH or COMPOSER would let the
+#: environment rather than us decide what it reads and who it sends
+#: credentials to.
+_COMPOSER_ENV_PASSTHROUGH = (
+    "PATH",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+)
+
+
+def _composer_env(home: Path) -> dict[str, str]:
+    """A minimal environment for resolving an untrusted composer.json.
+
+    HOME and COMPOSER_HOME are a scratch directory, so no global config.json
+    or auth.json can add repositories or credentials.
+    """
+    env = {name: os.environ[name] for name in _COMPOSER_ENV_PASSTHROUGH if name in os.environ}
+    env.update(
+        HOME=str(home),
+        COMPOSER_HOME=str(home / "composer"),
+        COMPOSER_CACHE_DIR=str(home / "cache"),
+        # The image runs as root; with scripts and plugins off there is
+        # nothing for Composer's warning to protect.
+        COMPOSER_ALLOW_SUPERUSER="1",
+    )
+    if root_version := composer_root_version():
+        logger.info(f"Telling Composer this package is version {root_version}")
+        env["COMPOSER_ROOT_VERSION"] = root_version
+    return env
+
+
+#: composer.json config keys that decide whom Composer trusts, which hosts it
+#: talks to and how, or what credentials it sends -- or that point it at
+#: package metadata the repository supplies, which it would read as though it
+#: came from Packagist. Any of them in the scanned project's config means no
+#: pre-resolution. A denylist rather than an allowlist, so the settings
+#: projects actually commit (sort-packages, platform, allow-plugins,
+#: optimize-autoloader) keep working. Checked against Composer 2.10.3's
+#: res/composer-schema.json.
+_COMPOSER_CONFIG_DENYLIST = frozenset(
+    {
+        # TLS and trust. A repository-supplied cafile or capath lets anyone on
+        # the network path serve packages under it.
+        "cafile",
+        "capath",
+        "disable-tls",
+        "secure-http",
+        "secure-svn-domains",
+        # Hosts, and how they are reached.
+        "github-domains",
+        "gitlab-domains",
+        "forgejo-domains",
+        "github-protocols",
+        "gitlab-protocol",
+        "use-github-api",
+        "custom-headers",
+        # Credentials.
+        "http-basic",
+        "bearer",
+        "github-oauth",
+        "gitlab-oauth",
+        "gitlab-token",
+        "bitbucket-oauth",
+        "forgejo-token",
+        "client-certificate",
+        "store-auths",
+        "github-expose-hostname",
+        # Caches. Composer revalidates cached metadata against the server
+        # rather than refetching it, so a cache directory inside the
+        # repository is metadata the repository wrote.
+        "cache-dir",
+        "cache-repo-dir",
+        "cache-files-dir",
+        "cache-vcs-dir",
+    }
+)
+
+#: Setting these to their defaults weakens nothing, so it is not refused.
+_COMPOSER_CONFIG_DEFAULTS = {"disable-tls": False, "secure-http": True}
+
+
+def _composer_manifest_refusal(manifest: Path) -> str | None:
+    """Why this composer.json must not be resolved here, or None.
+
+    repositories: each entry can point anywhere, including hosts inside the
+    runner's network, and turning packagist.org off goes through it too. A
+    project with private or path repositories has a lock file to commit.
+
+    config: anything in ``_COMPOSER_CONFIG_DENYLIST``. Composer reads these
+    from the project and most have no environment or command-line override --
+    Config::get lists disable-tls and secure-http as "booleans without env var
+    support" -- so they cannot be corrected, only refused. Only the exact
+    default literal is let through, rather than reimplementing PHP's
+    truthiness.
+    """
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return f"it could not be read ({e})"
+    if not isinstance(data, dict):
+        return "it is not a JSON object"
+    if data.get("repositories"):
+        return "it declares its own repositories, which can point at any host, including ones inside your network"
+    config = data.get("config") or {}
+    if not isinstance(config, dict):
+        return "its config is not a JSON object"
+    denied = sorted(
+        key
+        for key in config.keys() & _COMPOSER_CONFIG_DENYLIST
+        if not (key in _COMPOSER_CONFIG_DEFAULTS and config[key] is _COMPOSER_CONFIG_DEFAULTS[key])
+    )
+    if denied:
+        return (
+            f"its config sets {', '.join(denied)}, which decide{'s' if len(denied) == 1 else ''} what Composer "
+            "trusts, which hosts it talks to, or what credentials it sends"
+        )
+    return None
 
 
 #: A version Composer will accept as the root package's: a numeric core, with
