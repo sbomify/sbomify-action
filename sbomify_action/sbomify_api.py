@@ -931,6 +931,12 @@ class SbomifyApiClient:
         The release-artifact endpoint takes exactly one of ``sbom_id`` /
         ``document_id`` and rejects a payload carrying both, so the kind
         selects the key. Idempotent on DUPLICATE_ARTIFACT.
+
+        Sends ``replace`` so the artifact supersedes one of the same kind the
+        component already has in the release. Without it, re-running a release
+        job fails here with a 400: the job uploads a fresh SBOM for the same
+        version and the previous run's SBOM is still pinned. Servers that
+        predate the flag ignore it and keep the old 400.
         """
         if artifact_kind not in ("sbom", "document"):
             raise ValueError(f"Invalid artifact_kind {artifact_kind!r}; expected 'sbom' or 'document'.")
@@ -938,7 +944,7 @@ class SbomifyApiClient:
         response = self._request(
             "POST",
             f"/api/v1/releases/{release_id}/artifacts",
-            json_body={f"{artifact_kind}_id": artifact_id},
+            json_body={f"{artifact_kind}_id": artifact_id, "replace": True},
         )
         if response.ok:
             return
