@@ -107,6 +107,27 @@ def _no_runtime_fetching(monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
+def _no_previous_sbom_lookup(monkeypatch):
+    """Keep pipeline runs from asking the real sbomify API for a previous SBOM.
+
+    A run that uploads to sbomify fetches the component's last SBOM to report
+    drift against, and the suite runs many such pipelines with made-up tokens
+    against the production URL: each was a live request, answered with a 401
+    and a warning. Stubbed where the drift module binds the client, as a
+    component with no SBOMs yet. tests/test_drift_report.py patches the
+    methods it exercises on top of this; tests/test_sbomify_api.py tests the
+    real client, which this leaves alone.
+    """
+    from sbomify_action import drift, sbomify_api
+
+    class OfflineClient(sbomify_api.SbomifyApiClient):
+        def latest_component_sbom(self, component_id: str, sbom_format: str) -> None:
+            return None
+
+    monkeypatch.setattr(drift, "SbomifyApiClient", OfflineClient)
+
+
+@pytest.fixture(autouse=True)
 def _no_persistent_enrichment_cache(monkeypatch):
     """Keep the on-disk enrichment cache out of the suite.
 
@@ -126,3 +147,16 @@ def _no_persistent_enrichment_cache(monkeypatch):
     cache.close()
     yield
     cache.close()
+
+
+@pytest.fixture(autouse=True)
+def _no_runner_file_commands(monkeypatch):
+    """Keep the suite out of the CI job's own summary and step outputs.
+
+    The suite itself runs on GitHub Actions, where these point at the real
+    files for the test step. Every pipeline a test runs would otherwise append
+    its summary to the page and its outputs to the step. Tests that want them
+    set their own, pointing into tmp_path.
+    """
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)

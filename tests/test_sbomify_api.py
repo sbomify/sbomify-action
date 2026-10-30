@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-from sbomify_action.exceptions import APIError, AuthError, PlanLimitError
+from sbomify_action.exceptions import APIError, AuthError, ForbiddenError, PlanLimitError
 from sbomify_action.sbomify_api import SbomifyApiClient
 
 
@@ -824,3 +824,70 @@ def test_find_component_sbom_rechecks_filters_client_side() -> None:
         ]
     )
     assert client.find_component_sbom("c1", "v1.2.3", "cyclonedx") == "match"
+
+
+# ----------------------------------------------------------------------
+# previous SBOM (drift report)
+
+
+def test_latest_component_sbom_reads_one_page_and_takes_the_newest_in_the_format() -> None:
+    """Newest first, format re-checked client-side, and no walk through the whole history."""
+    client, session = _client_with(
+        [
+            _FakeResponse(
+                200,
+                {
+                    "items": [
+                        {"sbom": {"id": "other-format", "version": "1.1.0", "format": "spdx"}},
+                        {"sbom": {"id": "newest", "version": "1.0.0", "format": "cyclonedx"}},
+                        {"sbom": {"id": "older", "version": "0.9.0", "format": "cyclonedx"}},
+                    ],
+                    "pagination": {"has_next": True},
+                },
+            )
+        ]
+    )
+    newest = {"id": "newest", "version": "1.0.0", "format": "cyclonedx"}
+    assert client.latest_component_sbom("c1", "cyclonedx") == newest
+    assert session.request.call_count == 1
+    assert session.request.call_args.args[1] == "https://api.test/api/v1/components/c1/sboms"
+    # A small page: the backend builds vulnerability, release and assessment data per row.
+    assert session.request.call_args.kwargs["params"] == {"format": "cyclonedx", "page_size": 10}
+
+
+def test_latest_component_sbom_is_none_before_the_first_upload() -> None:
+    client, _ = _client_with([_FakeResponse(200, {"items": []})])
+    assert client.latest_component_sbom("c1", "cyclonedx") is None
+
+
+def test_latest_component_sbom_raises_forbidden_on_403() -> None:
+    """Typed, so a token that may upload but not read back can be told from a fault."""
+    client, _ = _client_with([_FakeResponse(403, {"detail": "Access denied"})])
+    with pytest.raises(ForbiddenError, match=r"\[403\]"):
+        client.latest_component_sbom("c1", "cyclonedx")
+
+
+def test_latest_component_sbom_raises_api_error_on_500() -> None:
+    client, _ = _client_with([_FakeResponse(500, {"detail": "boom"})])
+    with pytest.raises(APIError) as excinfo:
+        client.latest_component_sbom("c1", "cyclonedx")
+    assert not isinstance(excinfo.value, ForbiddenError)
+
+
+def test_download_sbom_returns_the_document() -> None:
+    document = {"bomFormat": "CycloneDX", "components": []}
+    client, session = _client_with([_FakeResponse(200, document)])
+    assert client.download_sbom("s1") == document
+    assert session.request.call_args.args[1] == "https://api.test/api/v1/sboms/s1/download"
+
+
+def test_download_sbom_raises_forbidden_on_403() -> None:
+    client, _ = _client_with([_FakeResponse(403, {"detail": "Access denied"})])
+    with pytest.raises(ForbiddenError):
+        client.download_sbom("s1")
+
+
+def test_download_sbom_rejects_a_body_that_is_not_a_json_document() -> None:
+    client, _ = _client_with([_FakeResponse(200, ["not", "a", "document"])])
+    with pytest.raises(APIError, match="not a JSON document"):
+        client.download_sbom("s1")
