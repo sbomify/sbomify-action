@@ -7,8 +7,10 @@ payloads are the ones from the real events, not invented equivalents.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 import sentry_sdk
@@ -29,7 +31,9 @@ from sbomify_action.exceptions import (
 )
 from sbomify_action.serialization import (
     _canonical_spdx_license_id,
+    _is_compound_expression,
     _is_valid_spdx_license_id,
+    load_cyclonedx_bom,
     sanitize_cyclonedx_licenses,
 )
 from sbomify_action.validation import validate_sbom_data
@@ -164,6 +168,76 @@ class TestNonSpdxLicenseIds:
         assert "id" not in licence
         assert licence["name"] == "Totally-Made-Up-1.0"
         assert validate_sbom_data(sbom, "cyclonedx", "1.6").valid is True
+
+
+class TestCompoundExpressionInLicenseId:
+    """GITHUB-ACTION-MG / MH / MJ — a licence expression sitting in ``license.id``.
+
+    ``[{'license': {'id': 'GPL-2.0-only OR GPL-2.0-or-later OR MPL-2.0'}}]`` at
+    ``components.0.licenses``, and step 3 aborted with "Enriched SBOM failed
+    validation". CycloneDX ``license.id`` takes one enum member; an expression
+    belongs in the peer ``expression`` field.
+
+    Every reported event is on ``26.1.0``, which predates
+    ``_is_compound_expression`` -- the sanitizer saw an id that was not on the
+    SPDX list and had nowhere to put it. The current sanitizer moves it, so
+    this test is the pin rather than the fix: it fails on any build where that
+    case is lost again.
+    """
+
+    #: The payload from the events, unabridged.
+    LICENSES: list[dict[str, object]] = [{"license": {"id": "GPL-2.0-only OR GPL-2.0-or-later OR MPL-2.0"}}]
+
+    def _sbom(self) -> dict[str, Any]:
+        return {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "version": 1,
+            "components": [
+                {
+                    "type": "library",
+                    "name": "pkg",
+                    "version": "1.0",
+                    "licenses": copy.deepcopy(self.LICENSES),
+                }
+            ],
+        }
+
+    def test_the_expression_is_recognised_as_one(self) -> None:
+        assert _is_compound_expression("GPL-2.0-only OR GPL-2.0-or-later OR MPL-2.0") is True
+
+    def test_an_expression_is_never_a_valid_license_id(self) -> None:
+        assert _is_valid_spdx_license_id("GPL-2.0-only OR GPL-2.0-or-later OR MPL-2.0") is False
+
+    def test_the_reported_payload_now_validates(self) -> None:
+        sbom = self._sbom()
+        # Precondition: unsanitized, this is exactly the reported failure,
+        # at the path the event named.
+        result = validate_sbom_data(sbom, "cyclonedx", "1.6")
+        assert result.valid is False
+        assert result.error_path == "components.0.licenses"
+
+        sanitize_cyclonedx_licenses(sbom)
+        assert validate_sbom_data(sbom, "cyclonedx", "1.6").valid is True
+
+    def test_the_expression_moves_to_the_expression_field_intact(self) -> None:
+        sbom = self._sbom()
+        sanitize_cyclonedx_licenses(sbom)
+        choice = sbom["components"][0]["licenses"][0]
+        # A peer of `license`, not nested under it, and every disjunct kept:
+        # a licence the document stated is not ours to narrow.
+        assert choice == {"expression": "GPL-2.0-only OR GPL-2.0-or-later OR MPL-2.0"}
+
+    def test_the_enrichment_path_reaches_the_repair(self) -> None:
+        """The events came out of step 3, so the repair has to run there.
+
+        Enrichment reads the document the user supplied, and that document is
+        where the expression was.
+        """
+        sbom = self._sbom()
+        bom = load_cyclonedx_bom(sbom)
+        component = next(iter(bom.components))
+        assert {str(licence.value) for licence in component.licenses} == {"GPL-2.0-only OR GPL-2.0-or-later OR MPL-2.0"}
 
 
 class TestSearchLocationMessage:
