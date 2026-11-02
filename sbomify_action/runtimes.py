@@ -49,7 +49,7 @@ import time
 import tomllib
 import zipfile
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -849,8 +849,133 @@ def _apply_bundle_manifest(prefix: Path) -> Path:
     return first
 
 
+#: Where to look for an earlier sbom-tools release when the pinned one lacks a bundle.
+_BUNDLE_RELEASES_API = "https://api.github.com/repos/sbomify/sbom-tools/releases"
+#: How far back to look. Far enough to skip a release that failed to build,
+#: close enough that the fallback is still a recent toolchain.
+_FALLBACK_RELEASES_TO_CHECK = 10
+
+
+def _is_missing(exc: BaseException) -> bool:
+    """Whether a failed fetch was a 404, rather than a network or verification failure.
+
+    Only absence earns a fallback. A bundle that downloaded but failed its
+    attestation must stop the run: trying an older release then would turn a
+    rejected artifact into a quiet downgrade.
+    """
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, requests.HTTPError):
+            response = current.response
+            return response is not None and response.status_code == 404
+        current = current.__cause__
+    return False
+
+
+def _github_auth_headers() -> dict[str, str]:
+    """An Authorization header when a token is available, for the 5000/hour API limit."""
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def _fallback_release(bundle: Bundle, arch: str) -> str | None:
+    """The newest release before the pinned one that has this bundle in full.
+
+    sbom-tools publishes a release before its build job has uploaded the
+    bundles, so for a few minutes the pinned tag exists and its archives 404.
+    An action pinned to it in that window -- the PR bumping the pin, in
+    practice -- would otherwise fail every generator. Both the archive and its
+    attestation have to be there: one without the other cannot be used.
+
+    Returns None when nothing suitable is found or the API cannot be reached,
+    so the caller reports the original 404 rather than this lookup's failure.
+    """
+    archive = bundle.archive_url(arch).rsplit("/", 1)[-1]
+    wanted = {archive, archive + ".sigstore.json"}
+    try:
+        response = requests.get(
+            _BUNDLE_RELEASES_API,
+            params={"per_page": _FALLBACK_RELEASES_TO_CHECK},
+            headers={"Accept": "application/vnd.github+json", **_github_auth_headers()},
+            timeout=(_CONNECT_TIMEOUT, _CONNECT_TIMEOUT),
+        )
+        response.raise_for_status()
+        releases = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning(f"Could not list sbom-tools releases to find a fallback for {bundle.name}: {exc}")
+        return None
+
+    # Newest first. Only releases older than the pin are candidates: falling
+    # forward would run a toolchain this action was never tested against. The
+    # rolling pre-release is not in the cut sequence, so with it pinned every
+    # cut release is older.
+    tags = [r.get("tag_name") for r in releases]
+    candidates = releases[tags.index(bundle.release) + 1 :] if bundle.release in tags else releases
+    for release in candidates:
+        if release.get("draft") or release.get("prerelease"):
+            continue
+        uploaded = {a.get("name") for a in release.get("assets") or [] if a.get("state", "uploaded") == "uploaded"}
+        if wanted <= uploaded:
+            return str(release["tag_name"])
+    return None
+
+
+def _materialize_bundle(bundle: Bundle, arch: str) -> Path:
+    """Fetch, verify and unpack one bundle into its prefix, unless it is already there."""
+    prefix = cache_root() / f"bundle-{bundle.name}-{bundle.release}-{arch}"
+    marker = prefix / _READY
+    # Re-read under the file lock. Another process may have finished this
+    # bundle while we waited for it, in which case there is nothing to do
+    # -- and, more to the point, the rmtree below would otherwise delete a
+    # prefix that process is about to use.
+    if marker.exists():
+        return prefix
+    if prefix.exists():
+        shutil.rmtree(prefix, ignore_errors=True)
+    logger.info(f"Fetching the {bundle.name} bundle ({bundle.release}, {arch})")
+    staging = prefix.with_name(prefix.name + ".staging")
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    try:
+        archive = staging / "bundle.tar.gz"
+        _download_verified(
+            Asset(
+                url=bundle.archive_url(arch),
+                algorithm="none",
+                digest="",
+                attestation=bundle.attestation_url(arch),
+            ),
+            archive,
+        )
+        unpacked = staging / "prefix"
+        unpacked.mkdir()
+        with tarfile.open(archive) as tar:
+            for member in tar.getmembers():
+                _reject_traversal(member.name)
+            tar.extractall(unpacked)  # noqa: S202 - every member checked above
+        archive.unlink()
+        (unpacked / _READY).write_text(f"{bundle.name} {bundle.release} {arch}\n", encoding="utf-8")
+        # Belt and braces behind the file lock, for the cache that
+        # could not take one. Losing this race is not an error: both
+        # prefixes were unpacked from the same pinned, attested
+        # archive, so the winner's is as good as ours.
+        try:
+            unpacked.rename(prefix)
+        except OSError:
+            if not marker.exists():
+                raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    logger.info(f"  ✓ {bundle.name} bundle ready")
+    return prefix
+
+
 def ensure_bundle(bundle: Bundle) -> Path:
-    """Fetch, verify and unpack an ecosystem bundle; return its main bin dir."""
+    """Fetch, verify and unpack an ecosystem bundle; return its main bin dir.
+
+    If the pinned release does not have the bundle (yet), the newest earlier
+    release that does is used instead -- see :func:`_fallback_release`.
+    """
     if cached := _bundles_ready.get(bundle.name):
         return cached
 
@@ -859,50 +984,16 @@ def ensure_bundle(bundle: Bundle) -> Path:
             return cached
 
         arch = current_arch()
-        prefix = cache_root() / f"bundle-{bundle.name}-{bundle.release}-{arch}"
-        marker = prefix / _READY
-        # Re-read under the file lock. Another process may have finished this
-        # bundle while we waited for it, in which case there is nothing to do
-        # -- and, more to the point, the rmtree below would otherwise delete a
-        # prefix that process is about to use.
-        if not marker.exists():
-            if prefix.exists():
-                shutil.rmtree(prefix, ignore_errors=True)
-            logger.info(f"Fetching the {bundle.name} bundle ({bundle.release}, {arch})")
-            staging = prefix.with_name(prefix.name + ".staging")
-            shutil.rmtree(staging, ignore_errors=True)
-            staging.mkdir(parents=True)
-            try:
-                archive = staging / "bundle.tar.gz"
-                _download_verified(
-                    Asset(
-                        url=bundle.archive_url(arch),
-                        algorithm="none",
-                        digest="",
-                        attestation=bundle.attestation_url(arch),
-                    ),
-                    archive,
-                )
-                unpacked = staging / "prefix"
-                unpacked.mkdir()
-                with tarfile.open(archive) as tar:
-                    for member in tar.getmembers():
-                        _reject_traversal(member.name)
-                    tar.extractall(unpacked)  # noqa: S202 - every member checked above
-                archive.unlink()
-                (unpacked / _READY).write_text(f"{bundle.name} {bundle.release} {arch}\n", encoding="utf-8")
-                # Belt and braces behind the file lock, for the cache that
-                # could not take one. Losing this race is not an error: both
-                # prefixes were unpacked from the same pinned, attested
-                # archive, so the winner's is as good as ours.
-                try:
-                    unpacked.rename(prefix)
-                except OSError:
-                    if not marker.exists():
-                        raise
-            finally:
-                shutil.rmtree(staging, ignore_errors=True)
-            logger.info(f"  ✓ {bundle.name} bundle ready")
+        try:
+            prefix = _materialize_bundle(bundle, arch)
+        except SBOMGenerationError as exc:
+            if not _is_missing(exc) or not (fallback := _fallback_release(bundle, arch)):
+                raise
+            logger.warning(
+                f"The {bundle.name} bundle is not in sbom-tools {bundle.release}; "
+                f"falling back to {fallback}, the newest earlier release that has it"
+            )
+            prefix = _materialize_bundle(replace(bundle, release=fallback), arch)
 
         bin_dir = _apply_bundle_manifest(prefix)
         _bundles_ready[bundle.name] = bin_dir
