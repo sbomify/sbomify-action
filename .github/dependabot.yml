@@ -11,16 +11,6 @@ updates:
       github-actions:
         patterns:
           - "*"
-  - package-ecosystem: "bun"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    exclude-paths:
-      - "tests/test-data/**"
-    groups:
-      bun:
-        patterns:
-          - "*"
   - package-ecosystem: "uv"
     directory: "/"
     schedule:

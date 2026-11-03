@@ -20,7 +20,7 @@ from sbomify_action._generation.protocol import (
     CARGO_CYCLONEDX_DEFAULT,
     CARGO_CYCLONEDX_VERSIONS,
 )
-from sbomify_action.exceptions import SBOMGenerationError
+from sbomify_action.exceptions import ProjectResolutionError, SBOMGenerationError
 
 
 @patch("sbomify_action._generation.generators.cyclonedx_cargo._CARGO_CYCLONEDX_AVAILABLE", True)
@@ -162,7 +162,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
             (project / "Cargo.lock").write_text("")
             output = Path(tmp) / "sbom.json"
 
-            def _run(cmd, name, timeout=None, cwd=None):
+            def _run(cmd, name, timeout=None, cwd=None, **_):
                 stem = cmd[cmd.index("--override-filename") + 1]
                 (Path(cwd) / f"{stem}.json").write_text('{"bomFormat": "CycloneDX"}')
                 return MagicMock(returncode=0)
@@ -188,6 +188,45 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIsNotNone(result.error_message)
         self.assertEqual(result.generator_name, "cyclonedx-cargo")
+
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_project_cargo_cannot_read_is_the_users_to_fix(self, mock_run):
+        """Sentry issue 952: a Cargo.toml cargo rejects was reported as our bug."""
+        import subprocess
+
+        mock_run.side_effect = subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["cargo-cyclonedx"],
+            stderr=(
+                "error: failed to parse manifest at `/src/Cargo.toml`\n\nCaused by:\n"
+                "  no targets specified in the manifest\n"
+                "Error: `cargo metadata` exited with an error: "
+            ),
+            output="",
+        )
+
+        gen_input = GenerationInput(lock_file=CARGO_LOCK, output_file="sbom.json")
+        with self.assertRaises(ProjectResolutionError) as ctx:
+            self.generator.generate(gen_input)
+
+        message = str(ctx.exception)
+        self.assertIn("failed to parse manifest", message)
+        self.assertIn("cargo metadata", message)
+
+    @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_other_cargo_cyclonedx_failures_stay_ours(self, mock_run):
+        import subprocess
+
+        mock_run.side_effect = subprocess.CalledProcessError(
+            returncode=1, cmd=["cargo-cyclonedx"], stderr="Error: I/O error\nRead-only file system", output=""
+        )
+
+        result = self.generator.generate(GenerationInput(lock_file=CARGO_LOCK, output_file="sbom.json"))
+
+        self.assertFalse(result.success)
+        self.assertIn("I/O error", result.error_message or "")
 
     def test_unsupported_version_returns_failure(self):
         """Test that unsupported version returns failure result."""
@@ -322,7 +361,7 @@ class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):
     def _fake_run(self, produced_body='{"bomFormat": "CycloneDX"}'):
         """Stand in for cargo-cyclonedx, writing where the real tool would."""
 
-        def _run(cmd, name, timeout=None, cwd=None):
+        def _run(cmd, name, timeout=None, cwd=None, **_):
             stem = cmd[cmd.index("--override-filename") + 1]
             (Path(cwd) / f"{stem}.json").write_text(produced_body)
             return MagicMock(returncode=0)
@@ -405,7 +444,7 @@ class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):
         orchestrator falls through to a generator that emits a single document.
         """
 
-        def _workspace_run(cmd, name, timeout=None, cwd=None):
+        def _workspace_run(cmd, name, timeout=None, cwd=None, **_):
             stem = cmd[cmd.index("--override-filename") + 1]
             for member in ("alpha", "beta"):
                 d = Path(cwd) / "crates" / member
@@ -429,7 +468,7 @@ class TestCycloneDXCargoGeneratorCommandLine(unittest.TestCase):
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.cyclonedx_cargo.run_command")
     def test_scratch_file_cleaned_up_when_the_tool_fails(self, mock_run):
-        def _boom(cmd, name, timeout=None, cwd=None):
+        def _boom(cmd, name, timeout=None, cwd=None, **_):
             stem = cmd[cmd.index("--override-filename") + 1]
             (Path(cwd) / f"{stem}.json").write_text("partial")
             raise SBOMGenerationError("cargo-cyclonedx blew up")
