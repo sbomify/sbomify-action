@@ -165,16 +165,36 @@ def test_client_rejects_invalid_document_type():
 
 def test_client_tags_document_into_release_with_document_id():
     """The release-artifact endpoint takes exactly one of sbom_id/document_id;
-    sending a document under sbom_id would attach the wrong artifact kind."""
+    sending a document under sbom_id would attach the wrong artifact kind.
+    replace lets a re-run release job supersede the earlier run's artifact."""
     session = MagicMock()
     session.request.return_value = _response(200, {})
     client = SbomifyApiClient(SBOMIFY_PRODUCTION_API, "tok", session=session)
 
     client.tag_artifact_with_release("doc-1", "rel-1", artifact_kind="document")
-    assert session.request.call_args.kwargs["json"] == {"document_id": "doc-1"}
+    assert session.request.call_args.kwargs["json"] == {"document_id": "doc-1", "replace": True}
 
     client.tag_artifact_with_release("sbom-1", "rel-1")
-    assert session.request.call_args.kwargs["json"] == {"sbom_id": "sbom-1"}
+    assert session.request.call_args.kwargs["json"] == {"sbom_id": "sbom-1", "replace": True}
+
+
+def test_client_warns_when_the_server_reports_a_replacement():
+    """Two jobs publishing to one component now overwrite each other; that must not be silent."""
+    session = MagicMock()
+    session.request.return_value = _response(201, {"replaced": True, "replaced_artifact_name": "app-amd64"})
+    client = SbomifyApiClient(SBOMIFY_PRODUCTION_API, "tok", session=session)
+
+    with patch("sbomify_action.sbomify_api.logger") as logger:
+        client.tag_artifact_with_release("sbom-2", "rel-1")
+    logger.warning.assert_called_once()
+    assert "replaced app-amd64" in logger.warning.call_args.args[0]
+
+    # A plain add, or a server that predates the field, logs nothing.
+    for body in ({"replaced": False, "replaced_artifact_name": None}, {"id": "ra-1"}):
+        session.request.return_value = _response(201, body)
+        with patch("sbomify_action.sbomify_api.logger") as logger:
+            client.tag_artifact_with_release("sbom-2", "rel-1")
+        logger.warning.assert_not_called()
 
 
 def test_client_rejects_unknown_artifact_kind():
