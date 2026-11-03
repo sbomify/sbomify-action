@@ -1342,11 +1342,14 @@ def _format_search_locations(*candidates: Path) -> str:
     return ", ".join(f"'{location}'" for location in seen)
 
 
-def _first_existing(path: str | Path) -> Path | None:
-    """Return the first workspace candidate that holds ``path`` as a file inside WORKING_DIR."""
+def _first_existing(path: str | Path, confined: bool = True) -> Path | None:
+    """Return the first workspace candidate that holds ``path`` as a file, inside WORKING_DIR if ``confined``.
+
+    Confined for resolving an input; unconfined for asking whether a file exists at all.
+    """
     for workspace in workspace_candidates():
         candidate = workspace / path
-        if candidate.is_file() and inside_working_dir(candidate):
+        if candidate.is_file() and (not confined or inside_working_dir(candidate)):
             return candidate
     return None
 
@@ -3246,7 +3249,7 @@ def _cites_a_phantom_lockfile(value: object, directory: Path) -> bool:
     # wearing a different hat.
     if cited.is_absolute():
         return not cited.is_file()
-    return not (directory / cited).is_file() and _first_existing(cited) is None
+    return not (directory / cited).is_file() and _first_existing(cited, confined=False) is None
 
 
 def _recommend_a_lock_file(lock_file: str | None) -> None:
