@@ -168,6 +168,53 @@ def test_build_env_mirrors_workflow_env_with_session_token(tmp_path: Path, monke
     assert env["HOME"] == str(tmp_path)
 
 
+def test_build_env_scrubs_every_input_the_pipeline_cli_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Derived from the CLI's own options so a new input can't slip past.
+
+    SBOMIFY_TOKEN is the sharp one: it outranks TOKEN, so a token exported
+    for another workspace would silently replace the session token.
+    """
+    import click
+
+    from sbomify_action.cli.main import cli
+
+    envvars: set[str] = set()
+    for param in cli.params:
+        if isinstance(param, click.Option) and param.envvar:
+            envvars.update([param.envvar] if isinstance(param.envvar, str) else param.envvar)
+    assert "SBOMIFY_TOKEN" in envvars
+    for name in envvars:
+        monkeypatch.setenv(name, "stray")
+
+    state = _state(tmp_path)
+    runs = publish_mod.build_publish_runs(state, tmp_path / "out")
+    env = publish_mod._build_env(runs[0], state, _opts(tmp_path), version=None)
+
+    assert sorted(k for k in envvars if env.get(k) == "stray") == []
+
+
+def test_build_env_sets_submodule_path_for_a_nested_lockfile(tmp_path: Path) -> None:
+    """Same attach-or-backfill mode the CI row runs in, so the SBOM lands
+    under the submodule's pinned version rather than this repo's SHA."""
+    state = _state(tmp_path)
+    lock = DiscoveredLockfile(
+        path=tmp_path / "vendor/lib/Cargo.lock",
+        rel_path=Path("vendor/lib/Cargo.lock"),
+        ecosystem="rust",
+        suggested_name="lib",
+        nested_repo="vendor/lib",
+        nested_repo_kind="submodule",
+    )
+    state.plan.create_components.append(PlannedComponent(lockfile=lock, name="lib"))
+    state.component_ids[Path("vendor/lib/Cargo.lock")] = "comp-2"
+    runs = publish_mod.build_publish_runs(state, tmp_path / "out")
+
+    envs = [publish_mod._build_env(run, state, _opts(tmp_path), version="abc1234") for run in runs]
+
+    assert "SUBMODULE_PATH" not in envs[0]
+    assert envs[1]["SUBMODULE_PATH"] == "vendor/lib"
+
+
 def test_build_env_omits_version_when_unknown(tmp_path: Path) -> None:
     state = _state(tmp_path)
     runs = publish_mod.build_publish_runs(state, tmp_path / "out")
