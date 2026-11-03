@@ -172,8 +172,12 @@ jobs:
           AUGMENT: 'true'
           ENRICH: 'true'
           OUTPUT_FILE: ${{ matrix.output_file }}
-          SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
-          SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
+          # The action is a container with the checkout mounted at
+          # /github/workspace; github.workspace is the runner's host path,
+          # which does not exist in there, so the cache step above never saw
+          # what the action wrote.
+          SBOMIFY_CACHE_DIR: /github/workspace/.sbomify-cache
+          SYFT_CACHE_DIR: /github/workspace/.sbomify-cache/syft
       # A generator that cannot read its input still exits 0 with a valid SBOM
       # listing nothing. SPDX counts the described root as a package; skip it.
       - name: Fail if the SBOM lists no components
