@@ -500,6 +500,20 @@ class TestTheManifestCannotSteerTheResolution:
 
         assert composer_runs == []
 
+    def test_advisories_do_not_decide_which_versions_are_listed(self, tmp_path, composer_runs):
+        """Since Composer 2.9, update refuses versions with security advisories:
+        an exact pin to one fails, and a range quietly resolves around it, so
+        the SBOM under-reports the very thing it exists to report. The
+        manifest's own policy cannot turn blocking back on: Composer applies
+        --no-blocking after reading the project's config."""
+        self._manifest(tmp_path, config={"policy": {"advisories": {"block": True}}, "audit": {"block-insecure": True}})
+
+        assert resolve_composer_lockfile(tmp_path) == tmp_path / "composer.lock"
+
+        cmd = composer_runs[0][0]
+        assert "--no-blocking" in cmd, "advisory blocking would drop vulnerable versions from the SBOM"
+        assert "--no-audit" in cmd, "the audit fetches policy-list URLs the manifest's config can name"
+
     def test_an_empty_repositories_list_resolves(self, tmp_path, composer_runs):
         self._manifest(tmp_path, repositories=[])
 

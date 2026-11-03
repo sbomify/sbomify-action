@@ -977,12 +977,21 @@ def resolve_composer_lockfile(directory: Path) -> Path | None:
         )
 
     logger.info("No composer.lock beside composer.json; resolving one without running the project's scripts")
+    # --no-blocking: since 2.9, update refuses versions with security
+    # advisories, so an exact pin to one fails and a range resolves around it
+    # -- an SBOM that under-reports the very thing it exists to report.
+    # Composer applies the flag after reading the project's config.policy, so
+    # the manifest cannot turn blocking back on. --no-audit: the audit has
+    # nothing to give us, and it is where Composer fetches the URL sources a
+    # config.policy custom list names. Both checked in 2.10.3's source.
     cmd = [
         "composer",
         "update",
         "--no-install",
         "--no-scripts",
         "--no-plugins",
+        "--no-blocking",
+        "--no-audit",
         "--ignore-platform-reqs",
         "--no-interaction",
     ]
