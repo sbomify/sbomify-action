@@ -320,7 +320,29 @@ class TestInputsResolveInsideWorkingDir:
         result, seen = _run_action(monorepo, WORKING_DIR="packages/api", LOCK_FILE="uv.lock")
 
         assert "lock_file" not in seen, f"built from {seen.get('lock_file')}"
+        assert f"'{monorepo / 'uv.lock'}'" in str(result.exception), "does not name the root file it skipped"
         assert "'../../uv.lock'" in str(result.exception)
+
+    @pytest.mark.parametrize("root_lock_file", [True, False], ids=["root-on-poetry", "root-without-poetry"])
+    def test_a_package_that_changed_lock_file_is_substituted_whatever_the_root_holds(
+        self, monorepo, caplog, root_lock_file
+    ):
+        """Other packages are still on poetry, this one moved to uv. A poetry.lock
+        at the root belongs to them, so it must not decide whether this
+        package's own uv.lock is used."""
+        package = monorepo / "packages" / "api"
+        (package / "uv.lock").write_text("version = 1\n")
+        if root_lock_file:
+            (monorepo / "poetry.lock").write_text("")
+
+        with caplog.at_level("WARNING"):
+            result, seen = _run_action(monorepo, WORKING_DIR="packages/api", LOCK_FILE="poetry.lock")
+
+        assert result.exit_code == 0, result.output
+        assert Path(seen["lock_file"]) == package / "uv.lock"
+        assert "USING A DIFFERENT INPUT THAN THE ONE YOU CONFIGURED" in caplog.text
+        # Only claim the file is missing from where it actually is missing.
+        assert ("'poetry.lock', which is not in WORKING_DIR" in caplog.text) == root_lock_file
 
     @pytest.mark.parametrize("spelling", ["../../uv.lock", "absolute"])
     def test_the_root_file_can_be_named_on_purpose(self, monorepo, spelling):

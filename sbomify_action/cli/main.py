@@ -1473,11 +1473,15 @@ def _expand_lock_file_or_substitute(path: str) -> str:
     except FileProcessingError as missing:
         original = missing
 
-    # The named file is there, only outside WORKING_DIR. The project did not
-    # change package manager, so there is nothing to substitute, and the error
-    # already says how to use that file on purpose.
-    if any((root / path).is_file() for root in workspace_candidates()):
-        raise original
+    # The named file is there, only outside WORKING_DIR. That alone does not
+    # rule out a substitute: other packages can keep poetry.lock at the root
+    # after this one moved to uv, and this package's own uv.lock is still the
+    # right input. But only a lock file may stand in for it, never a bare
+    # manifest -- in the usual workspace layout the package has only
+    # pyproject.toml and its lock file *is* the root one, so the project did
+    # not change package manager and the error already says how to use that
+    # file on purpose.
+    named_at_root = any((root / path).is_file() for root in workspace_candidates())
 
     named = Path(path)
     ecosystem = get_lock_file_ecosystem(named.name)
@@ -1559,7 +1563,7 @@ def _expand_lock_file_or_substitute(path: str) -> str:
     # share a filename.
     locks = [s for s in siblings if records_a_resolution(str(s))]
     manifests = [s for s in siblings if not records_a_resolution(str(s))]
-    candidates = locks or manifests
+    candidates = locks if named_at_root else (locks or manifests)
 
     if len(candidates) != 1:
         if candidates:
@@ -1582,7 +1586,7 @@ def _expand_lock_file_or_substitute(path: str) -> str:
         "  ┌───────────────────────────────────────────────────────────────┐\n"
         "  │  USING A DIFFERENT INPUT THAN THE ONE YOU CONFIGURED          │\n"
         "  └───────────────────────────────────────────────────────────────┘\n"
-        f"  LOCK_FILE names '{named.name}', which is not in this repository.\n"
+        f"  LOCK_FILE names '{named.name}', which is not {'in WORKING_DIR' if named_at_root else 'in this repository'}.\n"
         f"  '{substitute.name}' is, and it describes the same ecosystem\n"
         f"  ({ecosystem}), so that is what this SBOM was built from.\n"
         f"{downgrade}"
