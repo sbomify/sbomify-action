@@ -22,6 +22,9 @@ Design notes:
 * **Cache errors are never fatal.** Any problem reading or writing degrades to
   "no cache" rather than failing enrichment. A corrupt cache should cost
   network calls, not the run.
+* **Entries are versioned.** A fix to a source's parsing or matching must not
+  wait out the 30-day TTL while the old, wrong answers keep being served. See
+  ``SCHEMA_VERSION`` and ``SOURCE_VERSIONS``.
 """
 
 from __future__ import annotations
@@ -45,6 +48,14 @@ DEFAULT_HIT_TTL_SECONDS = 30 * 24 * 3600  # 30 days
 # Misses expire quickly so a newly published package is picked up on the next
 # run rather than being remembered as absent for a month.
 DEFAULT_MISS_TTL_SECONDS = 24 * 3600  # 1 day
+
+# Bump SCHEMA_VERSION when what an entry holds changes shape: every entry then
+# reads as a miss. When one source's parsing or matching is fixed, bump that
+# source's version here instead, keyed by ``source.name``, so its old answers
+# stop being served while every other source keeps its entries.
+# Version 1 retires everything cached before entries were versioned.
+SCHEMA_VERSION = 1
+SOURCE_VERSIONS: dict[str, int] = {}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
@@ -115,6 +126,13 @@ def _connect() -> Optional[sqlite3.Connection]:
     return _conn
 
 
+def _namespace(source: str) -> str:
+    """The stored ``source`` column: the name plus the versions it is read and written under."""
+    # ponytail: entries under an older version are never read again but are not
+    # deleted either; add a prune if the cache file's size becomes a problem.
+    return f"{source}@{SCHEMA_VERSION}.{SOURCE_VERSIONS.get(source, 0)}"
+
+
 def _serialize(metadata: Optional[NormalizedMetadata]) -> Optional[str]:
     if metadata is None:
         return None
@@ -146,7 +164,7 @@ def get(source: str, key: str) -> Tuple[bool, Optional[NormalizedMetadata]]:
         try:
             row = conn.execute(
                 "SELECT payload, fetched_at FROM entries WHERE source = ? AND key = ?",
-                (source, key),
+                (_namespace(source), key),
             ).fetchone()
         except Exception as e:  # pragma: no cover - corrupt db
             logger.debug(f"Enrichment cache read failed for {source}/{key}: {e}")
@@ -186,7 +204,7 @@ def set(source: str, key: str, metadata: Optional[NormalizedMetadata]) -> None:
         try:
             conn.execute(
                 "INSERT OR REPLACE INTO entries (source, key, payload, fetched_at) VALUES (?, ?, ?, ?)",
-                (source, key, _serialize(metadata), time.time()),
+                (_namespace(source), key, _serialize(metadata), time.time()),
             )
             conn.commit()
         except Exception as e:  # pragma: no cover - disk full, readonly fs
