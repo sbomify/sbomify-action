@@ -6,14 +6,17 @@ from unittest.mock import patch
 
 import pytest
 
+from sbomify_action._generation.buildkit_provenance import resolve_platform_digest
 from sbomify_action._generation.chainguard import (
     ChainguardBaseImage,
+    _detect_chainguard_from_provenance,
     _extract_repo,
     _parse_purl_docker_uri,
     convert_spdx_to_cyclonedx,
     detect_chainguard_image,
     fetch_chainguard_sbom,
 )
+from sbomify_action.exceptions import SBOMGenerationError
 
 # --- Fixtures ---
 
@@ -263,7 +266,7 @@ class TestParseDockerPurl:
 
 
 class TestDetectDirectChainguard:
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.chainguard.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_direct_chainguard_image(self, mock_crane, mock_which):
         mock_crane.side_effect = [
@@ -279,7 +282,7 @@ class TestDetectDirectChainguard:
         # Digest depends on current platform (amd64 or arm64)
         assert result.digest.startswith("sha256:")
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.chainguard.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_non_chainguard_returns_none(self, mock_crane, mock_which):
         # Not cgr.dev prefix, so tries provenance path
@@ -302,14 +305,45 @@ class TestDetectDirectChainguard:
         result = detect_chainguard_image("nginx:latest")
         assert result is None
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value=None)
-    def test_crane_not_available(self, mock_which):
+    @patch(
+        "sbomify_action._generation.chainguard.ensure_runtime",
+        side_effect=SBOMGenerationError("no pinned runtime"),
+    )
+    def test_crane_not_available(self, mock_ensure):
         result = detect_chainguard_image("cgr.dev/chainguard/python:latest")
         assert result is None
 
+    @patch("sbomify_action._generation.buildkit_provenance.run_crane")
+    def test_resolve_platform_digest_tolerates_missing_digest(self, mock_crane):
+        """A manifest-list entry that matches the platform but lacks a 'digest'
+        key must NOT raise KeyError — resolve_platform_digest returns None and
+        the caller treats it as 'no resolvable digest'. (OCI mandates digest;
+        this guards against a malformed/non-spec registry response.) Both
+        common linux platforms are present and digest-less so the test is
+        deterministic regardless of the runner's architecture."""
+        manifest_list_no_digest = json.dumps(
+            {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.index.v1+json",
+                "manifests": [
+                    {
+                        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                        "platform": {"architecture": "amd64", "os": "linux"},
+                    },
+                    {
+                        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                        "platform": {"architecture": "arm64", "os": "linux"},
+                    },
+                ],
+            }
+        )
+        mock_crane.return_value = manifest_list_no_digest
+        # Must not raise; returns None because no matching entry carries a digest.
+        assert resolve_platform_digest("cgr.dev/chainguard/python:latest") is None
+
 
 class TestDetectFromProvenance:
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.chainguard.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_detects_chainguard_base_in_provenance(self, mock_crane, mock_which):
         # Resolve platform digest for the found Chainguard image
@@ -344,7 +378,7 @@ class TestDetectFromProvenance:
         assert result.image_ref == "cgr.dev/chainguard/python"
         assert result.digest.startswith("sha256:")
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.chainguard.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_detects_chainguard_with_registry_port(self, mock_crane, mock_which):
         """Ensure provenance detection works with registry:port image refs."""
@@ -379,7 +413,7 @@ class TestDetectFromProvenance:
         att_call_args = calls[1][0][0]  # first positional arg is the args list
         assert att_call_args[1].startswith("localhost:5000/myorg/myapp@")
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.chainguard.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_no_chainguard_in_provenance(self, mock_crane, mock_which):
         mock_crane.side_effect = [
@@ -391,7 +425,7 @@ class TestDetectFromProvenance:
         result = detect_chainguard_image("myapp:latest")
         assert result is None
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/crane")
+    @patch("sbomify_action._generation.chainguard.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_no_attestation_manifest(self, mock_crane, mock_which):
         # Image index without attestation manifest
@@ -413,9 +447,32 @@ class TestDetectFromProvenance:
         result = detect_chainguard_image("oldimage:latest")
         assert result is None
 
+    @patch("sbomify_action._generation.buildkit_provenance.run_crane")
+    def test_tolerates_attestation_entry_missing_digest(self, mock_crane):
+        """An image-index attestation entry that matches the annotation but lacks
+        a 'digest' key must NOT raise KeyError — _detect_chainguard_from_provenance
+        returns None. Mirrors the resolve_platform_digest hardening for the
+        provenance code path (off-spec/malformed registry responses)."""
+        index_no_digest = json.dumps(
+            {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.index.v1+json",
+                "manifests": [
+                    {
+                        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                        "annotations": {"vnd.docker.reference.type": "attestation-manifest"},
+                        # no "digest" key — must not KeyError
+                    },
+                ],
+            }
+        )
+        mock_crane.return_value = index_no_digest
+
+        assert _detect_chainguard_from_provenance("nginx:latest") is None
+
 
 class TestFetchChainguardSbom:
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/cosign")
+    @patch("sbomify_action._generation.chainguard.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_cosign")
     def test_fetches_spdx_sbom(self, mock_cosign, mock_which):
         cosign_output = _make_cosign_attestation_output(SAMPLE_SPDX_SBOM)
@@ -430,7 +487,7 @@ class TestFetchChainguardSbom:
         assert result["spdxVersion"] == "SPDX-2.3"
         assert len(result["packages"]) == 3
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/local/bin/cosign")
+    @patch("sbomify_action._generation.chainguard.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_cosign")
     def test_no_spdx_attestation_raises(self, mock_cosign, mock_which):
         # Return a non-SPDX attestation
@@ -444,10 +501,13 @@ class TestFetchChainguardSbom:
         with pytest.raises(RuntimeError, match="No SPDX SBOM found"):
             fetch_chainguard_sbom(info)
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value=None)
-    def test_cosign_not_available_raises(self, mock_which):
+    @patch(
+        "sbomify_action._generation.chainguard.ensure_runtime",
+        side_effect=SBOMGenerationError("no pinned runtime"),
+    )
+    def test_cosign_not_available_raises(self, mock_ensure):
         info = ChainguardBaseImage(image_ref="cgr.dev/chainguard/python", digest="sha256:abc")
-        with pytest.raises(RuntimeError, match="cosign not found"):
+        with pytest.raises(RuntimeError, match="cosign unavailable"):
             fetch_chainguard_sbom(info)
 
 

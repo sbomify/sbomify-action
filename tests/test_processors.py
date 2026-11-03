@@ -15,7 +15,46 @@ from sbomify_action._processors import (
     SBOMProcessor,
     create_default_registry,
 )
+from sbomify_action.cli.main import _finalize_post_upload
 from sbomify_action.exceptions import APIError
+
+
+class TestFinalizePostUpload(unittest.TestCase):
+    """A failed post-upload processor (e.g. a 403 creating a release) must fail
+    the run, not be swallowed as success."""
+
+    def test_processor_failure_exits_nonzero(self):
+        results = AggregateResult(
+            results=[
+                ProcessorResult.failure_result("sbomify_releases", "[403] - Only owners and admins can create releases")
+            ]
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            _finalize_post_upload(results)
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_all_success_does_not_exit(self):
+        results = AggregateResult(results=[ProcessorResult.success_result("sbomify_releases", processed_items=1)])
+        _finalize_post_upload(results)  # must not raise
+
+    def test_skipped_processor_does_not_exit(self):
+        results = AggregateResult(results=[ProcessorResult.skipped_result("sbomify_releases")])
+        _finalize_post_upload(results)  # skipped is not a failure
+
+    def test_partial_failure_exits_nonzero(self):
+        results = AggregateResult(
+            results=[
+                ProcessorResult.failure_result(
+                    "sbomify_releases",
+                    "Error processing product:v1.0.0: [403] - Only owners and admins can create releases",
+                    processed_items=1,
+                    failed_items=1,
+                )
+            ]
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            _finalize_post_upload(results)
+        self.assertEqual(ctx.exception.code, 1)
 
 
 class TestProcessorInput(unittest.TestCase):
@@ -386,27 +425,15 @@ class TestSbomifyReleasesProcessor(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("API base URL and token are required", result.error_message)
 
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_process_creates_and_tags_release(self, mock_post, mock_get):
+    @patch("sbomify_action._processors.releases_api._client")
+    def test_process_creates_and_tags_release(self, mock_client_factory):
         """Test process creates release and tags SBOM."""
-        # Mock check release exists - not found
-        check_response = Mock()
-        check_response.status_code = 200
-        check_response.ok = True
-        check_response.json.return_value = {"items": []}
-
-        # Mock create release
-        create_response = Mock()
-        create_response.ok = True
-        create_response.json.return_value = {"id": "new-release-id"}
-
-        # Mock tag SBOM
-        tag_response = Mock()
-        tag_response.ok = True
-
-        mock_get.return_value = check_response
-        mock_post.side_effect = [create_response, tag_response]
+        client = Mock()
+        client.check_release_exists.return_value = False
+        client.create_release.return_value = "new-release-id"
+        client.tag_sbom_with_release.return_value = None
+        client.get_release_details.return_value = None
+        mock_client_factory.return_value = client
 
         input_obj = ProcessorInput(
             sbom_id="sbom-123",
@@ -421,24 +448,19 @@ class TestSbomifyReleasesProcessor(unittest.TestCase):
         self.assertEqual(result.processed_items, 1)
         self.assertIn("new-release-id", result.metadata["release_ids"])
 
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_process_handles_existing_release(self, mock_post, mock_get):
+    @patch("sbomify_action._processors.releases_api._client")
+    def test_process_handles_existing_release(self, mock_client_factory):
         """Test process handles existing release by using its ID."""
-        # Mock check release exists - found
-        check_response = Mock()
-        check_response.status_code = 200
-        check_response.ok = True
-        check_response.json.return_value = {
-            "items": [{"id": "existing-release-id", "version": "v1.0.0", "name": "Release v1.0.0"}]
+        client = Mock()
+        client.check_release_exists.return_value = True
+        client.get_release_id.return_value = "existing-release-id"
+        client.tag_sbom_with_release.return_value = None
+        client.get_release_details.return_value = {
+            "id": "existing-release-id",
+            "version": "v1.0.0",
+            "name": "Release v1.0.0",
         }
-
-        # Mock tag SBOM
-        tag_response = Mock()
-        tag_response.ok = True
-
-        mock_get.return_value = check_response
-        mock_post.return_value = tag_response
+        mock_client_factory.return_value = client
 
         input_obj = ProcessorInput(
             sbom_id="sbom-123",
@@ -453,48 +475,21 @@ class TestSbomifyReleasesProcessor(unittest.TestCase):
         self.assertEqual(result.processed_items, 1)
         self.assertIn("existing-release-id", result.metadata["release_ids"])
 
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    @patch("sbomify_action._processors.releases_api.requests.post")
-    def test_process_handles_duplicate_name_error(self, mock_post, mock_get):
+    @patch("sbomify_action._processors.releases_api._client")
+    def test_process_handles_duplicate_name_error(self, mock_client_factory):
         """Test process handles DUPLICATE_NAME error by fetching existing release."""
-        # Mock check release exists - not found initially
-        check_response = Mock()
-        check_response.status_code = 200
-        check_response.ok = True
-        check_response.json.return_value = {"items": []}
-
-        # Mock create release - returns DUPLICATE_NAME
-        create_response = Mock()
-        create_response.ok = False
-        create_response.status_code = 400
-        create_response.headers = {"content-type": "application/json"}
-        create_response.json.return_value = {
-            "detail": "A release with this name already exists",
-            "error_code": "DUPLICATE_NAME",
+        # The client's create_release transparently recovers from DUPLICATE_NAME
+        # and returns the existing ID — the processor just sees a successful create.
+        client = Mock()
+        client.check_release_exists.return_value = False
+        client.create_release.return_value = "existing-release-id"
+        client.tag_sbom_with_release.return_value = None
+        client.get_release_details.return_value = {
+            "id": "existing-release-id",
+            "version": "v1.0.0",
+            "name": "v1.0.0",
         }
-
-        # Mock get release ID by name after duplicate error
-        get_id_response = Mock()
-        get_id_response.ok = True
-        # Must include 'name' field since get_release_id_by_name filters by name, not version
-        get_id_response.json.return_value = {
-            "items": [{"id": "existing-release-id", "version": "v1.0.0", "name": "v1.0.0"}]
-        }
-
-        # Mock get details (for logging)
-        get_details_response = Mock()
-        get_details_response.ok = True
-        get_details_response.json.return_value = {
-            "items": [{"id": "existing-release-id", "version": "v1.0.0", "name": "v1.0.0"}]
-        }
-
-        # Mock tag SBOM
-        tag_response = Mock()
-        tag_response.ok = True
-
-        # Sequence: check exists, get ID after duplicate, get details, get details again for friendly name
-        mock_get.side_effect = [check_response, get_id_response, get_details_response, get_details_response]
-        mock_post.side_effect = [create_response, tag_response]
+        mock_client_factory.return_value = client
 
         input_obj = ProcessorInput(
             sbom_id="sbom-123",
@@ -508,10 +503,12 @@ class TestSbomifyReleasesProcessor(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.processed_items, 1)
 
-    @patch("sbomify_action._processors.releases_api.requests.get")
-    def test_process_handles_api_error(self, mock_get):
+    @patch("sbomify_action._processors.releases_api._client")
+    def test_process_handles_api_error(self, mock_client_factory):
         """Test process handles API errors gracefully."""
-        mock_get.side_effect = APIError("API connection failed")
+        client = Mock()
+        client.check_release_exists.side_effect = APIError("API connection failed")
+        mock_client_factory.return_value = client
 
         input_obj = ProcessorInput(
             sbom_id="sbom-123",
@@ -524,6 +521,34 @@ class TestSbomifyReleasesProcessor(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertIn("API connection failed", result.error_message)
+
+    @patch("sbomify_action._processors.releases_api._client")
+    def test_process_partial_failure_is_failure(self, mock_client_factory):
+        """One release succeeding must not mask another one failing."""
+        client = Mock()
+        client.check_release_exists.return_value = False
+        client.create_release.side_effect = [
+            "new-release-id",
+            APIError("[403] - Only owners and admins can create releases"),
+        ]
+        client.tag_sbom_with_release.return_value = None
+        client.get_release_details.return_value = None
+        mock_client_factory.return_value = client
+
+        input_obj = ProcessorInput(
+            sbom_id="sbom-123",
+            product_releases=["product-a:v1.0.0", "product-b:v1.0.0"],
+            api_base_url="https://api.test.com",
+            token="test-token",
+        )
+
+        result = self.processor.process(input_obj)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.processed_items, 1)
+        self.assertEqual(result.failed_items, 1)
+        self.assertIn("Only owners and admins", result.error_message)
+        self.assertIn("new-release-id", result.metadata["release_ids"])
 
 
 class TestProcessorOrchestrator(unittest.TestCase):

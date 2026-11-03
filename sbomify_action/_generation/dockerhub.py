@@ -47,7 +47,7 @@ DOCKERHUB_MERGE_WARNING = (
     "Some gaps can remain — for the fullest coverage, build your image with "
     "`docker buildx --sbom=true --provenance=true` so BuildKit attaches a "
     "complete SBOM directly. See: "
-    "https://github.com/sbomify/sbomify-action#docker-hub-images"
+    "https://github.com/sbomify/sbomify-action#notes"
 )
 
 

@@ -1,0 +1,98 @@
+# What this action fetches at run time.
+#
+# The tools themselves are built, bundled and attested in
+# https://github.com/sbomify/sbom-tools. This file only records which bundle
+# serves which tool, because that has to be known before anything is
+# downloaded. Everything else about a bundle -- where its executables live,
+# what environment it needs -- is described by the bundle.toml inside it, so
+# a bundle can change shape without changing this file.
+#
+# A bundle carries no digest here on purpose. It is verified by its Sigstore
+# attestation, which contains the subject digest inside the signed statement:
+# a digest that was signed, rather than one transcribed into this file and
+# trusted because it is written down. That is also what makes the rolling
+# release usable at all, since its bytes change on every push to master.
+
+# The sbom-tools release to fetch from: a cut release, bumped by PR. An image
+# built from master fetches the rolling release instead (tool_manifest._bundle_release).
+tools_release = "v26.10.3"
+
+# ---------------------------------------------------------------------------
+# Bundles. `provides` is the lookup that decides what to download when a
+# generator asks for a tool; it is not a description of the contents, which
+# the bundle states for itself.
+# ---------------------------------------------------------------------------
+
+[bundle.go]
+provides = ["cyclonedx-gomod", "go"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#go"
+
+[bundle.rust]
+provides = ["cargo-cyclonedx", "cargo", "rustc", "rust"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#rust"
+
+[bundle.jvm]
+provides = ["java", "maven", "gradle", "sbt"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#jvm"
+
+[bundle.dotnet]
+provides = ["dotnet"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#dotnet"
+
+# sbom-tools has built and published this bundle for a while; nothing here
+# declared it, so bundle_for("composer") returned None, can_provide said no,
+# and every PHP project that had no committed composer.lock fell through to
+# syft and got a document with zero components -- exit code 0, no warning.
+#
+# Like the jvm bundle, it carries its own cdxgen alongside the runtime, so
+# `provides` names only the ecosystem tools: listing cdxgen or syft here would
+# be a second provider for a tool [bundle.cdxgen] already claims, which
+# load_bundles rejects outright.
+[bundle.php]
+provides = ["php", "composer"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#php"
+
+[bundle.cdxgen]
+provides = ["cdxgen"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#cdxgen"
+
+[bundle.syft]
+provides = ["syft"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#syft"
+
+[bundle.sigstore]
+provides = ["crane"]
+purl = "pkg:github/sbomify/sbom-tools@{release}#sigstore"
+
+# ---------------------------------------------------------------------------
+# The one tool still fetched from its vendor, and the only one pinned by
+# digest here.
+# ---------------------------------------------------------------------------
+
+[tool.cosign]
+# A literal, because there is no longer a lockfile here to read it from:
+# cosign is pinned in sbomify/sbom-tools like every other tool, and this
+# copy exists only so the bootstrap fetch has a digest to check.
+# bin/check_tool_versions.py watches it for updates.
+version = "3.1.3"
+stage = "runtime"
+purl = "pkg:golang/github.com/sigstore/cosign@v{version}"
+github_repo = "sigstore/cosign"
+kind = "raw"
+
+[tool.cosign.assets.amd64]
+url = "https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-amd64"
+sha256 = "4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71"
+
+[tool.cosign.assets.arm64]
+url = "https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-arm64"
+sha256 = "c5d324e091826b0d7a78eb16fef316450b4eb9aaec045611c08ba06f5e73220a"
+
+[tool.uv]
+# Builds the image; not shipped inside it. Pinned in our own uv.lock like any
+# other Python dependency.
+version_from = { file = "uv.lock", package = "uv" }
+stage = "build"
+purl = "pkg:pypi/uv@{version}"
+github_repo = "astral-sh/uv"
+dockerfile_arg = "UV_VERSION"

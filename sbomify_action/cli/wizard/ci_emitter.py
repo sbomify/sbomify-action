@@ -1,0 +1,631 @@
+"""Render the wizard's GitHub Actions workflow file.
+
+The wizard owns one filename: ``.github/workflows/sboms.yml``. Every
+selected lockfile becomes one matrix entry per requested SBOM format
+in a single job, so all components in one repo share one
+release-strategy + credential-mode + augmentation setting and one
+set of formats. That's the explicit scope simplification —
+multi-strategy emission lives outside the wizard.
+
+Templates are plain f-strings. PyYAML round-tripping silently mangles
+quoting of GitHub Actions expressions (``${{ … }}``) and reorders keys,
+which would force snapshot churn for cosmetic-only changes.
+"""
+
+from __future__ import annotations
+
+import functools
+import logging
+import re
+import threading
+from pathlib import Path
+
+import requests
+
+from sbomify_action import __version__ as _PACKAGE_VERSION
+from sbomify_action.cli.wizard.discovery import slugify
+from sbomify_action.cli.wizard.io import WIZARD_HEADER_SENTINEL
+from sbomify_action.cli.wizard.state import (
+    CredentialMode,
+    Plan,
+    PlannedComponent,
+    ReleaseStrategy,
+    RepoFacts,
+    SbomFormat,
+)
+
+logger = logging.getLogger(__name__)
+
+# The sbomify-action reference in emitted workflows is resolved at wizard run
+# time (see ``resolve_action_ref``) instead of hard-coded, so there's no
+# per-release SHA to keep in sync. We ask GitHub for the latest release —
+# never assuming the running build's version is a published tag (dev/Docker
+# builds carry local versions like ``26.7.0+ad3dc1d`` that don't exist as
+# tags) — and pin to @<sha>, the security guarantee per SECURITY.md, since a
+# tag rewrite then can't swap the action's code under the user. When GitHub
+# is unreachable we default to this build's version (local part stripped) as
+# a tag-pinned (non-SHA) @<version> ref.
+ACTION_REPO = "sbomify/sbomify-action"
+
+# Resolving the pin is best-effort and must never block the wizard for long;
+# on any failure we emit the tag-pinned ref instead.
+_PIN_TIMEOUT = 3.0
+
+_SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+# Sanity check on a GitHub-reported release tag before it lands verbatim in
+# an emitted YAML file: plain tag characters only (no whitespace, quotes, or
+# comment markers).
+_TAG_RE = re.compile(r"[A-Za-z0-9._\-]+")
+
+# Third-party actions used by the emitted workflow. Pinned-by-SHA per
+# SECURITY.md; bump when consuming a known-good newer release.
+PINNED_CHECKOUT_SHA = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+PINNED_CHECKOUT_VERSION = "v6.0.2"
+PINNED_CACHE_SHA = "27d5ce7f107fe9357f9df03efb73ab90386fccae"
+PINNED_CACHE_VERSION = "v5.0.5"
+PINNED_ATTEST_SHA = "a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32"
+PINNED_ATTEST_VERSION = "v4.1.0"
+
+# Sentinel comment that wizard-managed files carry. Detection (in
+# ``existing.py`` via ``io.file_has_wizard_header``) matches this
+# version-agnostic prefix; the emitted line appends the actual build
+# version as provenance (see ``_generated_header``).
+HEADER_SENTINEL = WIZARD_HEADER_SENTINEL
+
+
+def _version_from_pyproject() -> str | None:
+    """The ``project.version`` from this repo's ``pyproject.toml``, or None.
+
+    Used only as a last-resort fallback for a dev checkout with no installed
+    package metadata. Reading the source of truth keeps the emitted pin from
+    drifting behind a hand-maintained constant.
+    """
+    import tomllib
+
+    import sbomify_action
+
+    pyproject = Path(sbomify_action.__file__).parent.parent / "pyproject.toml"
+    try:
+        with pyproject.open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, ValueError):
+        return None
+    version = str(data.get("project", {}).get("version", "")).strip()
+    return version or None
+
+
+def _action_version() -> str:
+    """This build's sbomify-action version tag, e.g. ``v26.2.0``.
+
+    Prefers the running package's reported version; in a metadata-less dev
+    checkout (``__version__ == "unknown"``) it reads ``project.version`` from
+    ``pyproject.toml`` so there's no hard-coded version to drift.
+
+    Dev/Docker builds report PEP 440 local versions like ``26.7.0+ad3dc1d``;
+    the ``+…`` local segment is build metadata, not part of any release tag,
+    so it's stripped — the result must name a ref that can exist on GitHub.
+    """
+    version = (_PACKAGE_VERSION or "").strip()
+    if not version or version == "unknown":
+        version = (_version_from_pyproject() or "").strip()
+    version = version.split("+", 1)[0]
+    return f"v{version}" if version else "unknown"
+
+
+def _generated_header() -> str:
+    """Comment header stamped on every emitted workflow.
+
+    The sentinel line carries the wizard's actual version
+    (``# sbomify-action wizard v26.7.0``) rather than a hard-coded
+    ``v1``. Ownership detection only matches the version-agnostic
+    ``WIZARD_HEADER_SENTINEL`` prefix, so the version is provenance —
+    it tells a reader which build wrote the file without affecting
+    the overwrite check.
+    """
+    return (
+        f"# Generated by `sbomify-action wizard`. Re-run the wizard to update.\n{HEADER_SENTINEL} {_action_version()}\n"
+    )
+
+
+def _resolve_latest_release_tag() -> str | None:
+    """Tag name of the latest published release per GitHub, or ``None``.
+
+    The wizard can't assume the running build's version exists as a tag
+    (dev and Docker builds carry local-version suffixes), so the emitted
+    pin is anchored to the latest actual release. Best-effort/never-raise,
+    like ``_resolve_tag_sha``.
+    """
+    url = f"https://api.github.com/repos/{ACTION_REPO}/releases/latest"
+    try:
+        response = requests.get(
+            url,
+            timeout=_PIN_TIMEOUT,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+    except requests.RequestException:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    tag = payload.get("tag_name", "")
+    return tag if isinstance(tag, str) and _TAG_RE.fullmatch(tag) else None
+
+
+def _resolve_tag_sha(version: str) -> str | None:
+    """Commit SHA behind ``version`` per GitHub, or ``None`` on any failure.
+
+    The ``commits/{ref}`` endpoint dereferences both lightweight and
+    annotated tags to the underlying commit, so this is a single request.
+    """
+    url = f"https://api.github.com/repos/{ACTION_REPO}/commits/{version}"
+    try:
+        response = requests.get(
+            url,
+            timeout=_PIN_TIMEOUT,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+    except requests.RequestException:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    # GitHub returns an object here, but a proxy/error page could hand back a
+    # well-formed non-dict JSON value (list, string, null). Guard the type so
+    # ``.get`` can't raise AttributeError — this stays best-effort/never-raise.
+    if not isinstance(payload, dict):
+        return None
+    sha = payload.get("sha", "")
+    return sha if isinstance(sha, str) and _SHA_RE.fullmatch(sha) else None
+
+
+def _build_action_ref(version: str, sha: str | None) -> str:
+    """Assemble the ``uses:`` ref: SHA-pinned when known, else tag-pinned."""
+    if sha:
+        return f"{ACTION_REPO}@{sha}  # {version}"
+    return f"{ACTION_REPO}@{version}"
+
+
+# Serializes resolution so the lookup is single-flight across threads. The
+# review screen resolves on a worker thread while apply can start its own
+# worker moments later; lru_cache memoizes the *result* but doesn't stop two
+# threads from both missing the empty cache and each firing a GitHub request
+# (with the risk of different pins if one call fails transiently). The lock
+# wraps the cache check + compute so exactly one network call ever happens and
+# every caller gets the identical ref.
+_RESOLVE_LOCK = threading.Lock()
+
+
+@functools.lru_cache(maxsize=1)
+def _resolve_action_ref_cached() -> str:
+    version = _resolve_latest_release_tag()
+    if not version:
+        version = _action_version()
+        logger.info(
+            "Could not resolve the latest %s release from GitHub; defaulting to this build's version %s.",
+            ACTION_REPO,
+            version,
+        )
+    sha = _resolve_tag_sha(version)
+    if not sha:
+        logger.info(
+            "Could not resolve %s commit SHA from GitHub; pinning emitted workflow to tag %s instead.",
+            ACTION_REPO,
+            version,
+        )
+    return _build_action_ref(version, sha)
+
+
+def resolve_action_ref() -> str:
+    """Resolve the ``uses:`` ref for sbomify-action in emitted workflows.
+
+    Single-flight and cached for the process, so the review preview and the
+    apply write share exactly one lookup and always pin the same ref even when
+    their worker threads call concurrently. Online: the latest published
+    release resolved to its commit,
+    ``sbomify/sbomify-action@<sha>  # <release-tag>`` — never the running
+    build's own version, which may not exist as a tag. Offline (unreachable,
+    rate-limited, or tag missing): a tag-pinned
+    ``sbomify/sbomify-action@<version>`` defaulting to the version we built —
+    still pinned, just no SHA.
+    """
+    with _RESOLVE_LOCK:
+        return _resolve_action_ref_cached()
+
+
+# Keep the cache-management surface on the public name so tests/conftest can
+# reset resolution state between runs without reaching for the private cache.
+resolve_action_ref.cache_clear = _resolve_action_ref_cached.cache_clear  # type: ignore[attr-defined]
+
+
+def _format_extension(fmt: SbomFormat) -> str:
+    """Map an SBOM format to the conventional output-file extension."""
+    return "cdx.json" if fmt == "cyclonedx" else "spdx.json"
+
+
+def _matrix_block(
+    components: list[PlannedComponent],
+    formats: list[SbomFormat],
+    component_ids: dict[str, str],
+    *,
+    attestation: bool = False,
+) -> str:
+    """Render the ``matrix.include:`` rows — one per (component, format).
+
+    Row ``name`` is suffixed with the format only when more than one
+    format is being emitted, so single-format workflows stay readable.
+
+    When ``attestation`` is enabled every row carries an ``attest``
+    boolean gating the attest-build-provenance step. Lockfiles inside a
+    submodule / vendored repo get ``attest: false``: the attestation's
+    Sigstore identity would be *this* repo's workflow, but the SBOM
+    describes code owned by another repository — signing it here would
+    produce provenance that fails verification against the repo the
+    code actually comes from.
+    """
+    rows: list[str] = []
+    multi_format = len(formats) > 1
+    # Track which component-name slugs are reused across lockfiles. When two
+    # lockfiles map to the same name (eg the user accepts the same suggested
+    # name for two Python projects in a monorepo), every matrix row would
+    # otherwise write to the same output_file and clobber each other in the
+    # runner workspace. Disambiguate by suffixing the lockfile path slug.
+    slug_counts: dict[str, int] = {}
+    for c in components:
+        slug_counts[slugify(c.name) or "component"] = slug_counts.get(slugify(c.name) or "component", 0) + 1
+    for c in components:
+        name_slug = slugify(c.name) or "component"
+        rel = str(c.lockfile.rel_path)
+        cid = component_ids.get(rel, c.existing_id or "REPLACE_WITH_COMPONENT_ID")
+        # Per-lockfile uniqueness slug: only added when the component slug
+        # alone isn't unique across the matrix. We use the relative-path
+        # slug rather than an index so the output filename stays stable
+        # across re-runs even if lockfile order changes.
+        if slug_counts[name_slug] > 1:
+            lockfile_slug = slugify(rel.replace("/", "-")) or "lockfile"
+            row_slug = f"{name_slug}-{lockfile_slug}"
+        else:
+            row_slug = name_slug
+        for fmt in formats:
+            ext = _format_extension(fmt)
+            row_name = f"{row_slug}-{fmt}" if multi_format else row_slug
+            output_file = f"{row_slug}.{ext}"
+            row = (
+                "          - name: " + row_name + "\n"
+                "            component_name: " + c.name + "\n"
+                "            component_id: " + cid + "\n"
+                "            lockfile: " + rel + "\n"
+                "            sbom_format: " + fmt + "\n"
+                "            output_file: " + output_file + "\n"
+            )
+            if c.lockfile.nested_repo:
+                # Drives the action's attach-or-backfill submodule mode:
+                # it resolves the pinned commit to a version, attaches the
+                # component's existing SBOM at that version when one
+                # exists, and only generates + uploads otherwise.
+                row += "            submodule_path: " + c.lockfile.nested_repo + "\n"
+            if attestation:
+                if c.lockfile.nested_repo:
+                    kind = "submodule" if c.lockfile.nested_repo_kind == "submodule" else "vendored repo"
+                    row += (
+                        f"            # Deliberately NOT signed: {c.lockfile.nested_repo} is a {kind} — "
+                        "another repository's code. An attestation from this repo's workflow\n"
+                        "            # would carry the wrong Sigstore identity and fail verification "
+                        "against the repository the code actually comes from.\n"
+                        "            attest: false\n"
+                    )
+                else:
+                    row += "            attest: true\n"
+            rows.append(row)
+    return "".join(rows)
+
+
+def _trigger_block(strategy: ReleaseStrategy, branch: str, lockfile_paths: list[str]) -> str:
+    """``on:`` block — picks push branches vs. tags vs. workflow_dispatch."""
+    paths_lines = "".join(f"      - '{p}'\n" for p in lockfile_paths)
+    paths_lines += "      - '.github/workflows/sboms.yml'\n"
+    if strategy == "trunk":
+        return f"on:\n  push:\n    branches: [{branch}]\n    paths:\n{paths_lines}  workflow_dispatch:\n"
+    if strategy == "tag":
+        # Version tags come in two common shapes: v-prefixed (v1.2.3) and
+        # bare-numeric — plain SemVer (1.2.3) or CalVer (2026.7.1). ``v*``
+        # alone misses the bare-numeric family entirely, so pair it with
+        # ``[0-9]*`` for tags that start with a digit.
+        return "on:\n  push:\n    tags: ['v*', '[0-9]*']\n  workflow_dispatch:\n"
+    # manual
+    return "on:\n  workflow_dispatch:\n"
+
+
+def _version_step(strategy: ReleaseStrategy) -> str:
+    """Compute the ``COMPONENT_VERSION`` for the matrix job's step output.
+
+    - tag-strategy push (``GITHUB_REF`` starts with ``refs/tags/``) →
+      strip the prefix and use the clean tag (semver).
+    - tag-strategy ``workflow_dispatch`` (no tag — ``GITHUB_REF`` looks
+      like ``refs/heads/main``) → fall back to the short SHA so the
+      version doesn't end up as ``refs/heads/<branch>`` (slashes are
+      invalid in a component version and would fail downstream
+      parsing in cli/main.py).
+    - trunk/manual → short SHA so each push gets a unique version
+      without clashing.
+    """
+    if strategy == "tag":
+        # Bash test: only strip the prefix when GITHUB_REF actually
+        # starts with refs/tags/. Otherwise emit the short SHA so a
+        # workflow_dispatch from a branch produces a valid version
+        # string.
+        return (
+            "      - id: ver\n"
+            "        run: |\n"
+            '          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then\n'
+            '            echo "v=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"\n'
+            "          else\n"
+            '            echo "v=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"\n'
+            "          fi\n"
+        )
+    return '      - id: ver\n        run: echo "v=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"\n'
+
+
+def _permissions_block(mode: CredentialMode, attestation: bool) -> str:
+    """Job-level ``permissions:`` — only emitted when needed.
+
+    - OIDC mode adds ``id-token: write`` so the runner can mint a JWT.
+    - Attestation needs ``attestations: write`` to upload the
+      provenance artifact, and ``contents: read`` to read the
+      workspace contents subject-path points at.
+    """
+    if mode != "oidc" and not attestation:
+        return ""
+    lines: list[str] = ["    permissions:"]
+    if mode == "oidc":
+        lines.append("      id-token: write   # required to mint the GitHub OIDC JWT")
+    lines.append("      contents: read")
+    if attestation:
+        lines.append("      attestations: write")
+    return "\n".join(lines) + "\n"
+
+
+def _env_block(
+    *,
+    api_base_url: str,
+    credential_mode: CredentialMode,
+    augmentation: str,
+    enrich: bool,
+    release_strategy: ReleaseStrategy,
+    product_id: str | None,
+    has_submodules: bool = False,
+    normalize_version: bool = False,
+) -> str:
+    """The ``env:`` block under the action step.
+
+    Token mode adds ``TOKEN: ${{ secrets.SBOMIFY_TOKEN }}``; OIDC mode
+    drops it entirely (the action mints a short-lived token from the
+    OIDC JWT at runtime).
+
+    ``PRODUCT_RELEASE`` is only set for tag-strategy emissions where a
+    product was selected; without it the action runs in upload-only
+    mode.
+    """
+    lines: list[str] = []
+    if credential_mode == "token":
+        lines.append("          TOKEN: ${{ secrets.SBOMIFY_TOKEN }}")
+    lines.extend(
+        [
+            "          COMPONENT_ID: ${{ matrix.component_id }}",
+            "          COMPONENT_NAME: ${{ matrix.component_name }}",
+            "          COMPONENT_VERSION: ${{ steps.ver.outputs.v }}",
+            "          LOCK_FILE: ${{ matrix.lockfile }}",
+            "          UPLOAD: 'true'",
+            f"          AUGMENT: '{augmentation_to_env(augmentation)}'",
+            f"          ENRICH: '{'true' if enrich else 'false'}'",
+            # Only emitted when asked for. The version step above hands over
+            # the tag exactly as the project wrote it, so this is what turns
+            # curl-8_21_0 into 8.21.0 -- and its absence is what leaves the
+            # tag alone for everyone who did not ask.
+            *(["          NORMALIZE_VERSION: 'true'"] if normalize_version else []),
+            "          SBOM_FORMAT: ${{ matrix.sbom_format }}",
+            "          OUTPUT_FILE: ${{ matrix.output_file }}",
+            f"          API_BASE_URL: {api_base_url}",
+            "          SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache",
+            "          SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft",
+        ]
+    )
+    if has_submodules:
+        # Empty for non-submodule rows (matrix field unset) — the action
+        # treats an empty SUBMODULE_PATH as disabled.
+        lines.append("          SUBMODULE_PATH: ${{ matrix.submodule_path }}")
+    if release_strategy == "tag" and product_id:
+        # PRODUCT_RELEASE is parsed by cli/main.py as a JSON list — see
+        # cli/main.py's "PRODUCT_RELEASE must be a JSON list like
+        # [\"product_id:v1.2.3\"]" validation. The previous scalar
+        # emission ("PRODUCT_RELEASE: 'pid:ver'") failed json.loads at
+        # runtime and aborted the workflow before upload. Emit the
+        # JSON-array form so the parser accepts it. The literal
+        # ``\"`` inside YAML single quotes survives without further
+        # escaping because YAML treats single-quoted scalars as raw
+        # text (double-quote is the only escapable character there).
+        lines.append(f"          PRODUCT_RELEASE: '[\"{product_id}:${{{{ steps.ver.outputs.v }}}}\"]'")
+    return "\n".join(lines) + "\n"
+
+
+def augmentation_to_env(value: str) -> str:
+    """Map the wizard's AugmentationStrategy literal to the action env flag.
+
+    Both ``profile`` and ``json_config`` resolve to ``AUGMENT=true`` at
+    runtime — the action then chooses its source via provider priority
+    (the json_config provider beats the sbomify_api provider when a
+    local sbomify.json exists, per `_augmentation/registry.py`).
+    """
+    return "true" if value in ("profile", "json_config") else "false"
+
+
+def _cache_step() -> str:
+    """Cache step — always emitted.
+
+    Caches the enrichment lookups and license databases (SBOMIFY_CACHE_DIR)
+    and the syft scanner (SYFT_CACHE_DIR).
+
+    The key must be unique per run, with a prefix in restore-keys. A static
+    key looks like it "stays warm" but does the opposite: actions/cache skips
+    its save step whenever the primary key hits exactly, so the directory is
+    written once -- on the first run that misses -- and then frozen. Nothing
+    that accumulates can accumulate:
+
+    * the enrichment cache stays pinned to whatever the first run happened to
+      look up, and every package added afterwards misses forever;
+    * once a newer license database is released, ``license_db`` downloads it
+      on every run into a directory that is never saved back, so it re-pays
+      that download indefinitely -- silently, because a failed download just
+      falls through to the other sources.
+
+    ``github.run_id`` is monotonic per repository, so each run writes a new
+    entry and the prefix restores the most recent one.
+    """
+    return (
+        f"      - uses: actions/cache@{PINNED_CACHE_SHA}  # {PINNED_CACHE_VERSION}\n"
+        "        with:\n"
+        "          path: .sbomify-cache\n"
+        "          key: sbomify-${{ runner.os }}-${{ github.run_id }}\n"
+        "          restore-keys: |\n"
+        "            sbomify-${{ runner.os }}-\n"
+    )
+
+
+def _attest_step() -> str:
+    """Build-provenance attestation step — only emitted when enabled.
+
+    Takes the just-written SBOM file as the subject and uploads a
+    signed attestation to GitHub. Pairs with
+    ``permissions: attestations: write``.
+
+    Constraints (per actions/attest-build-provenance README):
+      - Works on any public repo, on any GitHub plan.
+      - Requires GitHub Enterprise Cloud on private / internal repos.
+      - Not supported on GitHub Enterprise Server.
+    """
+    return (
+        "      # ---------------------------------------------------------------------\n"
+        "      # Build-provenance attestation (SLSA v1)\n"
+        "      # ---------------------------------------------------------------------\n"
+        "      # Where this step is supported:\n"
+        "      #   * Public repository on any GitHub plan (Free, Pro, Team, Enterprise)\n"
+        "      #     — uses the public-good Sigstore instance (Fulcio + Rekor public log).\n"
+        "      #   * Private / internal repository on GitHub Enterprise Cloud\n"
+        "      #     — uses GitHub's private Sigstore instance (scoped to the repo).\n"
+        "      # Where it is NOT supported and the workflow will fail:\n"
+        "      #   * Private / internal repository on GitHub Free, Pro, or Team.\n"
+        "      #   * Any repository on GitHub Enterprise Server (self-hosted).\n"
+        "      # If you hit one of the unsupported configurations, either upgrade to\n"
+        "      # GitHub Enterprise Cloud, make the repo public, or remove this step.\n"
+        "      # Reference: https://github.com/actions/attest-build-provenance\n"
+        "      #\n"
+        "      # Matrix entries with attest: false are skipped: those SBOMs describe\n"
+        "      # code owned by another repository (a git submodule or vendored\n"
+        "      # checkout), and an attestation signed by this repo's workflow would\n"
+        "      # fail verification against the repository the code comes from.\n"
+        f"      - uses: actions/attest-build-provenance@{PINNED_ATTEST_SHA}  # {PINNED_ATTEST_VERSION}\n"
+        "        if: ${{ matrix.attest }}\n"
+        "        with:\n"
+        "          subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'\n"
+    )
+
+
+def emit_workflow(
+    plan: Plan,
+    *,
+    facts: RepoFacts,
+    api_base_url: str,
+    component_ids: dict[str, str] | None = None,
+    product_id: str | None = None,
+    action_ref: str | None = None,
+) -> str:
+    """Render the wizard's ``sboms.yml`` for ``plan``.
+
+    ``component_ids`` is a ``{rel_path_str: id}`` map populated by the
+    apply phase once the matching components have been created.
+    Pre-apply (review screen, dry-run, snapshot tests) it can be
+    omitted; the emitter falls back to the planned component's
+    ``existing_id`` or a literal ``REPLACE_WITH_COMPONENT_ID``
+    placeholder.
+
+    ``product_id`` is the product the workflow should publish releases
+    under for tag-strategy emissions. Apply passes
+    ``state.created_product_id`` (covers both create-new and
+    use-existing paths); pre-apply callers can omit it and fall back to
+    ``plan.use_product_id``. Without one of those, tag-strategy
+    workflows silently drop ``PRODUCT_RELEASE`` and never publish a
+    release lifecycle event.
+
+    ``action_ref`` is the ``uses:`` reference for the sbomify-action step.
+    Apply/review callers pass ``resolve_action_ref()`` (a GitHub-resolved
+    commit SHA, or a tag offline); when omitted we emit the tag-pinned ref
+    without any network call.
+    """
+    component_ids = component_ids or {}
+    lockfile_paths = [str(c.lockfile.rel_path) for c in plan.create_components]
+    formats = plan.sbom_formats or ["cyclonedx"]
+    has_submodules = any(c.lockfile.nested_repo for c in plan.create_components)
+
+    permissions = _permissions_block(plan.credential_mode, plan.attestation)
+    trigger = _trigger_block(plan.release_strategy, facts.default_branch, lockfile_paths)
+    version_step = _version_step(plan.release_strategy)
+    env = _env_block(
+        api_base_url=api_base_url,
+        credential_mode=plan.credential_mode,
+        augmentation=plan.augmentation,
+        enrich=plan.enrich,
+        release_strategy=plan.release_strategy,
+        product_id=product_id or plan.use_product_id,
+        has_submodules=has_submodules,
+        normalize_version=plan.normalize_version,
+    )
+    matrix = _matrix_block(plan.create_components, formats, component_ids, attestation=plan.attestation)
+    attest_step = _attest_step() if plan.attestation else ""
+    if has_submodules:
+        # Submodule contents are only needed on the backfill path (no
+        # published SBOM at the pinned version yet), but the checkout has
+        # to cover it unconditionally.
+        checkout_step = (
+            f"      - uses: actions/checkout@{PINNED_CHECKOUT_SHA}  # {PINNED_CHECKOUT_VERSION}\n"
+            "        with:\n"
+            "          submodules: recursive\n"
+        )
+    else:
+        checkout_step = f"      - uses: actions/checkout@{PINNED_CHECKOUT_SHA}  # {PINNED_CHECKOUT_VERSION}\n"
+
+    # Resolved by the caller (apply / review) so the GitHub lookup happens
+    # once per run. Omitted by snapshot tests and ad-hoc callers — fall back
+    # to the tag-pinned ref without touching the network.
+    action_ref = action_ref or _build_action_ref(_action_version(), None)
+
+    return (
+        f"{_generated_header()}"
+        "name: sboms\n"
+        f"{trigger}"
+        "jobs:\n"
+        "  sbom:\n"
+        "    name: ${{ matrix.name }}\n"
+        "    runs-on: ubuntu-latest\n"
+        f"{permissions}"
+        "    strategy:\n"
+        "      fail-fast: false\n"
+        "      matrix:\n"
+        "        include:\n"
+        f"{matrix}"
+        "    steps:\n"
+        f"{checkout_step}"
+        f"{_cache_step()}"
+        f"{version_step}"
+        f"      - uses: {action_ref}\n"
+        "        env:\n"
+        f"{env}"
+        f"{attest_step}"
+    )

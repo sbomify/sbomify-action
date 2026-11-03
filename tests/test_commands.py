@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from sbomify_action._generation import GenerationResult
 from sbomify_action.cli.main import evaluate_boolean
 from sbomify_action.exceptions import (
+    ConfigurationError,
     FileProcessingError,
     SBOMGenerationError,
 )
@@ -247,7 +248,12 @@ class TestUtilityFunctions(unittest.TestCase):
         self.assertFalse(evaluate_boolean("FALSE"))
         self.assertFalse(evaluate_boolean("no"))
         self.assertFalse(evaluate_boolean("0"))
-        self.assertFalse(evaluate_boolean("anything_else"))
+        self.assertFalse(evaluate_boolean("off"))
+
+    def test_evaluate_boolean_rejects_unrecognised(self):
+        """Unrecognised input raises instead of quietly meaning False."""
+        with self.assertRaises(ConfigurationError):
+            evaluate_boolean("anything_else")
 
 
 if __name__ == "__main__":

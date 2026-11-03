@@ -11,11 +11,13 @@ Verified capabilities (Syft 1.38.2):
 - Version selection: -o format@version=file
 """
 
+import os
 from pathlib import Path
 
 from sbomify_action import format_display_name
 from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.runtimes import can_provide, ensure_runtime
 from sbomify_action.tool_checks import check_tool_available
 
 from ..protocol import (
@@ -29,8 +31,95 @@ from ..protocol import (
 from ..result import GenerationResult
 from ..utils import DEFAULT_TIMEOUT, SYFT_LOCK_FILES, run_command
 
-# Check tool availability once at module load
+# Whatever is already on PATH wins, so a pip install keeps using the syft
+# the user installed. Failing that, syft is available if we can fetch it,
+# which is now the default everywhere rather than only inside our own image --
+# see runtimes.fetching_is_enabled, and SBOMIFY_FETCH_RUNTIMES=0 to opt out.
+# The fetch itself happens in generate(), where a failure can be reported
+# rather than silently dropping the generator from the chain.
+_SYFT_PATH: str | None
 _SYFT_AVAILABLE, _SYFT_PATH = check_tool_available("syft")
+if not _SYFT_AVAILABLE:
+    _SYFT_AVAILABLE = can_provide("syft")
+
+
+def _swift_manifest_without_resolved(input: GenerationInput) -> GenerationResult | None:
+    """Refuse Package.swift when the resolved file it needs is not there.
+
+    Syft is the only generator that claims Package.swift -- cdxgen
+    deliberately excludes SwiftPM, and no Swift toolchain ships in the image
+    -- and syft cannot resolve a manifest. Measured across nine Swift
+    projects, every single one produced an SBOM with zero components:
+    swift-nio, swift-collections, swift-package-manager, swift-log,
+    swift-argument-parser, SwiftyJSON and three more. Pointed at the
+    Package.resolved beside it, the same tool works.
+
+    promote_to_lockfile already redirects to Package.resolved when one is
+    committed, so reaching here means it is genuinely absent. Rather than
+    write an empty document, say what is missing and how to produce it --
+    `swift package resolve` writes the file, and it is meant to be committed.
+
+    Declining rather than failing keeps this a routing decision, so anything
+    added to the chain later still gets its turn.
+    """
+    if input.is_source_dir or not input.lock_file:
+        return None
+    if os.path.basename(input.lock_file) != "Package.swift":
+        return None
+    if os.path.isfile(os.path.join(os.path.dirname(input.lock_file), "Package.resolved")):
+        return None
+    return GenerationResult.declined_result(
+        error_message=(
+            "Package.swift declares version ranges; SwiftPM resolves them into "
+            "Package.resolved, which is what an SBOM can be built from. No "
+            "Package.resolved was found beside it -- run `swift package resolve` "
+            "and commit the result, then point LOCK_FILE at it."
+        ),
+        sbom_format=input.output_format or "cyclonedx",
+        spec_version=input.spec_version or "",
+        generator_name="syft-fs",
+    )
+
+
+#: The --select-catalogers value that turns off syft's file catalogers, which
+#: describe every file in the subject rather than the software in it. A value
+#: rather than a flag pair, because only one --select-catalogers is ever
+#: emitted and a directory-only lock file substitutes its ecosystem here.
+#:
+#: Applied on every scan that does not substitute, whatever the output format
+#: -- what changes with the format is how much it matters, not whether the
+#: flag is passed. CycloneDX is where they dominate: eclipse-temurin:21-jre
+#: came out as 7,003 components of which 6,847 were `type: file` entries
+#: carrying a path and nothing else -- no purl, no version, no licence, because
+#: a file is not a package. They cannot be enriched or matched to an advisory,
+#: and they bury the 156 packages that can.
+#:
+#: Verified to remove only noise. Scanning with and without, the package set
+#: is identical -- alpine:3 goes from 96 components to 17 with the same 17
+#: packages, redis:8-alpine from 454 to 24 with the same 24 -- so nothing a
+#: consumer can act on is lost.
+#:
+#: SPDX output is where it makes no difference, which is why the flag is
+#: unconditional rather than format-dependent: its file entries come from
+#: package file ownership rather than from these catalogers, and the same scan
+#: reports 17 packages and 79 files either way. One code path, no format to
+#: special-case.
+_NO_FILE_CATALOGERS = "-file"
+
+#: Lock files syft will only read as part of a directory, never on their own.
+#:
+#: Measured on erlang/rebar3 -- same binary, same tree:
+#:
+#:     syft scan rebar.lock                            0 packages
+#:     syft scan dir:<parent>                          9 hex, 14 GitHub Actions
+#:     syft scan dir:<parent> --select-catalogers erlang    9 hex, nothing else
+#:
+#: So the subject becomes the parent directory, and the ecosystem's catalogers
+#: are named to keep the answer about the lock file rather than about whatever
+#: else shares the directory. Listing rebar.lock without this would have
+#: shipped a zero-component document for every rebar3 project, which is worse
+#: than declining because it looks like an answer.
+_DIRECTORY_ONLY_LOCK_FILES = {"rebar.lock": "erlang"}
 
 
 class SyftFsGenerator:
@@ -85,11 +174,21 @@ class SyftFsGenerator:
         if not _SYFT_AVAILABLE:
             return False
 
-        # Only supports lock files
-        if not input.is_lock_file:
+        # A directory is syft's own subject and needs no lock file to be
+        # named. It is a different claim from a lock file -- what is on disk
+        # rather than what an ecosystem resolved -- so it arrives as its own
+        # input rather than as a lock_file that happens to be a directory.
+        if input.is_source_dir:
+            return input.output_format in ("cyclonedx", "spdx") and not (
+                input.spec_version
+                and input.spec_version
+                not in (SYFT_SPDX_VERSIONS if input.output_format == "spdx" else SYFT_CYCLONEDX_VERSIONS)
+            )
+
+        subject = input.lock_file
+        if not input.is_lock_file or subject is None:
             return False
 
-        # Check if it's a supported lock file for Syft
         if input.lock_file_name not in SYFT_LOCK_FILES:
             return False
 
@@ -110,7 +209,12 @@ class SyftFsGenerator:
 
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using Syft scan command."""
-        assert input.lock_file is not None  # guaranteed by supports()
+        assert input.lock_file is not None or input.source_dir is not None  # guaranteed by supports()
+
+        if declined := _swift_manifest_without_resolved(input):
+            return declined
+
+        ensure_runtime("syft")
         # Determine format string and version
         if input.output_format == "cyclonedx":
             version = input.spec_version or SYFT_CYCLONEDX_DEFAULT
@@ -122,14 +226,42 @@ class SyftFsGenerator:
         # Syft output format: -o format@version=file
         output_spec = f"{format_str}@{version}={input.output_file}"
 
+        # dir: is explicit rather than inferred. Syft guesses the source type
+        # from the string, and a directory name that happens to look like an
+        # image reference is read as one -- which is how bun.lock ended up
+        # being handed to a container registry.
+        # One --select-catalogers, carrying every term it needs, rather than
+        # repeating the flag and depending on how syft merges repeats.
+        #
+        # Both terms are load-bearing. Measured on erlang/rebar3, CycloneDX
+        # output -- which is what ships, and where syft's native JSON is
+        # misleading because it carries no file entries at all:
+        #
+        #     erlang            15 components: 9 library, 6 file
+        #     erlang,-file       9 components: 9 library
+        #
+        # So selecting an ecosystem does not displace the file catalogers the
+        # way it displaces the rest of the defaults, and dropping `-file` here
+        # would quietly reintroduce the noise it exists to remove.
+        select = _NO_FILE_CATALOGERS
+        if input.is_source_dir:
+            subject = f"dir:{input.source_dir}"
+        elif (ecosystem := _DIRECTORY_ONLY_LOCK_FILES.get(input.lock_file_name or "")) is not None:
+            subject = f"dir:{Path(str(input.lock_file)).parent}"
+            select = f"{ecosystem},{_NO_FILE_CATALOGERS}"
+        else:
+            subject = str(input.lock_file)
+
         cmd = [
             "syft",
             "scan",
-            input.lock_file,
+            subject,
             "-o",
             output_spec,
             "--source-name",
             input.lock_file_name or "unknown",
+            "--select-catalogers",
+            select,
         ]
 
         logger.info(
@@ -243,6 +375,7 @@ class SyftImageGenerator:
     def generate(self, input: GenerationInput) -> GenerationResult:
         """Generate an SBOM using Syft scan command."""
         assert input.docker_image is not None  # guaranteed by supports()
+        ensure_runtime("syft")
         # Determine format string and version
         if input.output_format == "cyclonedx":
             version = input.spec_version or SYFT_CYCLONEDX_DEFAULT
@@ -260,6 +393,8 @@ class SyftImageGenerator:
             input.docker_image,
             "-o",
             output_spec,
+            "--select-catalogers",
+            _NO_FILE_CATALOGERS,
         ]
 
         logger.info(

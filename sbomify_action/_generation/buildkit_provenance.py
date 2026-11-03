@@ -21,12 +21,13 @@ import binascii
 import json
 import os
 import platform
-import shutil
 import subprocess
 from typing import Any, Iterator
 from urllib.parse import unquote
 
+from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.runtimes import ensure_runtime
 
 # Well-known in-toto predicate types.
 SLSA_PROVENANCE_V1 = "https://slsa.dev/provenance/v1"
@@ -69,12 +70,22 @@ def get_current_platform() -> str:
     return f"linux/{arch}"
 
 
+def _runtime_available(name: str) -> bool:
+    # crane and cosign are fetched on demand, not baked into the image.
+    try:
+        ensure_runtime(name)
+    except SBOMGenerationError as e:
+        logger.debug(f"{name} unavailable: {e}")
+        return False
+    return True
+
+
 def crane_available() -> bool:
-    return shutil.which("crane") is not None
+    return _runtime_available("crane")
 
 
 def cosign_available() -> bool:
-    return shutil.which("cosign") is not None
+    return _runtime_available("cosign")
 
 
 def _classify_registry_error(stderr: str) -> str | None:
@@ -125,8 +136,10 @@ def _classify_registry_error(stderr: str) -> str | None:
 
 def run_crane(args: list[str]) -> str:
     """Run a ``crane`` command and return stdout."""
+    ensure_runtime("crane")
     cmd = ["crane"] + args
     logger.debug(f"Running: {' '.join(cmd)}")
+    # nosemgrep: dangerous-subprocess-use-audit  # list-form, shell=False, fixed executable
     result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=60)
     if result.returncode != 0:
         hint = _classify_registry_error(result.stderr)
@@ -138,8 +151,10 @@ def run_crane(args: list[str]) -> str:
 
 def run_cosign(args: list[str]) -> str:
     """Run a ``cosign`` command and return stdout."""
+    ensure_runtime("cosign")
     cmd = ["cosign"] + args
     logger.debug(f"Running: {' '.join(cmd)}")
+    # nosemgrep: dangerous-subprocess-use-audit  # list-form, shell=False, fixed executable
     result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=120)
     if result.returncode != 0:
         hint = _classify_registry_error(result.stderr)
@@ -171,7 +186,9 @@ def resolve_platform_digest(image_ref: str) -> str | None:
         for entry in manifest.get("manifests", []):
             p = entry.get("platform", {})
             if p.get("os") == os_name and p.get("architecture") == arch:
-                return str(entry["digest"])
+                digest = entry.get("digest")
+                if digest:
+                    return str(digest)
         logger.debug(f"No matching platform {current_platform} in manifest list for {image_ref}")
         return None
 
@@ -263,7 +280,10 @@ def _find_attestation_manifest_digest(
         if annotations.get("vnd.docker.reference.type") != "attestation-manifest":
             continue
         if platform_digest is None or annotations.get("vnd.docker.reference.digest") == platform_digest:
-            return str(entry["digest"])
+            # ``.get``: an off-spec entry without ``digest`` is skipped, not a KeyError.
+            digest = entry.get("digest")
+            if digest:
+                return str(digest)
     return None
 
 
@@ -321,8 +341,9 @@ def fetch_buildkit_attestation_statement(
     for layer in att_manifest.get("layers", []):
         annotations = layer.get("annotations", {})
         if annotations.get("in-toto.io/predicate-type") == predicate_type:
-            layer_digest = layer["digest"]
-            break
+            layer_digest = layer.get("digest")
+            if layer_digest:
+                break
 
     if not layer_digest:
         logger.debug(f"No {predicate_type} layer found in attestation for {image_ref}")

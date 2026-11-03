@@ -5,13 +5,12 @@ import re
 from pathlib import Path
 from typing import Any
 
-from cyclonedx.model.bom import Bom
 from cyclonedx.model.component import Component, ComponentType
 from packageurl import PackageURL
 
 from ..console import get_audit_trail
 from ..logging_config import logger
-from ..serialization import serialize_cyclonedx_bom
+from ..serialization import load_cyclonedx_bom, serialize_cyclonedx_bom
 from ..spdx3 import is_spdx3
 from .expanders.pipdeptree import PipdeptreeExpander
 from .models import DiscoveredDependency, ExpansionResult, normalize_python_package_name
@@ -70,7 +69,7 @@ class DependencyEnricher:
         # Load SBOM early so we can report accurate original_count
         # even when no transitive dependencies are discovered or
         # expansion is skipped entirely.
-        with sbom_path.open("r") as f:
+        with sbom_path.open("r", encoding="utf-8") as f:
             sbom_data = json.load(f)
 
         # Find applicable expander
@@ -147,13 +146,15 @@ class DependencyEnricher:
         source: str,
     ) -> ExpansionResult:
         """Add discovered dependencies to CycloneDX SBOM."""
-        bom = Bom.from_json(sbom_data)  # type: ignore[attr-defined]
+        bom = load_cyclonedx_bom(sbom_data)
         original_count = len(bom.components) if bom.components else 0
 
-        # Ensure components collection is initialized in case Bom.from_json
-        # yields a Bom with components=None for unusual input.
-        if bom.components is None:
-            bom.components = type(Bom().components)()
+        # No components-is-None guard: the property returns a SortedSet that
+        # Bom.__init__ always populates, so a document with no "components"
+        # key deserializes to an empty set rather than None, and an explicit
+        # "components": null raises inside from_json before anything here
+        # runs. The guard reassigned the property, which retyped it to the
+        # setter's Iterable and hid the .add below from the type checker.
 
         # Build set of existing PURLs for deduplication
         existing_purls: set[str] = set()
@@ -199,7 +200,7 @@ class DependencyEnricher:
         # Serialize back
         spec_version = sbom_data.get("specVersion", "1.6")
         serialized = serialize_cyclonedx_bom(bom, spec_version)
-        with sbom_path.open("w") as f:
+        with sbom_path.open("w", encoding="utf-8") as f:
             f.write(serialized)
 
         logger.info(
@@ -333,7 +334,7 @@ class DependencyEnricher:
         sbom_data["relationships"] = relationships
 
         # Write back
-        with sbom_path.open("w") as f:
+        with sbom_path.open("w", encoding="utf-8") as f:
             json.dump(sbom_data, f, indent=2)
 
         logger.info(

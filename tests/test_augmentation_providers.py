@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -413,16 +413,13 @@ class TestSbomifyApiProvider:
         # Missing token
         assert provider.fetch(component_id="test-id", api_base_url="https://api.test.com") is None
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_success(self, mock_get):
         """Test successful API fetch."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "supplier": {"name": "API Supplier"},
             "lifecycle_phase": "post-build",
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -436,14 +433,12 @@ class TestSbomifyApiProvider:
         assert result.lifecycle_phase == "post-build"
         assert result.source == "sbomify-api"
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_api_error(self, mock_get):
         """Test returns None on API error."""
-        mock_response = Mock()
-        mock_response.ok = False
-        mock_response.status_code = 500
-        mock_response.headers = {}
-        mock_get.return_value = mock_response
+        from sbomify_action.exceptions import APIError
+
+        mock_get.side_effect = APIError("Failed to retrieve component metadata from sbomify. [500]")
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -554,12 +549,10 @@ class TestSbomifyApiProvider:
 
         assert result == "mailto:security@example.com"
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_extracts_security_contact_from_contact_profile(self, mock_get):
         """Test that fetch() extracts security_contact from contact_profile."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "supplier": {"name": "Test Supplier"},
             "contact_profile": {
                 "contacts": [
@@ -567,7 +560,6 @@ class TestSbomifyApiProvider:
                 ]
             },
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -579,12 +571,10 @@ class TestSbomifyApiProvider:
         assert result is not None
         assert result.security_contact == "mailto:security@test.com"
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_preserves_explicit_security_contact(self, mock_get):
         """Test that explicit security_contact takes precedence over contact_profile."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "supplier": {"name": "Test Supplier"},
             "security_contact": "https://example.com/security.txt",
             "contact_profile": {
@@ -593,7 +583,6 @@ class TestSbomifyApiProvider:
                 ]
             },
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -735,12 +724,10 @@ class TestSbomifyApiProvider:
 
         assert result is None
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_extracts_supplier_from_contact_profile(self, mock_get):
         """Test that fetch() extracts supplier from contact_profile when not directly provided."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "contact_profile": {
                 "entities": [
                     {
@@ -754,7 +741,6 @@ class TestSbomifyApiProvider:
                 "contacts": [],
             }
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -768,12 +754,10 @@ class TestSbomifyApiProvider:
         assert result.supplier["name"] == "Contact Profile Supplier"
         assert result.supplier["url"] == ["https://supplier.com"]
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_preserves_explicit_supplier(self, mock_get):
         """Test that explicit supplier takes precedence over contact_profile."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "supplier": {"name": "Direct Supplier"},
             "contact_profile": {
                 "entities": [{"name": "Contact Profile Supplier", "is_supplier": True}],
@@ -781,7 +765,6 @@ class TestSbomifyApiProvider:
                 "contacts": [],
             },
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -794,12 +777,10 @@ class TestSbomifyApiProvider:
         # Explicit supplier should be preserved
         assert result.supplier["name"] == "Direct Supplier"
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_extracts_manufacturer_from_contact_profile(self, mock_get):
         """Test that fetch() extracts manufacturer from contact_profile when not directly provided."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "contact_profile": {
                 "entities": [
                     {
@@ -812,7 +793,6 @@ class TestSbomifyApiProvider:
                 "contacts": [],
             }
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -825,19 +805,16 @@ class TestSbomifyApiProvider:
         assert result.manufacturer is not None
         assert result.manufacturer["name"] == "Contact Profile Manufacturer"
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_extracts_authors_from_contact_profile(self, mock_get):
         """Test that fetch() extracts authors from contact_profile when not directly provided."""
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "contact_profile": {
                 "entities": [],
                 "authors": [{"name": "Jane Developer", "email": "jane@dev.com"}],
                 "contacts": [],
             }
         }
-        mock_get.return_value = mock_response
 
         provider = SbomifyApiProvider()
         result = provider.fetch(
@@ -882,17 +859,14 @@ class TestProviderRegistry:
         assert providers[0].priority == 10
         assert providers[1].priority == 50
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_fetch_metadata_merges_results(self, mock_get):
         """Test that metadata from multiple providers is merged."""
         # Setup API mock
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "supplier": {"name": "API Supplier"},
             "authors": [{"name": "API Author"}],
         }
-        mock_get.return_value = mock_response
 
         # Create config file with lifecycle_phase
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -931,24 +905,22 @@ class TestCreateDefaultRegistry:
         registry = create_default_registry()
         providers = registry.list_providers()
 
-        # 6 providers: json-config, docker-image, github-actions,
-        # gitlab-ci, bitbucket-pipelines, sbomify-api
-        assert len(providers) == 6
+        # 4 providers: json-config, docker-image, ci-platform, sbomify-api.
+        # The per-vendor CI providers collapsed into ci-platform, which asks
+        # whichever platform sbomify_action._runtime resolved -- so supporting
+        # another CI system no longer grows this list.
+        assert len(providers) == 4
         provider_names = [p["name"] for p in providers]
         assert "json-config" in provider_names
         assert "docker-image" in provider_names
-        assert "github-actions" in provider_names
-        assert "gitlab-ci" in provider_names
-        assert "bitbucket-pipelines" in provider_names
+        assert "ci-platform" in provider_names
         assert "sbomify-api" in provider_names
 
         # Verify priority ordering (lower = higher priority)
         priorities = {p["name"]: p["priority"] for p in providers}
         assert priorities["json-config"] == 10  # Highest priority
         assert priorities["docker-image"] == 15  # Container-image input
-        assert priorities["github-actions"] == 20
-        assert priorities["gitlab-ci"] == 20
-        assert priorities["bitbucket-pipelines"] == 20
+        assert priorities["ci-platform"] == 20
         assert priorities["sbomify-api"] == 50  # Lowest priority
 
 
@@ -979,13 +951,11 @@ class TestLifecyclePhasePrecedence:
 
     def _registry_no_api(self):
         """Registry without the sbomify-api provider so tests don't hit
-        the network. Returns the same 5 providers that actually decide
+        the network. Returns the 3 providers that actually decide
         lifecycle_phase today."""
         from sbomify_action._augmentation.providers import (
-            BitbucketPipelinesProvider,
+            CIPlatformProvider,
             DockerImageProvider,
-            GitHubActionsProvider,
-            GitLabCIProvider,
             JsonConfigProvider,
         )
         from sbomify_action._augmentation.registry import ProviderRegistry
@@ -993,9 +963,7 @@ class TestLifecyclePhasePrecedence:
         registry = ProviderRegistry()
         registry.register(JsonConfigProvider())
         registry.register(DockerImageProvider())
-        registry.register(GitHubActionsProvider())
-        registry.register(GitLabCIProvider())
-        registry.register(BitbucketPipelinesProvider())
+        registry.register(CIPlatformProvider())
         return registry
 
     def test_ci_lockfile_scan_defaults_to_pre_build(self):
@@ -1197,10 +1165,8 @@ class TestLifecyclePhaseSpdxCdxParity:
         """Run the real registry (minus sbomify-api) with ``env`` as
         the only env vars and return the merged AugmentationMetadata."""
         from sbomify_action._augmentation.providers import (
-            BitbucketPipelinesProvider,
+            CIPlatformProvider,
             DockerImageProvider,
-            GitHubActionsProvider,
-            GitLabCIProvider,
             JsonConfigProvider,
         )
         from sbomify_action._augmentation.registry import ProviderRegistry
@@ -1208,9 +1174,7 @@ class TestLifecyclePhaseSpdxCdxParity:
         registry = ProviderRegistry()
         registry.register(JsonConfigProvider())
         registry.register(DockerImageProvider())
-        registry.register(GitHubActionsProvider())
-        registry.register(GitLabCIProvider())
-        registry.register(BitbucketPipelinesProvider())
+        registry.register(CIPlatformProvider())
 
         with patch.dict(os.environ, env, clear=True):
             return registry.fetch_metadata()
@@ -1421,17 +1385,14 @@ class TestCliDockerImageEnvMirror:
 class TestJsonConfigProviderIntegration:
     """Integration tests for JSON config provider with augmentation."""
 
-    @patch("sbomify_action._augmentation.providers.sbomify_api.requests.get")
+    @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_json_config_lifecycle_takes_precedence(self, mock_get):
         """Test that lifecycle_phase from JSON config takes precedence over API."""
         # Setup API mock with different lifecycle
-        mock_response = Mock()
-        mock_response.ok = True
-        mock_response.json.return_value = {
+        mock_get.return_value = {
             "lifecycle_phase": "operations",  # API says operations
             "supplier": {"name": "API Supplier"},
         }
-        mock_get.return_value = mock_response
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # JSON config says build

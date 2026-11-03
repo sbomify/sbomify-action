@@ -38,8 +38,13 @@ from .destinations import (
     DependencyTrackDestination,
     SbomifyDestination,
 )
+from .documents import (
+    DocumentUploadInput,
+    DocumentUploadResult,
+    upload_document,
+)
 from .orchestrator import UploadOrchestrator, create_registry_with_sbomify
-from .protocol import Destination, DestinationConfig, SBOMFormat, UploadInput
+from .protocol import VALID_BOM_TYPES, Destination, DestinationConfig, SBOMFormat, UploadInput
 from .registry import VALID_DESTINATIONS, DestinationRegistry
 from .result import UploadResult
 
@@ -47,6 +52,10 @@ __all__ = [
     # Core types
     "SBOMFormat",
     "UploadInput",
+    "DocumentUploadInput",
+    "DocumentUploadResult",
+    "upload_document",
+    "VALID_BOM_TYPES",
     "UploadResult",
     "Destination",
     "DestinationConfig",
