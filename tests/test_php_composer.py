@@ -852,6 +852,46 @@ class TestTheFlagsFitTheInstalledComposer:
         assert composer_runs == []
         assert not (tmp_path / "composer.lock").exists()
 
+    def test_that_refusal_in_strict_mode_is_not_called_a_bug(self, tmp_path, monkeypatch, composer_runs):
+        """Upgrading Composer is the user's to do, not a defect in the image."""
+
+        class Fallback:
+            name = command = "syft-fs"
+            priority = 35
+            supported_formats = [FormatVersion("cyclonedx", ("1.6",), "1.6")]
+
+            def supports(self, input):
+                return True
+
+            def generate(self, input):
+                pytest.fail("fell back past a deliberate refusal")
+
+        monkeypatch.setenv("SBOMIFY_IN_CONTAINER", "1")
+        monkeypatch.delenv("SBOMIFY_ALLOW_GENERATOR_FALLBACK", raising=False)
+        monkeypatch.setattr(cdxgen_module, "_CDXGEN_AVAILABLE", True)
+        monkeypatch.setattr(cdxgen_module, "ensure_runtime", lambda _tool: None)
+        self._composer(monkeypatch, composer_runs, "Composer version 2.9.1 2025-11-13 10:37:16")
+        (tmp_path / "composer.json").write_text('{"require": {}}')
+        registry = GeneratorRegistry()
+        registry.register(CdxgenFsGenerator())
+        registry.register(Fallback())
+
+        with pytest.raises(SBOMGenerationError) as error:
+            registry.generate(
+                GenerationInput(
+                    lock_file=str(tmp_path / "composer.json"),
+                    output_file=str(tmp_path / "o.json"),
+                    output_format="cyclonedx",
+                ),
+                validate=False,
+            )
+
+        message = str(error.value)
+        assert "refused this input" in message
+        assert "bug" not in message
+        assert "Upgrade Composer to 2.9.2" in message, "the refusal's advice was lost"
+        assert composer_runs == []
+
 
 class TestTheErrorSurvivesTheReport:
     """cdxgen splits one message across two streams: the marker on stderr and

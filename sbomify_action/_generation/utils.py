@@ -971,9 +971,9 @@ def resolve_composer_lockfile(directory: Path) -> Path | None:
 
     Raises:
         InputRefusedError: when this deliberately will not resolve the
-            manifest -- a symlinked lock, fetching opted out, or a manifest
-            that could steer where Composer goes. The message says what to
-            commit instead.
+            manifest -- a symlinked lock, fetching opted out, a manifest
+            that could steer where Composer goes, or a Composer that would
+            drop vulnerable versions. The message says what to commit instead.
         SBOMGenerationError: when Composer is unavailable or cannot resolve
             the manifest. Before, cdxgen failed here too; the message now
             says what to commit.
@@ -1083,7 +1083,7 @@ def _run_composer_update(project: Path, work: Path, home: Path, advice: str) -> 
     elif version >= (2, 9, 2):
         flags = ["--no-security-blocking", "--no-audit"]
     elif version >= (2, 9):
-        raise SBOMGenerationError(
+        raise InputRefusedError(
             f"Composer {'.'.join(map(str, version))} drops versions with security advisories from the resolution, "
             "and only the project's own config can stop it; 2.9.2 added --no-security-blocking. Resolving here "
             f"would leave out the vulnerable versions the SBOM exists to report. Upgrade Composer to 2.9.2 or later. "
