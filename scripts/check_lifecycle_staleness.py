@@ -11,10 +11,11 @@ Two independent checks, deliberately separated:
 
   Local invariants (offline, no network)
       Structural facts that must hold regardless of what upstream says: dates
-      parse, EOS never falls after EOL, every distro still has at least one
-      release that has not gone EOL, and the license-db generator's version list
-      has not drifted away from the lifecycle table. tests/test_lifecycle_freshness.py
-      runs these on every CI run.
+      parse, EOS never falls after EOL, and every distro still has at least one
+      release that has not gone EOL. tests/test_lifecycle_freshness.py runs these
+      on every CI run. That the license-db generator's version list agrees with
+      the lifecycle table is checked in sbomify/sbom-tools, where the generator
+      lives.
 
   Upstream coverage (network, endoflife.date)
       Reports release cycles that upstream knows about and we do not.
@@ -48,11 +49,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sbomify_action._enrichment.license_db_generator import (  # noqa: E402
-    DEBIAN_CODENAMES,
-    RPM_DISTRO_REPOS,
-    UBUNTU_CODENAMES,
-)
 from sbomify_action._enrichment.lifecycle_data import (  # noqa: E402
     DISTRO_LIFECYCLE,
     PACKAGE_LIFECYCLE,
@@ -220,44 +216,6 @@ def check_local_invariants(today: date | None = None) -> list[str]:
                 f"distro {name}: every tracked release has passed end-of-life "
                 f"(newest is {newest}, EOL {cycles[newest].get('end_of_life')}) -- "
                 f"a newer release almost certainly exists"
-            )
-
-    # --- the license-db generator and the lifecycle table must agree ---------
-    # These are maintained in different files and drift silently otherwise: a
-    # distro version can get a license database built with no lifecycle data
-    # attached, or lifecycle data that no database is ever built for.
-    #
-    # Only distros where the generator pins an explicit per-version config are
-    # comparable. Alpine builds its repository URL straight from the version
-    # string, and Wolfi is a rolling release, so neither has a version list to
-    # compare against.
-    generator_versions: dict[str, set[str]] = {
-        "ubuntu": set(UBUNTU_CODENAMES),
-        "debian": set(DEBIAN_CODENAMES),
-    }
-    for distro, versions in RPM_DISTRO_REPOS.items():
-        generator_versions[distro] = set(versions)
-
-    for distro, versions in sorted(generator_versions.items()):
-        tracked = set(DISTRO_LIFECYCLE.get(distro, {}))
-        for version in sorted(versions - tracked):
-            problems.append(
-                f"distro {distro} {version}: the license-db generator builds this version "
-                f"but lifecycle_data.py has no entry for it"
-            )
-        for version in sorted(tracked - versions):
-            # Retaining lifecycle data for a release the generator no longer
-            # builds is correct and expected: SBOMs of old images still name
-            # those releases, and we want to keep telling their consumers that
-            # they are past EOL. Only a still-supported release missing from the
-            # generator is a real gap.
-            eol_raw = DISTRO_LIFECYCLE[distro][version].get("end_of_life")
-            eol = parse_lifecycle_date(eol_raw) if eol_raw else None
-            if eol is not None and eol < today:
-                continue
-            problems.append(
-                f"distro {distro} {version}: lifecycle_data.py tracks this version "
-                f"but the license-db generator has no repository configured for it"
             )
 
     return problems

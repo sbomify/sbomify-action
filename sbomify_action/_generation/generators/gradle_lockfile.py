@@ -54,7 +54,7 @@ def parse_lockfile(path: Path) -> list[tuple[str, str, str]]:
     """(group, artifact, version) for every dependency the lock file pins."""
     found: list[tuple[str, str, str]] = []
     seen: set[tuple[str, str, str]] = set()
-    for raw in path.read_text().splitlines():
+    for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         # "empty=<configuration>" is how Gradle records a configuration that
         # resolved to nothing. It is not a dependency.
@@ -153,13 +153,13 @@ class GradleLockfileGenerator:
             # Written beside the output rather than in the project, which may
             # be read-only and is not ours to litter.
             staging = output.parent / f".{output.name}.cdx.json"
-            staging.write_text(json.dumps(document, indent=2))
+            staging.write_text(json.dumps(document, indent=2), encoding="utf-8")
             try:
                 convert_to_spdx(staging, output, source.parent)
             finally:
                 staging.unlink(missing_ok=True)
         else:
-            output.write_text(json.dumps(document, indent=2))
+            output.write_text(json.dumps(document, indent=2), encoding="utf-8")
 
         return GenerationResult.success_result(
             output_file=str(output),

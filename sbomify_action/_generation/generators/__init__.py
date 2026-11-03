@@ -6,6 +6,7 @@ This module contains all generator plugins:
 - CycloneDXGomodGenerator: Native Go CycloneDX generator (priority 10)
 - CycloneDXMavenGenerator / CycloneDXGradleGenerator / CycloneDXSbtGenerator:
   Native JVM CycloneDX generators (priority 10)
+- PlatformIOGenerator: Reads libraries PlatformIO installed (priority 10)
 - CdxgenFsGenerator: cdxgen filesystem scanner (priority 20)
 - CdxgenImageGenerator: cdxgen Docker image scanner (priority 20)
 - TrivyFsGenerator: Trivy filesystem scanner (priority 30)
@@ -24,6 +25,7 @@ from .cyclonedx_jvm import (
 )
 from .cyclonedx_py import CycloneDXPyGenerator
 from .gradle_lockfile import GradleLockfileGenerator
+from .platformio import PlatformIOGenerator
 from .syft import SyftFsGenerator, SyftImageGenerator
 from .trivy import TrivyFsGenerator, TrivyImageGenerator
 
@@ -33,6 +35,7 @@ __all__ = [
     "CycloneDXGomodGenerator",
     "CycloneDXGradleGenerator",
     "GradleLockfileGenerator",
+    "PlatformIOGenerator",
     "CycloneDXMavenGenerator",
     "CycloneDXSbtGenerator",
     "CdxgenFsGenerator",

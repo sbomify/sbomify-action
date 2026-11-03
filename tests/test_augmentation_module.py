@@ -308,6 +308,8 @@ class TestSPDXAugmentation:
             CreationInfo,
             Document,
             Package,
+            Relationship,
+            RelationshipType,
         )
 
         creation_info = CreationInfo(
@@ -323,7 +325,11 @@ class TestSPDXAugmentation:
             spdx_id="SPDXRef-main", name="test-app", download_location="https://example.com", version="1.0.0"
         )
 
-        return Document(creation_info=creation_info, packages=[package])
+        return Document(
+            creation_info=creation_info,
+            packages=[package],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-main")],
+        )
 
     def test_spdx_supplier_augmentation(self, spdx_document):
         """Test SPDX supplier augmentation."""
@@ -776,6 +782,8 @@ class TestManufacturerHandling:
             CreationInfo,
             Document,
             Package,
+            Relationship,
+            RelationshipType,
         )
 
         creation_info = CreationInfo(
@@ -791,7 +799,11 @@ class TestManufacturerHandling:
             spdx_id="SPDXRef-main", name="test-app-mfg", download_location="https://example.com", version="1.0.0"
         )
 
-        return Document(creation_info=creation_info, packages=[package])
+        return Document(
+            creation_info=creation_info,
+            packages=[package],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-main")],
+        )
 
     def test_cyclonedx_14_manufacturer_sets_manufacture(self, cyclonedx_14_bom, manufacturer_data):
         """Test that CycloneDX 1.4 sets metadata.manufacture (no 'r')."""
@@ -2144,6 +2156,8 @@ class TestPurlVersionUpdate:
             ExternalPackageRef,
             ExternalPackageRefCategory,
             Package,
+            Relationship,
+            RelationshipType,
             SpdxNoAssertion,
         )
 
@@ -2174,6 +2188,7 @@ class TestPurlVersionUpdate:
                 created=datetime.now(),
             ),
             packages=[package],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-Package")],
         )
 
         # Augment with version override
@@ -2430,6 +2445,7 @@ class TestComponentPurlOverride:
             "name": "test-document",
             "documentNamespace": "https://example.com/test",
             "creationInfo": {"created": "2024-01-01T00:00:00Z", "creators": ["Tool: test"]},
+            "documentDescribes": ["SPDXRef-Package"],
             "packages": [
                 {
                     "SPDXID": "SPDXRef-Package",
@@ -2460,6 +2476,7 @@ class TestComponentPurlOverride:
             "name": "test-document",
             "documentNamespace": "https://example.com/test",
             "creationInfo": {"created": "2024-01-01T00:00:00Z", "creators": ["Tool: test"]},
+            "documentDescribes": ["SPDXRef-Package"],
             "packages": [
                 {
                     "SPDXID": "SPDXRef-Package",
@@ -2556,6 +2573,7 @@ class TestComponentPurlOverride:
             "dataLicense": "CC0-1.0",
             "documentNamespace": "https://example.com/test",
             "creationInfo": {"created": "2024-01-01T00:00:00Z", "creators": ["Tool: test"]},
+            "documentDescribes": ["SPDXRef-Package"],
             "packages": [
                 {
                     "SPDXID": "SPDXRef-Package",
@@ -2729,6 +2747,8 @@ class TestPurlConstructionFromVCS:
             CreationInfo,
             Document,
             Package,
+            Relationship,
+            RelationshipType,
             SpdxNoAssertion,
         )
 
@@ -2750,6 +2770,7 @@ class TestPurlConstructionFromVCS:
                 created=datetime.now(),
             ),
             packages=[package],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-Package")],
         )
 
         # Augment with VCS info
@@ -2779,6 +2800,8 @@ class TestPurlConstructionFromVCS:
             ExternalPackageRef,
             ExternalPackageRefCategory,
             Package,
+            Relationship,
+            RelationshipType,
             SpdxNoAssertion,
         )
 
@@ -2807,6 +2830,7 @@ class TestPurlConstructionFromVCS:
                 created=datetime.now(),
             ),
             packages=[package],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-Package")],
         )
 
         # Augment with VCS info (should not overwrite existing PURL)
@@ -3564,6 +3588,8 @@ class TestSpdxGenericFallbackPURL:
             CreationInfo,
             Document,
             Package,
+            Relationship,
+            RelationshipType,
         )
 
         doc = Document(
@@ -3584,6 +3610,7 @@ class TestSpdxGenericFallbackPURL:
                 download_location="NOASSERTION",
             )
         ]
+        doc.relationships = [Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-Package")]
         return doc
 
     def test_generic_fallback_when_no_vcs_url(self):

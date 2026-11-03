@@ -809,7 +809,7 @@ class AuditTrail:
                 lines.append("")
 
         # Write file
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
     def print_summary(self, title: str = "SBOM Modifications") -> None:

@@ -104,6 +104,7 @@ from .generation import (
 )
 from .logging_config import logger
 from .serialization import (
+    get_spdx_root_package,
     link_root_dependencies,
     load_cyclonedx_bom,
     restore_spdx_document_describes,
@@ -186,6 +187,8 @@ LOCKFILE_DESCRIPTIONS = {
     # C++
     "conan.lock": "C++ Conan lockfile",
     "vcpkg.json": "C++ vcpkg manifest",
+    # Embedded
+    "platformio.ini": "PlatformIO project (installed libraries)",
 }
 
 # CycloneDX component type for operating system
@@ -288,7 +291,7 @@ def _enrich_lockfile_packages(document: Document) -> int:
 
     Instead of removing lockfiles, we enrich them with:
     - Description: Human-readable description based on lockfile type
-    - Supplier: Same as the main package (first package in document)
+    - Supplier: Same as the main package (the one the document describes)
     - Version: Inherited from main package or set to "0"
 
     Note: SPDX spdx_id already serves as the unique identifier.
@@ -300,17 +303,15 @@ def _enrich_lockfile_packages(document: Document) -> int:
     if not lockfile_packages:
         return 0
 
-    # Get supplier and version from the main package (usually first package represents the described component)
+    # Get supplier and version from the main package: the one the document
+    # describes, not the first dependency that happens to have them
     root_supplier = None
     root_version = None
-    if document.packages:
-        for pkg in document.packages:
-            if pkg.supplier and not isinstance(pkg.supplier, (SpdxNoAssertion, SpdxNone)):
-                root_supplier = pkg.supplier
-            if pkg.version and pkg.version != "NOASSERTION":
-                root_version = pkg.version
-            if root_supplier and root_version:
-                break
+    if (root := get_spdx_root_package(document)) is not None:
+        if root.supplier and not isinstance(root.supplier, (SpdxNoAssertion, SpdxNone)):
+            root_supplier = root.supplier
+        if root.version and root.version != "NOASSERTION":
+            root_version = root.version
 
     for pkg in lockfile_packages:
         # Add description if not present
@@ -1000,9 +1001,10 @@ def _apply_metadata_to_spdx_package(
             return True
         return False
 
-    # Registry URL (sanitized)
+    # Registry URL (sanitized). OTHER, because SPDX allows only purl,
+    # maven-central, npm, nuget and bower as PACKAGE-MANAGER reference types.
     if metadata.registry_url:
-        if _add_external_ref(ExternalPackageRefCategory.PACKAGE_MANAGER, "url", metadata.registry_url):
+        if _add_external_ref(ExternalPackageRefCategory.OTHER, "url", metadata.registry_url):
             added_fields.append("externalRef (registry)")
 
     # Documentation URL (sanitized)
@@ -1156,11 +1158,10 @@ def _enrich_self_referencing_packages(document: Document) -> int:
     Returns:
         Number of packages enriched
     """
-    if not document.packages:
+    main_package = get_spdx_root_package(document)
+    if main_package is None:
         return 0
 
-    # First package is usually the main/root package
-    main_package = document.packages[0]
     root_name = main_package.name
     if not root_name:
         return 0
@@ -1171,9 +1172,9 @@ def _enrich_self_referencing_packages(document: Document) -> int:
         return 0
 
     enriched_count = 0
-    for package in document.packages[1:]:  # Skip first (main) package
+    for package in document.packages:
         # Check if package name matches root package (self-referencing)
-        if package.name == root_name:
+        if package is not main_package and package.name == root_name:
             if not package.supplier or isinstance(package.supplier, (SpdxNoAssertion, SpdxNone)):
                 package.supplier = root_supplier
                 _add_enrichment_source_comment(package, "root-package")
@@ -1663,7 +1664,7 @@ def enrich_sbom(input_file: str, output_file: str, validate: bool = True) -> Non
 
     # Parse input file
     try:
-        with open(input_path, "r") as f:
+        with open(input_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
         raise FileNotFoundError(f"Input SBOM file not found: {input_file}")
@@ -1748,7 +1749,7 @@ def _enrich_cyclonedx_sbom(data: Dict[str, Any], input_path: Path, output_path: 
     if not components:
         logger.warning("No components with PURLs found in SBOM, skipping enrichment")
         serialized = _sanitize_and_serialize_cyclonedx(bom, spec_version)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(serialized)
         return
 
@@ -1769,7 +1770,7 @@ def _enrich_cyclonedx_sbom(data: Dict[str, Any], input_path: Path, output_path: 
     # Write output
     try:
         serialized = _sanitize_and_serialize_cyclonedx(bom, spec_version)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(serialized)
         logger.info(f"Enriched SBOM written to: {output_path}")
     except Exception as e:

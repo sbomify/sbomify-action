@@ -40,7 +40,7 @@ class PipfileLockParser:
         Returns:
             List of PackageHash objects (one per package).
         """
-        with lock_file_path.open("r") as f:
+        with lock_file_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
 
         hashes: list[PackageHash] = []

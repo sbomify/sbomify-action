@@ -13,12 +13,14 @@ has to be recorded somewhere that both can agree on.
 
 from __future__ import annotations
 
+import os
 import re
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 _MANIFEST = Path(__file__).with_name("tools.toml")
 
@@ -27,10 +29,9 @@ _MANIFEST = Path(__file__).with_name("tools.toml")
 _BUNDLE_BASE = "https://github.com/sbomify/sbom-tools/releases/download"
 _ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
 
-#: Where our own tool builds are published. Master replaces the assets on this
-#: rolling pre-release on every push; the image build stamps a release tag in
-#: its place, so a cut release fetches the binaries it was built against.
-TOOLS_RELEASE = "tools-rolling"
+#: The pre-release sbom-tools master replaces on every push. An image built from
+#: our own master fetches from it; everything else fetches the pin in tools.toml.
+TOOLS_RELEASE = "rolling"
 _TOOLS_RELEASE_BASE = "https://github.com/sbomify/sbomify-action/releases/download"
 _ARCH_SLUGS = {"amd64": "linux-amd64", "arm64": "linux-arm64"}
 
@@ -71,7 +72,7 @@ def _version_from_go_mod(path: Path, module: str) -> str:
     image, which has no Go toolchain.
     """
     pattern = re.compile(rf"^\s*{re.escape(module)}\s+(v\S+)", re.M)
-    match = pattern.search(path.read_text())
+    match = pattern.search(path.read_text(encoding="utf-8"))
     if not match:
         raise ManifestError(f"{module} not found in {path}")
     return match.group(1).lstrip("v")
@@ -85,7 +86,7 @@ def _version_from_go_toolchain(path: Path) -> str:
     that works rather than the one we build with. Go's own resolution order is
     followed -- ``toolchain`` when present, ``go`` otherwise.
     """
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     for pattern in (r"^toolchain\s+go(\S+)", r"^go\s+(\S+)"):
         if match := re.search(pattern, text, re.M):
             return match.group(1)
@@ -100,7 +101,7 @@ def _version_from_gradle(path: Path, coordinate: str) -> str:
     it has to be, or Dependabot could not rewrite it either.
     """
     pattern = re.compile(rf"""["']{re.escape(coordinate)}:([^"':]+)["']""")
-    match = pattern.search(path.read_text())
+    match = pattern.search(path.read_text(encoding="utf-8"))
     if not match:
         raise ManifestError(f"{coordinate} not found in {path}")
     return match.group(1)
@@ -111,7 +112,7 @@ def _version_from_toml_lock(path: Path, package: str) -> str:
 
     Both are TOML with the same ``[[package]] name/version`` shape.
     """
-    data = tomllib.loads(path.read_text())
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
     for entry in data.get("package", []):
         if entry.get("name") == package:
             return str(entry["version"])
@@ -120,7 +121,7 @@ def _version_from_toml_lock(path: Path, package: str) -> str:
 
 def _version_from_rust_toolchain(path: Path) -> str:
     """Read the toolchain version out of rust-toolchain.toml."""
-    channel = str((tomllib.loads(path.read_text()).get("toolchain") or {}).get("channel", ""))
+    channel = str((tomllib.loads(path.read_text(encoding="utf-8")).get("toolchain") or {}).get("channel", ""))
     if not channel:
         raise ManifestError(f"{path} has no [toolchain] channel")
     if not re.fullmatch(r"\d+\.\d+(\.\d+)?", channel):
@@ -144,7 +145,7 @@ def _version_from_bun_lock(path: Path, package: str) -> str:
     named a release nobody was running.
     """
     pattern = re.compile(rf'"{re.escape(package)}":\s*\[\s*"{re.escape(package)}@([^"]+)"')
-    match = pattern.search(path.read_text())
+    match = pattern.search(path.read_text(encoding="utf-8"))
     if not match:
         raise ManifestError(f"{package} not found in {path}")
     version = match.group(1)
@@ -232,7 +233,7 @@ def plugin_version(name: str) -> str:
     versions the release was built against.
     """
     try:
-        raw = tomllib.loads(_MANIFEST.read_text())
+        raw = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:  # pragma: no cover - packaging error
         raise ManifestError(f"Tool manifest not found at {_MANIFEST}") from exc
     except tomllib.TOMLDecodeError as exc:
@@ -399,7 +400,7 @@ def load_tools() -> dict[str, Tool]:
             runtime tool is missing the assets it would need to be fetched.
     """
     try:
-        raw = tomllib.loads(_MANIFEST.read_text())
+        raw = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:  # pragma: no cover - packaging error
         raise ManifestError(f"Tool manifest not found at {_MANIFEST}") from exc
     except tomllib.TOMLDecodeError as exc:
@@ -497,11 +498,28 @@ def load_tools() -> dict[str, Tool]:
     return tools
 
 
+def _bundle_release(raw: dict[str, Any]) -> str:
+    """The sbom-tools release to fetch bundles from.
+
+    The pinned release in tools.toml, so a released action keeps fetching the
+    bundles it shipped with. An image built from master (its VCS ref, set at
+    build time) fetches sbom-tools master instead.
+    """
+    if os.environ.get("SBOMIFY_GITHUB_ACTION_VCS_REF") == "master":
+        return TOOLS_RELEASE
+    return str(raw["tools_release"])
+
+
+def tools_release() -> str:
+    """The sbom-tools release this build fetches from: its bundles, and its license databases."""
+    return _bundle_release(tomllib.loads(_MANIFEST.read_text(encoding="utf-8")))
+
+
 @lru_cache(maxsize=1)
 def load_bundles() -> dict[str, Bundle]:
     """Parse the bundle section of tools.toml."""
-    raw = tomllib.loads(_MANIFEST.read_text())
-    release = str(raw.get("tools_release") or "tools-rolling")
+    raw = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))
+    release = _bundle_release(raw)
     bundles: dict[str, Bundle] = {}
     for name, body in (raw.get("bundle") or {}).items():
         provides = tuple(body.get("provides") or ())
