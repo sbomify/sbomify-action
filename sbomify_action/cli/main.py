@@ -2454,6 +2454,7 @@ def run_pipeline(config: Config) -> None:
                         try:
                             with tempfile.NamedTemporaryFile(
                                 mode="w",
+                                encoding="utf-8",
                                 suffix=".json",
                                 delete=False,
                                 dir=Path(STEP_1_FILE).parent,
