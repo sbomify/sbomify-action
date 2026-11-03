@@ -225,17 +225,24 @@ def run_publish(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) 
     would clobber, and an interleaved log would be unreadable anyway.
     """
     state.publish_outcomes = []
-    output_dir = Path(tempfile.mkdtemp(prefix="sbomify-wizard-publish-"))
-    state.publish_output_dir = output_dir
-    runs = build_publish_runs(state, output_dir)
+    # Cleared before the early returns, so Done never points at a dir an
+    # earlier pass left behind.
+    state.publish_output_dir = None
+    planned = build_publish_runs(state, Path())
 
-    if not runs:
+    if not planned:
         log("warning", "Nothing to publish — no components were applied.")
         return True
 
     if opts.dry_run:
-        _run_publish_dry_run(state, runs, log)
+        _run_publish_dry_run(state, planned, log)
         return True
+
+    # Made only now that a run will write into it; an empty one would be
+    # left behind in the temp dir.
+    output_dir = Path(tempfile.mkdtemp(prefix="sbomify-wizard-publish-"))
+    state.publish_output_dir = output_dir
+    runs = build_publish_runs(state, output_dir)
 
     version = component_version(opts.repo_root)
     all_ok = True

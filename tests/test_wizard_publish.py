@@ -390,6 +390,29 @@ def test_run_publish_with_no_components_is_a_noop(
     assert any(k == "warning" for k, _m in logs)
 
 
+@pytest.mark.parametrize("case", ["no components", "dry-run"])
+def test_run_publish_makes_no_output_dir_when_nothing_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """No empty sbomify-wizard-publish-* dir left in /tmp, and no dir from
+    an earlier pass left on the state for Done to point at."""
+    state = _state(tmp_path)
+    state.publish_output_dir = tmp_path / "sbomify-wizard-publish-earlier"
+    if case == "no components":
+        state.plan.create_components = []
+        state.component_ids = {}
+    else:
+        state.is_dry_run = True
+
+    def _no_dir(prefix: str) -> str:
+        raise AssertionError("created an output dir with nothing to write into it")
+
+    monkeypatch.setattr(publish_mod.tempfile, "mkdtemp", _no_dir)
+
+    assert publish_mod.run_publish(state, _opts(tmp_path, dry_run=case == "dry-run")) is True
+    assert state.publish_output_dir is None
+
+
 def test_reset_apply_artifacts_clears_publish_state(tmp_path: Path) -> None:
     state = _state(tmp_path)
     state.publish_outcomes = [
