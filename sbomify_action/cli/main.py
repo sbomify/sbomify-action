@@ -257,7 +257,7 @@ class Config:
     product_releases: Optional[str | list[str]] = None
     submodule_path: Optional[str] = None
     api_base_url: str = SBOMIFY_PRODUCTION_API
-    api_allow_insecure_http: bool = False
+    api_allow_insecure_http: bool = field(default=False, kw_only=True)
     sbom_format: SBOMFormat = "cyclonedx"
     bom_type: Optional[str] = None
     spec_version: Optional[str] = None
@@ -837,11 +837,12 @@ def build_config(
     product_releases: Optional[str] = None,
     submodule_path: Optional[str] = None,
     api_base_url: str = SBOMIFY_PRODUCTION_API,
-    api_allow_insecure_http: bool = False,
     sbom_format: str = "cyclonedx",
     bom_type: Optional[str] = None,
     spec_version: Optional[str] = None,
     oidc_audience: Optional[str] = None,
+    *,
+    api_allow_insecure_http: bool = False,
 ) -> Config:
     """
     Build and validate configuration from provided arguments.

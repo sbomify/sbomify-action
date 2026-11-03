@@ -201,12 +201,13 @@ def upload_document(
     token: Optional[str] = None,
     component_id: Optional[str] = None,
     api_base_url: Optional[str] = None,
-    allow_insecure_http: bool = False,
     name: Optional[str] = None,
     version: str = "1.0",
     document_type: str = "other",
     description: str = "",
     compliance_subcategory: Optional[str] = None,
+    *,
+    allow_insecure_http: bool = False,
 ) -> DocumentUploadResult:
     """
     Upload a document (PDF, Markdown, ...) to a sbomify document component.
@@ -219,13 +220,13 @@ def upload_document(
         token: sbomify API token
         component_id: sbomify component ID -- must be a component of type "document"
         api_base_url: sbomify API base URL
-        allow_insecure_http: API_ALLOW_INSECURE_HTTP, for an http:// api_base_url
-            on a host other than localhost
         name: Document name in sbomify (defaults to the file name without its suffix)
         version: Document version
         document_type: One of VALID_DOCUMENT_TYPES (e.g. "pentest-report", "compliance")
         description: Free-text description
         compliance_subcategory: nda/soc2/iso27001, only for document_type="compliance"
+        allow_insecure_http: API_ALLOW_INSECURE_HTTP, for an http:// api_base_url
+            on a host other than localhost
 
     Returns:
         DocumentUploadResult with success status and the new document ID
