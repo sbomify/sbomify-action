@@ -27,6 +27,10 @@ from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.runtimes import can_provide
 from sbomify_action.tool_manifest import bundle_for, load_bundles
 
+#: The fakes below stand in for Composer only. Anything else -- git, asked for
+#: the root version -- runs for real.
+_real_run = subprocess.run
+
 
 @pytest.fixture
 def no_version_in_env(monkeypatch):
@@ -49,6 +53,8 @@ def composer_runs(monkeypatch):
     calls: list[tuple[list[str], dict]] = []
 
     def fake_run(cmd, **kwargs):
+        if cmd[0] != "composer":
+            return _real_run(cmd, **kwargs)
         if cmd[1:2] == ["--version"]:
             return subprocess.CompletedProcess(cmd, 0, "Composer version 2.10.3 2026-08-27 13:10:43\n", "")
         home = (kwargs.get("env") or {}).get("HOME")
@@ -221,6 +227,98 @@ class TestTheVersionReachesComposer:
         assert composer_runs == []
 
 
+def _git(repo: Path, *args: str) -> None:
+    _real_run(
+        ["git", "-c", "user.name=sbomify", "-c", "user.email=sbomify@example.com", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+
+class TestTheRootVersionComesFromTheCheckoutWhenNothingElseSays:
+    """Composer resolves a copy of the manifest, in a directory with no git,
+    so it can no longer ask git itself. It would call the package 1.0.0, and a
+    project whose dependencies constrain its own version stops resolving. So
+    the checkout is asked the questions Composer asked, and the answer goes
+    to Composer as COMPOSER_ROOT_VERSION."""
+
+    @pytest.fixture
+    def checkout(self, tmp_path, monkeypatch):
+        """A git checkout with one commit, away from the user's own git config."""
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        (tmp_path / "composer.json").write_text('{"require": {}}')
+        _git(tmp_path, "init", "-q")
+        _git(tmp_path, "add", "composer.json")
+        _git(tmp_path, "commit", "-q", "-m", "init")
+        return tmp_path
+
+    @pytest.mark.parametrize(
+        "branch,expected",
+        [("main", "dev-main"), ("feature/login", "dev-feature/login"), ("13.x", "13.x-dev"), ("2", "2-dev")],
+    )
+    def test_a_branch_is_spelled_as_composer_spells_it(
+        self, checkout, no_version_in_env, composer_runs, branch, expected
+    ):
+        """A version branch such as 13.x becomes 13.x-dev, which constraints
+        on the root package then match; any other branch is dev-<name>, which
+        extra.branch-alias maps to a version."""
+        _git(checkout, "checkout", "-q", "-B", branch)
+
+        resolve_composer_lockfile(checkout)
+
+        assert composer_runs[0][1]["env"]["COMPOSER_ROOT_VERSION"] == expected
+
+    def test_a_detached_head_at_a_tag_is_that_version(self, checkout, no_version_in_env, composer_runs):
+        """A release checked out by a CI system that does not say it was a tag build."""
+        _git(checkout, "tag", "v13.24.0")
+        _git(checkout, "checkout", "-q", "--detach")
+
+        resolve_composer_lockfile(checkout)
+
+        assert composer_runs[0][1]["env"]["COMPOSER_ROOT_VERSION"] == "13.24.0"
+
+    def test_a_detached_head_with_no_tag_says_nothing(self, checkout, no_version_in_env, composer_runs):
+        _git(checkout, "checkout", "-q", "--detach")
+
+        resolve_composer_lockfile(checkout)
+
+        assert "COMPOSER_ROOT_VERSION" not in composer_runs[0][1]["env"]
+
+    def test_an_explicit_version_outranks_the_checkout(self, checkout, monkeypatch, no_version_in_env, composer_runs):
+        monkeypatch.setenv("COMPONENT_VERSION", "9.9.9")
+        _git(checkout, "checkout", "-q", "-B", "main")
+
+        resolve_composer_lockfile(checkout)
+
+        assert composer_runs[0][1]["env"]["COMPOSER_ROOT_VERSION"] == "9.9.9"
+
+    def test_git_may_read_a_checkout_owned_by_another_user(
+        self, checkout, monkeypatch, no_version_in_env, composer_runs
+    ):
+        """In the container the workspace is bind-mounted under another UID,
+        and git refuses it unless safe.directory allows it."""
+        _git(checkout, "checkout", "-q", "-B", "main")
+        fake, git_envs = utils.subprocess.run, []
+
+        def spy(cmd, **kwargs):
+            if cmd[0] == "git":
+                git_envs.append(kwargs["env"])
+            return fake(cmd, **kwargs)
+
+        monkeypatch.setattr(utils.subprocess, "run", spy)
+
+        resolve_composer_lockfile(checkout)
+
+        assert git_envs
+        for env in git_envs:
+            pairs = {
+                (env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"]) for i in range(int(env["GIT_CONFIG_COUNT"]))
+            }
+            assert ("safe.directory", "*") in pairs
+
+
 class TestComposerJsonIsResolvedWithoutRunningTheProject:
     """cdxgen runs with --no-install-deps, so it no longer runs `composer
     update` itself -- which ran the root package's scripts, code from the
@@ -335,6 +433,8 @@ class TestComposerJsonIsResolvedWithoutRunningTheProject:
         (tmp_path / "composer.json").write_text('{"require": {}}')
 
         def leaves_a_link(cmd, **kwargs):
+            if cmd[0] != "composer":
+                return _real_run(cmd, **kwargs)
             (Path(kwargs["cwd"]) / "composer.lock").write_text('{"packages": []}')
             if not (tmp_path / "composer.lock").is_symlink():
                 (tmp_path / "composer.lock").symlink_to(outside)
@@ -605,6 +705,8 @@ class TestComposerOnlySeesACopyOfTheManifest:
         seen: list[Path] = []
 
         def composer(cmd, **kwargs):
+            if cmd[0] != "composer":
+                return _real_run(cmd, **kwargs)
             # Where Composer 2.10.3 looks: Factory::createConfig reads
             # COMPOSER_HOME/auth.json, Factory::createComposer reads
             # dirname(realpath(composer.json))/auth.json.
@@ -631,6 +733,8 @@ class TestComposerOnlySeesACopyOfTheManifest:
         (tmp_path / "composer.json").write_bytes(original)
 
         def bumps(cmd, **kwargs):
+            if cmd[0] != "composer":
+                return _real_run(cmd, **kwargs)
             (Path(kwargs["cwd"]) / "composer.json").write_text('{"require": {"monolog/monolog": "^3.9.0"}}')
             (Path(kwargs["cwd"]) / "composer.lock").write_text('{"packages": []}')
             return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -651,6 +755,8 @@ class TestTheFlagsFitTheInstalledComposer:
     @staticmethod
     def _composer(monkeypatch, composer_runs, version_output):
         def composer(cmd, **kwargs):
+            if cmd[0] != "composer":
+                return _real_run(cmd, **kwargs)
             if cmd[1:2] == ["--version"]:
                 return subprocess.CompletedProcess(cmd, 0, version_output, "")
             composer_runs.append((cmd, kwargs))

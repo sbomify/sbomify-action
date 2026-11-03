@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
-from sbomify_action._runtime.git import git_safe_directory_env
+from sbomify_action._runtime.git import _run_git, git_safe_directory_env
 from sbomify_action.exceptions import (
     DockerImageNotFoundError,
     InputRefusedError,
@@ -1015,7 +1015,7 @@ def resolve_composer_lockfile(directory: Path) -> Path | None:
         # The copy, not the original: what is checked is what Composer reads.
         if refusal := _composer_manifest_refusal(work / "composer.json"):
             raise InputRefusedError(f"Not resolving composer.json: {refusal}. {advice}")
-        _run_composer_update(work, home, advice)
+        _run_composer_update(directory, work, home, advice)
 
         resolved = work / "composer.lock"
         if resolved.is_symlink() or not resolved.is_file():
@@ -1034,7 +1034,7 @@ def resolve_composer_lockfile(directory: Path) -> Path | None:
     return lock
 
 
-def _run_composer_update(work: Path, home: Path, advice: str) -> None:
+def _run_composer_update(project: Path, work: Path, home: Path, advice: str) -> None:
     """Run ``composer update`` on the copied manifest in ``work``."""
     try:
         ensure_php_installed()
@@ -1047,7 +1047,7 @@ def _run_composer_update(work: Path, home: Path, advice: str) -> None:
             f"composer.json has no composer.lock beside it, and Composer is not on PATH to resolve one. {advice}"
         )
 
-    env = _composer_env(home)
+    env = _composer_env(home, project)
     logger.info("No composer.lock beside composer.json; resolving one without running the project's scripts")
     # --no-blocking: since 2.9, update refuses versions with security
     # advisories, so an exact pin to one fails and a range resolves around it
@@ -1156,11 +1156,12 @@ _COMPOSER_ENV_PASSTHROUGH = (
 )
 
 
-def _composer_env(home: Path) -> dict[str, str]:
+def _composer_env(home: Path, project: Path) -> dict[str, str]:
     """A minimal environment for resolving an untrusted composer.json.
 
     HOME and COMPOSER_HOME are a scratch directory, so no global config.json
-    or auth.json can add repositories or credentials.
+    or auth.json can add repositories or credentials. ``project`` is only
+    asked for the root version.
     """
     env = {name: os.environ[name] for name in _COMPOSER_ENV_PASSTHROUGH if name in os.environ}
     env.update(
@@ -1171,7 +1172,7 @@ def _composer_env(home: Path) -> dict[str, str]:
         # nothing for Composer's warning to protect.
         COMPOSER_ALLOW_SUPERUSER="1",
     )
-    if root_version := composer_root_version():
+    if root_version := composer_root_version(project):
         logger.info(f"Telling Composer this package is version {root_version}")
         env["COMPOSER_ROOT_VERSION"] = root_version
     return env
@@ -1272,7 +1273,7 @@ def _composer_manifest_refusal(manifest: Path) -> str | None:
 _COMPOSER_VERSION = re.compile(r"^v?\d+(?:\.\d+)*(?:[-+.].*)?$", re.IGNORECASE)
 
 
-def composer_root_version() -> str | None:
+def composer_root_version(project: Path | None = None) -> str | None:
     """The version Composer should treat this repository's own package as.
 
     Composer works this out by asking git for the tag at HEAD. That fails
@@ -1297,9 +1298,10 @@ def composer_root_version() -> str | None:
     The repository's git config is deliberately left alone -- it belongs to
     whoever is running this, not to us -- so the version comes from what the
     build already knows: an explicit ``COMPONENT_VERSION``, or the tag the
-    release was triggered by.
+    release was triggered by. Failing both, ``project`` is asked what
+    Composer itself used to ask it; see ``_version_from_git``.
 
-    Returns None when neither source yields something Composer would accept,
+    Returns None when no source yields something Composer would accept,
     in which case the caller passes nothing and Composer behaves as before.
     """
     for candidate in (os.environ.get("COMPONENT_VERSION"), _version_from_tag()):
@@ -1309,6 +1311,33 @@ def composer_root_version() -> str | None:
         if _COMPOSER_VERSION.match(candidate):
             return candidate.lstrip("vV")
         logger.debug(f"Not usable as a Composer root version: {candidate!r}")
+    return _version_from_git(project) if project else None
+
+
+def _version_from_git(project: Path) -> str | None:
+    """What Composer would have read from the checkout, had it run there.
+
+    It no longer does: it resolves a copy of the manifest in a directory with
+    no git, so left alone it calls every package 1.0.0. Before, it ran in the
+    checkout with ``safe.directory`` set by ``run_command``. So its questions
+    are asked here, through ``_run_git``, which sets ``safe.directory`` the
+    same way, and neither reads nor runs the working tree. Composer's
+    VersionGuesser asks for the branch first, and only on a detached HEAD for
+    a tag at HEAD.
+    """
+    if branch := _run_git(["symbolic-ref", "--quiet", "--short", "HEAD"], project):
+        # Spelled as VersionParser::normalizeBranch spells it: a version
+        # branch such as 13.x is 13.x-dev, which constraints on the root
+        # package match; any other is dev-<name>, which extra.branch-alias
+        # maps to a version. Not mirrored: for a feature branch Composer also
+        # tries the nearest version branch (a git rev-list against each), so
+        # there this says dev-<name> where Composer may have found more.
+        first, *rest = branch.removeprefix("v").split(".")
+        numeric = first.isdigit() and len(rest) <= 3 and all(p.isdigit() or p in ("x", "X", "*") for p in rest)
+        return f"{branch}-dev" if numeric else f"dev-{branch}"
+    tag = _run_git(["describe", "--exact-match", "--tags"], project)
+    if tag and _COMPOSER_VERSION.match(version := normalize_release_version(tag) or tag):
+        return version.lstrip("vV")
     return None
 
 
