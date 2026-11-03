@@ -406,7 +406,7 @@ class DependencyTrackDestination:
                 destination_name=self.name,
                 error_message=(
                     f"Dependency Track answered {response.status_code} redirecting to "
-                    f"{response.headers.get('Location')}. Not following it, because the API key would go "
+                    f"{response.headers.get('Location')}. Not following it, because the credentials would go "
                     "with it. Set DTRACK_API_URL to the URL the server expects."
                 ),
             )

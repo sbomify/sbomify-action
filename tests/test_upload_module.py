@@ -1578,6 +1578,20 @@ class TestDependencyTrackWorkloadIdentity(unittest.TestCase):
 
     @patch("sbomify_action._upload.destinations.dependency_track.requests.put")
     @patch("sbomify_action._upload.destinations.dependency_track.requests.post")
+    def test_redirect_message_fits_the_session_token(self, mock_post, mock_put, provider):
+        """There is no API key on this path; the bearer session token is the credential."""
+        provider.return_value.request_token.return_value = "ci-jwt"
+        mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"access_token": "dt-session"}))
+        mock_put.return_value = Mock(ok=True, status_code=307, headers={"Location": "http://elsewhere/v1/bom"})
+
+        result = self._upload(_wif_config())
+
+        self.assertFalse(result.success)
+        self.assertIn("credentials would go with it", result.error_message)
+        self.assertNotIn("API key", result.error_message)
+
+    @patch("sbomify_action._upload.destinations.dependency_track.requests.put")
+    @patch("sbomify_action._upload.destinations.dependency_track.requests.post")
     def test_refused_exchange_fails_without_uploading(self, mock_post, mock_put, provider):
         provider.return_value.request_token.return_value = "ci-jwt"
         mock_post.return_value = Mock(
