@@ -20,7 +20,8 @@ import pytest
 from sbomify_action._generation import utils
 from sbomify_action._generation.generators import cdxgen as cdxgen_module
 from sbomify_action._generation.generators.cdxgen import CdxgenFsGenerator
-from sbomify_action._generation.protocol import GenerationInput
+from sbomify_action._generation.protocol import FormatVersion, GenerationInput
+from sbomify_action._generation.registry import GeneratorRegistry
 from sbomify_action._generation.utils import combined_output, composer_root_version, resolve_composer_lockfile
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.runtimes import can_provide
@@ -526,6 +527,47 @@ class TestTheManifestCannotSteerTheResolution:
         with pytest.raises(SBOMGenerationError, match="Commit a composer.lock"):
             resolve_composer_lockfile(tmp_path)
 
+        assert composer_runs == []
+
+    def test_a_refusal_in_strict_mode_is_not_called_a_bug(self, tmp_path, monkeypatch, composer_runs):
+        """In the image, strict mode stops the run rather than fall back to an
+        empty SBOM. That is right for a refusal too, but a refusal is a
+        decision, not a defect in the image, and calling it a bug sends the
+        reader looking in the wrong place."""
+
+        class Fallback:
+            name = command = "syft-fs"
+            priority = 35
+            supported_formats = [FormatVersion("cyclonedx", ("1.6",), "1.6")]
+
+            def supports(self, input):
+                return True
+
+            def generate(self, input):
+                pytest.fail("fell back past a deliberate refusal")
+
+        monkeypatch.setenv("SBOMIFY_IN_CONTAINER", "1")
+        monkeypatch.delenv("SBOMIFY_ALLOW_GENERATOR_FALLBACK", raising=False)
+        monkeypatch.setattr(cdxgen_module, "_CDXGEN_AVAILABLE", True)
+        monkeypatch.setattr(cdxgen_module, "ensure_runtime", lambda _tool: None)
+        self._manifest(tmp_path, repositories=[{"type": "vcs", "url": "https://git.internal.example/acme/widget.git"}])
+        registry = GeneratorRegistry()
+        registry.register(CdxgenFsGenerator())
+        registry.register(Fallback())
+
+        with pytest.raises(SBOMGenerationError) as error:
+            registry.generate(
+                GenerationInput(
+                    lock_file=str(tmp_path / "composer.json"),
+                    output_file=str(tmp_path / "o.json"),
+                    output_format="cyclonedx",
+                ),
+                validate=False,
+            )
+
+        message = str(error.value)
+        assert "bug" not in message
+        assert "repositories" in message and "Commit a composer.lock" in message, "the refusal's advice was lost"
         assert composer_runs == []
 
 

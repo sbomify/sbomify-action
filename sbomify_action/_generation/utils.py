@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from sbomify_action._runtime.git import git_safe_directory_env
-from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
+from sbomify_action.exceptions import DockerImageNotFoundError, InputRefusedError, SBOMGenerationError
 from sbomify_action.logging_config import ESCAPE_RE as _ANSI_RE
 from sbomify_action.logging_config import logger
 from sbomify_action.release_version import normalize_release_version, tag_from_ci
@@ -940,6 +940,10 @@ def resolve_composer_lockfile(directory: Path) -> Path | None:
     Returns the lock file created, or None when one is already committed.
 
     Raises:
+        InputRefusedError: when this deliberately will not resolve the
+            manifest -- a symlinked lock, fetching opted out, or a manifest
+            that could steer where Composer goes. The message says what to
+            commit instead.
         SBOMGenerationError: when Composer is unavailable or cannot resolve
             the manifest. Before, cdxgen failed here too; the message now
             says what to commit.
@@ -951,7 +955,7 @@ def resolve_composer_lockfile(directory: Path) -> Path | None:
     # lock"; Composer would then write through it, and the caller's cleanup
     # would delete whatever it pointed at.
     if lock.is_symlink():
-        raise SBOMGenerationError(f"composer.lock is a symlink, so it is neither read nor resolved over. {advice}")
+        raise InputRefusedError(f"composer.lock is a symlink, so it is neither read nor resolved over. {advice}")
     if lock.exists():
         return None
 
@@ -959,12 +963,12 @@ def resolve_composer_lockfile(directory: Path) -> Path | None:
     # network from inside CI. So: only when fetching is allowed at all, only
     # against Packagist, and only over TLS.
     if not fetching_is_enabled():
-        raise SBOMGenerationError(
+        raise InputRefusedError(
             "composer.json has no composer.lock beside it, and resolving one means reaching Packagist, "
             f"which SBOMIFY_FETCH_RUNTIMES rules out. {advice}"
         )
     if refusal := _composer_manifest_refusal(directory / "composer.json"):
-        raise SBOMGenerationError(f"Not resolving composer.json: {refusal}. {advice}")
+        raise InputRefusedError(f"Not resolving composer.json: {refusal}. {advice}")
 
     try:
         ensure_php_installed()
@@ -1019,7 +1023,7 @@ def resolve_composer_lockfile(directory: Path) -> Path | None:
     # Checked again before the caller registers it for deletion: whatever is
     # there now has to be a file we made, in the project, and nothing else.
     if lock.is_symlink() or not lock.is_file() or not lock.resolve().is_relative_to(directory.resolve()):
-        raise SBOMGenerationError(
+        raise InputRefusedError(
             f"Composer left a composer.lock that is not a regular file inside {directory}; not using it. {advice}"
         )
     logger.info("Resolved composer.json into a temporary composer.lock for this run only")

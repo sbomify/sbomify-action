@@ -13,7 +13,7 @@ Verified capabilities (cdxgen 12.0.0):
 
 from pathlib import Path
 
-from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
+from sbomify_action.exceptions import DockerImageNotFoundError, InputRefusedError, SBOMGenerationError
 from sbomify_action.logging_config import logger
 from sbomify_action.runtimes import can_provide, ensure_runtime
 from sbomify_action.tool_checks import check_tool_available
@@ -298,12 +298,14 @@ class CdxgenFsGenerator:
                 generator_name=self.name,
             )
         except SBOMGenerationError as e:
-            return GenerationResult.failure_result(
+            failed = GenerationResult.failure_result(
                 error_message=str(e),
                 sbom_format="cyclonedx",
                 spec_version=input.spec_version or CDXGEN_CYCLONEDX_DEFAULT,
                 generator_name=self.name,
             )
+            failed.refused = isinstance(e, InputRefusedError)
+            return failed
         finally:
             # A lock file we created is ours to remove. It is a working file,
             # not something the user asked for, and leaving it behind risks a
