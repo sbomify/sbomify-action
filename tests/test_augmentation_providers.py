@@ -929,9 +929,10 @@ class TestLifecyclePhasePrecedence:
 
     These pin the spec-correct defaults that the providers emit in
     realistic input/environment combinations, so a future refactor can't
-    silently regress the CDX 1.7 meta:enum alignment (pre-build for
-    lockfile scans, post-build for built-image scans, build only when
-    the operator explicitly opts in via sbomify.json).
+    silently regress the CDX 1.7 meta:enum alignment (post-build for
+    built-image scans, nothing from CI detection alone, build only when
+    the operator explicitly opts in via sbomify.json). The pipeline
+    derives pre-build for lock files and source trees itself.
     """
 
     @pytest.fixture(autouse=True)
@@ -966,10 +967,10 @@ class TestLifecyclePhasePrecedence:
         registry.register(CIPlatformProvider())
         return registry
 
-    def test_ci_lockfile_scan_defaults_to_pre_build(self):
+    def test_ci_alone_claims_no_phase(self):
         """GitHub Actions env alone (no json config, no docker image)
-        yields pre-build — the schema-correct default for a lockfile /
-        manifest scan on CI."""
+        yields no phase. CI says where the action ran, not what it was
+        given: a user's SBOM_FILE of a built image is not pre-build."""
         with tempfile.TemporaryDirectory() as tmpdir:
             os.chdir(tmpdir)  # no sbomify.json here
             env = {
@@ -984,7 +985,7 @@ class TestLifecyclePhasePrecedence:
                 metadata = registry.fetch_metadata()
 
             assert metadata is not None
-            assert metadata.lifecycle_phase == "pre-build"
+            assert metadata.lifecycle_phase is None
 
     def test_docker_image_overrides_ci_default_to_post_build(self):
         """DOCKER_IMAGE set alongside GITHUB_ACTIONS yields post-build.
@@ -1032,8 +1033,8 @@ class TestLifecyclePhasePrecedence:
             assert metadata is not None
             assert metadata.lifecycle_phase == "build"
 
-    def test_gitlab_defaults_to_pre_build(self):
-        """Same spec-alignment applies to GitLab CI and Bitbucket
+    def test_gitlab_claims_no_phase(self):
+        """Same applies to GitLab CI and Bitbucket
         Pipelines — parametrise-style coverage without the pytest
         parametrise boilerplate since patch.dict with different
         env sets doesn't compose cleanly as parameters."""
@@ -1050,9 +1051,9 @@ class TestLifecyclePhasePrecedence:
                 metadata = registry.fetch_metadata()
 
             assert metadata is not None
-            assert metadata.lifecycle_phase == "pre-build"
+            assert metadata.lifecycle_phase is None
 
-    def test_bitbucket_defaults_to_pre_build(self):
+    def test_bitbucket_claims_no_phase(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             os.chdir(tmpdir)
             env = {
@@ -1066,7 +1067,7 @@ class TestLifecyclePhasePrecedence:
                 metadata = registry.fetch_metadata()
 
             assert metadata is not None
-            assert metadata.lifecycle_phase == "pre-build"
+            assert metadata.lifecycle_phase is None
 
     def test_docker_image_alone_without_ci_still_emits_post_build(self):
         """DOCKER_IMAGE set with no CI env vars and no sbomify.json must
@@ -1140,7 +1141,7 @@ class TestLifecyclePhasePrecedence:
 
 
 class TestLifecyclePhaseSpdxCdxParity:
-    """End-to-end parity tests: CI provider default → both SPDX and
+    """End-to-end parity tests: a provider's phase → both SPDX and
     CycloneDX outputs carry the same lifecycle phase.
 
     The augmentation code writes the phase to different spec-native
@@ -1218,40 +1219,6 @@ class TestLifecyclePhaseSpdxCdxParity:
             bom_ref="parity-app@1.0.0",
         )
         return bom
-
-    def test_github_ci_lockfile_writes_pre_build_to_both_formats(self):
-        """GitHub Actions + lockfile scan → both SPDX creatorComment
-        and CDX metadata.lifecycles[0].phase hold ``pre-build``."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.chdir(tmpdir)
-            env = {
-                "GITHUB_ACTIONS": "true",
-                "GITHUB_REPOSITORY": "owner/repo",
-                "GITHUB_SHA": "a" * 40,
-                "GITHUB_REF": "refs/heads/main",
-                "GITHUB_SERVER_URL": "https://github.com",
-            }
-            metadata = self._fetch_from_registry(env)
-
-        assert metadata is not None
-        augmentation_data = metadata.to_dict()
-        assert augmentation_data["lifecycle_phase"] == "pre-build"
-
-        from sbomify_action.augmentation import augment_cyclonedx_sbom, augment_spdx_sbom
-
-        # CDX path
-        bom = self._minimal_cdx_bom()
-        augmented_bom = augment_cyclonedx_sbom(bom, augmentation_data, spec_version="1.6")
-        phases = [lc.phase.value for lc in augmented_bom.metadata.lifecycles if lc.phase is not None]
-        assert "pre-build" in phases, f"CDX lifecycles should carry pre-build; got {phases}"
-
-        # SPDX path
-        doc = self._minimal_spdx_doc()
-        augmented_doc = augment_spdx_sbom(doc, augmentation_data)
-        creator_comment = augmented_doc.creation_info.creator_comment or ""
-        assert "Lifecycle phase: pre-build" in creator_comment, (
-            f"SPDX creator comment should carry pre-build; got {creator_comment!r}"
-        )
 
     def test_docker_image_writes_post_build_to_both_formats(self):
         """``--docker-image`` on CI → both formats hold ``post-build``."""
