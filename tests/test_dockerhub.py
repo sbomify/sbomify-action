@@ -11,6 +11,7 @@ from sbomify_action._generation.dockerhub import (
     detect_dockerhub_image,
     fetch_dockerhub_sbom,
 )
+from sbomify_action.exceptions import SBOMGenerationError
 
 # --- Fixtures ---
 
@@ -165,7 +166,7 @@ class TestClassifyRef:
 
 
 class TestDetectDirect:
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_library_shorthand(self, mock_crane, mock_which):
         mock_crane.side_effect = [MANIFEST_LIST_PLAIN]
@@ -176,7 +177,7 @@ class TestDetectDirect:
         assert result.image_ref == "docker.io/library/python"
         assert result.digest.startswith("sha256:")
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_bare_name(self, mock_crane, mock_which):
         mock_crane.side_effect = [MANIFEST_LIST_PLAIN]
@@ -186,7 +187,7 @@ class TestDetectDirect:
         assert result.tier == "official"
         assert result.image_ref == "docker.io/library/python"
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_dhi(self, mock_crane, mock_which):
         mock_crane.side_effect = [MANIFEST_LIST_PLAIN]
@@ -196,7 +197,7 @@ class TestDetectDirect:
         assert result.tier == "dhi"
         assert result.image_ref == "dhi.io/python"
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_other_registry_returns_none(self, mock_crane, mock_which):
         # Provenance path will also be attempted — give it an empty manifest.
@@ -206,7 +207,10 @@ class TestDetectDirect:
         result = detect_dockerhub_image("ghcr.io/foo/bar:latest")
         assert result is None
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value=None)
+    @patch(
+        "sbomify_action._generation.buildkit_provenance.ensure_runtime",
+        side_effect=SBOMGenerationError("no pinned runtime"),
+    )
     def test_crane_not_available(self, mock_which):
         result = detect_dockerhub_image("python:3.11")
         assert result is None
@@ -216,7 +220,7 @@ class TestDetectDirect:
 
 
 class TestDetectFromProvenance:
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_detects_library_base(self, mock_crane, mock_which):
         python_manifest_list = json.dumps(
@@ -262,7 +266,7 @@ class TestDetectFromProvenance:
         assert result.tier == "official"
         assert result.image_ref == "docker.io/library/python"
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_detects_dhi_base(self, mock_crane, mock_which):
         dhi_manifest_list = json.dumps(
@@ -302,7 +306,7 @@ class TestDetectFromProvenance:
         assert result.tier == "dhi"
         assert result.image_ref == "dhi.io/python"
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/bin/crane")
+    @patch("sbomify_action._generation.buildkit_provenance.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_crane")
     def test_ignores_non_dockerhub_base(self, mock_crane, mock_which):
         mock_crane.side_effect = [
@@ -443,7 +447,7 @@ class TestFetchDockerhubSbom:
         )
         assert fetch_dockerhub_sbom(info) is None
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/bin/cosign")
+    @patch("sbomify_action._generation.buildkit_provenance.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_cosign")
     def test_dhi_fetches_via_cosign_with_key_and_tlog_flags(self, mock_cosign, mock_which):
         payload = {
@@ -468,7 +472,7 @@ class TestFetchDockerhubSbom:
         assert "--key" in call_args
         assert "--insecure-ignore-tlog=true" in call_args
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value="/usr/bin/cosign")
+    @patch("sbomify_action._generation.buildkit_provenance.ensure_runtime")
     @patch("sbomify_action._generation.buildkit_provenance.run_cosign")
     def test_dhi_uses_verify_attestation_not_download(self, mock_cosign, mock_which):
         """Regression guard: DHI must invoke `cosign verify-attestation` so
@@ -496,7 +500,10 @@ class TestFetchDockerhubSbom:
         assert "spdxjson" in call_args
         assert "download" not in call_args
 
-    @patch("sbomify_action._generation.buildkit_provenance.shutil.which", return_value=None)
+    @patch(
+        "sbomify_action._generation.buildkit_provenance.ensure_runtime",
+        side_effect=SBOMGenerationError("no pinned runtime"),
+    )
     def test_dhi_without_cosign_returns_none(self, mock_which):
         info = DockerHubBaseImage(
             image_ref="dhi.io/python",

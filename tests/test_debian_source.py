@@ -7,6 +7,7 @@ import pytest
 import requests
 from packageurl import PackageURL
 
+from sbomify_action._enrichment.exceptions import TransientSourceError
 from sbomify_action._enrichment.sources.debian import (
     DEBIAN_SOURCES_BASE,
     DebianSource,
@@ -189,9 +190,8 @@ class TestDebianSourceFetch:
         mock_session = Mock()
         mock_session.get.side_effect = requests.exceptions.Timeout("Connection timeout")
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_fetch_connection_error(self):
         """Test handling of connection error."""
@@ -201,9 +201,8 @@ class TestDebianSourceFetch:
         mock_session = Mock()
         mock_session.get.side_effect = requests.exceptions.ConnectionError("Connection failed")
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_fetch_json_decode_error(self):
         """Test handling of JSON decode error."""

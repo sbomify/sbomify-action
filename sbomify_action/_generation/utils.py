@@ -1,13 +1,20 @@
 """Shared utilities for SBOM generation."""
 
+import os
 import re
 import shutil
 import subprocess
 import threading
+from collections.abc import Callable
+from pathlib import Path
 from typing import Optional
 
-from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
+from sbomify_action._runtime.git import git_safe_directory_env
+from sbomify_action.exceptions import DockerImageNotFoundError, ProjectResolutionError, SBOMGenerationError
+from sbomify_action.logging_config import ESCAPE_RE as _ANSI_RE
 from sbomify_action.logging_config import logger
+from sbomify_action.release_version import normalize_release_version, tag_from_ci
+from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled
 
 # Track whether Java/Maven has been installed on-demand
 _java_maven_installed = False
@@ -26,11 +33,22 @@ PYTHON_LOCK_FILES = [
     "uv.lock",
 ]
 
-RUST_LOCK_FILES = ["Cargo.lock"]
+# Cargo.toml is the manifest fallback, mirroring pyproject.toml / package.json /
+# go.mod in the other ecosystems. It matters for Rust in particular because
+# `cargo new --lib` gitignores Cargo.lock by convention, so a library crate often
+# has no lockfile committed at all -- without the manifest, such a repo looks like
+# it contains no Rust to the wizard and to LOCK_FILE validation.
+# Cargo.lock stays first and outranks it (see the wizard's _LOCKFILE_PRIORITY).
+RUST_LOCK_FILES = ["Cargo.lock", "Cargo.toml"]
 
 JAVASCRIPT_LOCK_FILES = [
     "package.json",
     "package-lock.json",
+    # npm's older pinning file. It was known to resolve_npm_lockfile and to
+    # nothing else, so a repository holding only this was not discoverable as
+    # JavaScript at all, and pointing at its package.json skipped resolution
+    # (a lock file exists) to produce nothing (the pipeline could not read it).
+    "npm-shrinkwrap.json",
     "yarn.lock",
     "pnpm-lock.yaml",
     "bun.lock",
@@ -62,6 +80,23 @@ DOTNET_LOCK_FILES = [
     "packages.lock.json",
 ]
 
+#: .NET project files, matched by extension because their names are the
+#: project's, not a convention.
+#:
+#: `packages.lock.json` only exists if a project opts into NuGet lock files,
+#: which most do not: of ten .NET repositories surveyed, five had no
+#: recognised input at all and the other five were matched on a stray
+#: `package-lock.json` or `requirements.txt` belonging to something else --
+#: `quartznet` was described as 627 JavaScript packages. So .NET was
+#: nominally supported and almost never actually detected.
+#:
+#: cdxgen reads a project file directly, without the SDK and without a lock
+#: file: pointed at AutoMapper, which commits no lock file, it returns its
+#: PackageReference set. Like every manifest read this yields declared
+#: versions rather than a resolved graph -- see LOCKFILE_FOR_MANIFEST -- but
+#: that is the difference between a partial answer and none.
+DOTNET_PROJECT_SUFFIXES = (".csproj", ".fsproj", ".vbproj", ".sln")
+
 SWIFT_LOCK_FILES = [
     "Package.swift",
     "Package.resolved",
@@ -69,9 +104,41 @@ SWIFT_LOCK_FILES = [
 
 ELIXIR_LOCK_FILES = ["mix.lock"]
 
+# Haskell. Two build tools, two conventions, and syft reads both.
+#
+#   stack.yaml.lock   stack's resolved snapshot -- the authoritative one
+#   stack.yaml        the manifest, whose extra-deps are still pinned
+#   cabal.project.freeze  cabal's equivalent, a list of == constraints
+#
+# Measured on PostgREST: 7 packages from either stack file. The freeze file
+# there holds only an index-state and yields nothing, which is the file being
+# empty rather than the parser failing -- given real constraints it returns
+# one package each.
+HASKELL_LOCK_FILES = [
+    "stack.yaml.lock",
+    "stack.yaml",
+    "cabal.project.freeze",
+]
+
+# Erlang, for projects that build with rebar3. rebar.lock pins every
+# dependency with a version, which is what makes it worth reading; projects on
+# erlang.mk have no equivalent and are not covered. Measured on rebar3 itself:
+# 9 hex packages.
+ERLANG_LOCK_FILES = ["rebar.lock"]
+
+# Clojure, via cdxgen rather than syft, which has no Clojure cataloger.
+# deps.edn is the tools.deps manifest and project.clj is Leiningen's; cdxgen
+# reads either. Measured on clj-kondo: 9 components from each, independently.
+CLOJURE_LOCK_FILES = ["deps.edn", "project.clj"]
+
 SCALA_LOCK_FILES = ["build.sbt"]
 
 TERRAFORM_LOCK_FILES = [".terraform.lock.hcl"]
+
+# PlatformIO (Arduino, ESP32 and other embedded targets). Not a lock file:
+# the generator reads what `pio pkg install` recorded under .pio/libdeps --
+# see sbomify_action._platformio.
+PLATFORMIO_LOCK_FILES = ["platformio.ini"]
 
 # All supported lock files
 ALL_LOCK_FILES = (
@@ -89,6 +156,10 @@ ALL_LOCK_FILES = (
     + ELIXIR_LOCK_FILES
     + SCALA_LOCK_FILES
     + TERRAFORM_LOCK_FILES
+    + HASKELL_LOCK_FILES
+    + ERLANG_LOCK_FILES
+    + CLOJURE_LOCK_FILES
+    + PLATFORMIO_LOCK_FILES
 )
 
 # =============================================================================
@@ -105,6 +176,18 @@ CDXGEN_LOCK_FILES = (
     PYTHON_LOCK_FILES
     + JAVASCRIPT_LOCK_FILES
     + JAVA_LOCK_FILES  # Best tool for Java/Gradle lock files
+    # Go belongs here. It was removed on the strength of a measurement that
+    # does not reproduce: cdxgen was said to hit "Invalid purl: name is a
+    # required field" and emit 0 components on go.mod. Re-measured, it returns
+    # 4 components on the go fixture and 4 on a bare go.mod as well. The
+    # original reading was taken without a Go toolchain on PATH -- cdxgen
+    # shells out to `go` -- and the go bundle now supplies one, so the
+    # condition that produced it no longer exists.
+    #
+    # cyclonedx-gomod still leads at priority 10 and remains the right tool
+    # for Go. Keeping cdxgen at 20 restores the middle rung of the ladder, so
+    # a project where the native generator declines degrades to cdxgen rather
+    # than falling all the way to syft.
     + GO_LOCK_FILES
     + RUST_LOCK_FILES
     + RUBY_LOCK_FILES
@@ -112,9 +195,15 @@ CDXGEN_LOCK_FILES = (
     + CPP_LOCK_FILES
     + PHP_LOCK_FILES
     + DOTNET_LOCK_FILES
-    + SWIFT_LOCK_FILES
+    # Swift is deliberately absent. cdxgen claims SwiftPM and then fails on a
+    # real project, and in strict mode a generator that claims an input and
+    # fails is fatal -- so claiming it cost the SBOM entirely instead of
+    # degrading to syft, which produces one. Syft still lists Swift.
     + ELIXIR_LOCK_FILES
     + SCALA_LOCK_FILES
+    # cdxgen is the only tool here that reads Clojure; syft has no cataloger
+    # for it.
+    + CLOJURE_LOCK_FILES
 )
 
 # Trivy: Good multi-ecosystem support
@@ -146,6 +235,9 @@ SYFT_LOCK_FILES = (
     + SWIFT_LOCK_FILES
     + ELIXIR_LOCK_FILES
     + TERRAFORM_LOCK_FILES
+    # syft is the only tool here that reads either of these.
+    + HASKELL_LOCK_FILES
+    + ERLANG_LOCK_FILES
 )
 
 # Default command timeout in seconds
@@ -153,6 +245,125 @@ DEFAULT_TIMEOUT = 1800  # 30 minutes (large Maven projects can take a while)
 
 # Progress indicator interval in seconds
 PROGRESS_INTERVAL = 60  # Log progress every minute
+
+
+def convert_to_spdx(cyclonedx: Path, output: Path, cwd: Path) -> None:
+    """Turn a native CycloneDX document into SPDX.
+
+    Measured on spring-petclinic: 106 components in, 108 packages out at 99%
+    purl coverage. syft rather than cyclonedx-cli, which is marginally cleaner
+    (106 packages, 100%) but a 77MB self-contained .NET binary.
+
+    syft is not free here. Nothing is baked into the image, so a caller whose
+    ecosystem did not already need syft pays one bundle fetch the first time a
+    conversion happens; it is cached afterwards. Most callers have it already,
+    because the bundles that carry a native generator carry syft too.
+    """
+    ensure_runtime("syft")
+    # Absolute, because syft runs in the project directory and the caller's
+    # paths are relative to wherever sbomify-action was started. With
+    # LOCK_FILE in a subdirectory and a relative OUTPUT_FILE, syft looked
+    # for the staged document inside the project and failed.
+    run_command(
+        ["syft", "convert", str(cyclonedx.resolve()), "-o", f"spdx-json={output.resolve()}"],
+        "syft",
+        timeout=600,
+        cwd=str(cwd),
+    )
+
+
+# Volatile fragments that differ between runs of the *same* failure: absolute
+# paths, hex ids, line/column numbers, durations.
+_VOLATILE_RE = re.compile(
+    r"""
+      (/[^\s'"]+)          # absolute paths
+    | (\b[0-9a-f]{7,}\b)   # shas / hashes
+    | (\b\d+\b)            # any bare number
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def error_signature(output: str) -> str:
+    """A stable grouping key for a tool's error output.
+
+    Sentry groups log-derived events by message, and these messages are raw
+    tool stderr — so one root cause splinters into an issue per variant. A
+    single cdxgen complaint ("SECURE MODE: DO NOT run cdxgen with root
+    privileges") produced 23 separate issues, differing only in colour codes,
+    paths and line numbers.
+
+    Reduce the output to its first meaningful line with the volatile parts
+    removed, so those variants collapse to one issue while genuinely
+    different failures stay apart.
+    """
+    plain = _ANSI_RE.sub("", output or "")
+    for line in plain.splitlines():
+        stripped = line.strip()
+        if stripped:
+            normalised = _VOLATILE_RE.sub("", stripped)
+            return " ".join(normalised.split())[:120]
+    return ""
+
+
+def _log_error_grouped(command_name: str, output: str, message: str) -> None:
+    """Log ``message`` at error level under a stable Sentry fingerprint.
+
+    Exactly one error record is emitted whether or not the telemetry side
+    works, and nothing here can raise. That matters because this sits on the
+    SBOM generation error path: its whole job is to report someone else's
+    failure, so it must not be able to add one. Losing the grouping degrades
+    a Sentry view; turning "the tool failed" into "sbomify-action crashed"
+    would be a regression.
+
+    Not a context manager: ``new_scope()`` runs on ``__enter__``, so a
+    contextmanager-returning helper cannot catch its own failures -- they
+    surface in the caller's ``with``.
+    """
+    logged = False
+    try:
+        import sentry_sdk
+
+        with sentry_sdk.new_scope() as scope:
+            scope.fingerprint = ["tool-error", command_name, error_signature(output)]
+            logger.error(message)
+            logged = True
+    except Exception:  # noqa: BLE001 - deliberately broad; see above
+        logger.debug("Could not scope the tool-error fingerprint", exc_info=True)
+    if not logged:
+        logger.error(message)
+
+
+def combined_output(stderr: str | None, stdout: str | None) -> str:
+    """Both streams of a failed command, in the order a terminal would show them.
+
+    Was ``stderr or stdout``, which reads as "prefer stderr, fall back to
+    stdout" but is really "if stderr has *anything at all*, discard stdout".
+    cdxgen is the case that exposes it: on a composer failure it writes 24
+    bytes to stderr --
+
+        Error running composer:
+
+    -- and the 3,410 bytes that say *why* to stdout. stderr was non-empty, so
+    the fallback never fired, and every PHP resolution failure was reported as
+    that bare colon with nothing after it. The answer was in hand the whole
+    time and was being thrown away.
+
+    Joining is right rather than reordering: neither stream is reliably the
+    interesting one, and a tool that splits a single message across both is
+    only readable if both are kept.
+
+    Only blank lines are trimmed from the front, not indentation. Composer
+    says what is wrong in the shape of the text --
+
+        Problem 1
+          - laravel/framework is present at version 1.0.0+no-version-set
+
+    -- and a plain ``strip()`` would flatten the first line of that against
+    the left margin. Trailing whitespace goes entirely; nothing reads it.
+    """
+    parts = [part.lstrip("\r\n").rstrip() for part in (stderr, stdout) if part and part.strip()]
+    return "\n".join(parts)
 
 
 def log_command_error(command_name: str, stderr: str, stdout: str, level: str = "error") -> None:
@@ -163,16 +374,25 @@ def log_command_error(command_name: str, stderr: str, stdout: str, level: str = 
         command_name: The name of the command that failed
         stderr: The stderr output from the command
         stdout: The stdout output from the command (some tools output errors here)
-        level: Log level to use ("error" or "warning"). Default is "error".
+        level: Log level to use ("error", "warning", or "debug"). Default is
+            "error". "debug" is used for failures inside a generator priority
+            chain where a later generator is expected to succeed, so the
+            failure is benign noise on the happy path.
     """
-    # Prefer stderr, fall back to stdout (some tools like cdxgen output errors to stdout)
-    output = stderr or stdout
-    if output:
-        message = f"[{command_name}] error: {output.strip()}"
-        if level == "warning":
-            logger.warning(message)
-        else:
-            logger.error(message)
+    output = combined_output(stderr, stdout)
+    if not output:
+        return
+    # Strip ANSI so the escape bytes don't land in the log (or the issue title).
+    message = f"[{command_name}] error: {_ANSI_RE.sub('', output).strip()}"
+    # Branch on the level string, NOT on the identity of the bound method.
+    # ``logger.error is logger.error`` is False — attribute access builds a new
+    # bound method each time — so an identity check here silently disables the
+    # fingerprinting for every call.
+    if level not in ("debug", "warning"):
+        _log_error_grouped(command_name, output, message)
+        return
+    log_fn = logger.debug if level == "debug" else logger.warning
+    log_fn(message)
 
 
 # Patterns that indicate a Docker image was not found in the registry
@@ -261,7 +481,9 @@ def extract_error_summary(output: str | None, max_chars: int = 500) -> str:
     if not output:
         return ""
 
-    output = output.strip()
+    # The summary ends up in the SBOMGenerationError message, which the
+    # registry logs when it falls back to the next generator.
+    output = _ANSI_RE.sub("", output).strip()
 
     # Try to find error-specific lines
     error_lines = []
@@ -295,6 +517,9 @@ def run_command(
     capture_output: bool = True,
     cwd: str | None = None,
     docker_image: str | None = None,
+    log_errors: bool = True,
+    env: dict[str, str] | None = None,
+    project_unresolvable: Callable[[str], bool] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """
     Run a command and handle common error cases.
@@ -308,12 +533,34 @@ def run_command(
         capture_output: Whether to capture stdout/stderr
         cwd: Working directory for the command (optional)
         docker_image: Docker image being scanned (optional, for better error messages)
+        log_errors: When True (default), a failure (non-zero exit, timeout, or
+            missing binary) logs at ERROR. Set
+            False for a generator that runs inside the priority chain and is
+            expected to fail gracefully when a higher-priority or fallback
+            generator can still succeed (e.g. cdxgen on a Python lockfile,
+            where cyclonedx-py/syft take over) — its failure is then logged
+            at DEBUG so it doesn't spam ERROR on the happy path. The
+            ``SBOMGenerationError`` is still raised either way; the
+            orchestrator surfaces the real ERROR only if *every* generator
+            in the chain fails.
+        env: Extra environment variables for the child, layered over the
+            current environment rather than replacing it — the generators need
+            PATH, HOME and the proxy settings they were started with. Every
+            child also gets ``safe.directory`` via git's environment
+            configuration (see ``git_safe_directory_env``), since generators
+            routinely shell out to tools that ask git about the workspace.
+        project_unresolvable: Given the failed command's combined output,
+            whether the tool rejected the user's project rather than failed
+            itself. When it returns True the failure is logged as a warning
+            and raised as ``ProjectResolutionError``, which stays out of
+            error telemetry.
 
     Returns:
         CompletedProcess result
 
     Raises:
         DockerImageNotFoundError: If the Docker image doesn't exist in the registry
+        ProjectResolutionError: If ``project_unresolvable`` recognises the failure
         SBOMGenerationError: If command fails or times out for other reasons
     """
     import threading
@@ -340,6 +587,11 @@ def run_command(
     progress_thread.start()
 
     try:
+        # Safe by invariant: the executable (cmd[0]) is always an internal generator
+        # constant ("syft", "cdxgen", "trivy", ...), never user-controlled. Untrusted
+        # values (lockfile paths, image refs) reach only argv, and shell=False means
+        # no shell parsing — so neither command nor shell injection is reachable.
+        # nosemgrep: dangerous-subprocess-use-audit
         result = subprocess.run(
             cmd,
             capture_output=capture_output,
@@ -348,6 +600,9 @@ def run_command(
             shell=False,
             timeout=timeout,
             cwd=cwd,
+            # The caller's own overrides win over the safe.directory default,
+            # so a generator that deliberately configures git keeps control.
+            env={**os.environ, **git_safe_directory_env(), **(env or {})},
         )
         return result
     except subprocess.CalledProcessError as e:
@@ -370,12 +625,38 @@ def run_command(
                 returncode=e.returncode,
             )
 
-        # Other errors are logged at ERROR level (potential bugs or system issues)
-        logger.error(f"{command_name} command failed with error: {e}")
-        log_command_error(command_name, stderr, stdout)
+        # The tool ran and told us what is wrong with the user's project: a
+        # manifest that does not parse, a registry it cannot reach. Theirs to
+        # fix, so a warning that carries the tool's words, not an error event.
+        output = combined_output(stderr, stdout)
+        if project_unresolvable and project_unresolvable(output):
+            log_command_error(command_name, stderr, stdout, level="warning")
+            message = f"{command_name} could not resolve this project"
+            if error_summary := extract_error_summary(output):
+                message += f": {error_summary}"
+            raise ProjectResolutionError(message, stderr=stderr, stdout=stdout, returncode=e.returncode)
+
+        # Other errors normally log at ERROR (potential bugs or system issues).
+        # When the caller is a priority-chain generator that fails gracefully
+        # (log_errors=False), drop to DEBUG so an expected fallback doesn't
+        # spam red ERROR lines on the happy path — the SBOMGenerationError is
+        # still raised, and the orchestrator logs ERROR only if all generators
+        # fail.
+        if log_errors:
+            # The exit status alone says nothing about the cause, and as an
+            # ERROR it became one Sentry issue per tool holding every failure
+            # that tool ever had. When there is output, log_command_error
+            # reports it under a fingerprint of the actual cause; the status
+            # line only needs to be an error when it is all we have.
+            status_log = logger.warning if output else logger.error
+            status_log(f"{command_name} command failed with error: {e}")
+            log_command_error(command_name, stderr, stdout)
+        else:
+            logger.debug(f"{command_name} command failed (trying next generator): {e}")
+            log_command_error(command_name, stderr, stdout, level="debug")
 
         # Include error summary in the exception message for better diagnostics
-        error_summary = extract_error_summary(stderr or stdout)
+        error_summary = extract_error_summary(output)
         message = f"{command_name} command failed with return code {e.returncode}"
         if error_summary:
             message += f": {error_summary}"
@@ -388,10 +669,15 @@ def run_command(
         )
     except subprocess.TimeoutExpired:
         elapsed = int(time.time() - start_time)
-        logger.error(f"{command_name} command timed out after {elapsed}s (limit: {timeout}s)")
+        # Honor log_errors here too: a cdxgen timeout on, say, a Python
+        # lockfile is the same benign priority-chain fallback as a non-zero
+        # exit — it shouldn't spam red ERROR when a later generator succeeds.
+        timeout_msg = f"{command_name} command timed out after {elapsed}s (limit: {timeout}s)"
+        logger.error(timeout_msg) if log_errors else logger.debug(timeout_msg)
         raise SBOMGenerationError(f"{command_name} command timed out")
     except FileNotFoundError:
-        logger.error(f"{command_name} command not found")
+        not_found_msg = f"{command_name} command not found"
+        logger.error(not_found_msg) if log_errors else logger.debug(not_found_msg)
         raise SBOMGenerationError(f"{command_name} command not found - is it installed?")
     finally:
         # Stop the progress thread
@@ -427,6 +713,8 @@ def get_lock_file_ecosystem(lock_file_name: str) -> Optional[str]:
         return "java"
     elif lock_file_name in PHP_LOCK_FILES:
         return "php"
+    elif lock_file_name.endswith(DOTNET_PROJECT_SUFFIXES):
+        return "dotnet"
     elif lock_file_name in DOTNET_LOCK_FILES:
         return "dotnet"
     elif lock_file_name in SWIFT_LOCK_FILES:
@@ -437,152 +725,268 @@ def get_lock_file_ecosystem(lock_file_name: str) -> Optional[str]:
         return "scala"
     elif lock_file_name in TERRAFORM_LOCK_FILES:
         return "terraform"
+    elif lock_file_name in HASKELL_LOCK_FILES:
+        return "haskell"
+    elif lock_file_name in ERLANG_LOCK_FILES:
+        return "erlang"
+    elif lock_file_name in CLOJURE_LOCK_FILES:
+        return "clojure"
     return None
 
 
+# Lock files whose generator also needs the project manifest beside them.
+#
+# A lock file records resolved versions; the manifest names the project. Tools
+# that build a root component from the manifest fail without it, and the
+# failure is obscure:
+#
+#   Cargo.lock  without Cargo.toml    cargo metadata: manifest path ... does not exist
+#   pubspec.lock without pubspec.yaml TypeError: Cannot read properties of
+#                                     undefined (reading 'bom-ref')
+#
+# Both were being absorbed by the fallback chain, so the generator looked
+# merely unlucky rather than mis-declared. Declining an input we cannot handle
+# is a routing decision; claiming it and failing is a defect.
+#
+# Only pairs verified to matter are listed. Adding one on suspicion would
+# silently narrow a generator's coverage.
+LOCK_FILE_MANIFESTS = {
+    "Cargo.lock": "Cargo.toml",
+    "pubspec.lock": "pubspec.yaml",
+}
+
+
+def has_required_manifest(lock_file: str | None) -> bool:
+    """Whether a lock file has the project manifest its generator needs."""
+    if not lock_file:
+        return True
+    required = LOCK_FILE_MANIFESTS.get(Path(lock_file).name)
+    if not required:
+        return True
+    return (Path(lock_file).parent / required).exists()
+
+
+def is_supported_input(name: str) -> bool:
+    """Whether an input file is one we can generate from.
+
+    Most are matched by exact name. .NET project files are matched by
+    extension instead, because their names belong to the project rather than
+    to a convention.
+    """
+    return name in ALL_LOCK_FILES or name.endswith(DOTNET_PROJECT_SUFFIXES)
+
+
 def is_supported_lock_file(lock_file_name: str) -> bool:
-    """Check if a lock file is supported."""
-    return lock_file_name in ALL_LOCK_FILES
+    """Whether an input file is supported. Alias of is_supported_input.
+
+    The name predates .NET project files, which are supported inputs without
+    being lock files -- a .csproj is a manifest. Callers are spread across the
+    CLI and the wizard, so the name stays; what it answers is is_supported_input's
+    question, and new callers should ask that one.
+    """
+    return is_supported_input(lock_file_name)
 
 
 def ensure_java_maven_installed() -> None:
+    """Make a JDK and Maven available for Java/Scala dependency resolution.
+
+    Previously this ran `apt-get install maven default-jdk-headless` during
+    the run: whatever the Debian mirror happened to serve that day, requiring
+    root, and recorded in no SBOM. Both are now pinned artifacts verified
+    against the vendor's published digest and unpacked into an unprivileged
+    prefix, so a release resolves Java projects with exactly the toolchain it
+    was built against.
     """
-    Install Maven + JDK on-demand if not already present.
+    ensure_runtime("java")
+    ensure_runtime("maven")
 
-    This function is called lazily when processing Java/Scala projects
-    to avoid bloating the Docker image with Java dependencies that are
-    only needed for a subset of ecosystems.
 
-    The installation state is cached to avoid repeated checks.
-    Thread-safe: uses a lock to prevent concurrent installation attempts.
+def ensure_dotnet_installed() -> None:
+    """Make the .NET SDK available for packages.lock.json resolution.
 
-    Raises:
-        SBOMGenerationError: If installation fails
+    cdxgen shells out to `dotnet` here. Without it the run does not degrade,
+    it fails outright -- measured: cdxgen exits 1 and produces no document at
+    all for a NuGet lock file. This was claimed in README.md's supported list
+    long before anything fetched an SDK.
     """
-    global _java_maven_installed
+    ensure_runtime("dotnet")
 
-    # Fast path: skip if already confirmed installed (no lock needed)
-    if _java_maven_installed:
-        return
 
-    # Use lock to prevent race conditions if multiple threads try to install
-    with _java_maven_lock:
-        # Double-check after acquiring lock (another thread may have installed)
-        if _java_maven_installed:
-            return
+def _js_lock_files() -> tuple[str, ...]:
+    """Lock files a JavaScript project may have committed.
 
-        # Check if Maven is already available
-        if shutil.which("mvn"):
-            logger.debug("Maven already installed, skipping on-demand installation")
-            _java_maven_installed = True
-            return
+    Read from the shared map rather than restated here. The private copy had
+    already drifted: it listed npm-shrinkwrap.json, which nothing else in the
+    pipeline recognised, so a repository holding one skipped resolution *and*
+    could not be read -- worse than either behaviour alone.
+    """
+    from .registry import COMMITTED_RESOLUTION_FOR
 
-        logger.info("Java/Maven not found - installing for Java dependency resolution...")
+    return COMMITTED_RESOLUTION_FOR["package.json"]
 
-        try:
-            # Update package lists
-            subprocess.run(
-                ["apt-get", "update"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
 
-            # Install Maven and JDK
-            subprocess.run(
-                [
-                    "apt-get",
-                    "install",
-                    "-y",
-                    "--no-install-recommends",
-                    "maven",
-                    "default-jdk-headless",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 minutes for package installation
-            )
+def resolve_npm_lockfile(directory: Path) -> Path | None:
+    """Resolve a bare package.json into a lock file cdxgen can read.
 
-            _java_maven_installed = True
-            logger.info("Java/Maven installed successfully")
+    cdxgen cannot read a package.json on its own. Measured on express v5.2.1,
+    whose 28 runtime dependencies are declared and whose lock file is
+    gitignored: cdxgen exits 0 and produces **zero** components, with or
+    without --required-only. Resolve the manifest first and the same command
+    returns 67 -- the transitive closure of those 28.
 
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr if e.stderr else str(e)
-            logger.error(f"Failed to install Java/Maven: {error_msg}")
-            raise SBOMGenerationError(f"Failed to install Java/Maven for dependency resolution: {error_msg}")
-        except subprocess.TimeoutExpired:
-            logger.error("Java/Maven installation timed out")
-            raise SBOMGenerationError("Java/Maven installation timed out")
+    This is the common case rather than a corner. A JavaScript library
+    gitignores its lock file because the consuming application resolves it, so
+    most libraries on GitHub arrive as a manifest and nothing else. eslint and
+    express both produced empty documents for exactly this reason.
+
+    The versions this produces are a resolution performed now, not a record of
+    what the project committed to -- which is why every document built this
+    way carries the notice and the remedy from
+    ``_disclose_inferred_resolution``. Generating it is still worth doing: an
+    answer to "what would I install today" beats a document with nothing in
+    it, as long as it cannot be mistaken for the other thing.
+
+    bun is used because it is already in the cdxgen bundle -- no extra
+    toolchain, no extra download -- and ``--lockfile-only`` resolves without
+    fetching package contents. Measured at 368 packages in 846ms for express.
+
+    Returns the lock file created, so the caller can remove it: it is a
+    working file, and leaving it in a checkout invites someone to commit a
+    resolution nobody chose. Returns None when a lock file already exists, when
+    bun is unavailable, or when resolution fails -- all of which leave the
+    previous behaviour untouched.
+    """
+    if any((directory / name).is_file() for name in _js_lock_files()):
+        return None
+
+    # Resolving reaches the registry, so it honours the same opt-out as
+    # fetching a runtime does. Without this an air-gapped build waits out the
+    # full timeout on every JavaScript project to arrive where it started.
+    if not fetching_is_enabled():
+        logger.debug("Runtime fetching is disabled; not resolving package.json against the registry")
+        return None
+
+    if not shutil.which("bun"):
+        logger.debug("bun is not on PATH; cannot resolve package.json into a lock file")
+        return None
+
+    logger.info("No lock file beside package.json; resolving one so the manifest can be read")
+
+    # What is already here, before bun runs.
+    #
+    # The caller deletes whatever this returns, so returning a file we did not
+    # create deletes someone else's work. Recognising every lock file name is
+    # necessary and not sufficient: a name can be missed, and the cost of
+    # missing one is a committed file removed from a checkout. Ownership is
+    # recorded instead of inferred.
+    candidates = (directory / "bun.lock", directory / "bun.lockb")
+    pre_existing = {c for c in candidates if c.is_file()}
+
+    try:
+        subprocess.run(
+            ["bun", "install", "--lockfile-only", "--ignore-scripts"],
+            cwd=str(directory),
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        # Offline, private registry, or a manifest bun will not resolve. The
+        # generator carries on and fails the way it did before, which is the
+        # right outcome: this is an improvement when it works and must not be
+        # a new way to break.
+        detail = getattr(e, "stderr", "") or str(e)
+        logger.debug(f"Could not resolve package.json into a lock file: {str(detail)[:300]}")
+        return None
+
+    # Whichever bun actually wrote, and only if it was not there before.
+    for candidate in candidates:
+        if candidate.is_file() and candidate not in pre_existing:
+            logger.info(f"Resolved package.json into a temporary {candidate.name} for this run only")
+            return candidate
+    return None
+
+
+def ensure_php_installed() -> None:
+    """Make PHP and Composer available for composer.json resolution.
+
+    Without Composer, cdxgen cannot read a composer.json at all: it stops with
+    "No composer version found. Check if composer is installed and available
+    in PATH", falls through to syft, and syft writes a document with no
+    components -- while still exiting 0. A silent empty SBOM, which is the
+    worst of the three possible outcomes.
+
+    This is squarely the manifest case, and PHP is where it bites hardest:
+    libraries gitignore composer.lock because the consuming application
+    resolves it, so most PHP on GitHub arrives as a manifest and nothing else.
+    """
+    ensure_runtime("composer")
+
+
+#: A version Composer will accept as the root package's: a numeric core, with
+#: whatever the project appends to it. Anything else -- "latest", a commit SHA,
+#: a branch name -- would be worse than saying nothing, because Composer feeds
+#: the root version into resolution rather than merely recording it.
+_COMPOSER_VERSION = re.compile(r"^v?\d+(?:\.\d+)*(?:[-+.].*)?$", re.IGNORECASE)
+
+
+def composer_root_version() -> str | None:
+    """The version Composer should treat this repository's own package as.
+
+    Composer works this out by asking git for the tag at HEAD. That fails
+    whenever the workspace is bind-mounted into the container under a
+    different UID: git refuses the repository with "detected dubious
+    ownership", Composer falls back to ``1.0.0+no-version-set``, and any
+    project that depends on its own version stops resolving. Measured on
+    ``laravel/framework`` v13.24.0, whose ``require-dev`` names
+    ``orchestra/testbench-core``, which in turn conflicts with
+    ``laravel/framework <13``:
+
+        Root composer.json requires orchestra/testbench-core ^11.0.0
+        - orchestra/testbench-core[...] conflict with laravel/framework <13.23.0
+
+    cdxgen then exits 1 having written nothing, the chain falls through to
+    syft, and syft writes a document with no components and exit code 0.
+    Telling Composer the version directly takes that repository from 0 to 72
+    components. It is the same failure for ``symfony/symfony`` (which requires
+    its own subpackages at an exact version) and ``Seldaek/monolog`` (whose
+    ``rollbar/rollbar`` dev dependency requires ``monolog/monolog ^2 || ^3``).
+
+    The repository's git config is deliberately left alone -- it belongs to
+    whoever is running this, not to us -- so the version comes from what the
+    build already knows: an explicit ``COMPONENT_VERSION``, or the tag the
+    release was triggered by.
+
+    Returns None when neither source yields something Composer would accept,
+    in which case the caller passes nothing and Composer behaves as before.
+    """
+    for candidate in (os.environ.get("COMPONENT_VERSION"), _version_from_tag()):
+        if not candidate:
+            continue
+        candidate = candidate.strip()
+        if _COMPOSER_VERSION.match(candidate):
+            return candidate.lstrip("vV")
+        logger.debug(f"Not usable as a Composer root version: {candidate!r}")
+    return None
+
+
+def _version_from_tag() -> str | None:
+    """The release tag this build was triggered by, reduced to a version."""
+    tag = tag_from_ci()
+    if not tag:
+        return None
+    # repo_name is not passed: the foreign-package check belongs to the SBOM's
+    # own version, and getting a monorepo's per-package tag slightly wrong here
+    # only affects how Composer resolves, never what the document claims.
+    return normalize_release_version(tag) or tag
 
 
 def ensure_go_installed() -> None:
+    """Make the Go toolchain available for Go dependency resolution.
+
+    Was `apt-get install golang`, with the same problems: unpinned, root-only
+    and absent from every SBOM. Now a pinned tarball from go.dev, checked
+    against their published SHA256.
     """
-    Install Go on-demand if not already present.
-
-    This function is called lazily when processing Go projects
-    to avoid bloating the Docker image with Go dependencies that are
-    only needed for a subset of ecosystems.
-
-    The installation state is cached to avoid repeated checks.
-    Thread-safe: uses a lock to prevent concurrent installation attempts.
-
-    Raises:
-        SBOMGenerationError: If installation fails
-    """
-    global _go_installed
-
-    # Fast path: skip if already confirmed installed (no lock needed)
-    if _go_installed:
-        return
-
-    # Use lock to prevent race conditions if multiple threads try to install
-    with _go_lock:
-        # Double-check after acquiring lock (another thread may have installed)
-        if _go_installed:
-            return
-
-        # Check if Go is already available
-        if shutil.which("go"):
-            logger.debug("Go already installed, skipping on-demand installation")
-            _go_installed = True
-            return
-
-        logger.info("Go not found - installing for Go dependency resolution...")
-
-        try:
-            # Update package lists
-            subprocess.run(
-                ["apt-get", "update"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-
-            # Install Go
-            subprocess.run(
-                [
-                    "apt-get",
-                    "install",
-                    "-y",
-                    "--no-install-recommends",
-                    "golang",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 minutes for package installation
-            )
-
-            _go_installed = True
-            logger.info("Go installed successfully")
-
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr if e.stderr else str(e)
-            logger.error(f"Failed to install Go: {error_msg}")
-            raise SBOMGenerationError(f"Failed to install Go for dependency resolution: {error_msg}")
-        except subprocess.TimeoutExpired:
-            logger.error("Go installation timed out")
-            raise SBOMGenerationError("Go installation timed out")
+    ensure_runtime("go")

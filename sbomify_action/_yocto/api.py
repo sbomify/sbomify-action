@@ -1,171 +1,63 @@
-"""Component CRUD API calls for Yocto pipeline."""
+"""Component CRUD API calls for the Yocto pipeline.
 
-import requests
+This module preserves the historical function signatures
+(``api_base_url`` / ``token`` arguments) so the rest of the Yocto pipeline
+doesn't need to know about ``SbomifyApiClient``. Each function constructs
+a one-shot client and delegates — the real plumbing lives in
+``sbomify_action.sbomify_api``.
+"""
 
-from sbomify_action.exceptions import APIError, PlanLimitError
-from sbomify_action.http_client import get_default_headers
-from sbomify_action.logging_config import logger
+from __future__ import annotations
+
+from typing import Any, Iterator
+
+from sbomify_action.sbomify_api import SbomifyApiClient
+
+
+def _client(api_base_url: str, token: str) -> SbomifyApiClient:
+    """Build a fresh client for a single Yocto-style call."""
+    return SbomifyApiClient(api_base_url, token)
+
+
+def _iter_components(api_base_url: str, token: str, error_context: str) -> Iterator[dict[str, Any]]:
+    """Yield every component item, paginating as needed.
+
+    Preserved as a module-level helper so existing callers (and tests) can
+    import it under the old name. Delegates straight to the client.
+    """
+    return _client(api_base_url, token).iter_components(error_context=error_context)
 
 
 def list_components(api_base_url: str, token: str) -> dict[str, str]:
-    """Fetch all components and return a name-to-id mapping.
+    """Fetch all components and return a ``{name: id}`` mapping."""
+    return _client(api_base_url, token).list_components_by_name()
 
-    Paginates through all results to build a complete cache.
 
-    Args:
-        api_base_url: Base URL for the sbomify API
-        token: API authentication token
+def get_component_id_by_name(api_base_url: str, token: str, name: str) -> str | None:
+    """Look up a component ID by exact name match."""
+    return _client(api_base_url, token).get_component_id_by_name(name)
 
-    Returns:
-        Dict mapping component name to component ID
 
-    Raises:
-        APIError: If API call fails
+def create_component(api_base_url: str, token: str, name: str) -> tuple[str, bool]:
+    """Create a new component (or recover an existing one on DUPLICATE_NAME).
+
+    Yocto components are BOM-typed (``component_type='bom'``). The backend
+    ComponentType enum is ``{bom, document}`` — there is no "sbom" value
+    (passing it 422s), so we pass ``"bom"`` explicitly rather than relying
+    on a client default.
     """
-    url = api_base_url + "/api/v1/components"
-    headers = get_default_headers(token)
-    components: dict[str, str] = {}
-    page = 1
-    max_pages = 500  # Safety limit against infinite pagination
-
-    while page <= max_pages:
-        try:
-            response = requests.get(url, headers=headers, params={"page": page, "page_size": 100}, timeout=60)
-        except requests.exceptions.ConnectionError:
-            raise APIError("Failed to connect to sbomify API")
-        except requests.exceptions.Timeout:
-            raise APIError("API request timed out")
-
-        if not response.ok:
-            raise APIError(f"Failed to list components. [{response.status_code}]")
-
-        try:
-            data = response.json()
-        except (ValueError, requests.exceptions.JSONDecodeError):
-            raise APIError("Failed to list components: invalid JSON response from API")
-
-        if not isinstance(data, dict):
-            raise APIError(f"Failed to list components: unexpected response type ({type(data).__name__})")
-
-        for item in data.get("items", []):
-            name = item.get("name")
-            comp_id = item.get("id")
-            if name and comp_id:
-                components[name] = str(comp_id)
-
-        # Paginate based on 'next' link, not empty items
-        if not data.get("next"):
-            break
-        page += 1
-
-    if page > max_pages and data.get("next"):
-        logger.warning(
-            f"Pagination safety limit reached ({max_pages} pages). "
-            f"Component cache may be incomplete ({len(components)} components fetched)."
-        )
-
-    logger.info(f"Cached {len(components)} existing components")
-    return components
-
-
-def create_component(api_base_url: str, token: str, name: str) -> str:
-    """Create a new component.
-
-    Args:
-        api_base_url: Base URL for the sbomify API
-        token: API authentication token
-        name: Component name
-
-    Returns:
-        Component ID
-
-    Raises:
-        APIError: If API call fails
-    """
-    url = api_base_url + "/api/v1/components"
-    headers = get_default_headers(token, content_type="application/json")
-    payload = {"name": name, "component_type": "sbom"}
-
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
-    except requests.exceptions.ConnectionError:
-        raise APIError("Failed to connect to sbomify API")
-    except requests.exceptions.Timeout:
-        raise APIError("API request timed out")
-
-    if not response.ok:
-        err_msg = f"Failed to create component '{name}'. [{response.status_code}]"
-        detail = ""
-        try:
-            detail = response.json().get("detail", "")
-            if detail:
-                err_msg += f" - {detail}"
-        except ValueError:
-            pass
-
-        if response.status_code == 403 and "maximum" in detail.lower():
-            raise PlanLimitError(err_msg)
-
-        raise APIError(err_msg)
-
-    try:
-        data = response.json()
-    except (ValueError, requests.exceptions.JSONDecodeError):
-        raise APIError(f"Invalid JSON response when creating component '{name}'")
-    comp_id = data.get("id")
-    if comp_id is None:
-        raise APIError(f"Invalid response when creating component '{name}': no id returned")
-    return str(comp_id)
+    return _client(api_base_url, token).create_component(name, component_type="bom")
 
 
 def patch_component_visibility(api_base_url: str, token: str, component_id: str, visibility: str) -> None:
-    """Set the visibility of a component.
-
-    Non-fatal: logs a warning on failure since visibility is a best-effort
-    setting that should not block the pipeline.
-
-    Args:
-        api_base_url: Base URL for the sbomify API
-        token: API authentication token
-        component_id: Component ID to patch
-        visibility: One of "public", "private", "gated"
-
-    Raises:
-        APIError: If connection or timeout fails
-    """
-    url = f"{api_base_url}/api/v1/components/{component_id}"
-    headers = get_default_headers(token, content_type="application/json")
-
-    try:
-        response = requests.patch(url, headers=headers, json={"visibility": visibility}, timeout=60)
-    except requests.exceptions.ConnectionError:
-        raise APIError("Failed to connect to sbomify API")
-    except requests.exceptions.Timeout:
-        raise APIError("API request timed out")
-
-    if not response.ok:
-        logger.warning(f"Failed to set visibility for component {component_id}: [{response.status_code}]")
+    """Best-effort visibility patch — logs on failure rather than raising."""
+    _client(api_base_url, token).patch_component_visibility(component_id, visibility)
 
 
 def get_or_create_component(api_base_url: str, token: str, name: str, cache: dict[str, str]) -> tuple[str, bool]:
-    """Get an existing component or create a new one.
+    """Look the name up in ``cache``; on miss, create the component (and update cache).
 
-    Args:
-        api_base_url: Base URL for the sbomify API
-        token: API authentication token
-        name: Component name
-        cache: Name-to-id mapping (updated in-place if created)
-
-    Returns:
-        Tuple of (component_id, was_created)
-
-    Raises:
-        APIError: If API call fails
+    Passes ``component_type='bom'`` so newly-created Yocto components get
+    the correct backend type (see ``create_component`` above).
     """
-    if name in cache:
-        return cache[name], False
-
-    comp_id = create_component(api_base_url, token, name)
-    cache[name] = comp_id
-    logger.info(f"Created component '{name}' -> {comp_id}")
-    return comp_id, True
+    return _client(api_base_url, token).get_or_create_component(name, cache, component_type="bom")

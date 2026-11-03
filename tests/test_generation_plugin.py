@@ -1,5 +1,6 @@
 """Tests for the SBOM generation plugin architecture."""
 
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -21,7 +22,92 @@ from sbomify_action._generation.generators import (
     TrivyFsGenerator,
     TrivyImageGenerator,
 )
-from sbomify_action.exceptions import SBOMGenerationError, ToolNotAvailableError
+from sbomify_action.exceptions import ProjectResolutionError, SBOMGenerationError, ToolNotAvailableError
+
+
+class TestRunCommandErrorLogging(unittest.TestCase):
+    """run_command's ``log_errors`` flag controls the severity of a failed
+    subprocess. A priority-chain fallback that fails gracefully (eg cdxgen on
+    a Python lockfile, where cyclonedx-py/syft take over) passes
+    ``log_errors=False`` so it logs at DEBUG instead of spamming red ERROR
+    lines on the happy path — while still raising ``SBOMGenerationError`` so
+    the orchestrator can try the next generator."""
+
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_log_errors_false_logs_debug_not_error(self, mock_run: MagicMock) -> None:
+        from sbomify_action._generation import utils
+
+        mock_run.side_effect = subprocess.CalledProcessError(
+            returncode=1, cmd=["cdxgen", "."], stderr="yargs-parser node version error", output=""
+        )
+        with patch.object(utils, "logger") as mock_logger:
+            with self.assertRaises(SBOMGenerationError):
+                utils.run_command(["cdxgen", "."], "cdxgen", log_errors=False)
+            # The failure must NOT reach ERROR (neither the summary line nor
+            # log_command_error's body, both of which route through utils.logger).
+            mock_logger.error.assert_not_called()
+            self.assertTrue(mock_logger.debug.called, "expected the failure to be logged at DEBUG")
+
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_log_errors_true_still_logs_error(self, mock_run: MagicMock) -> None:
+        from sbomify_action._generation import utils
+
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd=["syft", "."], stderr="boom", output="")
+        with patch.object(utils, "logger") as mock_logger:
+            with self.assertRaises(SBOMGenerationError):
+                utils.run_command(["syft", "."], "syft", log_errors=True)
+            mock_logger.error.assert_called()
+
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_exit_status_line_is_not_an_error_when_output_explains_it(self, mock_run: MagicMock) -> None:
+        """The bare exit status was one Sentry issue holding every failure of
+        a tool; with output in hand only the output is reported as an error."""
+        from sbomify_action._generation import utils
+
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd=["syft", "."], stderr="boom", output="")
+        with patch.object(utils, "logger") as mock_logger:
+            with self.assertRaises(SBOMGenerationError):
+                utils.run_command(["syft", "."], "syft")
+            errors = [c.args[0] for c in mock_logger.error.call_args_list]
+            self.assertEqual(errors, ["[syft] error: boom"])
+            warnings = [c.args[0] for c in mock_logger.warning.call_args_list]
+            self.assertTrue(any("returned non-zero exit status 1" in w for w in warnings))
+
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_exit_status_line_stays_an_error_without_output(self, mock_run: MagicMock) -> None:
+        from sbomify_action._generation import utils
+
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd=["syft", "."], stderr="", output="")
+        with patch.object(utils, "logger") as mock_logger:
+            with self.assertRaises(SBOMGenerationError):
+                utils.run_command(["syft", "."], "syft")
+            mock_logger.error.assert_called_once()
+            self.assertIn("returned non-zero exit status 1", mock_logger.error.call_args.args[0])
+
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_unresolvable_project_is_a_warning_and_its_own_error_type(self, mock_run: MagicMock) -> None:
+        from sbomify_action._generation import utils
+
+        mock_run.side_effect = subprocess.CalledProcessError(
+            returncode=1, cmd=["tool"], stderr="error: failed to parse manifest\nTOOL GAVE UP", output=""
+        )
+        with patch.object(utils, "logger") as mock_logger:
+            with self.assertRaises(ProjectResolutionError) as ctx:
+                utils.run_command(["tool"], "tool", project_unresolvable=lambda out: "TOOL GAVE UP" in out)
+            mock_logger.error.assert_not_called()
+            mock_logger.warning.assert_called()
+        self.assertIn("failed to parse manifest", str(ctx.exception))
+        self.assertEqual(ctx.exception.returncode, 1)
+
+    @patch("sbomify_action._generation.utils.subprocess.run")
+    def test_unrecognised_failure_is_not_treated_as_the_projects(self, mock_run: MagicMock) -> None:
+        from sbomify_action._generation import utils
+
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd=["tool"], stderr="segfault", output="")
+        with patch.object(utils, "logger"):
+            with self.assertRaises(SBOMGenerationError) as ctx:
+                utils.run_command(["tool"], "tool", project_unresolvable=lambda out: False)
+        self.assertNotIsInstance(ctx.exception, ProjectResolutionError)
 
 
 class TestFormatVersion(unittest.TestCase):
@@ -201,10 +287,14 @@ class TestGeneratorRegistry(unittest.TestCase):
         generators = self.registry.get_generators_for(input)
 
         # cyclonedx-py doesn't support Docker images
+        # syft leads for container images -- it returns roughly 10x the
+        # components cdxgen does across the 27 image pairs in tests/test-data,
+        # and cdxgen returns none at all for distroless. cdxgen-image sits
+        # behind at 40 as a last resort.
         self.assertEqual(len(generators), 3)
-        self.assertEqual(generators[0].name, "cdxgen-image")  # Priority 20
-        self.assertEqual(generators[1].name, "trivy-image")  # Priority 30
-        self.assertEqual(generators[2].name, "syft-image")  # Priority 35
+        self.assertEqual(generators[0].name, "trivy-image")  # Priority 30
+        self.assertEqual(generators[1].name, "syft-image")  # Priority 35
+        self.assertEqual(generators[2].name, "cdxgen-image")  # Priority 40
 
 
 @patch("sbomify_action._generation.generators.cyclonedx_py._CYCLONEDX_PY_AVAILABLE", True)
@@ -288,7 +378,7 @@ class TestTrivyFsGenerator(unittest.TestCase):
 
     def test_supports_all_lock_files(self):
         """Test support for various lock files."""
-        lock_files = ["requirements.txt", "Cargo.lock", "package.json", "go.mod"]
+        lock_files = ["requirements.txt", "package.json"]
         for lock_file in lock_files:
             input = GenerationInput(lock_file=f"/path/{lock_file}", output_format="cyclonedx")
             self.assertTrue(self.generator.supports(input), f"Should support {lock_file}")
@@ -331,7 +421,10 @@ class TestCdxgenFsGenerator(unittest.TestCase):
 
     def test_supports_various_lock_files(self):
         """Test support for various lock files."""
-        lock_files = ["requirements.txt", "Cargo.lock", "package.json", "pom.xml", "go.mod"]
+        # Cargo.lock and pubspec.lock are excluded: they are claimed only when
+        # their manifest sits beside them, which a synthetic path cannot
+        # provide. TestLockFilesNeedingTheirManifest covers that pair.
+        lock_files = ["requirements.txt", "package.json", "pom.xml"]
         for lock_file in lock_files:
             input = GenerationInput(lock_file=f"/path/{lock_file}", output_format="cyclonedx")
             self.assertTrue(self.generator.supports(input), f"Should support {lock_file}")
@@ -456,8 +549,8 @@ class TestCdxgenFsGenerator(unittest.TestCase):
     @patch("sbomify_action._generation.generators.cdxgen.ensure_java_maven_installed")
     @patch("sbomify_action._generation.generators.cdxgen.run_command")
     @patch("pathlib.Path.exists")
-    def test_generate_uses_required_only_flag_for_all_ecosystems(self, mock_exists, mock_run, mock_java_install):
-        """Test that --required-only flag is passed for all ecosystems to exclude dev dependencies."""
+    def test_generate_uses_required_only_flag_for_dev_aware_ecosystems(self, mock_exists, mock_run, mock_java_install):
+        """Test that --required-only flag is passed for ecosystems with a dev/prod distinction."""
         mock_run.return_value = MagicMock(returncode=0)
         mock_exists.return_value = True
 
@@ -478,6 +571,24 @@ class TestCdxgenFsGenerator(unittest.TestCase):
         self.generator.generate(java_input)
         cmd = mock_run.call_args[0][0]
         self.assertIn("--required-only", cmd)
+
+    @patch("sbomify_action._generation.generators.cdxgen.ensure_go_installed")
+    @patch("sbomify_action._generation.generators.cdxgen.run_command")
+    @patch("pathlib.Path.exists")
+    def test_generate_omits_required_only_for_go(self, mock_exists, mock_run, mock_go_install):
+        """Test that --required-only is NOT passed for Go (issue #231).
+
+        cdxgen marks every `// indirect` line in go.mod as scope=optional, but under
+        Go 1.17+ module-graph pruning the indirect block is the build closure — those
+        modules ship in the binary. --required-only would strip the transitive closure.
+        """
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_exists.return_value = True
+
+        go_input = GenerationInput(lock_file="/path/to/go.mod", output_file="sbom.json")
+        self.generator.generate(go_input)
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("--required-only", cmd)
 
     @patch("sbomify_action._generation.generators.cdxgen.run_command")
     @patch("pathlib.Path.exists")
@@ -589,7 +700,8 @@ class TestCdxgenImageGenerator(unittest.TestCase):
     def test_name_and_priority(self):
         """Test generator name and priority."""
         self.assertEqual(self.generator.name, "cdxgen-image")
-        self.assertEqual(self.generator.priority, 20)
+        # 40, not 20: syft is the better tool for container images.
+        self.assertEqual(self.generator.priority, 40)
 
     def test_supports_docker_images(self):
         """Test support for Docker images."""
@@ -837,6 +949,44 @@ class TestSyftImageGenerator(unittest.TestCase):
         self.assertFalse(self.generator.supports(input))
 
 
+class TestLockFilesNeedingTheirManifest(unittest.TestCase):
+    """A lock file without its manifest must be declined, not claimed.
+
+    cdxgen handles Dart perfectly well *given pubspec.yaml* -- 233 components,
+    the same as syft. Without it there is no root component and it dies with
+    "Cannot read properties of undefined (reading \'bom-ref\')". Same shape as
+    Cargo.lock without Cargo.toml. Declining is a routing decision; claiming
+    and failing is a defect, and under strict mode it aborts the run.
+    """
+
+    def test_dart_is_still_cdxgen_territory(self):
+        from sbomify_action._generation.utils import CDXGEN_LOCK_FILES
+
+        self.assertIn("pubspec.lock", CDXGEN_LOCK_FILES)
+
+    def test_declines_a_lock_file_with_no_manifest(self):
+        import tempfile
+        from pathlib import Path as _Path
+
+        from sbomify_action._generation.utils import has_required_manifest
+
+        for lock, manifest in (("Cargo.lock", "Cargo.toml"), ("pubspec.lock", "pubspec.yaml")):
+            bare = _Path(tempfile.mkdtemp())
+            (bare / lock).write_text("")
+            self.assertFalse(has_required_manifest(str(bare / lock)), lock)
+
+            paired = _Path(tempfile.mkdtemp())
+            (paired / lock).write_text("")
+            (paired / manifest).write_text("")
+            self.assertTrue(has_required_manifest(str(paired / lock)), lock)
+
+    def test_lock_files_with_no_manifest_requirement_are_unaffected(self):
+        from sbomify_action._generation.utils import has_required_manifest
+
+        self.assertTrue(has_required_manifest("/nowhere/go.sum"))
+        self.assertTrue(has_required_manifest(None))
+
+
 class TestRegistryGenerateWithFallback(unittest.TestCase):
     """Tests for registry generate with fallback behavior."""
 
@@ -853,7 +1003,16 @@ class TestRegistryGenerateWithFallback(unittest.TestCase):
         with self.assertRaises(SBOMGenerationError) as cm:
             registry.generate(input)
 
-        self.assertIn("No generator found", str(cm.exception))
+        message = str(cm.exception)
+        self.assertIn("Nothing here generates CycloneDX", message)
+        # The caller asked for no particular version; naming one it never
+        # requested sends the reader looking for where they set it.
+        self.assertNotIn("None", message)
+        # The versions come from the canonical tuple, so the internal
+        # "SPDX-2.3" marker some generators declare cannot leak into a list a
+        # user would then try to set.
+        self.assertIn("1.6", message)
+        self.assertNotIn("SPDX-2.3", message)
 
     @patch("sbomify_action._generation.registry.check_tool_for_input")
     def test_generate_no_tools_raises_tool_not_available_error(self, mock_check_tool):
@@ -901,96 +1060,6 @@ class TestRegistryGenerateWithFallback(unittest.TestCase):
         # Should succeed with mock generator
         self.assertTrue(result.success)
         self.assertEqual(result.generator_name, "mock-generator")
-
-    @patch("sbomify_action._generation.generators.syft._SYFT_AVAILABLE", True)
-    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
-    @patch("sbomify_action._generation.generators.syft.run_command")
-    @patch("sbomify_action._generation.generators.cdxgen.run_command")
-    def test_dart_fallback_cdxgen_to_syft(self, mock_cdxgen_run, mock_syft_run):
-        """Test that Dart pubspec.lock falls back from cdxgen to Syft on failure.
-
-        This test verifies the fix for the cdxgen TypeError bug where
-        parentComponent is undefined when processing certain Dart files.
-        """
-        import os
-        import tempfile
-
-        # Create a temporary output file for Syft
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write('{"bomFormat": "CycloneDX", "specVersion": "1.6", "components": []}')
-            temp_output = f.name
-
-        try:
-            # cdxgen fails with the TypeError bug
-            mock_cdxgen_run.side_effect = SBOMGenerationError("cdxgen command failed with return code 1")
-
-            # Syft succeeds and creates output file
-            def syft_side_effect(*args, **kwargs):
-                # Extract output file from command args
-                cmd = args[0]
-                for i, arg in enumerate(cmd):
-                    if arg == "-o" or arg.startswith("cyclonedx-json@"):
-                        if "=" in arg:
-                            output_file = arg.split("=")[-1]
-                            # Create the output file
-                            with open(output_file, "w") as f:
-                                f.write('{"bomFormat": "CycloneDX", "specVersion": "1.6", "components": []}')
-                            break
-                return MagicMock(returncode=0)
-
-            mock_syft_run.side_effect = syft_side_effect
-
-            registry = GeneratorRegistry()
-            registry.register(CdxgenFsGenerator())  # Priority 20
-            registry.register(SyftFsGenerator())  # Priority 35
-
-            input = GenerationInput(
-                lock_file="/path/pubspec.lock",
-                output_file=temp_output,
-                output_format="cyclonedx",
-                spec_version="1.6",
-            )
-            result = registry.generate(input, validate=False)
-
-            # Should fall back to Syft and succeed
-            self.assertTrue(result.success, f"Expected success but got: {result.error_message}")
-            self.assertEqual(result.generator_name, "syft-fs")
-
-            # Verify cdxgen was tried first
-            mock_cdxgen_run.assert_called_once()
-
-            # Verify Syft was tried as fallback
-            mock_syft_run.assert_called_once()
-        finally:
-            # Clean up temp file
-            if os.path.exists(temp_output):
-                os.unlink(temp_output)
-
-    @patch("sbomify_action._generation.generators.syft._SYFT_AVAILABLE", True)
-    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
-    def test_dart_both_generators_available(self):
-        """Test that both cdxgen and Syft support Dart pubspec.lock files."""
-        registry = GeneratorRegistry()
-        registry.register(CdxgenFsGenerator())  # Priority 20
-        registry.register(SyftFsGenerator())  # Priority 35
-
-        input = GenerationInput(
-            lock_file="/path/pubspec.lock",
-            output_file="sbom.json",
-            output_format="cyclonedx",
-            spec_version="1.6",
-        )
-
-        generators = registry.get_generators_for(input)
-        generator_names = [g.name for g in generators]
-
-        # Both should support Dart
-        self.assertIn("cdxgen-fs", generator_names)
-        self.assertIn("syft-fs", generator_names)
-
-        # cdxgen should come first (lower priority number = higher priority)
-        self.assertEqual(generators[0].name, "cdxgen-fs")
-        self.assertEqual(generators[1].name, "syft-fs")
 
 
 class TestUtilsFunctions(unittest.TestCase):
@@ -1446,6 +1515,7 @@ class TestSyftImageGeneratorDockerNotFound(unittest.TestCase):
         """Set up test fixtures."""
         self.generator = SyftImageGenerator()
 
+    @patch("sbomify_action._generation.generators.syft.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.syft.run_command")
     def test_returns_clear_error_for_image_not_found(self, mock_run):
         """Test that clear error is returned when image is not found."""
@@ -1637,6 +1707,20 @@ class TestExtractErrorSummary(unittest.TestCase):
         self.assertIn("ERROR: second error", result)
         self.assertIn(" | ", result)
 
+    def test_strips_escape_sequences_from_remote_output(self):
+        """A git remote's sideband text must not carry terminal escapes into the summary."""
+        from sbomify_action._generation.utils import extract_error_summary
+
+        output = (
+            "remote: \x1b]0;pwned\x07fatal: repository not found\n"
+            "remote: \x1b]8;;https://evil.example\x1b\\click\x1b]8;;\x1b\\ error: denied\r\x1b[2Kerror: spoofed"
+        )
+        result = extract_error_summary(output)
+        self.assertNotIn("\x1b", result)
+        self.assertNotIn("\x07", result)
+        self.assertNotIn("\r", result)
+        self.assertIn("fatal: repository not found", result)
+
     def test_fallback_to_full_output(self):
         """Test fallback to full output when no error patterns found."""
         from sbomify_action._generation.utils import extract_error_summary
@@ -1762,5 +1846,99 @@ class TestRegistryErrorAggregation(unittest.TestCase):
         self.assertIn("second error", result.error_message)
 
 
+class TestRustManifestSupport(unittest.TestCase):
+    """Cargo.toml must be treated as Rust everywhere the registries reach.
+
+    It was previously absent from RUST_LOCK_FILES, which meant a crate with no
+    committed Cargo.lock was invisible to wizard discovery *and* rejected by
+    LOCK_FILE validation with "not a recognized lock file type". Since
+    ALL_LOCK_FILES and CDXGEN_LOCK_FILES are both derived from the per-ecosystem
+    lists, these assertions pin the whole cascade.
+    """
+
+    def test_cargo_toml_resolves_to_rust(self):
+        from sbomify_action._generation.utils import get_lock_file_ecosystem
+
+        self.assertEqual(get_lock_file_ecosystem("Cargo.toml"), "rust")
+        self.assertEqual(get_lock_file_ecosystem("Cargo.lock"), "rust")
+
+    def test_cargo_toml_is_a_recognized_lock_file(self):
+        from sbomify_action._generation.utils import ALL_LOCK_FILES
+
+        self.assertIn("Cargo.toml", ALL_LOCK_FILES)
+
+    def test_cdxgen_accepts_cargo_toml(self):
+        """cdxgen is the generator that actually handles a lockless crate.
+
+        cyclonedx-cargo requires Cargo.lock specifically, so without this the
+        input would be discovered and then fail with "No generator found".
+        """
+        from sbomify_action._generation.utils import CDXGEN_LOCK_FILES
+
+        self.assertIn("Cargo.toml", CDXGEN_LOCK_FILES)
+
+    def test_every_manifest_the_wizard_prioritises_is_discoverable(self):
+        """No entry in the wizard's priority table may be undiscoverable.
+
+        Cargo.toml was the only one, which is exactly how this bug hid.
+        """
+        from sbomify_action._generation.utils import ALL_LOCK_FILES
+        from sbomify_action.cli.wizard.discovery import _LOCKFILE_PRIORITY
+
+        unreachable = sorted(n for n in _LOCKFILE_PRIORITY if n not in ALL_LOCK_FILES)
+        self.assertEqual(unreachable, [])
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCycloneDXPyPipenvPath(unittest.TestCase):
+    """`cyclonedx-py pipenv` takes the project directory, not the lock file.
+
+    Passing the file made it look for Pipfile.lock/Pipfile.lock and fail on
+    every Pipenv project. Nobody noticed because the orchestrator quietly
+    fell back to syft; strict mode is what surfaced it.
+    """
+
+    @patch("sbomify_action._generation.generators.cyclonedx_py._CYCLONEDX_PY_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cyclonedx_py.run_command")
+    def test_pipenv_is_given_the_directory(self, mock_run):
+        import tempfile
+        from pathlib import Path as _Path
+
+        work = _Path(tempfile.mkdtemp())
+        (work / "Pipfile.lock").write_text("{}")
+        gen = CycloneDXPyGenerator()
+        gen.generate(
+            GenerationInput(
+                lock_file=str(work / "Pipfile.lock"),
+                output_file=str(work / "out.json"),
+                output_format="cyclonedx",
+            )
+        )
+
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[1], "pipenv")
+        self.assertEqual(cmd[2], str(work), "pipenv must receive the directory")
+
+    @patch("sbomify_action._generation.generators.cyclonedx_py._CYCLONEDX_PY_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cyclonedx_py.run_command")
+    def test_requirements_is_still_given_the_file(self, mock_run):
+        import tempfile
+        from pathlib import Path as _Path
+
+        work = _Path(tempfile.mkdtemp())
+        (work / "requirements.txt").write_text("")
+        gen = CycloneDXPyGenerator()
+        gen.generate(
+            GenerationInput(
+                lock_file=str(work / "requirements.txt"),
+                output_file=str(work / "out.json"),
+                output_format="cyclonedx",
+            )
+        )
+
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[1], "requirements")
+        self.assertEqual(cmd[2], str(work / "requirements.txt"))

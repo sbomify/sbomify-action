@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Code Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -30,9 +30,11 @@ jobs:
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "${{ env.UV_VERSION }}"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
         run: |
@@ -55,13 +57,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Code Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Set up Python
         id: setup-python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
 
@@ -71,13 +73,15 @@ jobs:
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "${{ env.UV_VERSION }}"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Load cached venv
         id: cached-uv-dependencies
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .venv
           key: venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/uv.lock') }}
@@ -100,7 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Code Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -111,8 +115,7 @@ jobs:
       - name: Run enrichment test
         run: |
           docker run --rm \
-            -v $(pwd):/github/workspace \
-            -w /github/workspace \
+            -v $(pwd):/workspace \
             -e TOKEN=placeholder \
             -e COMPONENT_ID=placeholder \
             -e UPLOAD=false \
@@ -125,7 +128,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Code Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -133,27 +136,16 @@ jobs:
         run: |
           source ./scripts/generate_additional_packages.sh
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
-          echo "SYFT_VERSION=$SYFT_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "${{ env.UV_VERSION }}"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
         run: uv sync --locked --dev
-
-      - name: Install Syft
-        run: |
-          curl -sL -o syft_${SYFT_VERSION}_linux_amd64.tar.gz \
-            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
-          curl -sL -o syft_checksum.txt \
-            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt"
-          grep "syft_${SYFT_VERSION}_linux_amd64.tar.gz" syft_checksum.txt | sha256sum -c -
-          tar xvfz syft_${SYFT_VERSION}_linux_amd64.tar.gz
-          chmod +x syft
-          sudo mv syft /usr/local/bin
-          rm -f syft_${SYFT_VERSION}_linux_amd64.tar.gz syft_checksum.txt
 
       - name: Generate and enrich Alpine SBOM (CycloneDX)
         run: |
@@ -167,6 +159,12 @@ jobs:
           OUTPUT_FILE: alpine-enriched.cdx.json
           ENRICH: "true"
           UPLOAD: "false"
+          # The license database is fetched from this repo's GitHub releases.
+          # Unauthenticated that API allows 60 requests/hour per IP, and runners
+          # share IPs, so it intermittently 403s and enrichment silently degrades:
+          #   Failed to fetch releases: 403 ... rate limit exceeded
+          # which then fails the assertion below. Authenticated gets 5000/hour.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate and enrich Alpine SBOM (SPDX)
         run: |
@@ -180,6 +178,7 @@ jobs:
           OUTPUT_FILE: alpine-enriched.spdx.json
           ENRICH: "true"
           UPLOAD: "false"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify CycloneDX license database enrichment
         run: |
@@ -398,7 +397,7 @@ jobs:
           jq -r '.packages[] | select(.originator != null and .originator != "NOASSERTION") | "\(.name): \(.originator)"' alpine-enriched.spdx.json | head -5
 
       - name: Upload enriched SBOM artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: alpine-enriched-sboms
@@ -412,7 +411,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Code Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -420,27 +419,16 @@ jobs:
         run: |
           source ./scripts/generate_additional_packages.sh
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
-          echo "SYFT_VERSION=$SYFT_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "${{ env.UV_VERSION }}"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
         run: uv sync --locked --dev
-
-      - name: Install Syft
-        run: |
-          curl -sL -o syft_${SYFT_VERSION}_linux_amd64.tar.gz \
-            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
-          curl -sL -o syft_checksum.txt \
-            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt"
-          grep "syft_${SYFT_VERSION}_linux_amd64.tar.gz" syft_checksum.txt | sha256sum -c -
-          tar xvfz syft_${SYFT_VERSION}_linux_amd64.tar.gz
-          chmod +x syft
-          sudo mv syft /usr/local/bin
-          rm -f syft_${SYFT_VERSION}_linux_amd64.tar.gz syft_checksum.txt
 
       - name: Generate and enrich Debian SBOM (CycloneDX)
         run: |
@@ -500,13 +488,14 @@ jobs:
             exit 1
           fi
           
-          # Debian 12 EOS should be 2026-06-10 (regular support end)
+          # Debian 12 EOS should be 2026-06-11 (regular security support end,
+          # per the LTS schedule at https://wiki.debian.org/LTS)
           CLE_EOS=$(jq -r '.components[] | select(.type == "operating-system") | .properties[]? | select(.name == "cdx:lifecycle:milestone:endOfSupport") | .value' debian-enriched.cdx.json)
-          
-          if [ "$CLE_EOS" = "2026-06-10" ]; then
+
+          if [ "$CLE_EOS" = "2026-06-11" ]; then
             echo "✅ Debian 12 EOS date is correct: $CLE_EOS"
           else
-            echo "❌ Debian 12 EOS date incorrect: $CLE_EOS (expected 2026-06-10)"
+            echo "❌ Debian 12 EOS date incorrect: $CLE_EOS (expected 2026-06-11)"
             exit 1
           fi
 
@@ -529,7 +518,7 @@ jobs:
           jq -r '.components[] | select(.properties[]?.name | startswith("cdx:lifecycle")) | "\(.type // "library"): \(.name) v\(.version)"' debian-enriched.cdx.json | sort -u
 
       - name: Upload enriched SBOM artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: debian-cle-enriched-sbom
@@ -541,7 +530,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Code Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -551,9 +540,11 @@ jobs:
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "${{ env.UV_VERSION }}"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
         run: uv sync --locked --dev
@@ -1036,7 +1027,7 @@ jobs:
           echo "=== SPDX NTIA Compliance: PASSED ==="
 
       - name: Upload augmented SBOM artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: augmented-sboms
@@ -1045,9 +1036,58 @@ jobs:
             augmented-sbom.spdx.json
           retention-days: 7
 
-  push-images:
-    name: Push Docker Images
+  docker-meta:
+    name: Docker Build Metadata
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      ghcr_repo: ${{ steps.meta.outputs.ghcr_repo }}
+      dockerhub_repo: ${{ steps.meta.outputs.dockerhub_repo }}
+      build_date: ${{ steps.meta.outputs.build_date }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Prepare build metadata
+        id: meta
+        env:
+          GH_REF_TYPE: ${{ github.ref_type }}
+          GH_REF_NAME: ${{ github.ref_name }}
+          GH_SHA: ${{ github.sha }}
+          GH_REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          # Full version string is used for image labels / runtime env (VERSION build-arg).
+          # The image *tag* is kept separate because it must not contain '+' (invalid in tags).
+          BASE_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+
+          if [[ "${GH_REF_TYPE}" == "tag" ]]; then
+            # For tags, strip a leading 'v' (v1.2.3 -> 1.2.3)
+            VERSION="${GH_REF_NAME#v}"
+            IMAGE_TAG="${VERSION}"
+          else
+            # For master, version carries the short SHA as semver build metadata; tag is 'latest'
+            SHORT_SHA=$(echo "${GH_SHA}" | cut -c1-7)
+            VERSION="${BASE_VERSION}+${SHORT_SHA}"
+            IMAGE_TAG="latest"
+          fi
+
+          GHCR_REPO="ghcr.io/$(echo "${GH_REPO_OWNER}/${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
+          DOCKERHUB_REPO="sbomifyhub/${IMAGE_NAME}"
+          BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+          {
+            echo "version=${VERSION}"
+            echo "image_tag=${IMAGE_TAG}"
+            echo "ghcr_repo=${GHCR_REPO}"
+            echo "dockerhub_repo=${DOCKERHUB_REPO}"
+            echo "build_date=${BUILD_DATE}"
+          } >> "$GITHUB_OUTPUT"
+
+  build-images:
+    name: Build Docker Image (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
     needs:
       - sanity-checks
       - integration-tests
@@ -1055,399 +1095,147 @@ jobs:
       - license-db-integration-test
       - cle-integration-test
       - augmentation-integration-test
-    if: github.event_name == 'push'
+      - docker-meta
     permissions:
       packages: write
       contents: read
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            slug: linux-amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            slug: linux-arm64
+            runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Determine version
-        id: version
-        env:
-          GH_REF_TYPE: ${{ github.ref_type }}
-          GH_REF_NAME: ${{ github.ref_name }}
-          GH_SHA: ${{ github.sha }}
-        run: |
-          # Extract base version from pyproject.toml
-          BASE_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-          if [[ "${GH_REF_TYPE}" == "tag" ]]; then
-            # For tags, use the tag name (strip 'v' prefix if present)
-            VERSION="${GH_REF_NAME}"
-            VERSION="${VERSION#v}"
-          else
-            # For branches, use base version + short SHA as semver build metadata
-            SHORT_SHA=$(echo "${GH_SHA}" | cut -c1-7)
-            VERSION="${BASE_VERSION}+${SHORT_SHA}"
-          fi
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-
-      - name: Build image
-        env:
-          BUILD_VERSION: ${{ steps.version.outputs.version }}
-          COMMIT_SHA: ${{ github.sha }}
-          VCS_REF: ${{ github.ref_name }}
-        run: |
-          docker build . \
-            --file Dockerfile \
-            --tag $IMAGE_NAME \
-            --label "runnumber=${GITHUB_RUN_ID}" \
-            --build-arg VERSION="${BUILD_VERSION}" \
-            --build-arg COMMIT_SHA="${COMMIT_SHA}" \
-            --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-            --build-arg VCS_REF="${VCS_REF}"
-
-      - name: Log in to registry
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_ACTOR: ${{ github.actor }}
-        run: echo "${GH_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        if: github.event_name == 'push'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: sbomifyhub
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Push image
+      # On pull_request this builds only -- no registry, no push -- so the
+      # arm64 image is actually compiled in review. Pushing by digest stays
+      # limited to push events, where the registry secrets exist.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          labels: |
+            runnumber=${{ github.run_id }}
+          build-args: |
+            VERSION=${{ needs.docker-meta.outputs.version }}
+            COMMIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ needs.docker-meta.outputs.build_date }}
+            VCS_REF=${{ github.ref_name }}
+          outputs: ${{ github.event_name == 'push' && format('type=image,"name={0},{1}",push-by-digest=true,name-canonical=true,push=true', needs.docker-meta.outputs.ghcr_repo, needs.docker-meta.outputs.dockerhub_repo) || 'type=cacheonly' }}
+          cache-from: type=gha,scope=build-${{ matrix.slug }}
+          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope=build-{0}', matrix.slug) || '' }}
+
+      - name: Export digest
+        if: github.event_name == 'push'
         env:
-          GH_REPO_OWNER: ${{ github.repository_owner }}
-          GH_REF: ${{ github.ref }}
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          set -x
-          GITHUB_IMAGE_ID=ghcr.io/${GH_REPO_OWNER}/$IMAGE_NAME
-          GITHUB_IMAGE_ID=$(echo $GITHUB_IMAGE_ID | tr '[A-Z]' '[a-z]')
-          DOCKER_HUB_IMAGE_ID=sbomifyhub/$IMAGE_NAME
+          mkdir -p "${{ runner.temp }}/digests"
+          touch "${{ runner.temp }}/digests/${DIGEST#sha256:}"
 
-          VERSION=$(echo "${GH_REF}" | sed -e 's,.*/\(.*\),\1,')
+      - name: Upload digest
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.slug }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
-          [[ "${GH_REF}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
-
-          [ "$VERSION" == "master" ] && VERSION=latest
-
-          echo VERSION=$VERSION
-          docker tag $IMAGE_NAME $GITHUB_IMAGE_ID:$VERSION
-          docker tag $IMAGE_NAME $DOCKER_HUB_IMAGE_ID:$VERSION
-
-          docker push $GITHUB_IMAGE_ID:$VERSION
-          docker push $DOCKER_HUB_IMAGE_ID:$VERSION
-
-          echo \`\`\` >> ${GITHUB_STEP_SUMMARY}
-          echo "Use $GITHUB_IMAGE_ID:$VERSION within GitHub" >> ${GITHUB_STEP_SUMMARY}
-          echo "Use $DOCKER_HUB_IMAGE_ID:$VERSION outside of GitHub" >> ${GITHUB_STEP_SUMMARY}
-          echo \`\`\` >> ${GITHUB_STEP_SUMMARY}
-
-  # =========================================================================
-  # Generate Source SBOMs (Staging) - master branch only
-  # =========================================================================
-  generate-source-sboms-staging:
-    name: Generate SBOMs (${{ matrix.component }}-${{ matrix.format }}-staging)
-    needs: push-images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    permissions:
-      id-token: write
-      contents: read
-      attestations: write
+  push-images:
+    name: Push Docker Images
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - component: action
-            format: cyclonedx
-            component_id: 'XNsX40tonzvv'
-            component_name: 'sbomify Action'
-            lock_file: 'uv.lock'
-            output_file: 'sbomify-action.cdx.json'
-            product_release_id: 'Engh9j4XTTwD'
-            has_product_release: true
-          - component: action
-            format: spdx
-            component_id: 'XNsX40tonzvv'
-            component_name: 'sbomify Action'
-            lock_file: 'uv.lock'
-            output_file: 'sbomify-action.spdx.json'
-            product_release_id: 'Engh9j4XTTwD'
-            has_product_release: true
-          - component: javascript
-            format: cyclonedx
-            component_id: 'PGyKXNbQd5eq'
-            component_name: 'JavaScript Dependencies'
-            lock_file: 'bun.lock'
-            output_file: 'sbomify-action-frontend.cdx.json'
-            product_release_id: 'Engh9j4XTTwD'
-            has_product_release: true
-          - component: javascript
-            format: spdx
-            component_id: 'PGyKXNbQd5eq'
-            component_name: 'JavaScript Dependencies'
-            lock_file: 'bun.lock'
-            output_file: 'sbomify-action-frontend.spdx.json'
-            product_release_id: 'Engh9j4XTTwD'
-            has_product_release: true
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Cache sbomify data
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: .sbomify-cache
-          key: sbomify-${{ runner.os }}
-
-      - name: Determine version
-        id: version
-        uses: ./.github/actions/determine-version
-
-      - name: Generate and Upload SBOM
-        uses: sbomify/sbomify-action@master
-        env:
-          TOKEN: ${{ secrets.SBOMIFY_STAGE_TOKEN }}
-          API_BASE_URL: 'https://stage.sbomify.com'
-          COMPONENT_ID: ${{ matrix.component_id }}
-          COMPONENT_NAME: ${{ matrix.component_name }}
-          COMPONENT_VERSION: ${{ steps.version.outputs.version }}
-          COMPONENT_PURL: ${{ matrix.component == 'action' && format('pkg:docker/sbomifyhub/sbomify-action@{0}', steps.version.outputs.version) || '' }}
-          LOCK_FILE: ${{ matrix.lock_file }}
-          PRODUCT_RELEASE: ${{ matrix.has_product_release && format('["{0}:{1}"]', matrix.product_release_id, steps.version.outputs.version) || '' }}
-          SBOM_FORMAT: ${{ matrix.format }}
-          AUGMENT: true
-          ENRICH: true
-          UPLOAD: true
-          OUTPUT_FILE: ${{ matrix.output_file }}
-          SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
-
-          SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
-
-      - name: Attest SBOM
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
-        with:
-          subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'
-
-  # =========================================================================
-  # Generate Source SBOMs (Production) - tags only
-  # =========================================================================
-  generate-source-sboms-production:
-    name: Generate SBOMs (${{ matrix.component }}-${{ matrix.format }}-production)
-    needs: push-images
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs:
+      - docker-meta
+      - build-images
+    if: github.event_name == 'push'
     permissions:
-      id-token: write
+      packages: write
       contents: read
-      attestations: write
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - component: action
-            format: cyclonedx
-            component_id: 'Gu9wem8mkX'
-            component_name: 'sbomify Action'
-            lock_file: 'uv.lock'
-            output_file: 'sbomify-action.cdx.json'
-            product_release_id: 'IeIn1dGJXULh'
-            has_product_release: true
-          - component: action
-            format: spdx
-            component_id: 'Gu9wem8mkX'
-            component_name: 'sbomify Action'
-            lock_file: 'uv.lock'
-            output_file: 'sbomify-action.spdx.json'
-            product_release_id: 'IeIn1dGJXULh'
-            has_product_release: true
-          - component: javascript
-            format: cyclonedx
-            component_id: 'IxwrYSb9rGql'
-            component_name: 'JavaScript Dependencies'
-            lock_file: 'bun.lock'
-            output_file: 'sbomify-action-frontend.cdx.json'
-            product_release_id: 'IeIn1dGJXULh'
-            has_product_release: true
-          - component: javascript
-            format: spdx
-            component_id: 'IxwrYSb9rGql'
-            component_name: 'JavaScript Dependencies'
-            lock_file: 'bun.lock'
-            output_file: 'sbomify-action-frontend.spdx.json'
-            product_release_id: 'IeIn1dGJXULh'
-            has_product_release: true
+    env:
+      GHCR_REPO: ${{ needs.docker-meta.outputs.ghcr_repo }}
+      DOCKERHUB_REPO: ${{ needs.docker-meta.outputs.dockerhub_repo }}
+      IMAGE_TAG: ${{ needs.docker-meta.outputs.image_tag }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Cache sbomify data
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      - name: Download digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: .sbomify-cache
-          key: sbomify-${{ runner.os }}
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
 
-      - name: Determine version
-        id: version
-        uses: ./.github/actions/determine-version
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Generate and Upload SBOM
-        uses: sbomify/sbomify-action@master
-        env:
-          TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
-          COMPONENT_ID: ${{ matrix.component_id }}
-          COMPONENT_NAME: ${{ matrix.component_name }}
-          COMPONENT_VERSION: ${{ steps.version.outputs.version }}
-          COMPONENT_PURL: ${{ matrix.component == 'action' && format('pkg:docker/sbomifyhub/sbomify-action@{0}', steps.version.outputs.version) || '' }}
-          LOCK_FILE: ${{ matrix.lock_file }}
-          PRODUCT_RELEASE: ${{ matrix.has_product_release && format('["{0}:{1}"]', matrix.product_release_id, steps.version.outputs.version) || '' }}
-          SBOM_FORMAT: ${{ matrix.format }}
-          AUGMENT: true
-          ENRICH: true
-          UPLOAD: true
-          OUTPUT_FILE: ${{ matrix.output_file }}
-          SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
-
-          SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
-
-      - name: Attest SBOM
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-  # =========================================================================
-  # Generate Container SBOMs (Staging) - master branch only
-  # =========================================================================
-  generate-container-sboms-staging:
-    name: Generate SBOMs (container-${{ matrix.format }}-staging)
-    needs: push-images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    permissions:
-      id-token: write
-      contents: read
-      attestations: write
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - format: cyclonedx
-            component_id: 'gco2pG10whmy'
-            component_name: 'sbomify Action Container'
-            output_file: 'sbomify-action-container.cdx.json'
-            product_release_id: 'Engh9j4XTTwD'
-            has_product_release: true
-          - format: spdx
-            component_id: 'gco2pG10whmy'
-            component_name: 'sbomify Action Container'
-            output_file: 'sbomify-action-container.spdx.json'
-            product_release_id: 'Engh9j4XTTwD'
-            has_product_release: true
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Cache sbomify data
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      - name: Login to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          path: .sbomify-cache
-          key: sbomify-${{ runner.os }}
+          username: sbomifyhub
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Generate additional packages from Dockerfile
-        run: ./scripts/generate_additional_packages.sh > container_additional_packages.txt
+      - name: Create and push multi-arch manifests
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          shopt -s nullglob
+          digests=(*)
+          if [ "${#digests[@]}" -eq 0 ]; then
+            echo "::error::No digest files found. The digests-* artifacts may have expired" \
+              "(retention is 7 days) — re-run all jobs, not just this one."
+            exit 1
+          fi
+          echo "Found ${#digests[@]} digest(s): ${digests[*]}"
+          docker buildx imagetools create -t "${GHCR_REPO}:${IMAGE_TAG}" \
+            $(printf -- "${GHCR_REPO}@sha256:%s " "${digests[@]}")
+          docker buildx imagetools create -t "${DOCKERHUB_REPO}:${IMAGE_TAG}" \
+            $(printf -- "${DOCKERHUB_REPO}@sha256:%s " "${digests[@]}")
 
-      - name: Determine version
-        id: version
-        uses: ./.github/actions/determine-version
+      - name: Inspect manifests
+        run: |
+          docker buildx imagetools inspect "${GHCR_REPO}:${IMAGE_TAG}"
+          docker buildx imagetools inspect "${DOCKERHUB_REPO}:${IMAGE_TAG}"
 
-      - name: Generate and Upload SBOM
-        uses: sbomify/sbomify-action@master
-        env:
-          TOKEN: ${{ secrets.SBOMIFY_STAGE_TOKEN }}
-          API_BASE_URL: 'https://stage.sbomify.com'
-          COMPONENT_ID: ${{ matrix.component_id }}
-          COMPONENT_NAME: ${{ matrix.component_name }}
-          COMPONENT_VERSION: ${{ steps.version.outputs.version }}
-          COMPONENT_PURL: pkg:docker/sbomifyhub/sbomify-action@${{ steps.version.outputs.version }}
-          DOCKER_IMAGE: sbomifyhub/sbomify-action:${{ steps.version.outputs.docker_tag }}
-          ADDITIONAL_PACKAGES_FILE: container_additional_packages.txt
-          PRODUCT_RELEASE: ${{ matrix.has_product_release && format('["{0}:{1}"]', matrix.product_release_id, steps.version.outputs.version) || '' }}
-          SBOM_FORMAT: ${{ matrix.format }}
-          AUGMENT: true
-          ENRICH: true
-          UPLOAD: true
-          OUTPUT_FILE: ${{ matrix.output_file }}
-          SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
-
-          SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
-
-      - name: Attest SBOM
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
-        with:
-          subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'
-
-  # =========================================================================
-  # Generate Container SBOMs (Production) - tags only
-  # =========================================================================
-  generate-container-sboms-production:
-    name: Generate SBOMs (container-${{ matrix.format }}-production)
-    needs: push-images
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    permissions:
-      id-token: write
-      contents: read
-      attestations: write
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - format: cyclonedx
-            component_id: 'ryD0Hcu4vq6y'
-            component_name: 'sbomify Action Container'
-            output_file: 'sbomify-action-container.cdx.json'
-            product_release_id: 'IeIn1dGJXULh'
-            has_product_release: true
-          - format: spdx
-            component_id: 'ryD0Hcu4vq6y'
-            component_name: 'sbomify Action Container'
-            output_file: 'sbomify-action-container.spdx.json'
-            product_release_id: 'IeIn1dGJXULh'
-            has_product_release: true
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Cache sbomify data
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: .sbomify-cache
-          key: sbomify-${{ runner.os }}
-
-      - name: Generate additional packages from Dockerfile
-        run: ./scripts/generate_additional_packages.sh > container_additional_packages.txt
-
-      - name: Determine version
-        id: version
-        uses: ./.github/actions/determine-version
-
-      - name: Generate and Upload SBOM
-        uses: sbomify/sbomify-action@master
-        env:
-          TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
-          COMPONENT_ID: ${{ matrix.component_id }}
-          COMPONENT_NAME: ${{ matrix.component_name }}
-          COMPONENT_VERSION: ${{ steps.version.outputs.version }}
-          COMPONENT_PURL: pkg:docker/sbomifyhub/sbomify-action@${{ steps.version.outputs.version }}
-          DOCKER_IMAGE: sbomifyhub/sbomify-action:${{ steps.version.outputs.docker_tag }}
-          ADDITIONAL_PACKAGES_FILE: container_additional_packages.txt
-          PRODUCT_RELEASE: ${{ matrix.has_product_release && format('["{0}:{1}"]', matrix.product_release_id, steps.version.outputs.version) || '' }}
-          SBOM_FORMAT: ${{ matrix.format }}
-          AUGMENT: true
-          ENRICH: true
-          UPLOAD: true
-          OUTPUT_FILE: ${{ matrix.output_file }}
-          SBOMIFY_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache
-
-          SYFT_CACHE_DIR: ${{ github.workspace }}/.sbomify-cache/syft
-
-      - name: Attest SBOM
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
-        with:
-          subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'
+      - name: Image summary
+        run: |
+          PLATFORMS=$(docker buildx imagetools inspect "${GHCR_REPO}:${IMAGE_TAG}" \
+            --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}')
+          {
+            echo '```'
+            echo "Primary:   ${GHCR_REPO}:${IMAGE_TAG}"
+            echo "Mirror:    ${DOCKERHUB_REPO}:${IMAGE_TAG}"
+            echo "Platforms: ${PLATFORMS}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"

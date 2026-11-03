@@ -1,0 +1,1137 @@
+"""Shared HTTP client for the sbomify REST API.
+
+This module is the single place where the action talks to sbomify. Yocto,
+upload, augmentation, releases, and the wizard all delegate here instead of
+hand-rolling their own ``requests`` calls. Centralising the plumbing keeps
+session reuse, header construction, pagination, and error handling in one
+spot, and gives every caller the same ``APIError`` / ``AuthError`` shape.
+
+The client is intentionally narrow: every method is a thin wrapper over a
+single REST endpoint. Higher-level orchestration (get-or-create on name
+collisions, contact-profile resolution, etc.) lives on top, not inside.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Iterator
+
+import requests
+
+from sbomify_action.exceptions import APIError, AuthError, ForbiddenError, PlanLimitError
+from sbomify_action.http_client import get_default_headers
+from sbomify_action.logging_config import logger
+
+DEFAULT_TIMEOUT = 60
+DEFAULT_PAGE_SIZE = 100
+MAX_PAGES = 500  # Safety limit against runaway pagination.
+
+# Artifact types the sbomify backend accepts via the ?bom_type= query param.
+# None/"sbom" is the default plain SBOM upload; the others are uploaded as-is.
+VALID_BOM_TYPES = ("sbom", "vex", "cbom", "hbom")
+
+# Component types the sbomify backend accepts (mirrors
+# ``core.schemas.ComponentType``: BOM="bom", DOCUMENT="document"). There is
+# NO "sbom" value — passing one trips a server-side 422. We validate
+# client-side so a wrong literal fails fast with a clear message at the
+# call site instead of an opaque enum-validation dump from the API.
+VALID_COMPONENT_TYPES = frozenset({"bom", "document"})
+
+# Document types the backend records on a document artifact (mirrors
+# ``documents.models.Document.DocumentType``). Django applies ``choices`` only
+# in ``full_clean()``, and the document API saves the value straight through --
+# so an unrecognised type is stored verbatim rather than rejected, and shows up
+# in the UI as a type that filters and badges nothing. Validate client-side.
+VALID_DOCUMENT_TYPES = frozenset(
+    {
+        # Technical documentation
+        "specification",
+        "manual",
+        "readme",
+        "documentation",
+        "build-instructions",
+        "configuration",
+        # Legal and compliance
+        "license",
+        "compliance",
+        "evidence",
+        # Release information
+        "changelog",
+        "release-notes",
+        # Security
+        "security-advisory",
+        "vulnerability-report",
+        "threat-model",
+        "risk-assessment",
+        "pentest-report",
+        # Analysis reports
+        "static-analysis",
+        "dynamic-analysis",
+        "quality-metrics",
+        "maturity-report",
+        "report",
+        # Other
+        "other",
+    }
+)
+
+# Subcategories the backend badges a ``compliance`` document with (mirrors
+# ``documents.models.Document.ComplianceSubcategory``). Ignored for every other
+# document type -- the backend only reads it when document_type=compliance.
+VALID_COMPLIANCE_SUBCATEGORIES = frozenset({"nda", "soc2", "iso27001"})
+
+
+def clean_validation_error(detail: Any) -> str | None:
+    """Render an API error ``detail`` into human-readable text.
+
+    django-ninja / pydantic 422 responses put a *list* of per-field error
+    dicts (``{type, loc, msg, ctx}``) in ``detail``. Stringifying that list
+    dumps raw Python reprs — eg ``[{'type': 'enum', 'loc': ['body', 'payload',
+    'component_type'], 'msg': "Input should be 'document' or 'bom'", ...}]`` —
+    at the user. Collapse it to ``<field>: <msg>`` lines instead. A plain-string
+    detail (the common case) passes through unchanged; ``None`` stays ``None``
+    so callers can treat "no detail" as falsy.
+
+    Module-level (not just a client method) so other code paths that handle raw
+    API responses — eg the upload destination, which never goes through
+    ``SbomifyApiClient`` — can reuse it without depending on the class (and
+    without breaking when tests mock the class wholesale).
+    """
+    if detail is None:
+        return None
+    if isinstance(detail, list):
+        parts: list[str] = []
+        for item in detail:
+            if isinstance(item, dict):
+                msg = item.get("msg") or item.get("detail") or ""
+                loc = item.get("loc")
+                field = None
+                if isinstance(loc, list | tuple) and loc:
+                    # ``loc`` is a path like ['body', 'payload', '<field>'];
+                    # the trailing element is the field the user cares about.
+                    field = str(loc[-1])
+                if field and msg:
+                    parts.append(f"{field}: {msg}")
+                elif msg:
+                    parts.append(str(msg))
+            elif item:
+                parts.append(str(item))
+        return "; ".join(parts) if parts else None
+    return str(detail)
+
+
+class SbomifyApiClient:
+    """Thin wrapper around the sbomify REST API.
+
+    One instance per thread. ``requests.Session`` is not thread-safe; do not
+    share a client across threads — pass the base URL + token instead and let
+    each thread build its own.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        token: str | None,
+        *,
+        timeout: int = DEFAULT_TIMEOUT,
+        session: requests.Session | None = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+        self.timeout = timeout
+        self.session = session or requests.Session()
+
+    # ------------------------------------------------------------------
+    # plumbing
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: Any | None = None,
+        data: bytes | dict[str, str] | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        timeout: int | None = None,
+    ) -> requests.Response:
+        """Issue one HTTP request and return the response.
+
+        ``json_body`` and ``data`` are mutually exclusive — ``data`` is for
+        raw payloads (SBOM upload), ``json_body`` for normal JSON requests.
+        ``files`` sends a multipart/form-data body (document upload), in which
+        case ``data`` carries the accompanying form fields and no Content-Type
+        is set: requests must generate it, boundary included.
+        Connection / timeout failures and 401s raise immediately; other
+        non-2xx responses are returned to the caller so they can build
+        endpoint-specific error messages from the body.
+        """
+        url = f"{self.base_url}{path}"
+        content_type = "application/json" if json_body is not None else None
+        headers = get_default_headers(self.token, content_type=content_type)
+        if extra_headers:
+            headers.update(extra_headers)
+
+        try:
+            response = self.session.request(
+                method,
+                url,
+                headers=headers,
+                params=params,
+                json=json_body,
+                data=data,
+                files=files,
+                timeout=timeout if timeout is not None else self.timeout,
+            )
+        except requests.exceptions.ConnectionError:
+            raise APIError("Failed to connect to sbomify API")
+        except requests.exceptions.Timeout:
+            raise APIError("API request timed out")
+
+        if response.status_code == 401:
+            raise AuthError(self._build_error("Authentication failed", response))
+        return response
+
+    @staticmethod
+    def _build_error(prefix: str, response: requests.Response) -> str:
+        """Format ``prefix [status] - detail`` from a non-2xx response."""
+        message = f"{prefix} [{response.status_code}]"
+        body = SbomifyApiClient._safe_json_dict(response)
+        if body is not None:
+            detail = SbomifyApiClient._clean_validation_error(body.get("detail"))
+            if detail:
+                message += f" - {detail}"
+        return message
+
+    @staticmethod
+    def _clean_validation_error(detail: Any) -> str | None:
+        """Backwards-compatible alias for the module-level
+        :func:`clean_validation_error`. Kept so existing call sites and tests
+        that reference ``SbomifyApiClient._clean_validation_error`` keep working.
+        """
+        return clean_validation_error(detail)
+
+    @staticmethod
+    def _safe_json_dict(response: requests.Response) -> dict[str, Any] | None:
+        """Parse the response body as a JSON dict, returning None on failure."""
+        try:
+            data = response.json()
+        except ValueError:
+            return None
+        if isinstance(data, dict):
+            return data
+        return None
+
+    def _paginate(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        page_size: int = DEFAULT_PAGE_SIZE,
+        error_context: str = "paginate",
+    ) -> Iterator[dict[str, Any]]:
+        """Iterate over every item in a paginated endpoint.
+
+        Yields one dict per item. Stops when the response indicates no more
+        pages (either ``has_next: False`` in a ``pagination`` block, or an
+        empty page, or a missing ``next``/``items``). Raises ``APIError`` on
+        transport/HTTP/JSON failure or if the safety limit is hit.
+        """
+        page = 1
+        while page <= MAX_PAGES:
+            page_params = dict(params or {})
+            page_params["page"] = page
+            page_params["page_size"] = page_size
+
+            response = self._request("GET", path, params=page_params)
+            if not response.ok:
+                raise APIError(self._build_error(f"Failed to {error_context}.", response))
+
+            try:
+                data = response.json()
+            except (ValueError, requests.exceptions.JSONDecodeError):
+                raise APIError(f"Failed to {error_context}: invalid JSON response from API")
+
+            if isinstance(data, list):
+                # Some endpoints return a bare list rather than {items: [...]}.
+                # Bare-list endpoints don't carry pagination metadata, so we
+                # treat the response as authoritative: yield once and stop.
+                # Re-requesting would loop forever against any endpoint that
+                # ignores ?page= and returns the same list every time.
+                for item in data:
+                    if isinstance(item, dict):
+                        yield item
+                return
+
+            if not isinstance(data, dict):
+                raise APIError(f"Failed to {error_context}: unexpected response type ({type(data).__name__})")
+
+            raw_items = data.get("items")
+            if not isinstance(raw_items, list):
+                # Envelope without `items` — treat as a single-page response
+                # with no items and stop. Yielding the envelope dict would
+                # poison callers like list_components_by_name that .get('id')
+                # on every yielded element.
+                return
+
+            for item in raw_items:
+                if isinstance(item, dict):
+                    yield item
+
+            # Stop logic. Trust explicit pagination signals where present;
+            # otherwise assume single-page so we don't loop against an
+            # endpoint that ignores ?page= and returns the same items
+            # every request.
+            pagination = data.get("pagination")
+            # 1. Explicit "no next page" markers — stop.
+            if isinstance(pagination, dict) and pagination.get("has_next") is False:
+                return
+            if "next" in data and not data.get("next"):
+                return
+            # 2. Empty page — nothing more to consume.
+            if not raw_items:
+                return
+            # 3. No pagination metadata at all → single-page response. Stop.
+            #    A server that wanted us to paginate would have shipped either
+            #    a ``pagination`` block or a ``next`` link.
+            if not isinstance(pagination, dict) and "next" not in data:
+                return
+            page += 1
+
+        raise APIError(
+            f"Failed to {error_context}: pagination safety limit reached ({MAX_PAGES} pages × {page_size} items)"
+        )
+
+    # ------------------------------------------------------------------
+    # auth probe
+
+    def whoami(self) -> None:
+        """Cheap probe that confirms the token is valid.
+
+        Raises ``AuthError`` on 401, ``APIError`` on anything else non-2xx.
+        Lists one component (cheapest endpoint with no side effects).
+        """
+        response = self._request("GET", "/api/v1/components", params={"page": 1, "page_size": 1})
+        if not response.ok:
+            raise APIError(self._build_error("Failed to authenticate with sbomify", response))
+
+    # ------------------------------------------------------------------
+    # components
+
+    def iter_components(self, error_context: str = "list components") -> Iterator[dict[str, Any]]:
+        """Yield every component the token has access to."""
+        yield from self._paginate("/api/v1/components", error_context=error_context)
+
+    def list_components(self) -> list[dict[str, Any]]:
+        """Materialize the full list of components."""
+        return list(self.iter_components())
+
+    def list_components_by_name(self) -> dict[str, str]:
+        """Fetch all components and return a ``{name: id}`` mapping."""
+        mapping: dict[str, str] = {}
+        for item in self.iter_components():
+            name = item.get("name")
+            comp_id = item.get("id")
+            if name and comp_id:
+                mapping[str(name)] = str(comp_id)
+        logger.info(f"Cached {len(mapping)} existing components")
+        return mapping
+
+    def get_component_id_by_name(self, name: str) -> str | None:
+        """Find a component ID by exact name match, paging until found."""
+        for item in self.iter_components(error_context=f"look up component '{name}'"):
+            if item.get("name") == name:
+                comp_id = item.get("id")
+                if comp_id is not None:
+                    return str(comp_id)
+        return None
+
+    def create_component(
+        self,
+        name: str,
+        *,
+        component_type: str,
+    ) -> tuple[str, bool]:
+        """Create a component with get-or-create semantics.
+
+        Returns ``(component_id, was_created)``. Recovers from
+        ``DUPLICATE_NAME`` (status 400 or 409) by looking the existing
+        component up by name. Raises ``PlanLimitError`` when the team has
+        hit their component-count limit.
+
+        Raises ``ValueError`` if ``component_type`` isn't a value the
+        backend accepts — a hardcoded-literal mistake (the only way a bad
+        type reaches here) should fail loud at the call site / in CI, not
+        ship and surface as an opaque 422 at runtime.
+        """
+        if component_type not in VALID_COMPONENT_TYPES:
+            raise ValueError(
+                f"Invalid component_type {component_type!r}; expected one of {sorted(VALID_COMPONENT_TYPES)}."
+            )
+        response = self._request(
+            "POST",
+            "/api/v1/components",
+            json_body={"name": name, "component_type": component_type},
+        )
+
+        if response.ok:
+            data = self._safe_json_dict(response)
+            if data is None:
+                raise APIError(f"Invalid JSON response when creating component '{name}'")
+            comp_id = data.get("id")
+            if comp_id is None:
+                raise APIError(f"Invalid response when creating component '{name}': no id returned")
+            return str(comp_id), True
+
+        body = self._safe_json_dict(response) or {}
+        # ``raw_detail`` drives plan-limit detection; ``detail`` (cleaned) is for
+        # the human-facing message only. Keep them separate: the backend's
+        # plan-limit 403 sends a plain string ("maximum components reached"),
+        # whereas a pydantic 422 sends a list. Matching "maximum" against the
+        # *cleaned* string would misfire on a list-detail whose collapsed text
+        # happens to contain "maximum" (eg "name: ...maximum length 255"),
+        # raising PlanLimitError for a plain validation error.
+        raw_detail = body.get("detail")
+        detail = self._clean_validation_error(raw_detail) or ""
+        error_code = body.get("error_code") or ""
+        err_msg = f"Failed to create component '{name}'. [{response.status_code}]"
+        if detail:
+            err_msg += f" - {detail}"
+
+        if response.status_code in (400, 409) and error_code == "DUPLICATE_NAME":
+            logger.info(f"Component '{name}' already exists, retrieving existing component ID")
+            existing_id = self.get_component_id_by_name(name)
+            if existing_id is not None:
+                return existing_id, False
+            raise APIError(f"Component '{name}' reported as duplicate by API but could not be found via lookup")
+
+        if self._is_plan_limit(response.status_code, raw_detail, error_code):
+            raise PlanLimitError(self._plan_limit_message("component", name, raw_detail), resource="component")
+        raise APIError(err_msg)
+
+    @staticmethod
+    def _plan_limit_message(resource: str, name: str, raw_detail: Any) -> str:
+        """Build a human, status-code-free plan-limit message.
+
+        Plan-limit errors are surfaced verbatim in the UI (the wizard's apply
+        banner), so the message must never carry an HTTP status marker or a
+        raw structured ``detail``. Uses the backend's string detail only when
+        it is actually a non-empty string — a list/dict detail (pydantic-shaped
+        or otherwise) falls back to a generic sentence rather than being
+        interpolated as a Python repr.
+        """
+        if isinstance(raw_detail, str) and raw_detail:
+            return f"Could not create {resource} '{name}': {raw_detail}"
+        return f"Could not create {resource} '{name}': your plan's {resource} limit has been reached."
+
+    @staticmethod
+    def _is_plan_limit(status_code: int, raw_detail: Any, error_code: str) -> bool:
+        """True when a create was rejected because the team's plan limit is hit.
+
+        The backend tags these with ``error_code: BILLING_LIMIT_EXCEEDED``
+        (verified against ``core/apis._check_billing_limits``); the string
+        match on the raw detail is kept as a fallback for older deployments
+        that predate the error code. Only a *string* detail counts — a
+        pydantic list-detail whose collapsed text contains "maximum" is a
+        validation error, not a plan limit.
+        """
+        if status_code != 403:
+            return False
+        if error_code == "BILLING_LIMIT_EXCEEDED":
+            return True
+        return isinstance(raw_detail, str) and "maximum" in raw_detail.lower()
+
+    def get_or_create_component(
+        self,
+        name: str,
+        cache: dict[str, str],
+        *,
+        component_type: str,
+    ) -> tuple[str, bool]:
+        """Look the name up in ``cache``; on miss, create it (updating cache)."""
+        if name in cache:
+            return cache[name], False
+        comp_id, was_created = self.create_component(name, component_type=component_type)
+        cache[name] = comp_id
+        if was_created:
+            logger.info(f"Created component '{name}' -> {comp_id}")
+        else:
+            logger.info(f"Recovered existing component '{name}' -> {comp_id}")
+        return comp_id, was_created
+
+    def patch_component(self, component_id: str, **fields: Any) -> dict[str, Any]:
+        """Partial-update a component. Raises on non-2xx."""
+        response = self._request("PATCH", f"/api/v1/components/{component_id}", json_body=fields)
+        if not response.ok:
+            raise APIError(self._build_error(f"Failed to patch component {component_id}.", response))
+        data = self._safe_json_dict(response)
+        return data or {}
+
+    def patch_component_visibility(self, component_id: str, visibility: str) -> None:
+        """Set a component's visibility, logging (not raising) on failure.
+
+        Visibility is best-effort; the action should not abort if the API
+        rejects it (eg. when the token can't modify the component, or 401s
+        on a long-running Yocto pipeline whose token expired). AuthError /
+        APIError from ``_request`` are caught and logged so the caller's
+        upload-then-set-visibility flow always completes.
+        """
+        try:
+            response = self._request(
+                "PATCH",
+                f"/api/v1/components/{component_id}",
+                json_body={"visibility": visibility},
+            )
+        except APIError as e:
+            logger.warning(f"Failed to set visibility for component {component_id}: {e}")
+            return
+        if not response.ok:
+            logger.warning(f"Failed to set visibility for component {component_id}: [{response.status_code}]")
+
+    def list_component_sboms(
+        self,
+        component_id: str,
+        *,
+        version: str | None = None,
+        sbom_format: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List a component's SBOMs, newest first.
+
+        ``version`` / ``sbom_format`` are passed to the backend's
+        exact-match filters (``GET /api/v1/components/{id}/sboms``).
+        Each item is ``{"sbom": {id, version, format, created_at, ...},
+        "releases": [...], ...}``.
+        """
+        params: dict[str, Any] = {}
+        if version is not None:
+            params["version"] = version
+        if sbom_format is not None:
+            params["format"] = sbom_format
+        return list(
+            self._paginate(
+                f"/api/v1/components/{component_id}/sboms",
+                params=params,
+                error_context="list component SBOMs",
+            )
+        )
+
+    def find_component_sbom(self, component_id: str, version: str, sbom_format: str) -> str | None:
+        """ID of the newest SBOM at exactly ``(version, sbom_format)``, or None.
+
+        The filter params are re-checked client-side: a backend that
+        predates the server-side filters ignores unknown query params and
+        would otherwise return the full unfiltered listing, silently
+        matching the wrong SBOM.
+        """
+        for item in self.list_component_sboms(component_id, version=version, sbom_format=sbom_format):
+            sbom = item.get("sbom")
+            if not isinstance(sbom, dict):
+                continue
+            if sbom.get("version") == version and sbom.get("format") == sbom_format and sbom.get("id"):
+                return str(sbom["id"])
+        return None
+
+    def get_augmentation_meta(self, component_id: str) -> dict[str, Any]:
+        """Fetch augmentation metadata for a component.
+
+        Uses ``/api/v1/sboms/component/{id}/meta`` (the legacy augmentation
+        endpoint). The newer ``/api/v1/components/{id}/metadata`` endpoint
+        carries different fields and is not interchangeable yet.
+        """
+        response = self._request("GET", f"/api/v1/sboms/component/{component_id}/meta")
+        if not response.ok:
+            raise APIError(self._build_error("Failed to retrieve component metadata from sbomify.", response))
+        data = self._safe_json_dict(response)
+        return data or {}
+
+    # ------------------------------------------------------------------
+    # products
+
+    def list_products(self) -> list[dict[str, Any]]:
+        return list(self._paginate("/api/v1/products", error_context="list products"))
+
+    def get_product(self, product_id: str) -> dict[str, Any]:
+        response = self._request("GET", f"/api/v1/products/{product_id}")
+        if not response.ok:
+            raise APIError(self._build_error(f"Failed to fetch product {product_id}.", response))
+        return self._safe_json_dict(response) or {}
+
+    def get_product_by_name(self, name: str) -> dict[str, Any] | None:
+        """Find a product by exact name match, or None."""
+        for product in self._paginate("/api/v1/products", error_context=f"look up product '{name}'"):
+            if product.get("name") == name:
+                return product
+        return None
+
+    def create_product(self, name: str) -> dict[str, Any]:
+        """Create a product. Thin wrapper over ``POST /products``.
+
+        Returns the created product dict. Raises ``PlanLimitError`` (tagged
+        ``resource="product"``) when the team has hit its product-count
+        limit, and ``APIError`` for any other non-2xx (including a
+        ``DUPLICATE_NAME`` collision — callers that want get-or-create
+        semantics use :meth:`get_or_create_product`).
+        """
+        response = self._request("POST", "/api/v1/products", json_body={"name": name})
+        if response.ok:
+            return self._safe_json_dict(response) or {}
+
+        body = self._safe_json_dict(response) or {}
+        raw_detail = body.get("detail")
+        error_code = body.get("error_code") or ""
+        if self._is_plan_limit(response.status_code, raw_detail, error_code):
+            raise PlanLimitError(self._plan_limit_message("product", name, raw_detail), resource="product")
+        raise APIError(self._build_error(f"Failed to create product '{name}'.", response))
+
+    def get_or_create_product(self, name: str) -> tuple[dict[str, Any], bool]:
+        """Create a product, recovering from a name collision.
+
+        Returns ``(product, was_created)``. On a create failure the product
+        is looked up by name and reused when found — this is what lets a
+        retry after a partially-failed apply (product created, a later step
+        failed) reuse the product instead of dead-ending on ``DUPLICATE_NAME``.
+        ``PlanLimitError`` propagates unchanged (it is not a name collision,
+        so a lookup would be wrong); any other error re-raises when no
+        existing product matches the name.
+        """
+        try:
+            return self.create_product(name), True
+        except PlanLimitError:
+            raise
+        except APIError:
+            existing = self.get_product_by_name(name)
+            if existing is not None:
+                logger.info(f"Product '{name}' already exists, reusing it")
+                return existing, False
+            raise
+
+    def attach_components_to_product(self, product_id: str, component_ids: list[str]) -> None:
+        """Set the full component list on a product.
+
+        sbomify's ``PATCH /products/{id}`` with ``component_ids`` *replaces*
+        the existing set, so we read the current set first and PATCH the
+        union back. Workspace-scoped components (``is_global=True``) trigger
+        a 400 from the backend — we surface that as ``APIError``.
+        """
+        if not component_ids:
+            return
+        product = self.get_product(product_id)
+        existing = product.get("component_ids") or product.get("components") or []
+        existing_ids: list[str] = []
+        for entry in existing:
+            if isinstance(entry, str):
+                existing_ids.append(entry)
+            elif isinstance(entry, dict) and entry.get("id"):
+                existing_ids.append(str(entry["id"]))
+
+        merged = list(existing_ids)
+        for cid in component_ids:
+            if cid not in merged:
+                merged.append(cid)
+        if merged == existing_ids:
+            return  # Nothing to add — backend would no-op anyway.
+
+        response = self._request(
+            "PATCH",
+            f"/api/v1/products/{product_id}",
+            json_body={"component_ids": merged},
+        )
+        if not response.ok:
+            raise APIError(self._build_error(f"Failed to attach components to product {product_id}.", response))
+
+    # ------------------------------------------------------------------
+    # contact profiles
+
+    def list_workspaces(self) -> list[dict[str, Any]]:
+        """List workspaces the token can see.
+
+        Each item carries a ``key`` field used to scope workspace-nested
+        endpoints like ``/api/v1/workspaces/{team_key}/contact-profiles``.
+        Returns a bare JSON list (no pagination envelope) directly from
+        the API. The route is mounted at ``/workspaces`` (not
+        ``/teams``) despite the legacy ``team_key`` parameter naming.
+
+        Note: this is the ONLY workspaces-router endpoint where a
+        trailing slash is REQUIRED — verified against stage,
+        ``/api/v1/workspaces`` returns 301 (redirect, may drop bodies on
+        non-GET). The nested routes (``/{key}/contact-profiles`` etc.)
+        do NOT accept a trailing slash; they 404 when one is present.
+        Do not "normalize" the slashes here — each route's shape is
+        dictated by the backend's mount config and verified by
+        integration probing.
+
+        Accepts both shapes the API might return: a bare list (current
+        production shape) OR a paginated envelope (``{items: [...],
+        pagination: {...}}``) — the latter is the shape every other
+        list endpoint already uses, so a future migration of this
+        route would otherwise silently return [] and break team_key
+        resolution.
+        """
+        response = self._request("GET", "/api/v1/workspaces/")
+        if not response.ok:
+            raise APIError(self._build_error("Failed to list workspaces.", response))
+        try:
+            data = response.json()
+        except ValueError:
+            raise APIError("Failed to list workspaces: invalid JSON response from API")
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            items = data.get("items")
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+        return []
+
+    def list_contact_profiles(self, team_key: str) -> list[dict[str, Any]]:
+        """List contact profiles for a workspace.
+
+        Hits ``GET /api/v1/workspaces/{team_key}/contact-profiles``.
+        Returns a bare JSON list (no pagination envelope), filtered
+        server-side to workspace-level profiles (the backend excludes
+        ``is_component_private`` ones). Returns ``[]`` on 404 — some
+        deployments don't expose the endpoint, and callers treat
+        absence as "no profiles configured".
+
+        ``team_key`` must come from a prior ``list_workspaces()`` call
+        (or be otherwise known to the caller); the API has no "current
+        workspace" notion for token-scoped requests, so it can't be
+        omitted.
+        """
+        response = self._request("GET", f"/api/v1/workspaces/{team_key}/contact-profiles")
+        if response.status_code == 404:
+            logger.debug("Contact profiles endpoint not available for workspace %s", team_key)
+            return []
+        if response.status_code == 403:
+            # Scope denial — this token can't read this workspace. Raise a
+            # typed error so callers (the wizard's workspace resolver) can
+            # tell it apart from a transient failure and switch workspaces
+            # only on a genuine 403, never on a 500/timeout.
+            raise ForbiddenError(self._build_error("Failed to list contact profiles.", response))
+        if not response.ok:
+            raise APIError(self._build_error("Failed to list contact profiles.", response))
+        try:
+            data = response.json()
+        except ValueError:
+            raise APIError("Failed to list contact profiles: invalid JSON response from API")
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        # Accept a paginated envelope too — the shape every other list
+        # endpoint uses — so a future backend migration of this route
+        # doesn't silently return [] and hide every existing profile.
+        if isinstance(data, dict):
+            items = data.get("items")
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+        return []
+
+    def create_contact_profile(self, team_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a contact profile in a workspace.
+
+        Hits ``POST /api/v1/workspaces/{team_key}/contact-profiles``.
+        ``payload`` is the CycloneDX-aligned ``ContactProfileCreateSchema``
+        — at minimum ``name`` is required; ``entities`` (with at least
+        one of ``is_manufacturer``/``is_supplier``/``is_author`` set)
+        and ``authors`` cover the supplier + author metadata that NTIA /
+        CISA / EU CRA list as minimum elements. Returns the created
+        profile dict (with the new ``id``) on 201; raises ``APIError``
+        on validation / permission failure.
+
+        Recovers from ``DUPLICATE_NAME`` (status 400 or 409) by looking
+        the existing profile up by name and returning it. This matters
+        for a lost-response resubmit: a first POST that created the
+        profile but whose result the caller never saw (canceled worker,
+        dropped connection) would otherwise dead-end every retry on the
+        duplicate error even though the profile is right there.
+        """
+        response = self._request(
+            "POST",
+            f"/api/v1/workspaces/{team_key}/contact-profiles",
+            json_body=payload,
+        )
+        if response.ok:
+            return self._safe_json_dict(response) or {}
+
+        body = self._safe_json_dict(response) or {}
+        error_code = body.get("error_code") or ""
+        name = payload.get("name")
+        if response.status_code in (400, 409) and error_code == "DUPLICATE_NAME" and isinstance(name, str):
+            logger.info(f"Contact profile '{name}' already exists, retrieving existing profile")
+            for profile in self.list_contact_profiles(team_key):
+                if profile.get("name") == name:
+                    return profile
+            # The duplicate exists but isn't in the list the token can see —
+            # fall through to a message that points at the dashboard instead
+            # of the raw constraint error.
+            raise APIError(
+                f"A contact profile named '{name}' already exists in this workspace but could not "
+                "be retrieved. Check Settings → Contacts in the sbomify dashboard."
+            )
+        raise APIError(self._build_error("Failed to create contact profile.", response))
+
+    # ------------------------------------------------------------------
+    # releases
+
+    def _fetch_releases(
+        self,
+        params: dict[str, str],
+        error_context: str,
+    ) -> list[dict[str, Any]]:
+        """Query the releases endpoint, paginating until every release matching
+        ``params`` has been collected.
+
+        Pagination matters for DUPLICATE_NAME recovery: when the backend
+        rejects a create_release call, the existing release we need to look
+        up may be on page 2+ of a busy product. A single-page fetch silently
+        missed those releases and turned a "you already have this release"
+        into a hard APIError.
+
+        Returns ``[]`` on 404 (endpoint not available on every deployment).
+        Inlines the pagination loop (rather than calling ``_paginate``) so
+        the 404-tolerant first-page probe doesn't cost a duplicate round
+        trip.
+        """
+        items: list[dict[str, Any]] = []
+        page = 1
+        while page <= MAX_PAGES:
+            page_params = {**params, "page": str(page), "page_size": str(DEFAULT_PAGE_SIZE)}
+            response = self._request("GET", "/api/v1/releases", params=page_params)
+            if response.status_code == 404:
+                # Endpoint not available on this deployment. Treat as
+                # "no releases" rather than raising — preserves the soft-
+                # fail contract callers rely on.
+                return []
+            if not response.ok:
+                raise APIError(self._build_error(f"Failed to {error_context}.", response))
+            data = self._safe_json_dict(response)
+            if data is None:
+                return items
+            raw_items = data.get("items")
+            if not isinstance(raw_items, list):
+                return items
+            for item in raw_items:
+                if isinstance(item, dict):
+                    items.append(item)
+            # Same stop conditions as _paginate's dict branch: trust
+            # explicit pagination metadata when present, otherwise stop
+            # after one page so we don't loop against an endpoint that
+            # ignores ?page=.
+            pagination = data.get("pagination")
+            if isinstance(pagination, dict) and pagination.get("has_next") is False:
+                return items
+            if "next" in data and not data.get("next"):
+                return items
+            if len(raw_items) < DEFAULT_PAGE_SIZE:
+                return items
+            if not isinstance(pagination, dict) and "next" not in data:
+                return items
+            page += 1
+        raise APIError(f"Failed to {error_context}: pagination safety limit reached ({MAX_PAGES} pages)")
+
+    def check_release_exists(self, product_id: str, version: str) -> bool:
+        params = {"product_id": product_id, "version": version}
+        releases = self._fetch_releases(params, "check release existence")
+        return any(release.get("version") == version for release in releases)
+
+    def get_release_id(self, product_id: str, version: str) -> str | None:
+        params = {"product_id": product_id, "version": version}
+        for release in self._fetch_releases(params, "get release ID"):
+            if release.get("version") == version:
+                rid = release.get("id")
+                if rid is not None:
+                    return str(rid)
+        return None
+
+    def get_release_id_by_name(self, product_id: str, name: str) -> str | None:
+        """Look up a release by ``name`` (not ``version``).
+
+        Used to recover from DUPLICATE_NAME errors: the API enforces
+        uniqueness on the name field, not the version field.
+        """
+        params = {"product_id": product_id}
+        for release in self._fetch_releases(params, "get release ID by name"):
+            if release.get("name") == name:
+                rid = release.get("id")
+                if rid is not None:
+                    return str(rid)
+        return None
+
+    def get_release_details(self, product_id: str, version: str) -> dict[str, Any] | None:
+        params = {"product_id": product_id, "version": version}
+        for release in self._fetch_releases(params, "get release details"):
+            if release.get("version") == version:
+                return release
+        return None
+
+    def list_releases(self, product_id: str) -> list[dict[str, Any]]:
+        return self._fetch_releases({"product_id": product_id}, "list releases")
+
+    def create_release(
+        self,
+        product_id: str,
+        version: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        is_prerelease: bool | None = None,
+    ) -> str:
+        """Create a release. Returns the release ID; recovers from DUPLICATE_NAME."""
+        payload: dict[str, Any] = {
+            "product_id": product_id,
+            "version": version,
+            "name": name if name is not None else version,
+            "description": description if description is not None else f"{version} created by sbomify-action",
+        }
+        if is_prerelease is not None:
+            payload["is_prerelease"] = is_prerelease
+
+        response = self._request("POST", "/api/v1/releases", json_body=payload)
+        if response.ok:
+            data = self._safe_json_dict(response)
+            if data is not None:
+                rid = data.get("id")
+                if rid is not None:
+                    return str(rid)
+            raise APIError("Invalid response format when creating release")
+
+        # Duplicate-name recovery: the backend rejects with 400 +
+        # DUPLICATE_NAME if another release on the product already uses
+        # this name. Look it up and return that ID instead.
+        if response.status_code == 400:
+            error_data = self._safe_json_dict(response)
+            if error_data is not None and error_data.get("error_code") == "DUPLICATE_NAME":
+                logger.info(
+                    f"Release '{version}' for product {product_id} already exists, retrieving existing release ID"
+                )
+                existing = self.get_release_id_by_name(product_id, version)
+                if existing:
+                    return existing
+                legacy = self.get_release_id_by_name(product_id, f"Release {version}")
+                if legacy:
+                    logger.info(f"Found existing legacy-named release 'Release {version}' for product {product_id}")
+                    return legacy
+
+        err_msg = f"Failed to create release. [{response.status_code}]"
+        body = self._safe_json_dict(response)
+        if body is not None:
+            if "detail" in body:
+                err_msg += f" - {body['detail']}"
+            else:
+                err_msg += f" - {body}"
+        elif response.text:
+            err_msg += f" - Response: {response.text[:500]}"
+        raise APIError(err_msg)
+
+    def tag_sbom_with_release(self, sbom_id: str, release_id: str) -> None:
+        """Associate an SBOM with a release. Idempotent on DUPLICATE_ARTIFACT."""
+        self.tag_artifact_with_release(sbom_id, release_id)
+
+    def tag_artifact_with_release(self, artifact_id: str, release_id: str, *, artifact_kind: str = "sbom") -> None:
+        """Associate an SBOM or a document with a release.
+
+        The release-artifact endpoint takes exactly one of ``sbom_id`` /
+        ``document_id`` and rejects a payload carrying both, so the kind
+        selects the key. Idempotent on DUPLICATE_ARTIFACT.
+        """
+        if artifact_kind not in ("sbom", "document"):
+            raise ValueError(f"Invalid artifact_kind {artifact_kind!r}; expected 'sbom' or 'document'.")
+        label = "SBOM" if artifact_kind == "sbom" else "document"
+        response = self._request(
+            "POST",
+            f"/api/v1/releases/{release_id}/artifacts",
+            json_body={f"{artifact_kind}_id": artifact_id},
+        )
+        if response.ok:
+            return
+        if response.status_code == 409:
+            error_data = self._safe_json_dict(response)
+            if error_data is not None and error_data.get("error_code") == "DUPLICATE_ARTIFACT":
+                logger.info(f"{label} {artifact_id} already tagged with release {release_id}")
+                return
+
+        err_msg = f"Failed to tag {label} with release. [{response.status_code}]"
+        body = self._safe_json_dict(response)
+        if body is not None and "detail" in body:
+            err_msg += f" - {body['detail']}"
+        raise APIError(err_msg)
+
+    def link_release(self, release_id: str, product_id: str, version: str) -> None:
+        """Link another product's release, by product and version, into ``release_id``.
+
+        Idempotent: an existing link (409 CONFLICT) is not an error.
+        """
+        response = self._request(
+            "POST",
+            f"/api/v1/releases/{release_id}/links",
+            json_body={"product_id": product_id, "version": version},
+        )
+        if response.ok:
+            return
+        body = self._safe_json_dict(response)
+        if response.status_code == 409 and body is not None and body.get("error_code") == "CONFLICT":
+            logger.info(f"Release {release_id} already includes {product_id}:{version}")
+            return
+        err_msg = f"Failed to include {product_id}:{version} in release. [{response.status_code}]"
+        if body is not None and "detail" in body:
+            err_msg += f" - {body['detail']}"
+        raise APIError(err_msg)
+
+    # ------------------------------------------------------------------
+    # OIDC trusted publishing
+
+    def create_oidc_binding(self, component_id: str, repository: str) -> bool:
+        """Register a GitHub OIDC trusted-publisher binding for a component.
+
+        Ties a GitHub repository (``owner/repo``) to a component so that
+        repository's workflow can mint short-lived upload tokens via OIDC —
+        the same binding a user would otherwise create by hand in the UI.
+
+        Sends only the repo name (no GitHub token, public or private). The
+        backend resolves the immutable IDs for public repos at create time and
+        defers to the first OIDC publish for private ones (pin-on-first-use).
+
+        Idempotent: a 409 (the repository is already bound to this component)
+        is treated as success and returns ``False`` (nothing created). A fresh
+        201 returns ``True``.
+
+        Raises ``APIError`` on any other non-2xx — notably 400 (malformed slug)
+        and 404 (the token's user isn't an owner/admin of the component's
+        workspace, OR the component doesn't exist — the API conflates the two).
+        Callers in the wizard treat these as non-fatal warnings and fall back
+        to manual binding instructions.
+
+        GitHub is the only provider the wizard supports today. When a second
+        provider (eg. GitLab) is wired up, give it its own method routed at
+        ``/api/v1/auth/oidc/{provider}/bindings`` rather than a kwarg here —
+        the backend URL is provider-specific and adding a ``provider`` kwarg
+        would send a body field that the github route silently ignores.
+        """
+        response = self._request(
+            "POST",
+            "/api/v1/auth/oidc/github/bindings",
+            json_body={"component_id": component_id, "repository": repository},
+        )
+        if response.status_code == 201:
+            return True
+        if response.status_code == 409:
+            logger.info(f"Trusted publisher already registered for component {component_id} ({repository})")
+            return False
+        raise APIError(
+            self._build_error(f"Failed to register trusted publisher for component {component_id}.", response)
+        )
+
+    # ------------------------------------------------------------------
+    # upload
+
+    def upload_sbom(
+        self,
+        component_id: str,
+        sbom_payload: bytes,
+        *,
+        sbom_format: str = "cyclonedx",
+        bom_type: str | None = None,
+        content_encoding: str | None = None,
+        timeout: int | None = None,
+    ) -> requests.Response:
+        """POST a raw artifact (SBOM/VEX/CBOM/HBOM) to the sboms artifact API.
+
+        Most formats go to ``/api/v1/sboms/artifact/{format}/{id}``; OpenVEX and
+        CSAF go to the format-agnostic ``/api/v1/sboms/artifact/vex/{id}``.
+
+        ``bom_type`` (sbom/vex/cbom/hbom) is forwarded as the ``?bom_type=``
+        query param when set, so the same endpoint can record a VEX or CBOM
+        rather than a plain SBOM. The destination layer owns
+        error-to-``UploadResult`` translation, so this method returns the raw
+        response (including non-2xx) instead of raising. Network/timeout
+        failures still bubble up as ``APIError``. OpenVEX and CSAF VEX
+        documents go to the format-agnostic ``/artifact/vex/`` endpoint (the
+        backend detects the format from content); CycloneDX VEX keeps the
+        CycloneDX endpoint, which every deployed backend supports.
+        """
+        if sbom_format in ("openvex", "csaf"):
+            path = f"/api/v1/sboms/artifact/vex/{component_id}"
+        else:
+            path = f"/api/v1/sboms/artifact/{sbom_format}/{component_id}"
+        extra: dict[str, str] = {"Content-Type": "application/json"}
+        if content_encoding:
+            extra["Content-Encoding"] = content_encoding
+        # Lower-case like the rest of the stack; the backend enum is lowercase.
+        if bom_type is not None and not isinstance(bom_type, str):
+            raise ValueError(f"Invalid bom_type: {bom_type!r}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
+        normalized_bom_type = bom_type.lower() if bom_type else None
+        if normalized_bom_type is not None and normalized_bom_type not in VALID_BOM_TYPES:
+            raise ValueError(f"Invalid bom_type: {bom_type!r}. Must be one of: {', '.join(VALID_BOM_TYPES)}")
+        # OpenVEX/CSAF are only meaningful as a VEX; enforce the same constraint
+        # UploadInput does so a direct caller can't silently misroute them to the
+        # /artifact/vex/ endpoint with a wrong bom_type.
+        if sbom_format in ("openvex", "csaf") and normalized_bom_type != "vex":
+            raise ValueError(f"sbom_format={sbom_format!r} requires bom_type='vex'")
+        params = {"bom_type": normalized_bom_type} if normalized_bom_type and normalized_bom_type != "sbom" else None
+        return self._request(
+            "POST",
+            path,
+            data=sbom_payload,
+            params=params,
+            extra_headers=extra,
+            timeout=timeout,
+        )
+
+    def upload_document(
+        self,
+        component_id: str,
+        document_payload: bytes,
+        *,
+        name: str,
+        version: str = "1.0",
+        document_type: str = "other",
+        description: str = "",
+        compliance_subcategory: str | None = None,
+        filename: str | None = None,
+        content_type: str = "application/octet-stream",
+        timeout: int | None = None,
+    ) -> requests.Response:
+        """POST a document (PDF, Markdown, …) to ``/api/v1/documents/``.
+
+        Sent as ``multipart/form-data`` rather than as a raw body, even though
+        the endpoint accepts both. The raw-body branch reads
+        ``request.body``, which Django caps at ``DATA_UPLOAD_MAX_MEMORY_SIZE``
+        (20 MB on app.sbomify.com) — well below the 50 MB the file-upload
+        branch allows and checks for — and it drops the original filename.
+
+        The component must be a ``document`` component; uploading to a ``bom``
+        component comes back as 404 from the backend.
+
+        Like :meth:`upload_sbom`, this returns the raw response (including
+        non-2xx) so the caller owns error-to-result translation; network and
+        timeout failures still raise ``APIError``.
+        """
+        if document_type not in VALID_DOCUMENT_TYPES:
+            raise ValueError(
+                f"Invalid document_type {document_type!r}; expected one of {sorted(VALID_DOCUMENT_TYPES)}."
+            )
+        if compliance_subcategory is not None and compliance_subcategory not in VALID_COMPLIANCE_SUBCATEGORIES:
+            raise ValueError(
+                f"Invalid compliance_subcategory {compliance_subcategory!r}; "
+                f"expected one of {sorted(VALID_COMPLIANCE_SUBCATEGORIES)}."
+            )
+        if not name:
+            raise ValueError("name is required for document upload")
+
+        form_fields: dict[str, str] = {
+            "component_id": component_id,
+            "name": name,
+            "version": version,
+            "document_type": document_type,
+            "description": description,
+        }
+        # Only the compliance type has subcategories; the backend ignores the
+        # field for every other type, so don't send noise it would discard.
+        if compliance_subcategory and document_type == "compliance":
+            form_fields["compliance_subcategory"] = compliance_subcategory
+
+        return self._request(
+            "POST",
+            "/api/v1/documents/",
+            data=form_fields,
+            files={"document_file": (filename or name, document_payload, content_type)},
+            timeout=timeout,
+        )

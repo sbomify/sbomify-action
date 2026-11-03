@@ -1,0 +1,1070 @@
+"""Tests for on-demand, hash-pinned tool runtimes."""
+
+import hashlib
+import io
+import os
+import tarfile
+from pathlib import Path
+
+import pytest
+
+from sbomify_action import runtimes
+from sbomify_action.exceptions import SBOMGenerationError
+from sbomify_action.runtimes import (
+    Asset,
+    RuntimeSpec,
+    cache_root,
+    current_arch,
+    ensure_runtime,
+    reset_runtime_cache,
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate(tmp_path, monkeypatch):
+    """Point the cache at a temp dir and clear memoisation between tests."""
+    monkeypatch.setenv("SBOMIFY_TOOL_CACHE", str(tmp_path / "cache"))
+    reset_runtime_cache()
+    yield
+    reset_runtime_cache()
+
+
+class _FakeResponse:
+    def __init__(self, payload: bytes):
+        self._payload = payload
+        self.headers = {"Content-Length": str(len(payload))}
+
+    @property
+    def content(self) -> bytes:
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def raise_for_status(self):
+        return None
+
+    def iter_content(self, chunk_size=1):
+        for i in range(0, len(self._payload), chunk_size):
+            yield self._payload[i : i + chunk_size]
+
+
+def _serve(monkeypatch, payload: bytes):
+    """Make every download return payload."""
+    monkeypatch.setattr(runtimes.requests, "get", lambda *a, **k: _FakeResponse(payload))
+
+
+def _register(monkeypatch, spec: RuntimeSpec):
+    monkeypatch.setitem(runtimes.RUNTIMES, spec.name, spec)
+    monkeypatch.setitem(runtimes._locks, spec.name, runtimes.threading.Lock())
+
+
+def _raw_spec(payload: bytes, name: str = "faketool") -> RuntimeSpec:
+    return RuntimeSpec(
+        name=name,
+        version="1.0.0",
+        kind="raw",
+        assets={
+            arch: [
+                Asset(
+                    url=f"https://example.invalid/{name}",
+                    algorithm="sha256",
+                    digest=hashlib.sha256(payload).hexdigest(),
+                )
+            ]
+            for arch in ("amd64", "arm64")
+        },
+    )
+
+
+def test_fetches_verifies_and_puts_on_path(monkeypatch):
+    payload = b"#!/bin/sh\necho hi\n"
+    spec = _raw_spec(payload)
+    _register(monkeypatch, spec)
+    _serve(monkeypatch, payload)
+
+    bin_dir = ensure_runtime("faketool")
+
+    binary = bin_dir / "faketool"
+    assert binary.read_bytes() == payload
+    assert os.access(binary, os.X_OK), "fetched runtime must be executable"
+    assert str(bin_dir) in os.environ["PATH"].split(os.pathsep)
+
+
+def test_rejects_a_tampered_download(monkeypatch):
+    """A payload that does not match the pinned digest must never be used."""
+    spec = _raw_spec(b"the-bytes-we-pinned")
+    _register(monkeypatch, spec)
+    _serve(monkeypatch, b"malicious-substitute")
+
+    with pytest.raises(SBOMGenerationError, match="Checksum mismatch"):
+        ensure_runtime("faketool")
+
+    # And nothing is left behind for a later run to pick up.
+    leftovers = [p for p in cache_root().rglob("faketool") if p.is_file()]
+    assert leftovers == [], f"tampered download was left on disk: {leftovers}"
+
+
+def test_reuses_an_already_extracted_prefix(monkeypatch):
+    payload = b"binary-content"
+    spec = _raw_spec(payload)
+    _register(monkeypatch, spec)
+
+    calls = {"n": 0}
+
+    def counting_get(*a, **k):
+        calls["n"] += 1
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr(runtimes.requests, "get", counting_get)
+
+    ensure_runtime("faketool")
+    reset_runtime_cache()  # forget the in-process memo, keep the on-disk prefix
+    ensure_runtime("faketool")
+
+    assert calls["n"] == 1, "second call re-downloaded instead of reusing the prefix"
+
+
+def test_ignores_a_tool_already_on_path(monkeypatch, tmp_path):
+    """The pinned artifact must win over whatever happens to be installed.
+
+    Each release hard-codes the tool versions it was built against and its
+    SBOM names them. Using a different binary found on PATH would mean
+    running one thing and reporting another.
+    """
+    payload = b"the-pinned-bytes"
+    spec = _raw_spec(payload)
+    _register(monkeypatch, spec)
+    _serve(monkeypatch, payload)
+
+    impostor = tmp_path / "bin" / "faketool"
+    impostor.parent.mkdir(parents=True)
+    impostor.write_bytes(b"a different build entirely")
+    monkeypatch.setattr(runtimes.shutil, "which", lambda n: str(impostor) if n == "faketool" else None)
+
+    bin_dir = ensure_runtime("faketool")
+
+    assert bin_dir != impostor.parent, "used the binary on PATH instead of the pinned one"
+    assert (bin_dir / "faketool").read_bytes() == payload
+
+
+def test_extracts_a_named_member_from_an_archive(monkeypatch):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name, body in (("tool", b"the-tool"), ("README", b"noise")):
+            info = tarfile.TarInfo(name)
+            info.size = len(body)
+            tf.addfile(info, io.BytesIO(body))
+    payload = buf.getvalue()
+
+    spec = RuntimeSpec(
+        name="tool",
+        version="2.0.0",
+        kind="tar.gz",
+        member="tool",
+        assets={
+            arch: [
+                Asset(
+                    url="https://example.invalid/t.tgz", algorithm="sha256", digest=hashlib.sha256(payload).hexdigest()
+                )
+            ]
+            for arch in ("amd64", "arm64")
+        },
+    )
+    _register(monkeypatch, spec)
+    _serve(monkeypatch, payload)
+
+    bin_dir = ensure_runtime("tool")
+    assert (bin_dir / "tool").read_bytes() == b"the-tool"
+    assert not (bin_dir / "README").exists(), "only the named member should be kept"
+
+
+def test_refuses_path_traversal_in_archives(monkeypatch):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = tarfile.TarInfo("../../escaped")
+        info.size = 3
+        tf.addfile(info, io.BytesIO(b"bad"))
+    payload = buf.getvalue()
+
+    spec = RuntimeSpec(
+        name="evil",
+        version="1.0.0",
+        kind="tar.gz",
+        assets={
+            arch: [
+                Asset(
+                    url="https://example.invalid/e.tgz", algorithm="sha256", digest=hashlib.sha256(payload).hexdigest()
+                )
+            ]
+            for arch in ("amd64", "arm64")
+        },
+    )
+    _register(monkeypatch, spec)
+    _serve(monkeypatch, payload)
+
+    with pytest.raises(SBOMGenerationError, match="unsafe archive entry"):
+        ensure_runtime("evil")
+
+
+def test_unknown_runtime_is_rejected():
+    with pytest.raises(SBOMGenerationError, match="Unknown tool runtime"):
+        ensure_runtime("no-such-tool")
+
+
+def test_cache_falls_back_when_home_is_unwritable(monkeypatch, tmp_path):
+    """The non-root case: HOME exists but cannot be written to."""
+    monkeypatch.delenv("SBOMIFY_TOOL_CACHE", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.setenv("HOME", "/proc/nonexistent-home")
+    monkeypatch.setattr(runtimes.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    root = cache_root()
+
+    assert root == tmp_path / "sbomify-runtimes"
+    assert root.is_dir()
+
+
+def test_cache_honours_explicit_override(monkeypatch, tmp_path):
+    target = tmp_path / "pinned-cache"
+    monkeypatch.setenv("SBOMIFY_TOOL_CACHE", str(target))
+    assert cache_root() == target
+
+
+def test_every_pinned_runtime_covers_both_architectures():
+    """A missing arch would only surface on arm64 users' machines."""
+    for name, spec in runtimes.RUNTIMES.items():
+        assert set(spec.assets) == {"amd64", "arm64"}, f"{name} is missing an architecture"
+        for arch, arch_assets in spec.assets.items():
+            assert arch_assets, f"{name}/{arch} has no assets"
+            for asset in arch_assets:
+                assert asset.url.startswith("https://"), f"{name}/{arch} must be fetched over https"
+                if asset.attestation:
+                    # Ours: anchored by the signed digest inside the bundle,
+                    # so there is no locally transcribed one to check.
+                    assert asset.attestation.startswith("https://"), f"{name}/{arch} attestation must be https"
+                    continue
+                expected = {"sha256": 64, "sha512": 128}[asset.algorithm]
+                assert len(asset.digest) == expected, f"{name}/{arch} digest length is wrong"
+
+
+def test_current_arch_is_supported():
+    assert current_arch() in {"amd64", "arm64"}
+
+
+def test_partial_download_is_not_left_in_the_cache(monkeypatch):
+    """A download that dies mid-stream must not leave a usable-looking file."""
+    spec = _raw_spec(b"complete-payload")
+    _register(monkeypatch, spec)
+
+    class _Dying(_FakeResponse):
+        def iter_content(self, chunk_size=1):
+            yield b"partial"
+            raise runtimes.requests.ConnectionError("connection reset")
+
+    monkeypatch.setattr(runtimes.requests, "get", lambda *a, **k: _Dying(b""))
+
+    with pytest.raises(SBOMGenerationError, match="Failed to download"):
+        ensure_runtime("faketool")
+
+    assert not list(Path(cache_root()).rglob("faketool")), "partial download left behind"
+
+
+def test_fetching_is_on_by_default_and_opt_out(monkeypatch):
+    """Fetching what an ecosystem needs is the design, not an extra.
+
+    This was once opt-in outside our own image, because fetching a tool
+    changes which generator wins and so changes the SBOM. The reasoning was
+    backwards: declining to fetch does not leave the user without an opinion,
+    it silently hands them the fallback. A Rust project resolved by syft
+    rather than cargo-cyclonedx is a worse SBOM, and nothing says so.
+
+    The gate was really compensating for a routing defect -- cdxgen becoming
+    available on a bare runner, displacing syft for container images and
+    degrading enrichment. That is fixed directly now: syft-image outranks
+    cdxgen-image, so the incident cannot recur through this door.
+    """
+    monkeypatch.delenv("SBOMIFY_IN_CONTAINER", raising=False)
+    monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+    assert runtimes.fetching_is_enabled() is True
+
+    for value in ("0", "false", "no", "FALSE"):
+        monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", value)
+        assert runtimes.fetching_is_enabled() is False, f"{value} should opt out"
+
+    monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
+    assert runtimes.fetching_is_enabled() is True
+
+
+def test_the_container_image_routing_that_gate_protected_is_fixed(monkeypatch):
+    """Syft must outrank cdxgen for container images, or the old bug returns."""
+    from sbomify_action._generation import create_default_registry
+
+    registry = create_default_registry()
+    generators = getattr(registry, "_generators", None) or registry.generators
+    priority = {g.name: g.priority for g in generators}
+    assert priority["syft-image"] < priority["cdxgen-image"]
+
+
+def test_fetching_can_be_opted_into_anywhere(monkeypatch):
+    monkeypatch.delenv("SBOMIFY_IN_CONTAINER", raising=False)
+    monkeypatch.setenv("SBOMIFY_FETCH_RUNTIMES", "1")
+    assert runtimes.fetching_is_enabled() is True
+
+
+def test_a_prefix_from_a_different_digest_is_refetched(monkeypatch):
+    """A cached prefix must match the digest we now expect, not merely exist.
+
+    The digest is the whole trust anchor, and it was checked on download but
+    not on reuse. Since SBOMIFY_TOOL_CACHE is meant to be shared and
+    long-lived, correcting a wrong pin without bumping the version would
+    otherwise keep serving the old bytes forever.
+    """
+    payload = b"the-bytes-we-now-expect"
+    spec = _raw_spec(payload)
+    _register(monkeypatch, spec)
+    _serve(monkeypatch, payload)
+
+    prefix = cache_root() / f"{spec.name}-{spec.version}-{runtimes.current_arch()}"
+    prefix.mkdir(parents=True)
+    (prefix / spec.name).write_bytes(b"bytes from an older pin")
+    (prefix / runtimes._READY).write_text(f"{spec.name} {spec.version} sha256:{'0' * 64}\n")
+
+    bin_dir = ensure_runtime("faketool")
+
+    assert (bin_dir / "faketool").read_bytes() == payload, "stale prefix was reused"
+
+
+def test_a_prefix_matching_the_digest_is_reused(monkeypatch):
+    """The check must not defeat caching for an unchanged pin."""
+    payload = b"stable-bytes"
+    spec = _raw_spec(payload)
+    _register(monkeypatch, spec)
+
+    calls = {"n": 0}
+
+    def counting_get(*a, **k):
+        calls["n"] += 1
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr(runtimes.requests, "get", counting_get)
+
+    ensure_runtime("faketool")
+    reset_runtime_cache()
+    ensure_runtime("faketool")
+
+    assert calls["n"] == 1, "a matching prefix should not be refetched"
+
+
+class TestAttestationVerification:
+    """Our own builds must prove they came from our workflow.
+
+    The digest pin proves the bytes match what we recorded. It cannot prove
+    where they came from: anyone able to edit tools.toml can change a URL and
+    its digest in the same commit. The Sigstore certificate is the part they
+    cannot forge, so a bundle that does not verify must stop the fetch.
+    """
+
+    @staticmethod
+    def _attested_spec(payload: bytes) -> RuntimeSpec:
+        spec = _raw_spec(payload, name="ourtool")
+        return RuntimeSpec(
+            name=spec.name,
+            version=spec.version,
+            kind=spec.kind,
+            assets={
+                arch: [
+                    Asset(url=a.url, algorithm=a.algorithm, digest=a.digest, attestation="https://example.invalid/b")
+                ]
+                for arch, assets in spec.assets.items()
+                for a in assets
+            },
+        )
+
+    def test_a_failing_attestation_refuses_the_binary(self, monkeypatch):
+        payload = b"bytes-that-hash-correctly"
+        _register(monkeypatch, self._attested_spec(payload))
+        _serve(monkeypatch, payload)
+        monkeypatch.setattr(runtimes.shutil, "which", lambda n: "/usr/bin/cosign" if n == "cosign" else None)
+        monkeypatch.setattr(
+            runtimes.subprocess,
+            "run",
+            lambda *a, **k: runtimes.subprocess.CompletedProcess(a[0], 1, "", "no matching signatures"),
+        )
+
+        with pytest.raises(SBOMGenerationError, match="Attestation verification failed"):
+            ensure_runtime("ourtool")
+
+        # The digest matched, so only the attestation stopped this. Nothing
+        # may be left where a later run would treat it as verified.
+        assert not list(Path(cache_root()).rglob("ourtool")), "rejected binary was left on disk"
+
+    def test_a_passing_attestation_lets_the_fetch_through(self, monkeypatch):
+        payload = b"bytes-that-hash-correctly"
+        _register(monkeypatch, self._attested_spec(payload))
+        _serve(monkeypatch, payload)
+        monkeypatch.setattr(runtimes.shutil, "which", lambda n: "/usr/bin/cosign" if n == "cosign" else None)
+        seen = {}
+
+        def fake_run(cmd, *a, **k):
+            seen["cmd"] = cmd
+            return runtimes.subprocess.CompletedProcess(cmd, 0, "Verified OK", "")
+
+        monkeypatch.setattr(runtimes.subprocess, "run", fake_run)
+
+        bin_dir = ensure_runtime("ourtool")
+
+        assert (bin_dir / "ourtool").read_bytes() == payload
+        # The identity is the point of the check: without pinning the workflow
+        # and issuer, any Sigstore-signed artifact at all would pass.
+        assert "--certificate-identity-regexp" in seen["cmd"]
+        identity = seen["cmd"][seen["cmd"].index("--certificate-identity-regexp") + 1]
+        # The tools moved repositories; verifying against the old identity
+        # would reject every bundle we now publish.
+        assert "sbom-tools" in identity and "build" in identity
+        assert seen["cmd"][seen["cmd"].index("--certificate-oidc-issuer") + 1] == (
+            "https://token.actions.githubusercontent.com"
+        )
+        assert seen["cmd"][seen["cmd"].index("--type") + 1] == "slsaprovenance1"
+        # --new-bundle-format is deprecated in cosign v3 -- it is the only
+        # format now -- and passing it printed a deprecation warning on every
+        # single fetch.
+        assert "--new-bundle-format" not in seen["cmd"]
+
+    def test_upstream_downloads_are_digest_pinned_only(self, monkeypatch):
+        """No bundle declared means no cosign call, not a silent pass."""
+        payload = b"vendor-bytes"
+        _register(monkeypatch, _raw_spec(payload))
+        _serve(monkeypatch, payload)
+        monkeypatch.setattr(
+            runtimes.subprocess,
+            "run",
+            lambda *a, **k: pytest.fail("cosign was invoked for an artifact with no attestation"),
+        )
+
+        assert (ensure_runtime("faketool") / "faketool").read_bytes() == payload
+
+    def test_cosign_itself_carries_no_attestation(self):
+        """The bootstrap: verifying cosign would require cosign."""
+        for asset in runtimes.RUNTIMES["cosign"].assets["amd64"]:
+            assert asset.attestation is None, "cosign cannot verify its own download on a cold cache"
+
+
+class TestBundleEnvironment:
+    """The [env] block a bundle declares, and who is allowed to win."""
+
+    @staticmethod
+    def _bundle(tmp_path: Path, env: str) -> Path:
+        prefix = tmp_path / "bundle-jvm-tools-rolling-amd64"
+        (prefix / "bin").mkdir(parents=True)
+        (prefix / "bundle.toml").write_text('[bundle]\nname = "jvm"\nbin_dirs = ["bin"]\n\n[env]\n' + env)
+        return prefix
+
+    def test_bundle_env_is_applied_with_the_prefix_substituted(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("GRADLE_USER_HOME", raising=False)
+        prefix = self._bundle(tmp_path, 'GRADLE_USER_HOME = "{prefix}/.gradle"\n')
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ["GRADLE_USER_HOME"] == str(prefix / ".gradle")
+
+    def test_a_caller_can_isolate_its_own_gradle_home(self, tmp_path, monkeypatch):
+        """F16: two concurrent JVM builds shared one Gradle journal.
+
+        The bundle pins GRADLE_USER_HOME into the shared runtime cache and used
+        to assign it unconditionally, after the caller's environment was read.
+        Exporting it did nothing, so the only way to stop two builds corrupting
+        each other was to stop running two builds.
+        """
+        monkeypatch.setenv("GRADLE_USER_HOME", "/tmp/mine")
+        prefix = self._bundle(tmp_path, 'GRADLE_USER_HOME = "{prefix}/.gradle"\n')
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ["GRADLE_USER_HOME"] == "/tmp/mine"
+
+    def test_maven_and_sbt_are_overridable_too(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MAVEN_ARGS", "-Dmaven.repo.local=/tmp/m2")
+        monkeypatch.setenv("SBT_OPTS", "-Dsbt.global.base=/tmp/sbt")
+        prefix = self._bundle(
+            tmp_path,
+            'MAVEN_ARGS = "-Dmaven.repo.local={prefix}/repository"\nSBT_OPTS = "-Dsbt.global.base={prefix}/.sbt"\n',
+        )
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ["MAVEN_ARGS"] == "-Dmaven.repo.local=/tmp/m2"
+        assert os.environ["SBT_OPTS"] == "-Dsbt.global.base=/tmp/sbt"
+
+    def test_java_home_is_not_overridable(self, tmp_path, monkeypatch):
+        """A runner's own JDK must not displace the one we pinned and attested.
+
+        JAVA_HOME is set on most CI images, so honouring it would quietly build
+        against a different Java than the bundle provides -- a wrong answer,
+        where the contention it would avoid is merely slow.
+        """
+        monkeypatch.setenv("JAVA_HOME", "/usr/lib/jvm/some-other-jdk")
+        prefix = self._bundle(tmp_path, 'JAVA_HOME = "{prefix}/jdk"\n')
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ["JAVA_HOME"] == str(prefix / "jdk")
+
+    def test_an_empty_override_does_not_count_as_set(self, tmp_path, monkeypatch):
+        """GRADLE_USER_HOME= in a workflow is an accident, not an isolation request."""
+        monkeypatch.setenv("GRADLE_USER_HOME", "")
+        prefix = self._bundle(tmp_path, 'GRADLE_USER_HOME = "{prefix}/.gradle"\n')
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ["GRADLE_USER_HOME"] == str(prefix / ".gradle")
+
+    @pytest.mark.parametrize("name", ["GOCACHE", "GOMODCACHE", "GOPATH"])
+    def test_the_go_caches_are_overridable(self, tmp_path, monkeypatch, name):
+        """The go bundle puts its caches inside the prefix, same as the JVM one.
+
+        {prefix} is the only substitution a bundle gets, so left unoverridable
+        the module cache has nowhere to live but inside a Sigstore-attested
+        directory: 6.2 GB of .gomodcache around 370 MB of toolchain, in a tree
+        that is reused on a marker file and never re-verified. The release is
+        `rolling`, so each toolchain refresh rmtree's the prefix and discards a
+        module cache that never depended on the Go version.
+        """
+        monkeypatch.setenv(name, "/tmp/mine")
+        prefix = self._bundle(tmp_path, f'{name} = "{{prefix}}/.default"\n')
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ[name] == "/tmp/mine"
+
+    @pytest.mark.parametrize("name", ["GOCACHE", "GOMODCACHE", "GOPATH"])
+    def test_the_go_caches_keep_the_bundle_default_when_unset(self, tmp_path, monkeypatch, name):
+        """Making them overridable must not move them for anyone who says nothing."""
+        monkeypatch.delenv(name, raising=False)
+        prefix = self._bundle(tmp_path, f'{name} = "{{prefix}}/.default"\n')
+
+        runtimes._apply_bundle_manifest(prefix)
+
+        assert os.environ[name] == str(prefix / ".default")
+
+
+class TestBundleFileLock:
+    """F19: materialising a bundle has to be safe between processes."""
+
+    def test_the_lock_is_held_exclusively_and_released(self, tmp_path, monkeypatch):
+        fcntl = pytest.importorskip("fcntl", reason="POSIX only")
+
+        monkeypatch.setenv("SBOMIFY_TOOL_CACHE", str(tmp_path / "cache"))
+        reset_runtime_cache()
+
+        with runtimes._bundle_file_lock("jvm"):
+            path = cache_root() / ".bundle-jvm.lock"
+            assert path.exists()
+            # A second handle must not be able to take it while we hold it.
+            with path.open("w") as rival:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(rival.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        # ...and must be able to once we let go.
+        with (cache_root() / ".bundle-jvm.lock").open("w") as after:
+            fcntl.flock(after.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(after.fileno(), fcntl.LOCK_UN)
+
+    def test_an_unlockable_cache_degrades_rather_than_failing(self, tmp_path, monkeypatch):
+        """Some network filesystems have no flock. Unsynchronised beats refusing to run."""
+        pytest.importorskip("fcntl", reason="POSIX only")
+
+        def _no_flock(*_args, **_kwargs):
+            raise OSError("flock not supported")
+
+        monkeypatch.setattr(runtimes.fcntl, "flock", _no_flock)
+
+        with runtimes._bundle_file_lock("jvm"):
+            pass
+
+    def test_a_symlinked_lock_file_is_refused_not_followed(self, tmp_path, monkeypatch):
+        """cache_root() can be a world-writable tempdir.
+
+        A container with no writable HOME falls back to one, so the lock file
+        is not always somewhere only we can create things. Following a symlink
+        there -- or opening it with "w" -- would let anyone who can plant
+        .bundle-jvm.lock have us truncate whatever it points at.
+        """
+        pytest.importorskip("fcntl", reason="POSIX only")
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        monkeypatch.setenv("SBOMIFY_TOOL_CACHE", str(cache))
+        reset_runtime_cache()
+
+        victim = tmp_path / "precious"
+        victim.write_text("do not truncate me")
+        (cache / ".bundle-jvm.lock").symlink_to(victim)
+
+        # Degrades to unsynchronised rather than raising, and above all does
+        # not touch the target.
+        with runtimes._bundle_file_lock("jvm"):
+            pass
+
+        assert victim.read_text() == "do not truncate me"
+
+    def test_an_existing_lock_file_is_reused_without_truncation(self, tmp_path, monkeypatch):
+        """Nothing reads the file, but nothing should destroy it either."""
+        pytest.importorskip("fcntl", reason="POSIX only")
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        monkeypatch.setenv("SBOMIFY_TOOL_CACHE", str(cache))
+        reset_runtime_cache()
+
+        lock = cache / ".bundle-jvm.lock"
+        lock.write_text("existing")
+
+        with runtimes._bundle_file_lock("jvm"):
+            pass
+
+        assert lock.read_text() == "existing"
+
+    def test_a_platform_without_fcntl_degrades_rather_than_crashing(self, monkeypatch):
+        """Windows has no fcntl at all.
+
+        The module is imported defensively because this package is published
+        as OS Independent and every generator imports runtimes -- an
+        unconditional `import fcntl` would take the whole library down on
+        import, not just the locking. Losing cross-process locking is a
+        degradation; losing the library is not.
+        """
+        monkeypatch.setattr(runtimes, "fcntl", None)
+
+        entered = False
+        with runtimes._bundle_file_lock("jvm"):
+            entered = True
+
+        assert entered, "the context manager must still yield without fcntl"
+
+
+class TestDownloadRetries:
+    """A dropped connection to the release CDN must not fail the run.
+
+    Seen in production as `RemoteDisconnected('Remote end closed connection
+    without response')`, which aborted generation outright because falling
+    back to another generator is deliberately refused.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_sleeping(self, monkeypatch):
+        monkeypatch.setattr(runtimes.time, "sleep", lambda _seconds: None)
+
+    def test_a_dropped_connection_is_retried(self, monkeypatch):
+        payload = b"#!/bin/sh\necho hi\n"
+        spec = _raw_spec(payload)
+        _register(monkeypatch, spec)
+
+        attempts = []
+
+        def _flaky(*args, **kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise runtimes.requests.ConnectionError("Remote end closed connection without response")
+            return _FakeResponse(payload)
+
+        monkeypatch.setattr(runtimes.requests, "get", _flaky)
+
+        bin_dir = ensure_runtime("faketool")
+
+        assert len(attempts) == 2, "the first attempt should have been retried"
+        assert (bin_dir / "faketool").read_bytes() == payload
+
+    def test_a_retry_after_a_partial_body_still_matches_the_pin(self, monkeypatch):
+        """The hash must not carry bytes over from the failed attempt.
+
+        The mid-body failure is a ChunkedEncodingError, not a
+        ConnectionError: requests only raises the latter before a response
+        exists. Getting this wrong makes the test pass against a retry path
+        that would not fire in production.
+        """
+        payload = b"0123456789" * 32
+        spec = _raw_spec(payload)
+        _register(monkeypatch, spec)
+
+        attempts = []
+
+        class _TruncatedResponse(_FakeResponse):
+            def iter_content(self, chunk_size=1):
+                yield self._payload[:17]
+                raise runtimes.requests.exceptions.ChunkedEncodingError(
+                    "Connection broken: IncompleteRead(17 bytes read)"
+                )
+
+        def _flaky(*args, **kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                return _TruncatedResponse(payload)
+            return _FakeResponse(payload)
+
+        monkeypatch.setattr(runtimes.requests, "get", _flaky)
+
+        bin_dir = ensure_runtime("faketool")
+
+        assert len(attempts) == 2
+        assert (bin_dir / "faketool").read_bytes() == payload
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            pytest.param(runtimes.requests.ConnectionError("Connection aborted."), id="connection-aborted"),
+            pytest.param(runtimes.requests.Timeout("read timed out"), id="timeout"),
+            pytest.param(runtimes.requests.exceptions.ChunkedEncodingError("Connection broken"), id="chunked"),
+            pytest.param(runtimes.requests.exceptions.ContentDecodingError("bad gzip"), id="decoding"),
+        ],
+    )
+    def test_every_transient_shape_is_recognised(self, exc):
+        assert runtimes._is_transient(exc) is True
+
+    def test_a_malformed_url_is_not_transient(self):
+        """A request that can never be made is not worth three attempts."""
+        assert runtimes._is_transient(runtimes.requests.exceptions.MissingSchema("no scheme")) is False
+
+    def test_a_missing_asset_is_not_retried(self, monkeypatch):
+        """A 404 means the manifest is wrong; retrying only slows the failure."""
+        spec = _raw_spec(b"never-served")
+        _register(monkeypatch, spec)
+
+        attempts = []
+
+        class _NotFound(_FakeResponse):
+            def __init__(self):
+                super().__init__(b"")
+                self.status_code = 404
+
+            def raise_for_status(self):
+                raise runtimes.requests.HTTPError("404 Not Found", response=self)
+
+        def _gone(*args, **kwargs):
+            attempts.append(1)
+            return _NotFound()
+
+        monkeypatch.setattr(runtimes.requests, "get", _gone)
+
+        with pytest.raises(SBOMGenerationError, match="Failed to download"):
+            ensure_runtime("faketool")
+
+        assert len(attempts) == 1, "a 404 must fail on the first attempt"
+
+    def test_a_persistently_dropped_connection_gives_up(self, monkeypatch):
+        spec = _raw_spec(b"never-served")
+        _register(monkeypatch, spec)
+
+        attempts = []
+
+        def _always_drops(*args, **kwargs):
+            attempts.append(1)
+            raise runtimes.requests.ConnectionError("Remote end closed connection without response")
+
+        monkeypatch.setattr(runtimes.requests, "get", _always_drops)
+
+        with pytest.raises(SBOMGenerationError, match="Failed to download"):
+            ensure_runtime("faketool")
+
+        assert len(attempts) == runtimes._DOWNLOAD_ATTEMPTS
+
+    def test_a_server_error_is_retried(self, monkeypatch):
+        payload = b"#!/bin/sh\necho hi\n"
+        spec = _raw_spec(payload)
+        _register(monkeypatch, spec)
+
+        attempts = []
+
+        class _Unavailable(_FakeResponse):
+            def __init__(self):
+                super().__init__(b"")
+                self.status_code = 503
+
+            def raise_for_status(self):
+                raise runtimes.requests.HTTPError("503 Service Unavailable", response=self)
+
+        def _flaky(*args, **kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                return _Unavailable()
+            return _FakeResponse(payload)
+
+        monkeypatch.setattr(runtimes.requests, "get", _flaky)
+
+        bin_dir = ensure_runtime("faketool")
+
+        assert len(attempts) == 2
+        assert (bin_dir / "faketool").read_bytes() == payload
+
+
+class TestHostsTheRuntimesCannotRunOn:
+    """A pinned runtime is a Linux binary, so a Mac must not be given one.
+
+    sbomify-action is published OS Independent and people pip install it on
+    macOS. There, ``ensure_runtime`` downloaded ``syft-linux-arm64.tar.gz``,
+    verified it with a ``cosign-linux-arm64`` it had also just downloaded, and
+    both ended the same way:
+
+        Could not run cosign to verify syft-linux-arm64.tar.gz:
+        [Errno 8] Exec format error: '/Users/.../cosign-3.1.3-arm64/cosign'
+
+    The second failure was worse than the first. ``ensure_runtime`` is called
+    unconditionally, before the tool is run, and it prepends its own prefix to
+    PATH -- so on a host that had a working syft installed, ours shadowed it
+    and the run failed as ``Exec format error: 'syft'``. Installing the tool,
+    which is the documented remedy, did not help.
+    """
+
+    def test_an_installed_tool_is_used_instead_of_a_download(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+
+        installed = tmp_path / "homebrew" / "bin"
+        installed.mkdir(parents=True)
+        (installed / "syft").touch(mode=0o755)
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name))
+
+        def _no_network(*args, **kwargs):
+            raise AssertionError("a Linux artifact must not be downloaded onto a Darwin host")
+
+        monkeypatch.setattr(runtimes.requests, "get", _no_network)
+
+        assert ensure_runtime("syft") == installed
+
+    def test_the_installed_tool_is_not_shadowed_on_path(self, monkeypatch, tmp_path):
+        """The PATH prepend is what broke a host that had the tool already."""
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        installed = tmp_path / "bin"
+        installed.mkdir()
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name))
+
+        before = os.environ.get("PATH", "")
+        ensure_runtime("syft")
+        assert os.environ.get("PATH", "") == before
+
+    def test_without_an_installed_tool_the_error_says_what_to_do(self, monkeypatch):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: None)
+
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            ensure_runtime("syft")
+
+        message = str(excinfo.value)
+        assert "Darwin" in message
+        assert "Install syft" in message
+        assert "Exec format" not in message
+
+    def test_a_generator_does_not_claim_an_input_it_cannot_serve(self, monkeypatch):
+        """can_provide is what a generator asks before claiming an input.
+
+        Answering yes off Linux routes the input to a generator whose only
+        possible outcome is a failed exec, instead of to one that works.
+        """
+        monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Linux")
+        assert runtimes.can_provide("syft") is True
+
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        assert runtimes.can_provide("syft") is False
+
+    @pytest.mark.parametrize("system,expected", [("Linux", True), ("Darwin", False), ("Windows", False)])
+    def test_host_runs_runtimes(self, monkeypatch, system, expected):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: system)
+        assert runtimes.host_runs_runtimes() is expected
+
+    def test_an_installed_go_toolchain_still_claims_go_mod(self, monkeypatch):
+        """The Go generator gates on fetching, so it needs the check directly.
+
+        Declining every go.mod off Linux would be too much: unlike the JVM
+        generators, this one needs nothing from the bundle but the two
+        commands, and ensure_runtime hands it an installed pair. Declining
+        anyway drops the project to syft, or to no SBOM at all.
+        """
+        from sbomify_action._generation.generators.cyclonedx_gomod import CycloneDXGomodGenerator
+        from sbomify_action._generation.protocol import GenerationInput
+
+        monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+
+        go_mod = Path(__file__).parent / "test-data" / "projects" / "go" / "go.mod"
+        assert go_mod.exists(), f"fixture missing: {go_mod}"
+        input = GenerationInput(lock_file=str(go_mod), output_format="cyclonedx")
+        generator = CycloneDXGomodGenerator()
+
+        installed = {"cyclonedx-gomod", "go"}
+        monkeypatch.setattr(
+            "sbomify_action._generation.generators.cyclonedx_gomod.shutil.which",
+            lambda name: f"/opt/homebrew/bin/{name}" if name in installed else None,
+        )
+        assert generator.supports(input) is True
+
+        installed.discard("cyclonedx-gomod")
+        assert generator.supports(input) is False, "nothing to run and nothing to fetch"
+
+
+class TestRuntimeIdsThatAreNotCommandNames:
+    """A runtime is a thing we fetch, not always a thing you can run.
+
+    The jvm bundle's "maven" installs `mvn`; "rust" is a toolchain and there is
+    no `rust` binary anywhere. Looking the runtime id up on PATH verbatim would
+    report a fully installed native toolchain as missing, which is the one
+    outcome the fallback exists to avoid.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _off_linux(self, monkeypatch):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+
+    def test_maven_is_found_as_mvn(self, monkeypatch, tmp_path):
+        installed = tmp_path / "bin"
+        installed.mkdir()
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name) if name == "mvn" else None)
+
+        assert ensure_runtime("maven") == installed
+
+    def test_rust_needs_cargo_and_rustc(self, monkeypatch, tmp_path):
+        """cargo-cyclonedx shells out to both, so finding one is not enough."""
+        installed = tmp_path / "cargo" / "bin"
+        installed.mkdir(parents=True)
+        toolchain = {"cargo", "rustc"}
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name) if name in toolchain else None)
+
+        assert ensure_runtime("rust") == installed
+
+        toolchain.discard("rustc")
+        runtimes.reset_runtime_cache()
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            ensure_runtime("rust")
+
+        assert "rustc" in str(excinfo.value)
+        assert "cargo" not in str(excinfo.value), "cargo is installed; do not ask for it"
+
+    def test_an_id_that_is_its_own_command_is_unaffected(self, monkeypatch, tmp_path):
+        installed = tmp_path / "bin"
+        installed.mkdir()
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name))
+
+        assert ensure_runtime("cdxgen") == installed
+
+
+class TestBundleReleaseFallback:
+    """sbom-tools publishes a release before its build has uploaded the bundles."""
+
+    PINNED = "v26.11.0"
+
+    @staticmethod
+    def _names() -> list[str]:
+        archive = f"syft-linux-{current_arch()}.tar.gz"
+        return [archive, archive + ".sigstore.json"]
+
+    @staticmethod
+    def _archive() -> bytes:
+        buffer = io.BytesIO()
+        manifest = b'[bundle]\nname = "syft"\nbin_dirs = ["bin"]\n'
+        with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+            directory = tarfile.TarInfo("bin")
+            directory.type = tarfile.DIRTYPE
+            tar.addfile(directory)
+            info = tarfile.TarInfo("bundle.toml")
+            info.size = len(manifest)
+            tar.addfile(info, io.BytesIO(manifest))
+        return buffer.getvalue()
+
+    @staticmethod
+    def _release(tag: str, names: list[str], **extra) -> dict:
+        return {"tag_name": tag, "assets": [{"name": n, "state": "uploaded"} for n in names], **extra}
+
+    def _setup(self, monkeypatch, releases: list[dict], missing: tuple[str, ...] = ("/v26.11.0/",), fail: bool = False):
+        bundle = runtimes.Bundle(name="syft", release=self.PINNED, provides=("syft",), purl="pkg:x@{release}")
+        archive = self._archive()
+        fetched: list[str] = []
+
+        class _Missing(_FakeResponse):
+            def raise_for_status(self):
+                response = runtimes.requests.Response()
+                response.status_code = 404
+                raise runtimes.requests.HTTPError("404 Client Error: Not Found", response=response)
+
+        class _Listing(_FakeResponse):
+            def json(self):
+                return releases
+
+        def fake_get(url, *a, **k):
+            fetched.append(url)
+            if url == runtimes._BUNDLE_RELEASES_API:
+                return _Listing(b"")
+            if any(m in url for m in missing):
+                return _Missing(b"")
+            return _FakeResponse(archive if url.endswith(".tar.gz") else b"{}")
+
+        monkeypatch.setattr(runtimes.requests, "get", fake_get)
+        monkeypatch.setattr(runtimes, "_bundles_ready", {})
+        monkeypatch.setattr(runtimes.shutil, "which", lambda n: "/usr/bin/cosign" if n == "cosign" else None)
+        monkeypatch.setattr(
+            runtimes.subprocess,
+            "run",
+            lambda cmd, *a, **k: runtimes.subprocess.CompletedProcess(cmd, 1 if fail else 0, "", "bad signature"),
+        )
+        return bundle, fetched
+
+    def test_a_missing_bundle_falls_back_to_the_newest_earlier_release(self, monkeypatch):
+        names = self._names()
+        releases = [
+            self._release("v26.12.0", names),  # newer than the pin: never a fallback
+            self._release(self.PINNED, []),
+            self._release("rolling", names, prerelease=True),
+            self._release("v26.10.4", names[:1]),  # attestation not uploaded
+            self._release("v26.10.3", names),
+            self._release("v26.10.2", names),
+        ]
+        bundle, fetched = self._setup(monkeypatch, releases)
+
+        bin_dir = runtimes.ensure_bundle(bundle)
+
+        assert bin_dir.parent.name == f"bundle-syft-v26.10.3-{current_arch()}"
+        assert any("/v26.10.3/" in url for url in fetched)
+
+    def test_the_pinned_release_is_used_when_it_has_the_bundle(self, monkeypatch):
+        bundle, fetched = self._setup(monkeypatch, [], missing=())
+
+        bin_dir = runtimes.ensure_bundle(bundle)
+
+        assert bin_dir.parent.name == f"bundle-syft-{self.PINNED}-{current_arch()}"
+        assert runtimes._BUNDLE_RELEASES_API not in fetched
+
+    def test_a_missing_attestation_also_falls_back(self, monkeypatch):
+        names = self._names()
+        releases = [self._release(self.PINNED, names[:1]), self._release("v26.10.3", names)]
+        bundle, _ = self._setup(monkeypatch, releases, missing=(f"/{self.PINNED}/{names[1]}",))
+
+        assert runtimes.ensure_bundle(bundle).parent.name == f"bundle-syft-v26.10.3-{current_arch()}"
+
+    def test_the_original_404_is_raised_when_no_release_has_the_bundle(self, monkeypatch):
+        bundle, _ = self._setup(monkeypatch, [self._release(self.PINNED, [])])
+
+        with pytest.raises(SBOMGenerationError, match="404"):
+            runtimes.ensure_bundle(bundle)
+
+    def test_an_unreachable_api_reports_the_original_404(self, monkeypatch):
+        bundle, _ = self._setup(monkeypatch, [])
+
+        def broken(url, *a, **k):
+            if url == runtimes._BUNDLE_RELEASES_API:
+                raise runtimes.requests.ConnectionError("rate limited")
+            response = runtimes.requests.Response()
+            response.status_code = 404
+            raise runtimes.requests.HTTPError("404 Client Error: Not Found", response=response)
+
+        monkeypatch.setattr(runtimes.requests, "get", broken)
+
+        with pytest.raises(SBOMGenerationError, match="404"):
+            runtimes.ensure_bundle(bundle)
+
+    def test_a_failed_attestation_never_falls_back(self, monkeypatch):
+        """A rejected artifact must stop the run, not quietly become an older one."""
+        bundle, fetched = self._setup(monkeypatch, [], missing=(), fail=True)
+
+        with pytest.raises(SBOMGenerationError, match="Attestation verification failed"):
+            runtimes.ensure_bundle(bundle)
+        assert runtimes._BUNDLE_RELEASES_API not in fetched

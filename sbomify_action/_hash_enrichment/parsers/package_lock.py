@@ -41,7 +41,7 @@ class PackageLockParser:
         Returns:
             List of PackageHash objects (one per package@version).
         """
-        with lock_file_path.open("r") as f:
+        with lock_file_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
 
         hashes: list[PackageHash] = []

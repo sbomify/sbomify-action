@@ -16,6 +16,7 @@ from packageurl import PackageURL
 
 from sbomify_action.logging_config import logger
 
+from ..exceptions import TransientSourceError
 from ..license_utils import normalize_license_list
 from ..metadata import NormalizedMetadata
 from ..sanitization import normalize_vcs_url
@@ -109,7 +110,7 @@ class PyPISource:
         #   3. Build the cache key from the now-validated name/version.
         #
         # Path-traversal rules:
-        #   - Names: PEP 503 allows "." and "_" inside a normalised project
+        #   - Names: PEP 503 allows "." and "_" inside a normalized project
         #     name (so "a..b" is a legal-but-unusual name). Reject only
         #     actual path separators ("/", "\\") and the whole-name
         #     dot-segments ("." / ".."). The ":" character is refused too
@@ -235,7 +236,7 @@ class PyPISource:
                 f"Timeout fetching PyPI metadata for {purl.name}@{purl.version or 'latest'} "
                 f"(not caching — later components will retry)"
             )
-            return None
+            raise TransientSourceError(f"Timeout from {self.name}") from None
         except requests.exceptions.RequestException as e:
             # Network-layer exceptions (ConnectionError, SSLError,
             # TooManyRedirects, etc.) are almost always transient.
@@ -243,7 +244,7 @@ class PyPISource:
                 f"Network error fetching PyPI metadata for {purl.name}@{purl.version or 'latest'}: "
                 f"{e.__class__.__name__}: {e} (not caching — later components will retry)"
             )
-            return None
+            raise TransientSourceError(f"RequestException from {self.name}") from None
         except json.JSONDecodeError as e:
             # Malformed response is almost always a deterministic
             # upstream issue (HTML error page, corrupt encoding) — cache
@@ -321,7 +322,7 @@ class PyPISource:
         # (BSI TR-03183-2 §5.2.2 filename + hash / NTIA / CISA hash element).
         # Prefer wheel (.whl) over sdist (.tar.gz); take the hashes of the
         # distribution whose filename we record so the two fields describe
-        # the same artefact.
+        # the same artifact.
         distribution_filename = None
         distribution_hashes: Dict[str, str] = {}
         urls = data.get("urls", [])

@@ -17,7 +17,9 @@ from cyclonedx.model.contact import OrganizationalEntity
 from cyclonedx.model.tool import Tool
 from packageurl import PackageURL
 
+from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
+from sbomify_action.runtimes import ensure_runtime
 from sbomify_action.serialization import serialize_cyclonedx_bom
 
 from . import buildkit_provenance as bkp
@@ -110,8 +112,13 @@ def detect_chainguard_image(docker_image: str) -> ChainguardBaseImage | None:
     Returns ChainguardBaseImage with the per-architecture digest, or None if not detected.
     Requires crane to be available on PATH.
     """
-    if not bkp.crane_available():
-        logger.debug("crane not found on PATH, skipping Chainguard detection")
+    # Detection needs crane, which is fetched on demand. Keep the historical
+    # contract: if it cannot be made available, Chainguard detection is
+    # skipped rather than failing the whole run.
+    try:
+        ensure_runtime("crane")
+    except SBOMGenerationError as e:
+        logger.debug(f"crane unavailable, skipping Chainguard detection: {e}")
         return None
 
     result = _detect_direct_chainguard(docker_image)
@@ -122,9 +129,24 @@ def detect_chainguard_image(docker_image: str) -> ChainguardBaseImage | None:
 
 
 def fetch_chainguard_sbom(info: ChainguardBaseImage) -> dict[str, Any]:
-    """Download the SPDX SBOM from a Chainguard image's cosign attestation."""
-    if not bkp.cosign_available():
-        raise RuntimeError("cosign not found on PATH, cannot fetch Chainguard SBOM")
+    """Download the SPDX SBOM from a Chainguard image's cosign attestation.
+
+    Args:
+        info: Detected Chainguard image info with per-architecture digest
+
+    Returns:
+        SPDX document as a dict
+
+    Raises:
+        RuntimeError: If SBOM cannot be fetched or parsed
+    """
+    # cosign is fetched on demand rather than baked into the image: it is
+    # 141MB and only this Chainguard path and the Docker Hardened Images path
+    # (dockerhub.py) use it.
+    try:
+        ensure_runtime("cosign")
+    except SBOMGenerationError as e:
+        raise RuntimeError(f"cosign unavailable, cannot fetch Chainguard SBOM: {e}") from e
 
     image_with_digest = f"{info.image_ref}@{info.digest}"
     logger.info(f"Fetching Chainguard SBOM for {image_with_digest}")

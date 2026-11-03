@@ -3,8 +3,9 @@
   "@graph": [
     {
       "type": "SpdxDocument",
-      "@id": "urn:spdx.dev:doc-test",
+      "spdxId": "urn:spdx.dev:doc-test",
       "name": "test-document",
+      "profileConformance": ["core", "software"],
       "element": [
         "urn:spdx.dev:pkg-test",
         "urn:spdx.dev:tool-test"
@@ -13,49 +14,60 @@
         "urn:spdx.dev:pkg-test"
       ],
       "creationInfo": {
+        "type": "CreationInfo",
         "specVersion": "3.0.1",
         "created": "2024-01-01T00:00:00Z",
-        "createdBy": [],
-        "createdUsing": ["urn:spdx.dev:tool-test"],
-        "profile": ["core", "software"]
+        "createdBy": ["urn:spdx.dev:agent-test"],
+        "createdUsing": ["urn:spdx.dev:tool-test"]
+      }
+    },
+    {
+      "type": "Person",
+      "spdxId": "urn:spdx.dev:agent-test",
+      "name": "Test Author",
+      "creationInfo": {
+        "type": "CreationInfo",
+        "specVersion": "3.0.1",
+        "created": "2024-01-01T00:00:00Z",
+        "createdBy": ["urn:spdx.dev:agent-test"]
       }
     },
     {
       "type": "software_Package",
-      "@id": "urn:spdx.dev:pkg-test",
+      "spdxId": "urn:spdx.dev:pkg-test",
       "name": "test-package",
-      "packageVersion": "1.0.0",
-      "packageUrl": "pkg:pypi/test-package@1.0.0",
-      "downloadLocation": "https://example.com/test-package-1.0.0.tar.gz",
+      "software_packageVersion": "1.0.0",
+      "software_packageUrl": "pkg:pypi/test-package@1.0.0",
+      "software_downloadLocation": "https://example.com/test-package-1.0.0.tar.gz",
       "creationInfo": {
+        "type": "CreationInfo",
         "specVersion": "3.0.1",
         "created": "2024-01-01T00:00:00Z",
-        "createdBy": [],
-        "profile": ["core", "software"]
+        "createdBy": ["urn:spdx.dev:agent-test"]
       }
     },
     {
       "type": "Tool",
-      "@id": "urn:spdx.dev:tool-test",
+      "spdxId": "urn:spdx.dev:tool-test",
       "name": "test-tool",
       "creationInfo": {
+        "type": "CreationInfo",
         "specVersion": "3.0.1",
         "created": "2024-01-01T00:00:00Z",
-        "createdBy": [],
-        "profile": ["core", "software"]
+        "createdBy": ["urn:spdx.dev:agent-test"]
       }
     },
     {
       "type": "Relationship",
-      "@id": "urn:spdx.dev:rel-test",
+      "spdxId": "urn:spdx.dev:rel-test",
       "from": "urn:spdx.dev:doc-test",
       "to": ["urn:spdx.dev:pkg-test"],
       "relationshipType": "describes",
       "creationInfo": {
+        "type": "CreationInfo",
         "specVersion": "3.0.1",
         "created": "2024-01-01T00:00:00Z",
-        "createdBy": [],
-        "profile": ["core", "software"]
+        "createdBy": ["urn:spdx.dev:agent-test"]
       }
     }
   ]

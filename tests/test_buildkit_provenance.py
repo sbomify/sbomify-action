@@ -319,6 +319,11 @@ class TestClassifyRegistryError:
 
 
 class TestRunCraneSurfacesHints:
+    @pytest.fixture(autouse=True)
+    def _no_runtime_fetching(self, monkeypatch):
+        # run_crane/run_cosign fetch their runtime first; keep that off the network.
+        monkeypatch.setattr("sbomify_action._generation.buildkit_provenance.ensure_runtime", lambda name: None)
+
     @patch("sbomify_action._generation.buildkit_provenance.subprocess.run")
     def test_rate_limit_logged_at_warning(self, mock_run, caplog):
         mock_run.return_value = subprocess.CompletedProcess(

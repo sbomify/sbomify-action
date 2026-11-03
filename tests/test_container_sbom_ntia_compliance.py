@@ -275,8 +275,8 @@ class TestAugmentationNTIACompliance:
                 return_value=None,
             ),
             patch(
-                "sbomify_action._augmentation.providers.sbomify_api.requests.get",
-                return_value=mock_api_response,
+                "sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata",
+                return_value=mock_api_response.json.return_value,
             ),
         ):
             sbom_format = augment_sbom_from_file(
@@ -323,7 +323,10 @@ class TestAugmentationNTIACompliance:
         mock_api_response.ok = True
         mock_api_response.json.return_value = mock_backend_response
 
-        with patch("sbomify_action._augmentation.providers.sbomify_api.requests.get", return_value=mock_api_response):
+        with patch(
+            "sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata",
+            return_value=mock_api_response.json.return_value,
+        ):
             sbom_format = augment_sbom_from_file(
                 str(sbom_path),
                 str(output_file),
@@ -373,7 +376,10 @@ class TestFullPipelineNTIACompliance:
         mock_api_response.ok = True
         mock_api_response.json.return_value = SAMPLE_BACKEND_METADATA
 
-        with patch("sbomify_action._augmentation.providers.sbomify_api.requests.get", return_value=mock_api_response):
+        with patch(
+            "sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata",
+            return_value=mock_api_response.json.return_value,
+        ):
             augment_sbom_from_file(
                 str(enriched_file),
                 str(augmented_file),

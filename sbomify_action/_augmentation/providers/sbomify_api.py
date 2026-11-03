@@ -11,11 +11,9 @@ flags, which we extract and convert to 'security_contact'.
 
 from typing import Any, Dict, List, Optional
 
-import requests
-
 from sbomify_action.exceptions import APIError
-from sbomify_action.http_client import get_default_headers
 from sbomify_action.logging_config import logger
+from sbomify_action.sbomify_api import SbomifyApiClient
 
 from ..metadata import AugmentationMetadata
 
@@ -96,43 +94,17 @@ class SbomifyApiProvider:
         token: str,
         component_id: str,
     ) -> Dict[str, Any]:
-        """
-        Fetch metadata from backend API.
+        """Fetch augmentation metadata for ``component_id`` from the API.
 
-        Args:
-            api_base_url: Base URL for the API
-            token: Authentication token
-            component_id: Component ID to fetch metadata for
-
-        Returns:
-            Backend metadata dict
+        Delegates to ``SbomifyApiClient.get_augmentation_meta``; the
+        consolidated client builds the URL, applies default headers,
+        and translates transport / HTTP failures into ``APIError``.
 
         Raises:
             APIError: If API call fails
         """
-        url = f"{api_base_url}/api/v1/sboms/component/{component_id}/meta"
-        headers = get_default_headers(token)
-
-        try:
-            response = requests.get(url, headers=headers, timeout=60)
-        except requests.exceptions.ConnectionError:
-            raise APIError("Failed to connect to sbomify API")
-        except requests.exceptions.Timeout:
-            raise APIError("API request timed out")
-
-        if not response.ok:
-            err_msg = f"Failed to retrieve component metadata from sbomify. [{response.status_code}]"
-            if response.headers.get("content-type") == "application/json":
-                try:
-                    error_data = response.json()
-                    if "detail" in error_data:
-                        err_msg += f" - {error_data['detail']}"
-                except (ValueError, KeyError):
-                    pass
-            raise APIError(err_msg)
-
-        result: Dict[str, Any] = response.json()
-        return result
+        client = SbomifyApiClient(api_base_url, token)
+        return client.get_augmentation_meta(component_id)
 
     def _extract_from_contact_profile(self, data: Dict[str, Any]) -> None:
         """

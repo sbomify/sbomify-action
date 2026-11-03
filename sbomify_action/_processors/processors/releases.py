@@ -1,13 +1,15 @@
-"""sbomify releases processor for tagging SBOMs with product releases.
+"""sbomify releases processor for tagging artifacts with product releases.
 
 This processor handles the creation or retrieval of product releases
-in the sbomify platform and associates (tags) uploaded SBOMs with those releases.
+in the sbomify platform and associates (tags) uploaded artifacts -- SBOMs, or
+documents when ``ProcessorInput.artifact_kind`` says so -- with those releases.
 """
 
 from typing import List, Optional
 
 from sbomify_action.exceptions import APIError
 from sbomify_action.logging_config import logger
+from sbomify_action.release_version import is_prerelease
 
 from ..protocol import ProcessorInput
 from ..releases_api import (
@@ -16,7 +18,8 @@ from ..releases_api import (
     get_release_details,
     get_release_friendly_name,
     get_release_id,
-    tag_sbom_with_release,
+    link_release,
+    tag_artifact_with_release,
 )
 from ..result import ProcessorResult
 
@@ -99,9 +102,17 @@ class SbomifyReleasesProcessor:
                     sbom_id=input.sbom_id,
                     product_id=product_id,
                     version=version,
+                    artifact_kind=input.artifact_kind,
                 )
 
                 if release_id:
+                    # A product release includes whole releases of other products,
+                    # such as the toolchain it ships with. The link is made from
+                    # this release, so the included release is never touched.
+                    for include in input.release_includes or []:
+                        include_product, include_version = include.split(":", 1)
+                        logger.info(f"Including {include_product}:{include_version} in release {version}")
+                        link_release(api_base_url, token, release_id, include_product, include_version)
                     release_ids.append(release_id)
                     processed += 1
                 else:
@@ -113,7 +124,11 @@ class SbomifyReleasesProcessor:
                 errors.append(f"Error processing {release_spec}: {str(e)}")
                 logger.error(f"Error processing release {release_spec}: {e}")
 
-        if failed > 0 and processed == 0:
+        # Any failed release is fatal, including partial success (some
+        # succeeded, some failed) — a silently missing release must fail the run.
+        if failed > 0:
+            if processed > 0:
+                logger.warning(f"Partial failure: {processed} release(s) processed, {failed} failed")
             return ProcessorResult.failure_result(
                 processor_name=self.name,
                 error_message="; ".join(errors),
@@ -122,19 +137,10 @@ class SbomifyReleasesProcessor:
                 metadata={"release_ids": release_ids},
             )
 
-        # Log warning for partial success (some succeeded, some failed)
-        if failed > 0 and processed > 0:
-            logger.warning(
-                f"Partial success: {processed} release(s) processed, {failed} failed. Errors: {'; '.join(errors)}"
-            )
-
         return ProcessorResult.success_result(
             processor_name=self.name,
             processed_items=processed,
-            metadata={
-                "release_ids": release_ids,
-                "errors": errors if errors else None,
-            },
+            metadata={"release_ids": release_ids},
         )
 
     def _process_single_release(
@@ -144,6 +150,7 @@ class SbomifyReleasesProcessor:
         sbom_id: str,
         product_id: str,
         version: str,
+        artifact_kind: str = "sbom",
     ) -> Optional[str]:
         """
         Process a single release: check/create and tag.
@@ -167,8 +174,27 @@ class SbomifyReleasesProcessor:
                 logger.warning(f"Could not get release details for logging: {e}")
                 logger.info(f"Release {version} already exists for product {product_id}")
         else:
-            logger.info(f"Creating release {version} for product {product_id}")
-            created_release_id = create_release(api_base_url, token, product_id, version)
+            # sbomify keeps is_prerelease as its own indexed field, so an
+            # alpha recorded as a final release is not merely mislabelled --
+            # it is indexed and queried alongside every genuine one, and it
+            # can become the release a customer is pointed at.
+            #
+            # Only sent when the version says so. Passing False for everything
+            # unrecognised would assert "this is final" about versions we have
+            # simply not been able to read, so an unparseable version leaves
+            # the backend's own default in place.
+            prerelease = is_prerelease(version)
+            if prerelease:
+                logger.info(f"Creating release {version} for product {product_id} (prerelease)")
+            else:
+                logger.info(f"Creating release {version} for product {product_id}")
+            created_release_id = create_release(
+                api_base_url,
+                token,
+                product_id,
+                version,
+                is_prerelease=True if prerelease else None,
+            )
             if created_release_id:
                 release_id = created_release_id
             # Get details after creation for consistent logging
@@ -184,13 +210,14 @@ class SbomifyReleasesProcessor:
             release_id = get_release_id(api_base_url, token, product_id, version)
 
         if release_id:
+            artifact_label = "SBOM" if artifact_kind == "sbom" else "document"
             # Use friendly name if we have release details
             if release_details:
                 friendly_name = get_release_friendly_name(release_details, version)
-                logger.info(f"Tagging SBOM {sbom_id} with {friendly_name} (ID: {release_id})")
+                logger.info(f"Tagging {artifact_label} {sbom_id} with {friendly_name} (ID: {release_id})")
             else:
-                logger.info(f"Tagging SBOM {sbom_id} with release {version} (ID: {release_id})")
-            tag_sbom_with_release(api_base_url, token, sbom_id, release_id)
+                logger.info(f"Tagging {artifact_label} {sbom_id} with release {version} (ID: {release_id})")
+            tag_artifact_with_release(api_base_url, token, sbom_id, release_id, artifact_kind=artifact_kind)
         else:
             logger.error(f"Could not get release ID for {product_id}:{version}")
 

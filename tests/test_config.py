@@ -19,7 +19,8 @@ cli_main_module = import_module("sbomify_action.cli.main")
 class TestConfig(unittest.TestCase):
     """Test cases for the Config dataclass and related functionality."""
 
-    def test_config_validation_missing_token(self):
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
+    def test_config_validation_missing_token(self, _mock_oidc):
         """Test that Config raises ConfigurationError when token is missing and UPLOAD=true."""
         config = Config(token="", component_id="test-component", sbom_file="/path/to/sbom.json", upload=True)
 
@@ -60,6 +61,132 @@ class TestConfig(unittest.TestCase):
 
         self.assertIn("Please provide one of", str(cm.exception))
 
+    def test_bom_type_non_sbom_rejects_generation(self):
+        """A non-SBOM BOM_TYPE with a generation source is rejected (it would generate an SBOM and
+        upload it mislabeled)."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            lock_file="/path/to/requirements.txt",
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("cannot be", str(cm.exception))
+
+    def test_bom_type_non_sbom_rejects_docker_generation(self):
+        """A non-SBOM BOM_TYPE with a docker image (generation) is rejected."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="hbom",
+            docker_image="alpine:latest",
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("verbatim", str(cm.exception))
+
+    def test_bom_type_non_sbom_clears_component_overrides(self):
+        """Non-SBOM BOM_TYPE ignores document-rewriting override inputs (verbatim contract)."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            component_name="renamed",
+            component_version="9.9.9",
+            component_purl="pkg:npm/renamed@9.9.9",
+            override_name=True,
+        )
+        config.validate()
+        self.assertIsNone(config.component_name)
+        self.assertIsNone(config.component_version)
+        self.assertIsNone(config.component_purl)
+        self.assertFalse(config.override_name)
+
+    def test_bom_type_non_sbom_clears_augment_enrich(self):
+        """The verbatim guard lives in validate() itself, so directly
+        constructed configs cannot augment/enrich a non-SBOM artifact."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            augment=True,
+            enrich=True,
+        )
+        config.validate()
+        self.assertFalse(config.augment)
+        self.assertFalse(config.enrich)
+
+    def test_bom_type_non_sbom_with_real_file_ok(self):
+        """A non-SBOM BOM_TYPE with a real SBOM_FILE (pre-authored artifact) validates."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            upload=True,
+        )
+        config.validate()  # no error
+
+    def test_bom_type_non_sbom_rejects_spdx_format(self):
+        """A non-SBOM BOM_TYPE with SPDX is rejected: SPDX sanitization would rewrite the bytes."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            sbom_format="spdx",
+            upload=True,
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("CycloneDX", str(cm.exception))
+
+    def test_bom_type_non_sbom_rejects_non_sbomify_destinations(self):
+        """Non-SBOM artifacts are only recorded by the sbomify backend; other
+        destinations re-encode the payload and treat it as a plain SBOM."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            upload=True,
+            upload_destinations=["sbomify", "dependency-track"],
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("dependency-track", str(cm.exception))
+
+    def test_bom_type_non_sbom_rejects_product_release(self):
+        """Releases hold one SBOM per component and format; tagging a VEX/CBOM
+        into a release either collides with the component's SBOM or occupies
+        its slot, so PRODUCT_RELEASE is rejected for non-SBOM artifacts."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            product_releases='["myproduct:v1.0.0"]',
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("PRODUCT_RELEASE", str(cm.exception))
+
+    def test_bom_type_non_sbom_no_upload_allows_other_destinations(self):
+        """With UPLOAD=false nothing is sent anywhere, so configured
+        destinations are irrelevant and must not fail validation."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            bom_type="vex",
+            sbom_file="/path/to/authored.vex.cdx.json",
+            upload=False,
+            upload_destinations=["sbomify", "dependency-track"],
+        )
+        config.validate()  # no error
+
     def test_config_validation_valid_config(self):
         """Test that Config validation passes with valid configuration."""
         config = Config(
@@ -98,7 +225,8 @@ class TestConfig(unittest.TestCase):
         # Should not raise any exception - sbomify credentials not required
         config.validate()
 
-    def test_config_validation_multi_destination_requires_sbomify_credentials(self):
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
+    def test_config_validation_multi_destination_requires_sbomify_credentials(self, _mock_oidc):
         """Test that sbomify credentials ARE required when sbomify is one of multiple destinations."""
         config = Config(
             token="",
@@ -115,7 +243,8 @@ class TestConfig(unittest.TestCase):
         self.assertIn("sbomify API token is not defined", str(cm.exception))
         self.assertIn("uploading to sbomify", str(cm.exception))
 
-    def test_config_validation_upload_requires_token(self):
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
+    def test_config_validation_upload_requires_token(self, _mock_oidc):
         """Test that TOKEN is required when uploading to sbomify."""
         config = Config(
             token="",
@@ -143,7 +272,8 @@ class TestConfig(unittest.TestCase):
         # Should not raise - augmentation can use sbomify.json without API credentials
         config.validate()
 
-    def test_config_validation_product_release_requires_token(self):
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
+    def test_config_validation_product_release_requires_token(self, _mock_oidc):
         """Test that TOKEN is required when PRODUCT_RELEASE is set even if UPLOAD=false."""
         config = Config(
             token="",
@@ -159,6 +289,76 @@ class TestConfig(unittest.TestCase):
 
         self.assertIn("sbomify API token is not defined", str(cm.exception))
         self.assertIn("PRODUCT_RELEASE is set", str(cm.exception))
+
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=True)
+    def test_config_validation_oidc_available_no_token_required(self, _mock_oidc):
+        """When GitHub OIDC is available, validate() should NOT raise for missing TOKEN."""
+        config = Config(
+            token="",
+            component_id="test-component",
+            sbom_file="/path/to/sbom.json",
+            upload=True,
+            upload_destinations=["sbomify"],
+        )
+        # Should not raise — pipeline will perform OIDC exchange at runtime
+        config.validate()
+
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=True)
+    def test_config_validation_oidc_available_still_requires_component_id(self, _mock_oidc):
+        """OIDC bypasses the TOKEN requirement but COMPONENT_ID is still required."""
+        config = Config(
+            token="",
+            component_id="",
+            sbom_file="/path/to/sbom.json",
+            upload=True,
+            upload_destinations=["sbomify"],
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("Component ID is not defined", str(cm.exception))
+
+    def test_will_use_sbomify_api_includes_augment(self):
+        """AUGMENT alone (no upload, no PR) marks the run as 'may use sbomify API'."""
+        config = Config(
+            token="",
+            component_id="comp-1",
+            sbom_file="/path/to/sbom.json",
+            upload=False,
+            augment=True,
+        )
+        # validate() doesn't require credentials here (augment can fall back to
+        # sbomify.json) — but will_use_sbomify_api is True so run_pipeline knows
+        # to attempt OIDC exchange if available.
+        self.assertFalse(config.requires_sbomify_api)
+        self.assertTrue(config.will_use_sbomify_api)
+
+    def test_will_use_sbomify_api_equals_requires_when_uploading(self):
+        config = Config(
+            token="t",
+            component_id="c",
+            sbom_file="/path/to/sbom.json",
+            upload=True,
+            upload_destinations=["sbomify"],
+        )
+        self.assertTrue(config.requires_sbomify_api)
+        self.assertTrue(config.will_use_sbomify_api)
+
+    def test_will_use_sbomify_api_false_when_no_sbomify_involvement(self):
+        config = Config(
+            token="",
+            component_id="",
+            sbom_file="/path/to/sbom.json",
+            upload=False,
+            augment=False,
+        )
+        self.assertFalse(config.requires_sbomify_api)
+        self.assertFalse(config.will_use_sbomify_api)
+
+    def test_config_token_excluded_from_repr(self):
+        """field(repr=False) keeps the token out of repr(config) so accidental
+        logging or pytest diffs don't leak the short-lived OIDC-minted JWT."""
+        config = Config(token="super-secret-jwt-value", component_id="c", sbom_file="x")
+        self.assertNotIn("super-secret-jwt-value", repr(config))
 
     def test_config_validation_upload_requires_component_id(self):
         """Test that COMPONENT_ID is required when uploading to sbomify."""
@@ -261,10 +461,15 @@ class TestConfig(unittest.TestCase):
         self.assertFalse(config.upload)
         self.assertTrue(config.augment)
 
+    @patch("sbomify_action.oidc.is_oidc_available", return_value=False)
     @patch.dict(os.environ, {"TOKEN": "", "COMPONENT_ID": "test"})
     @patch("sys.exit")
-    def test_load_config_exits_on_invalid_config(self, mock_exit):
-        """Test that load_config exits when configuration is invalid."""
+    def test_load_config_exits_on_invalid_config(self, mock_exit, _mock_oidc):
+        """Test that load_config exits when configuration is invalid.
+
+        is_github_oidc_available is patched to False so the test is
+        deterministic when run under CI workflows that grant id-token: write.
+        """
         load_config()
         mock_exit.assert_called_once_with(1)
 
@@ -819,6 +1024,44 @@ class TestBuildConfig(unittest.TestCase):
             self.assertEqual(config.api_base_url, "https://custom.api.com")
             self.assertEqual(config.sbom_format, "spdx")
 
+    def test_build_config_non_sbom_bom_type_forces_verbatim(self):
+        """A non-SBOM bom_type (VEX/CBOM) disables augment/enrich so the
+        artifact is uploaded exactly as authored."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            vex_file = Path(tmp_dir) / "x.vex.cdx.json"
+            vex_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            config = build_config(
+                sbom_file=str(vex_file),
+                upload=False,
+                augment=True,
+                enrich=True,
+                bom_type="vex",
+            )
+            self.assertEqual(config.bom_type, "vex")
+            self.assertFalse(config.augment)
+            self.assertFalse(config.enrich)
+
+    def test_build_config_sbom_keeps_augment_enrich(self):
+        """A plain SBOM upload still augments and enriches."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            config = build_config(
+                sbom_file=str(sbom_file),
+                upload=False,
+                augment=True,
+                enrich=True,
+            )
+            self.assertTrue(config.augment)
+            self.assertTrue(config.enrich)
+            self.assertEqual(config.bom_type, "sbom")
+
     def test_build_config_defaults(self):
         """Test build_config uses correct defaults."""
         from sbomify_action.cli.main import SBOMIFY_PRODUCTION_API, build_config
@@ -841,6 +1084,51 @@ class TestBuildConfig(unittest.TestCase):
             self.assertFalse(config.override_sbom_metadata)
             self.assertEqual(config.api_base_url, SBOMIFY_PRODUCTION_API)
             self.assertEqual(config.sbom_format, "cyclonedx")
+            self.assertEqual(config.bom_type, "sbom")
+
+    def test_build_config_non_string_bom_type_exits_cleanly(self):
+        """A non-string bom_type from an untyped caller must exit via the
+        ConfigurationError path, not crash with AttributeError on .lower()."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            with self.assertRaises(SystemExit):
+                build_config(sbom_file=str(sbom_file), upload=False, bom_type=123)  # type: ignore[arg-type]
+
+    def test_build_config_falsy_non_string_bom_type_rejected(self):
+        """Only None and '' mean unset; other falsy garbage (0, False) must be
+        rejected by validation, not silently coerced to the default."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            with self.assertRaises(SystemExit):
+                build_config(sbom_file=str(sbom_file), upload=False, bom_type=0)  # type: ignore[arg-type]
+
+    def test_build_config_empty_string_bom_type_means_unset(self):
+        """An empty BOM_TYPE means unset, mirroring click's empty-envvar
+        semantics, and resolves to the sbom default."""
+        from sbomify_action.cli.main import build_config
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sbom_file = Path(tmp_dir) / "sbom.cdx.json"
+            sbom_file.write_text('{"bomFormat": "CycloneDX", "specVersion": "1.6"}')
+
+            config = build_config(sbom_file=str(sbom_file), upload=False, bom_type="")
+            self.assertEqual(config.bom_type, "sbom")
+
+    def test_cli_bom_type_option_defaults_to_sbom(self):
+        """The --bom-type click option itself defaults to 'sbom' so --help and
+        the parsed value agree; unset must not reach the pipeline as None."""
+        from sbomify_action.cli.main import cli
+
+        param = next(p for p in cli.params if p.name == "bom_type")
+        self.assertEqual(param.default, "sbom")
 
     def test_build_config_normalizes_sbom_format_case(self):
         """Test that build_config normalizes SBOM format to lowercase."""
@@ -923,6 +1211,293 @@ class TestLoadConfigAndBuildConfigParity(unittest.TestCase):
             self.assertEqual(config_from_env.augment, config_from_args.augment)
             self.assertEqual(config_from_env.enrich, config_from_args.enrich)
             self.assertEqual(config_from_env.sbom_format, config_from_args.sbom_format)
+
+
+class TestSpecVersionValidation(unittest.TestCase):
+    """SPEC_VERSION must be rejected up front when nothing can generate it.
+
+    These versions used to pass config validation and then fail mid-run with
+    "No generator found for input", which reads like a missing tool rather than
+    an unsupported request.
+    """
+
+    def _config(self, sbom_format: str, spec_version: str) -> Config:
+        return Config(
+            token="test-token",
+            component_id="test-component",
+            lock_file="/path/to/requirements.txt",
+            sbom_format=sbom_format,
+            spec_version=spec_version,
+        )
+
+    def test_spdx_301_rejected_with_input_only_hint(self):
+        """SPDX 3.0.1 has no generator; the error should point at SBOM_FILE."""
+        with self.assertRaises(ConfigurationError) as cm:
+            self._config("spdx", "3.0.1").validate()
+
+        message = str(cm.exception)
+        self.assertIn("cannot be generated", message)
+        # Both working routes must be named, and additional-packages-only mode is
+        # reachable through either sentinel -- see the tests below that exercise them.
+        self.assertIn("SBOM_FILE", message)
+        self.assertIn("LOCK_FILE=none", message)
+        self.assertIn("SBOM_FILE=none", message)
+
+    def test_cyclonedx_xml_only_versions_rejected(self):
+        """CycloneDX 1.0/1.1 predate JSON, which is all this tool emits."""
+        for version in ("1.0", "1.1"):
+            with self.subTest(version=version):
+                with self.assertRaises(ConfigurationError) as cm:
+                    self._config("cyclonedx", version).validate()
+
+                self.assertIn("JSON in 1.2", str(cm.exception))
+
+    def test_generatable_versions_accepted(self):
+        """The versions a bundled generator can actually emit still validate."""
+        for sbom_format, version in (
+            ("cyclonedx", "1.2"),
+            ("cyclonedx", "1.7"),
+            ("spdx", "2.2"),
+            ("spdx", "2.3"),
+        ):
+            with self.subTest(sbom_format=sbom_format, version=version):
+                self._config(sbom_format, version).validate()
+
+    def test_docker_image_input_also_validated(self):
+        """Docker images go through the generator plugins too."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            docker_image="alpine:latest",
+            sbom_format="spdx",
+            spec_version="3.0.1",
+        )
+        with self.assertRaises(ConfigurationError):
+            config.validate()
+
+    def test_additional_packages_only_may_request_spdx3(self):
+        """additional-packages-only mode builds the document itself and can
+        bootstrap SPDX 3.0.1, so the generator-plugin limits must not apply."""
+        for source in ("lock_file", "sbom_file"):
+            with self.subTest(source=source):
+                config = Config(
+                    token="test-token",
+                    component_id="test-component",
+                    sbom_format="spdx",
+                    spec_version="3.0.1",
+                    **{source: "none"},
+                )
+                # The mode itself requires packages to inject; supply them so the
+                # only thing under test is the spec_version check.
+                with patch.dict(os.environ, {"ADDITIONAL_PACKAGES": "pkg:pypi/requests@2.31.0"}):
+                    config.validate()  # no error
+
+    def test_real_sbom_file_input_not_version_checked(self):
+        """A real SBOM_FILE never consults spec_version, so setting one that no
+        generator emits must not block the run."""
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            sbom_file="/path/to/existing.spdx.json",
+            sbom_format="spdx",
+            spec_version="3.0.1",
+        )
+        config.validate()  # no error
+
+
+class TestSubmoduleConfig(unittest.TestCase):
+    """Validation rules for submodule (attach-or-backfill) mode."""
+
+    def test_submodule_path_requires_lock_file(self):
+        config = Config(
+            token="t",
+            component_id="c1",
+            sbom_file="/path/to/sbom.json",
+            submodule_path="extern/lib",
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("SUBMODULE_PATH requires LOCK_FILE", str(cm.exception))
+
+    def test_submodule_path_requires_sbomify_upload(self):
+        config = Config(
+            token="t",
+            component_id="c1",
+            lock_file="extern/lib/Cargo.lock",
+            submodule_path="extern/lib",
+            upload=False,
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        self.assertIn("SUBMODULE_PATH requires uploading to sbomify", str(cm.exception))
+
+    def test_submodule_path_valid_config(self):
+        config = Config(
+            token="t",
+            component_id="c1",
+            lock_file="extern/lib/Cargo.lock",
+            submodule_path="extern/lib",
+        )
+        config.validate()  # must not raise
+
+    def test_empty_submodule_path_env_is_disabled(self):
+        """The emitted workflow sets SUBMODULE_PATH to an empty string on
+        non-submodule matrix rows — that must not enable submodule mode."""
+        with tempfile.NamedTemporaryFile(suffix=".json") as f:
+            with patch.dict(
+                os.environ,
+                {
+                    "SUBMODULE_PATH": "",
+                    "TOKEN": "t",
+                    "COMPONENT_ID": "c1",
+                    "SBOM_FILE": f.name,
+                    "UPLOAD": "false",
+                },
+                clear=False,
+            ):
+                config = load_config()
+        self.assertIsNone(config.submodule_path)
+
+
+class TestSpdx3AdviceIsRoutableAdvice(unittest.TestCase):
+    """The SPEC_VERSION guard sends the user somewhere. Everywhere it sends
+    them has to work for the version they asked for.
+    """
+
+    def _error(self, spec_version: str) -> str:
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            lock_file="/path/to/requirements.txt",
+            sbom_format="spdx",
+            spec_version=spec_version,
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        return str(cm.exception)
+
+    def test_300_gets_the_same_hint_as_301(self):
+        """The hint was pinned to the literal "3.0.1". 3.0 is what syft,
+        Microsoft sbom-tool, JFrog Xray and Yocto 5.x emit, so it is just as
+        likely to be asked for, and it fell through to the bare message."""
+        message = self._error("3.0.0")
+
+        self.assertIn("cannot be generated", message)
+        self.assertIn("SBOM_FILE", message)
+
+    def test_31_is_not_sent_to_a_route_that_also_refuses_it(self):
+        """SBOM_FILE only accepts what the reader accepts, and 3.1 is not in
+        that set, so offering it there would cost the user a second round
+        trip to the same answer."""
+        message = self._error("3.1.0")
+
+        self.assertIn("Nor is it read", message)
+        self.assertNotIn("pass an existing 3.1.0 document", message)
+
+    def test_it_names_the_versions_sbom_file_does_accept(self):
+        message = self._error("3.1.0")
+
+        self.assertIn("3.0.0", message)
+        self.assertIn("3.0.1", message)
+
+    def test_the_empty_sbom_route_says_which_version_it_writes(self):
+        """create_empty_sbom writes 3.0.1 whatever was asked for, so naming it
+        beats implying the request is honoured."""
+        message = self._error("3.0.0")
+
+        self.assertIn("which writes 3.0.1", message)
+
+
+class TestActionYmlExposesTheFormatKnobs(unittest.TestCase):
+    """SBOM_FORMAT and SPEC_VERSION had to be smuggled through a raw `env:`
+    block, because action.yml exposed neither.
+    """
+
+    @staticmethod
+    def _action_yml() -> dict:
+        import yaml
+
+        return yaml.safe_load((Path(__file__).parent.parent / "action.yml").read_text())
+
+    def test_both_are_inputs(self):
+        inputs = self._action_yml()["inputs"]
+
+        self.assertIn("sbom-format", inputs)
+        self.assertIn("spec-version", inputs)
+
+    def test_both_reach_the_container_as_their_environment_variables(self):
+        env = self._action_yml()["runs"]["env"]
+
+        self.assertEqual(env["SBOM_FORMAT"], "${{ inputs['sbom-format'] }}")
+        self.assertEqual(env["SPEC_VERSION"], "${{ inputs['spec-version'] }}")
+
+    def test_every_input_is_wired_to_an_environment_variable(self):
+        """An input that reaches nothing is worse than no input: it looks
+        supported and is silently dropped."""
+        action = self._action_yml()
+        wired = " ".join(str(v) for v in action["runs"]["env"].values())
+
+        for name in action["inputs"]:
+            self.assertIn(f"inputs['{name}']", wired, f"{name} is declared but reaches no env var")
+
+
+class TestTheInputsSurviveBeingOmitted(unittest.TestCase):
+    """GitHub Actions passes an omitted input as an empty string, not as
+    absent, so `env: X: ${{ inputs.x }}` sets X="" rather than leaving it
+    unset. A knob whose CLI option validates its value has to declare a
+    default here or it breaks the moment somebody does not set it.
+    """
+
+    @staticmethod
+    def _inputs() -> dict:
+        import yaml
+
+        return yaml.safe_load((Path(__file__).parent.parent / "action.yml").read_text())["inputs"]
+
+    def test_sbom_format_defaults_rather_than_arriving_empty(self):
+        """SBOM_FORMAT feeds a click.Choice, which refuses "" instead of
+        falling back to cyclonedx."""
+        self.assertEqual(self._inputs()["sbom-format"].get("default"), "cyclonedx")
+
+    def test_spec_version_defaults_to_empty_on_purpose(self):
+        """Its per-format default lives in the CLI: 1.6 for CycloneDX, 2.3 for
+        SPDX. Empty is how the input says "whichever the format wants"."""
+        self.assertEqual(self._inputs()["spec-version"].get("default"), "")
+
+    def test_every_input_with_a_validated_cli_option_has_a_default(self):
+        """bom-type is the precedent: it feeds a click.Choice and declares one."""
+        for name in ("bom-type", "sbom-format"):
+            with self.subTest(input=name):
+                self.assertIn("default", self._inputs()[name])
+
+
+class TestTheThreeZeroLineIsNotOfferedAsARoute(unittest.TestCase):
+    """ "3.0" is a key in SPDX_SCHEMAS so an alias-context document reaches a
+    schema at all. It is not a version anyone can send: both official schemas
+    pin @context with a const to their fully qualified URL, so a document
+    declaring the bare line fails whichever schema it is held to.
+    """
+
+    def _error(self, spec_version: str) -> str:
+        config = Config(
+            token="test-token",
+            component_id="test-component",
+            lock_file="/path/to/requirements.txt",
+            sbom_format="spdx",
+            spec_version=spec_version,
+        )
+        with self.assertRaises(ConfigurationError) as cm:
+            config.validate()
+        return str(cm.exception)
+
+    def test_it_is_not_sent_to_sbom_file(self):
+        message = self._error("3.0")
+
+        self.assertIn("Nor is it read", message)
+        self.assertNotIn("pass an existing 3.0 document", message)
+
+    def test_the_versions_that_are_readable_still_are(self):
+        self.assertIn("pass an existing 3.0.1 document", self._error("3.0.1"))
 
 
 if __name__ == "__main__":

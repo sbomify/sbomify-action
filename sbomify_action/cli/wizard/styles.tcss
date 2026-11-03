@@ -1,0 +1,698 @@
+/* ---------------------------------------------------------------------
+ * sbomify brand palette — mirrors sbomify.com/tailwind.config.js +
+ * the @theme tokens in sbomify.com/_assets/css/tailwind.css.
+ * Keep these in sync if marketing rebrands.
+ * --------------------------------------------------------------------- */
+
+$sbom-primary: #141035;          /* primaryBG — deep purple-blue base */
+$sbom-primary-light: #201B4C;    /* primary.light — panel fill        */
+$sbom-primary-600: #37306B;      /* primary.600 — borders, dividers   */
+$sbom-primary-700: #4A4276;      /* primary.700 — button stroke       */
+$sbom-purple: #8A7DFF;           /* purple — accent / CTA             */
+$sbom-purple-hover: #7A6DE5;     /* purple.700 — CTA hover            */
+$sbom-secondary-bg: #1A1B2A;     /* secondaryBG — sunken surfaces     */
+$sbom-text-muted: #CBCCCE;       /* tertiaryText                      */
+$sbom-text-dim: #5E5E5E;         /* secondaryText                     */
+$sbom-fuschia: #FCDDEC;
+
+/* Signature blue → magenta → peach gradient. Used in markup, not CSS. */
+$sbom-grad-blue: #4059D0;
+$sbom-grad-magenta: #CC58BB;
+$sbom-grad-peach: #F4B57F;
+
+/* NOTE: we intentionally do NOT redefine Textual's built-in design
+ * tokens ($accent, $primary, $panel, …). Those are referenced by
+ * Textual's own internal stylesheet (e.g. ``hatch: right $panel;``)
+ * with shape expectations that don't accept arbitrary hex colors.
+ * Instead, every selector below uses our $sbom-* variables directly. */
+
+/* ---------------------------------------------------------------------
+ * App chrome
+ * --------------------------------------------------------------------- */
+
+Screen {
+    background: $sbom-primary;
+}
+
+Header {
+    background: $sbom-primary-light;
+    color: $sbom-purple;
+    text-style: bold;
+}
+
+Footer {
+    background: $sbom-primary-light;
+    color: $sbom-text-muted;
+}
+
+Footer > .footer--key {
+    color: $sbom-purple;
+    text-style: bold;
+}
+
+/* Notifications. Textual docks the toast rack bottom-right, which is
+ * exactly where the pinned action row lives — at 80x24 a toast covered the
+ * Cancel button outright and clipped Next, so the message telling you what
+ * happened hid the control you needed to respond to it. Dock the rack to
+ * the top instead: the header is the one band of the screen with nothing
+ * interactive in it. Narrower toasts too, so they don't span a wide
+ * terminal for a one-line message. */
+ToastRack {
+    dock: top;
+    align: right top;
+    margin-top: 1;
+    margin-bottom: 0;
+}
+
+Toast {
+    width: 48;
+    max-width: 60%;
+}
+
+/* ---------------------------------------------------------------------
+ * Wizard layout — applied by WizardScreen.compose
+ * --------------------------------------------------------------------- */
+
+/* Centre the body so the max-width below leaves even gutters on wide
+ * terminals rather than pinning everything to the left edge. Header and
+ * Footer are docked, so they're unaffected. */
+Screen {
+    align-horizontal: center;
+}
+
+.wizard-body {
+    padding: 1 2;
+    height: 1fr;
+    width: 100%;
+    /* Cap the measure. Without this every panel stretched to the full
+     * terminal width — at 250 columns the rationale prose ran 220+
+     * characters per line and a two-entry picker drew a 240-column box.
+     * ~110 cells is a comfortable reading measure and still wide enough
+     * for the Review diff and the components table. */
+    max-width: 110;
+}
+
+/* The scrolling region: everything a screen yields from ``compose_body``.
+ * Taking 1fr here (with the crumb/subtitle above and the action row below
+ * at auto height) is what pins Back/Next on screen at any terminal size —
+ * overflowing content scrolls instead of being clipped away. */
+.wizard-scroll {
+    height: 1fr;
+    width: 100%;
+    scrollbar-size-vertical: 1;
+    scrollbar-background: $sbom-primary;
+    scrollbar-color: $sbom-primary-600;
+    scrollbar-color-hover: $sbom-purple;
+    scrollbar-color-active: $sbom-purple;
+}
+
+/* The region is only a tab stop when it can scroll (see WizardScroll), and
+ * it has no border to light up — so brighten the scrollbar to show that
+ * arrow keys now pan the body rather than move a selection. */
+.wizard-scroll:focus {
+    scrollbar-color: $sbom-purple;
+}
+
+.wizard-step-crumb {
+    color: $sbom-purple;
+    margin-bottom: 1;
+}
+
+.wizard-subtitle {
+    color: $sbom-text-muted;
+    margin-bottom: 1;
+}
+
+/* Paged forms (see screens/_paged.py) — the "Step n of N · Title" header
+ * that replaces the static subtitle on multi-page forms. Unlike the
+ * subtitle it stays visible in compact mode (it's the only cue to which
+ * page you're on). */
+.wizard-page-indicator {
+    color: $sbom-purple;
+    margin-bottom: 1;
+}
+
+.form-page {
+    height: auto;
+}
+
+#form-status {
+    height: auto;
+}
+
+/* Card panels — modern devsecops-CLI shape: rounded border with a
+ * named title bar (set via widget.border_title). Padding gives the
+ * content room to breathe; bottom margin keeps stacked cards from
+ * butting up against each other. */
+.wizard-panel {
+    border: round $sbom-primary-600;
+    padding: 1 2;
+    margin-bottom: 1;
+    height: auto;
+    background: $sbom-primary-light;
+    border-title-color: $sbom-purple;
+    border-title-style: bold;
+    border-title-align: left;
+    border-subtitle-color: $sbom-text-muted;
+    border-subtitle-align: right;
+}
+
+.wizard-panel-emphasis {
+    border: thick $sbom-purple;
+    padding: 1 2;
+    margin-bottom: 1;
+    height: auto;
+    background: $sbom-primary-light;
+    border-title-color: $sbom-grad-peach;
+    border-title-style: bold;
+    border-title-align: left;
+}
+
+.wizard-title {
+    color: $sbom-purple;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.wizard-muted {
+    color: $sbom-text-muted;
+    margin-bottom: 1;
+}
+
+/* Explanatory / rationale prose (the "why" copy and keyboard hints above
+ * a control) — styled like muted text, but tagged separately so the
+ * responsive layer can drop it on tight terminals while keeping warnings
+ * and status lines (which stay ``wizard-muted``). See the ``-compact``
+ * rule near the foot of this file. */
+.wizard-help {
+    color: $sbom-text-muted;
+    margin-bottom: 1;
+}
+
+.banner {
+    color: $sbom-purple;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+/* Hero card — only used on the Welcome screen. Bigger padding,
+ * thick gradient border, title-bar uses the gradient peach so it
+ * pops against the deep purple background. */
+.wizard-hero {
+    border: thick $sbom-purple;
+    padding: 2 4;
+    margin-bottom: 1;
+    height: auto;
+    background: $sbom-primary-light;
+    border-title-color: $sbom-grad-peach;
+    border-title-style: bold;
+    border-title-align: left;
+}
+
+/* Two-column hero — text on the left, ASCII wizard on the right. */
+.wizard-hero-row {
+    height: auto;
+}
+
+.wizard-hero-text {
+    width: 1fr;
+    height: auto;
+    padding-right: 2;
+}
+
+.wizard-hero-mascot {
+    width: auto;
+    height: auto;
+    padding-left: 2;
+}
+
+.wizard-hero-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.wizard-hero-tagline {
+    text-style: italic;
+    margin-bottom: 1;
+}
+
+.wizard-hero-strap {
+    color: $sbom-text-muted;
+}
+
+.wizard-hero-badge {
+    margin-top: 1;
+}
+
+/* ---------------------------------------------------------------------
+ * Buttons
+ * --------------------------------------------------------------------- */
+
+.button-row {
+    align: center middle;
+    height: auto;
+    padding-top: 1;
+}
+
+.button-row Button {
+    margin: 0 1;
+}
+
+Button {
+    background: $sbom-primary-600;
+    color: $sbom-text-muted;
+    border: tall $sbom-primary-700;
+}
+
+Button:hover {
+    background: $sbom-primary-700;
+    color: white;
+}
+
+Button:focus {
+    border: tall $sbom-purple;
+}
+
+Button.-primary {
+    background: $sbom-purple;
+    color: $sbom-primary;
+    border: tall $sbom-purple-hover;
+    text-style: bold;
+}
+
+Button.-primary:hover {
+    background: $sbom-purple-hover;
+    color: $sbom-primary;
+}
+
+/* Primary button focus indicator. The generic `Button:focus { border:
+ * tall $sbom-purple }` rule is invisible on the primary button because
+ * its background is already purple. Use the gradient peach instead so
+ * the focused 'Next' button reads clearly against the brand purple. */
+Button.-primary:focus {
+    border: tall $sbom-grad-peach;
+}
+
+/* ---------------------------------------------------------------------
+ * Inputs + form controls
+ * --------------------------------------------------------------------- */
+
+Input {
+    margin: 0 0 1 0;
+    background: $sbom-secondary-bg;
+    border: tall $sbom-primary-600;
+    color: white;
+}
+
+Input:focus {
+    border: tall $sbom-purple;
+}
+
+Input.-invalid {
+    border: tall #F87171;
+}
+
+Label {
+    color: $sbom-text-muted;
+    margin-top: 1;
+}
+
+RadioSet {
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+
+RadioButton {
+    background: transparent;
+    padding: 0 1;
+}
+
+/* Selected radio buttons stay readable on every background. Previously
+ * the rule was `color: $sbom-purple` which gave purple text — and the
+ * hover background is also a purple shade, so a selected-and-hovered
+ * button rendered purple-on-purple and was effectively invisible.
+ * Use white text for selected so we keep contrast across the
+ * default / focus / hover states, and lean on the bold + Textual's
+ * own (●) indicator to mark the selection. */
+RadioButton.-selected {
+    color: white;
+    text-style: bold;
+}
+
+/* Don't restyle the background when hovering an already-selected radio
+ * button — Textual's own focus / selected styling is enough, and the
+ * dark-purple hover background was the other half of the purple-on-
+ * purple readability bug. */
+RadioButton:hover {
+    background: $sbom-primary-700;
+    color: white;
+}
+
+/* ---------------------------------------------------------------------
+ * Lists + tables
+ * --------------------------------------------------------------------- */
+
+SelectionList, OptionList, ListView {
+    background: $sbom-secondary-bg;
+    border: tall $sbom-primary-600;
+    height: 1fr;
+    margin: 1 0;
+    color: $sbom-text-muted;
+}
+
+/* Discover screen — size the lockfile list to its content (one row per
+ * lockfile + a row of padding top/bottom) rather than taking 1fr. A
+ * scrollbar still kicks in if a user has an unreasonable number of
+ * lockfiles, but for typical repos (1–5) the panel stays compact. */
+#lockfile-list {
+    height: auto;
+    max-height: 20;
+}
+
+/* Product / Components: the picker's OptionList must size to its
+ * content (a "create new" row + however many existing items), NOT grab
+ * 1fr. PickOrCreate's DEFAULT_CSS says as much, but the generic
+ * ``OptionList { height: 1fr }`` rule above is app-origin and outranks
+ * widget DEFAULT_CSS, so without this app-level override the picker
+ * balloons to fill the screen and shoves the Next button off the
+ * bottom. Re-assert auto + a cap here where it can win. */
+PickOrCreate > OptionList {
+    height: auto;
+    max-height: 10;
+}
+
+/* Review screen — DataTable of planned components defaults to 1fr
+ * from the generic `DataTable` rule above. Override for #components-
+ * table so it sizes to "header row + one row per component", same
+ * principle as the list pickers. */
+#components-table {
+    height: auto;
+    max-height: 20;
+}
+
+/* ConfigureSbom profile picker — inline OptionList that appears
+ * beneath the augmentation radio when "Use a contact profile" is
+ * chosen. (The augmentation panel moved from ConfigureWorkflow to
+ * ConfigureSbom; the picker lives there now alongside Enrichment.)
+ * Without an explicit constraint it inherits the generic OptionList
+ * `height: 1fr` rule and balloons to 20+ rows for two profile
+ * entries, pushing the Next button off the visible terminal area.
+ * Size to content (typical workspaces have a handful of profiles)
+ * and cap so a workspace with dozens still scrolls inside the panel
+ * rather than dominating it. */
+#profile-picker {
+    height: auto;
+    max-height: 8;
+    margin: 1 0 0 0;
+}
+
+#profile-help {
+    height: auto;
+    margin: 0 0 0 0;
+    color: $sbom-text-muted;
+}
+
+/* Review screen — the diff panel is the screen's flexible region: it takes
+ * 1fr so it soaks up whatever vertical space is left after the plan summary
+ * and components table, and the RichLog inside scrolls.
+ *
+ * min-height is the important half: 1fr of "whatever's left" resolved to
+ * ZERO rows on a short terminal, so the panel rendered as an empty box
+ * still captioned "preview of what apply will write" — reading as "no
+ * changes" immediately before the wizard writes a file. The minimum
+ * guarantees a usable diff; if that doesn't fit, the body scrolls. */
+#diff-panel {
+    height: 1fr;
+    min-height: 12;
+}
+
+#workflow-diff {
+    height: 1fr;
+    min-height: 8;
+}
+
+/* Apply screen — live log of apply_plan's progress. Same problem as
+ * #workflow-diff: the generic ``RichLog { height: 1fr }`` rule fills
+ * every remaining row, pushing the Continue / Back buttons under the
+ * apply panel below the visible terminal area. Symptom: user finishes
+ * apply, sees "success Wrote …" but no Continue button — wizard
+ * appears stuck. Size to content (typical apply emits <20 lines)
+ * and cap so a very chatty run still scrolls inside the panel
+ * rather than dominating the viewport. */
+#apply-log {
+    height: auto;
+    max-height: 20;
+}
+
+SelectionList:focus, OptionList:focus, ListView:focus {
+    border: tall $sbom-purple;
+}
+
+SelectionList > .selection-list--button-selected,
+OptionList > .option-list--option-highlighted {
+    background: $sbom-purple;
+    color: $sbom-primary;
+    text-style: bold;
+}
+
+DataTable {
+    height: 1fr;
+    margin: 1 0;
+    background: $sbom-secondary-bg;
+}
+
+DataTable > .datatable--header {
+    background: $sbom-primary-light;
+    color: $sbom-purple;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $sbom-purple;
+    color: $sbom-primary;
+}
+
+DataTable > .datatable--odd-row {
+    background: $sbom-secondary-bg;
+}
+
+DataTable > .datatable--even-row {
+    background: $sbom-primary-light;
+}
+
+/* ---------------------------------------------------------------------
+ * Progress + log surfaces
+ * --------------------------------------------------------------------- */
+
+/* Empty placeholder container on the authenticate screen — collapses
+ * to zero height until a LoadingIndicator is mounted inside it,
+ * otherwise it inherits Container's default 1fr and renders the empty
+ * widget's repr as visible text. */
+#auth-progress {
+    height: auto;
+    min-height: 0;
+}
+
+LoadingIndicator {
+    color: $sbom-purple;
+    background: transparent;
+}
+
+ProgressBar Bar > .bar--bar {
+    color: $sbom-purple;
+}
+
+ProgressBar Bar > .bar--complete {
+    color: $sbom-grad-peach;
+}
+
+RichLog {
+    background: $sbom-secondary-bg;
+    border: round $sbom-primary-600;
+    height: 1fr;
+    color: $sbom-text-muted;
+}
+
+/* ---------------------------------------------------------------------
+ * Responsive layout
+ *
+ * The wizard fits the viewport — nothing scrolls. ``WizardScreen``
+ * (_base.py) toggles ``-compact`` / ``-tiny`` on the screen from the
+ * live terminal size; the rules below react to those classes.
+ * --------------------------------------------------------------------- */
+
+/* Too-small guard — below the supported minimum (80x24) we hide the
+ * normal body and show a centered resize prompt in its place. Hidden by
+ * default; the screen only carries ``-tiny`` when it's genuinely too
+ * small to render. */
+#too-small {
+    display: none;
+    height: 1fr;
+    width: 1fr;
+    content-align: center middle;
+    text-align: center;
+}
+
+.-tiny .wizard-body {
+    display: none;
+}
+
+.-tiny #too-small {
+    display: block;
+}
+
+/* Art opt-out — the welcome mascot is the single tallest element, so it
+ * has its own breakpoint (see ART_* in _base.py): we keep showing it
+ * wherever it fits, and only hide it on terminals too short/narrow for
+ * the two-column hero. The text column carries the message on its own. */
+.-no-art .wizard-hero-mascot {
+    display: none;
+}
+
+/* The welcome "What we'll do" preview has its own bound (PREVIEW_HEIGHT)
+ * rather than riding on ``-compact``: it's a short text list that fits in
+ * far more terminals than the full comfortable layout, so we keep showing
+ * it down to medium-tall terminals and only drop it when genuinely short.
+ * (The progress crumb already communicates the eight steps regardless.) */
+.-no-preview #what-well-do {
+    display: none;
+}
+
+/* Compact mode — terminal is usable but below the roomy bound. Flatten
+ * the vertical padding / margins that exist purely to let the comfortable
+ * layout breathe. Everything here is additive over the comfortable
+ * defaults above, so a roomy terminal is completely unaffected. */
+
+.-compact .wizard-body {
+    padding: 0 2;
+}
+
+.-compact .wizard-hero {
+    padding: 0 2;
+    margin-bottom: 1;
+}
+
+.-compact .wizard-panel,
+.-compact .wizard-panel-emphasis {
+    padding: 0 2;
+    margin-bottom: 0;
+}
+
+.-compact .wizard-step-crumb,
+.-compact .wizard-hero-title,
+.-compact .wizard-hero-tagline,
+.-compact .wizard-title,
+.-compact .wizard-muted,
+.-compact .wizard-page-indicator {
+    margin-bottom: 0;
+}
+
+/* The per-screen subtitle is a secondary one-liner — the progress crumb
+ * already names the current step — so drop it on tight terminals to
+ * reclaim a row (two when it wraps). */
+.-compact .wizard-subtitle {
+    display: none;
+}
+
+/* Form controls: in the comfortable layout each Label has a top margin
+ * and each Input a bottom margin so fields breathe. On tight terminals
+ * those single-row gaps add up fast across a multi-field form — collapse
+ * them so the form body reclaims a row per control. */
+.-compact Label {
+    margin-top: 0;
+}
+
+/* A full Textual Input box is 3 rows (top border + text + bottom border).
+ * Across a multi-field form that's the dominant cost, so on tight
+ * terminals slim each Input to 2 rows — a single underline border that
+ * still separates adjacent fields and still carries the focus / invalid
+ * cue (purple when focused, red when invalid). */
+.-compact Input {
+    margin: 0;
+    height: 2;
+    min-height: 2;
+    border: none;
+    border-bottom: tall $sbom-primary-600;
+}
+
+.-compact Input:focus {
+    border: none;
+    border-bottom: tall $sbom-purple;
+}
+
+.-compact Input.-invalid {
+    border: none;
+    border-bottom: tall #F87171;
+}
+
+/* Progressive disclosure — drop the explanatory rationale prose so the
+ * controls fit. Warnings and status lines stay (they're ``wizard-muted``,
+ * not ``wizard-help``). The full copy returns on roomy terminals. */
+.-compact .wizard-help {
+    display: none;
+}
+
+/* Cards whose entire contents are ``wizard-help`` prose — the Components
+ * and form intros. Hiding just the prose left a titled, subtitled, empty
+ * two-row box, which reads as a rendering bug rather than as intentional
+ * compaction. Hide the whole card instead. Screens tag it explicitly, so a
+ * card that also carries a warning keeps rendering. */
+.-compact .wizard-panel-help-only {
+    display: none;
+}
+
+/* Capped scrollable regions — lists / tables / logs already scroll
+ * inside their own box, so on tight terminals we just lower the cap.
+ * The content is still fully reachable via the widget's own scrollbar;
+ * only the page itself never scrolls. */
+.-compact PickOrCreate > OptionList {
+    max-height: 6;
+}
+
+.-compact #lockfile-list {
+    max-height: 8;
+}
+
+.-compact #apply-log {
+    max-height: 8;
+}
+
+/* Review's components table scrolls internally; cap it hard on tight
+ * terminals so a long component list can't crowd out the plan summary
+ * or the diff (which is the 1fr flex region — see #diff-panel above). */
+.-compact #components-table {
+    max-height: 4;
+}
+
+.-compact #profile-picker {
+    max-height: 5;
+}
+
+.-compact .button-row {
+    padding-top: 0;
+    height: 1;
+}
+
+/* Flatten the action buttons on tight terminals: a bordered Textual
+ * Button is 3 rows tall (top border + label + bottom border); dropping
+ * the border makes each row-of-buttons 1 row instead of 3, reclaimed on
+ * every screen. The border normally doubles as the focus ring, so swap
+ * in a background/bold focus cue that reads without it. */
+.-compact .button-row Button {
+    border: none;
+    height: 1;
+    min-height: 1;
+}
+
+.-compact .button-row Button:focus {
+    background: $sbom-purple;
+    color: $sbom-primary;
+    text-style: bold;
+}
+
+.-compact .button-row Button.-primary:focus {
+    background: $sbom-grad-peach;
+    color: $sbom-primary;
+    text-style: bold;
+}

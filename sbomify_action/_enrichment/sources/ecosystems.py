@@ -8,6 +8,7 @@ from packageurl import PackageURL
 
 from sbomify_action.logging_config import logger
 
+from ..exceptions import TransientSourceError
 from ..license_utils import normalize_license_list
 from ..metadata import NormalizedMetadata
 from ..sanitization import normalize_vcs_url
@@ -87,6 +88,13 @@ class EcosystemsSource:
             metadata = None
             if response.status_code == 200:
                 data = response.json()
+                if purl.type == "github" and isinstance(data, list):
+                    # A pkg:github purl names a repository. ecosyste.ms also
+                    # answers with any registry package published from it --
+                    # typically a Go module proxy entry for a C++ library --
+                    # whose licence and registry URL are not this component's.
+                    # Only a GitHub Action is the repository itself.
+                    data = [entry for entry in data if isinstance(entry, dict) and entry.get("ecosystem") == "actions"]
                 # API returns an array, take first result
                 if isinstance(data, list) and len(data) > 0:
                     metadata = self._normalize_response(purl.type, data[0])
@@ -96,11 +104,16 @@ class EcosystemsSource:
                     logger.debug(f"No package data found in ecosyste.ms for: {purl_str}")
             elif response.status_code == 404:
                 logger.debug(f"Package not found in ecosyste.ms: {purl_str}")
-            elif response.status_code == 429:
-                logger.warning(
-                    f"Rate limit exceeded for ecosyste.ms: {purl_str}. "
-                    "Consider using an API key for higher rate limits."
-                )
+            elif response.status_code == 429 or response.status_code >= 500:
+                # Transient: must not be persisted as "no metadata".
+                if response.status_code == 429:
+                    logger.warning(
+                        f"Rate limit exceeded for ecosyste.ms: {purl_str}. "
+                        "Consider using an API key for higher rate limits."
+                    )
+                else:
+                    logger.warning(f"ecosyste.ms upstream error for {purl_str}: HTTP {response.status_code}")
+                raise TransientSourceError(f"HTTP {response.status_code} from {self.name}")
             else:
                 logger.warning(f"Failed to fetch ecosyste.ms metadata for {purl_str}: HTTP {response.status_code}")
 
@@ -110,12 +123,10 @@ class EcosystemsSource:
 
         except requests.exceptions.Timeout:
             logger.warning(f"Timeout fetching ecosyste.ms metadata for {purl_str}")
-            _cache[cache_key] = None
-            return None
+            raise TransientSourceError(f"Timeout from {self.name}") from None
         except requests.exceptions.RequestException as e:
             logger.warning(f"Error fetching ecosyste.ms metadata for {purl_str}: {e}")
-            _cache[cache_key] = None
-            return None
+            raise TransientSourceError(f"RequestException from {self.name}") from None
         except json.JSONDecodeError as e:
             logger.warning(f"JSON decode error for ecosyste.ms {purl_str}: {e}")
             _cache[cache_key] = None

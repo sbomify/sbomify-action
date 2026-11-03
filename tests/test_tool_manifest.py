@@ -1,0 +1,556 @@
+"""The tool manifest must stay the single source of truth.
+
+Versions, download locations and digests used to be restated in four places.
+They drifted: moving cosign and crane to on-demand fetching dropped them out
+of version monitoring entirely, and bomctl stayed declared in our own SBOM
+after it had been removed from the image. These tests make each of those
+failure modes fail loudly instead of silently.
+"""
+
+import re
+import shutil
+import subprocess
+import tarfile
+import tomllib
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from sbomify_action import runtimes, tool_manifest
+from sbomify_action.tool_manifest import (
+    STAGE_BUILD,
+    STAGE_IMAGE,
+    STAGE_RUNTIME,
+    ManifestError,
+    image_package_urls,
+    load_tools,
+    runtime_package_urls,
+    tools_for_stage,
+)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DOCKERFILE = REPO_ROOT / "Dockerfile"
+
+
+def test_versions_come_from_native_lockfiles_on_master():
+    """Tool versions must not be restated in tools.toml.
+
+    A second copy is a second thing to bump, and Dependabot cannot see a
+    bespoke file -- which is the whole reason these live in the manifests that
+    own them. The image build freezes them in (see
+    scripts/freeze_tool_versions.py), so this only holds on a source tree.
+    """
+    manifest = (Path(__file__).resolve().parent.parent / "sbomify_action" / "tools.toml").read_text()
+    if "frozen from the lockfile" in manifest:
+        pytest.skip("manifest is frozen; this is a built artifact, not a source tree")
+
+    body = tomllib.loads(manifest)["tool"]
+    restated = sorted(name for name, entry in body.items() if "version" in entry)
+
+    # cosign is the sole exception, and only because it is the one tool still
+    # fetched from its vendor: it verifies every bundle's attestation, and
+    # trust in a verifier cannot be bootstrapped from an artifact only that
+    # verifier can check. Every other tool is pinned in sbomify/sbom-tools
+    # now, so there is no lockfile left here to read its version from.
+    # bin/check_tool_versions.py watches it instead.
+    #
+    # Asserting the exception list rather than a count means adding a tool
+    # with a literal version fails here, instead of quietly nudging a number.
+    assert restated == ["cosign"], (
+        f"these restate a version instead of reading a native lockfile: {restated}. "
+        "A second copy is a second thing to bump, and Dependabot cannot see it."
+    )
+
+
+@pytest.mark.slow
+def test_a_built_wheel_carries_resolved_versions(tmp_path):
+    """Whatever builds the wheel, its manifest must not point at a lockfile.
+
+    tools.toml resolves uv's version from uv.lock, and uv.lock is not part of
+    the package: an installed copy looks for it beside the package under
+    site-packages, does not find it, and raises ManifestError while
+    sbomify_action.runtimes is still being imported -- so the command does not
+    start at all.
+
+    The image build has always run scripts/freeze_tool_versions.py first, which
+    is why the published wheel is fine. Every other way of building was broken:
+    `uv build`, `pip install .`, `pip install git+https://...`. The build hook
+    in hatch_build.py freezes the manifest into the artifact, so this now holds
+    for a wheel nobody remembered to prepare.
+
+    Marked slow: it builds a wheel, which is seconds rather than the
+    milliseconds the rest of this file costs. CI runs the whole suite, so this
+    only buys `-m "not slow"` back for local iteration.
+    """
+    root = Path(__file__).resolve().parent.parent
+    if "frozen from the lockfile" in (root / "sbomify_action" / "tools.toml").read_text():
+        pytest.skip("manifest is frozen; this is a built artifact, not a source tree")
+    if shutil.which("uv") is None:
+        pytest.skip("uv is not available to build a wheel")
+
+    result = subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(tmp_path)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    built = list(tmp_path.glob("*.whl"))
+    assert len(built) == 1, built
+    with zipfile.ZipFile(built[0]) as wheel:
+        names = wheel.namelist()
+        # Force-including the frozen copy while the source one is still
+        # collected would put two entries at this path, and which one wins on
+        # extraction is not something to leave to chance.
+        assert [n for n in names if n.endswith("tools.toml")] == ["sbomify_action/tools.toml"]
+        manifest = wheel.read("sbomify_action/tools.toml").decode()
+    assert "version_from" not in manifest, "the wheel still resolves a version from a lockfile it does not ship"
+
+    # Frozen for the artifact only: freezing the source tree in place would put
+    # the versions back out of Dependabot's reach.
+    assert "version_from" in (root / "sbomify_action" / "tools.toml").read_text()
+
+
+@pytest.mark.slow
+def test_a_built_sdist_carries_resolved_versions(tmp_path):
+    """The sdist needs the same guarantee, and gets there a longer way round.
+
+    sbomify_action/tools.toml is excluded from every target, and the frozen
+    copy is put back by force_include from the build hook. That makes the
+    manifest's presence in an sdist entirely dependent on the hook running --
+    a regression that stopped it firing for this target would ship an sdist
+    with no manifest at all, which fails later and further from the cause than
+    the wheel case does.
+
+    The sdist also has to be able to build a wheel on its own, which is why it
+    carries hatch_build.py and the freezer; asserted here so trimming the
+    include list shows up as a test failure rather than a broken
+    `pip install <sdist>`.
+    """
+    root = Path(__file__).resolve().parent.parent
+    if "frozen from the lockfile" in (root / "sbomify_action" / "tools.toml").read_text():
+        pytest.skip("manifest is frozen; this is a built artifact, not a source tree")
+    if shutil.which("uv") is None:
+        pytest.skip("uv is not available to build an sdist")
+
+    result = subprocess.run(
+        ["uv", "build", "--sdist", "--out-dir", str(tmp_path)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    built = list(tmp_path.glob("*.tar.gz"))
+    assert len(built) == 1, built
+    with tarfile.open(built[0]) as sdist:
+        names = sdist.getnames()
+        prefix = built[0].name.removesuffix(".tar.gz")
+        assert [n for n in names if n.endswith("tools.toml")] == [f"{prefix}/sbomify_action/tools.toml"]
+        member = sdist.extractfile(f"{prefix}/sbomify_action/tools.toml")
+        assert member is not None
+        manifest = member.read().decode()
+    assert "version_from" not in manifest, "the sdist still resolves a version from a lockfile it does not ship"
+
+    assert f"{prefix}/hatch_build.py" in names
+    assert f"{prefix}/scripts/freeze_tool_versions.py" in names
+
+    # Same as the wheel: frozen for the artifact only, so the versions stay
+    # where Dependabot can reach them.
+    assert "version_from" in (root / "sbomify_action" / "tools.toml").read_text()
+
+
+def test_lockfiles_are_the_ones_dependabot_watches():
+    """The manifest must point at files a Dependabot ecosystem covers."""
+    root = Path(__file__).resolve().parent.parent
+    assert (root / "uv.lock").exists(), "uv.lock is missing"
+
+    config = (root / ".github" / "dependabot.yml").read_text()
+    for ecosystem in ("uv", "docker", "github-actions"):
+        assert f'package-ecosystem: "{ecosystem}"' in config, f"{ecosystem} is not configured"
+
+    # Everything that pinned a tool moved to sbomify/sbom-tools with the tool,
+    # and is watched there. Watching any of it here would open PRs against
+    # manifests this repository no longer has -- and, while both copies
+    # existed, let the two disagree about which plugin version we apply.
+    for ecosystem in ("gomod", "cargo", "maven", "gradle", "bun"):
+        assert f'package-ecosystem: "{ecosystem}"' not in config, (
+            f"{ecosystem} is still watched here, but what it pinned moved to sbom-tools"
+        )
+    assert not (root / "tools").exists(), "tools/ belongs to sbom-tools now"
+
+
+def test_manifest_loads_and_validates():
+    tools = load_tools()
+    assert tools, "manifest defines no tools"
+    for name, tool in tools.items():
+        assert tool.version, f"{name} has no version"
+        assert tool.stage in (STAGE_IMAGE, STAGE_RUNTIME, STAGE_BUILD)
+        assert "{version}" in tool.purl or tool.version in tool.purl
+
+
+def test_dockerfile_versions_match_the_manifest():
+    """A pin bumped in one place and not the other is a silent mismatch.
+
+    The Dockerfile still has to carry literal ARGs -- it cannot read TOML --
+    so this is what keeps the two honest.
+    """
+    content = DOCKERFILE.read_text()
+    args = dict(re.findall(r"ARG\s+(\w+_VERSION)=(\S+)", content))
+
+    for name, tool in load_tools().items():
+        if not tool.dockerfile_arg:
+            continue
+        assert tool.dockerfile_arg in args, (
+            f"{name}: manifest names ARG {tool.dockerfile_arg}, which the Dockerfile does not define"
+        )
+        assert args[tool.dockerfile_arg] == tool.version, (
+            f"{name}: Dockerfile has {tool.dockerfile_arg}={args[tool.dockerfile_arg]} "
+            f"but the manifest pins {tool.version}"
+        )
+
+
+def test_every_dockerfile_version_arg_is_declared():
+    """A tool added to the image without a manifest entry is invisible.
+
+    It would be absent from the SBOM and from version monitoring -- which is
+    how bun ended up shipping in the image but missing from its own SBOM.
+    """
+    content = DOCKERFILE.read_text()
+    args = {a for a, _ in re.findall(r"ARG\s+(\w+_VERSION)=(\S+)", content)}
+    declared = {t.dockerfile_arg for t in load_tools().values() if t.dockerfile_arg}
+
+    assert args - declared == set(), f"Dockerfile pins versions not in tools.toml: {sorted(args - declared)}"
+
+
+def test_runtimes_are_built_from_the_manifest():
+    """runtimes.py must not carry its own copy of the pins."""
+    manifest_runtime = tools_for_stage(STAGE_RUNTIME)
+    assert set(runtimes.RUNTIMES) == set(manifest_runtime)
+    for name, spec in runtimes.RUNTIMES.items():
+        tool = manifest_runtime[name]
+        assert spec.version == tool.version
+        assert tool.assets is not None
+        for arch, arch_assets in tool.assets.items():
+            for i, asset in enumerate(arch_assets):
+                assert spec.assets[arch][i].digest == asset.digest
+                assert spec.assets[arch][i].algorithm == asset.algorithm
+                assert spec.assets[arch][i].url == asset.url
+
+
+def test_runtime_tools_are_absent_from_the_image_sbom():
+    """The image does not contain them, so it must not claim them.
+
+    This is the whole reason the build and runtime SBOMs diverge.
+    """
+    image = set(image_package_urls())
+    runtime = set(runtime_package_urls())
+    assert runtime, "nothing is fetched at run time, which cannot be right"
+    assert image.isdisjoint(runtime)
+    for tool in tools_for_stage(STAGE_RUNTIME).values():
+        assert tool.package_url not in image
+
+
+def test_the_image_bakes_in_no_external_tools():
+    """Only what is Python-native ships; everything else is fetched.
+
+    syft (83MB) and cargo-cyclonedx (6.9MB) were the last two baked in, and
+    neither was ecosystem-agnostic. cargo-cyclonedx was the clearer case: it
+    is a cargo *subcommand*, and cargo is fetched on demand, so the image
+    carried a binary that could not run without a 92MB download it did not
+    have. Both are runtime-stage now, which is what keeps the image at one
+    Python runtime plus our package.
+    """
+    baked = sorted(tools_for_stage(STAGE_IMAGE))
+    assert baked == [], (
+        f"these are baked into the image: {baked}. Anything not useful to every "
+        "ecosystem belongs at runtime stage, fetched by the users who need it."
+    )
+
+
+def test_build_only_tools_are_not_claimed_as_shipped():
+    """uv builds the image but is not in it."""
+    for tool in tools_for_stage(STAGE_BUILD).values():
+        assert not tool.ships_in_image
+        assert tool.package_url not in image_package_urls()
+
+
+def test_every_runtime_tool_can_actually_be_fetched():
+    """Missing assets would only surface on the first machine that needed them."""
+    for name, tool in tools_for_stage(STAGE_RUNTIME).items():
+        assert tool.assets, f"{name} has no assets"
+        assert set(tool.assets) == {"amd64", "arm64"}, f"{name} is missing an architecture"
+        for arch, arch_assets in tool.assets.items():
+            for asset in arch_assets:
+                if tool.built:
+                    assert asset.attestation, f"{name}/{arch} is ours but has no attestation to verify it"
+                    continue
+                expected = {"sha256": 64, "sha512": 128}[asset.algorithm]
+                assert re.fullmatch(rf"[0-9a-f]{{{expected}}}", asset.digest), (
+                    f"{name}/{arch} {asset.algorithm} digest is malformed"
+                )
+            assert asset.url.startswith("https://"), f"{name}/{arch} must be fetched over https"
+            if tool.built:
+                # Our own URLs carry the release, not the version --
+                # .../tools-rolling/syft-linux-amd64 -- because the release is
+                # what says which build these bytes came from. The check below
+                # is about vendor URLs drifting from the pinned version.
+                continue
+            # Vendors spell the same version differently in a URL: Adoptium
+            # uses both 21.0.12%2B8 and 21.0.12_8 for 21.0.12+8. Accept any
+            # encoding of the separator, but insist the version is in there --
+            # a bump that left the URL behind would fetch the old binary and
+            # still pass its checksum, which is the worst possible outcome.
+            candidates = {
+                tool.version,
+                tool.version.replace("+", "%2B"),
+                tool.version.replace("+", "_"),
+                tool.version.replace("+", "-"),
+                tool.version.replace("+", "."),
+            }
+            assert any(c in asset.url for c in candidates), (
+                f"{name}/{arch}: url does not mention {tool.version} in any encoding"
+            )
+
+
+def test_monitorable_tools_declare_an_upstream():
+    """Without github_repo a tool silently stops being version-checked."""
+    unmonitored = [n for n, t in load_tools().items() if not t.github_repo]
+    assert unmonitored == [], f"tools with no upstream to check: {unmonitored}"
+
+
+def test_unknown_stage_is_rejected():
+    with pytest.raises(ManifestError):
+        tools_for_stage("nonsense")
+
+
+class TestNativeLockfileReaders:
+    """Each reader must pin an exact version, and refuse anything that moves.
+
+    cdxgen is why this class exists. package.json tracked
+    ``github:cyclonedx/cdxgen#cc0c694`` -- a branch, resolved to whatever it
+    pointed at that day -- while tools.toml advertised
+    ``pkg:npm/%40cyclonedx/cdxgen@12.8.2``. Both looked pinned. Neither
+    described what shipped.
+    """
+
+    def test_bun_lock_yields_the_published_version(self, tmp_path):
+        lock = tmp_path / "bun.lock"
+        lock.write_text('{ "packages": { "@cyclonedx/cdxgen": ["@cyclonedx/cdxgen@12.8.2", "", {}, "sha512-x"], } }')
+        assert tool_manifest._version_from_bun_lock(lock, "@cyclonedx/cdxgen") == "12.8.2"
+
+    def test_bun_lock_refuses_a_git_specifier(self, tmp_path):
+        """The exact defect: a branch reference where a release should be."""
+        lock = tmp_path / "bun.lock"
+        lock.write_text(
+            '{ "packages": { "@cyclonedx/cdxgen": ["@cyclonedx/cdxgen@github:cyclonedx/cdxgen#cc0c694", ""], } }'
+        )
+        with pytest.raises(tool_manifest.ManifestError, match="not a released version"):
+            tool_manifest._version_from_bun_lock(lock, "@cyclonedx/cdxgen")
+
+    def test_go_toolchain_directive_wins_over_the_go_minimum(self, tmp_path):
+        """``go`` is the oldest toolchain that works, not the one we build with.
+
+        Reading it would have pinned us to 1.26.3 while 1.26.5 was current.
+        """
+        mod = tmp_path / "go.mod"
+        mod.write_text("module x\n\ngo 1.26.3\n\ntoolchain go1.26.5\n")
+        assert tool_manifest._version_from_go_toolchain(mod) == "1.26.5"
+
+    def test_go_falls_back_to_the_go_directive(self, tmp_path):
+        mod = tmp_path / "go.mod"
+        mod.write_text("module x\n\ngo 1.26.3\n")
+        assert tool_manifest._version_from_go_toolchain(mod) == "1.26.3"
+
+    def test_rust_toolchain_refuses_a_channel_alias(self, tmp_path):
+        """ "stable" is a different compiler every six weeks."""
+        toolchain = tmp_path / "rust-toolchain.toml"
+        toolchain.write_text('[toolchain]\nchannel = "stable"\n')
+        with pytest.raises(tool_manifest.ManifestError, match="exact version"):
+            tool_manifest._version_from_rust_toolchain(toolchain)
+
+    def test_rust_toolchain_accepts_an_exact_version(self, tmp_path):
+        toolchain = tmp_path / "rust-toolchain.toml"
+        toolchain.write_text('[toolchain]\nchannel = "1.97.1"\n')
+        assert tool_manifest._version_from_rust_toolchain(toolchain) == "1.97.1"
+
+    def test_uv_lock_and_cargo_lock_share_a_reader(self, tmp_path):
+        lock = tmp_path / "uv.lock"
+        lock.write_text('[[package]]\nname = "uv"\nversion = "0.12.1"\n')
+        assert tool_manifest._version_from_toml_lock(lock, "uv") == "0.12.1"
+
+    def test_an_unknown_lockfile_is_rejected(self):
+        with pytest.raises(tool_manifest.ManifestError, match="no reader for"):
+            tool_manifest._resolve_version("x", {"version_from": {"file": "README.md"}})
+
+
+class TestJvmPluginsComeFromTheBundle:
+    """The JVM plugin versions are pinned in sbomify/sbom-tools, not here.
+
+    They used to be pinned in both, in this repository's tools/pom.xml and in
+    that one's, each watched by Dependabot and free to disagree. They did:
+    sbom-tools reached 2.9.3 while this repository still said 2.9.1, so the
+    generator applied one version while the bundle advertised another.
+    """
+
+    def test_no_plugin_version_is_written_in_the_source(self):
+        """A literal here would be a pin nothing watches, in the wrong repo."""
+        source = (REPO_ROOT / "sbomify_action" / "_generation" / "generators" / "cyclonedx_jvm.py").read_text()
+        offenders = re.findall(r'"org\.cyclonedx:[a-z-]+:\d+\.\d+', source)
+        assert offenders == [], f"plugin versions hard-coded in the generator: {offenders}"
+
+    def test_the_manifests_are_gone(self):
+        """Deleting them is what leaves one source of truth."""
+        assert not (REPO_ROOT / "tools").exists(), "tools/ is owned by sbomify/sbom-tools now"
+
+    def test_the_version_is_read_from_the_bundle(self, monkeypatch, tmp_path):
+        from sbomify_action import runtimes
+
+        prefix = tmp_path / "bundle-jvm"
+        (prefix / "bin").mkdir(parents=True)
+        (prefix / "bundle.toml").write_text('[bundle]\nname = "jvm"\n\n[plugins]\ncyclonedx-maven = "9.9.9"\n')
+        monkeypatch.setattr(runtimes, "ensure_runtime", lambda _tool: prefix / "bin")
+        assert runtimes.bundle_plugin_version("mvn", "cyclonedx-maven") == "9.9.9"
+
+    def test_an_older_bundle_says_so_rather_than_guessing(self, monkeypatch, tmp_path):
+        """A bundle predating [plugins] must not silently fall back to a literal."""
+        from sbomify_action import runtimes
+        from sbomify_action.exceptions import SBOMGenerationError
+
+        prefix = tmp_path / "bundle-jvm"
+        (prefix / "bin").mkdir(parents=True)
+        (prefix / "bundle.toml").write_text('[bundle]\nname = "jvm"\n')
+        monkeypatch.setattr(runtimes, "ensure_runtime", lambda _tool: prefix / "bin")
+        with pytest.raises(SBOMGenerationError, match="declares no version"):
+            runtimes.bundle_plugin_version("mvn", "cyclonedx-maven")
+
+
+class TestJvmWrappersComeFromTheBundle:
+    """Which wrapper stands in for which tool is the bundle's fact too.
+
+    Same reasoning as the plugin pins above, and the same failure avoided: a
+    copy here would be a second repository describing that one's toolchain.
+    Unlike the plugin pins, silence is not fatal -- see below.
+    """
+
+    @staticmethod
+    def _bundle(monkeypatch, tmp_path, body: str):
+        from sbomify_action import runtimes
+
+        prefix = tmp_path / "bundle-jvm"
+        (prefix / "bin").mkdir(parents=True)
+        (prefix / "bundle.toml").write_text(body)
+        monkeypatch.setattr(runtimes, "ensure_runtime", lambda _tool: prefix / "bin")
+        return runtimes
+
+    def test_the_wrappers_are_read_from_the_bundle(self, monkeypatch, tmp_path):
+        runtimes = self._bundle(
+            monkeypatch,
+            tmp_path,
+            '[bundle]\nname = "jvm"\n\n'
+            '[wrappers.gradle]\nscript = "gradlew"\ntool = "gradle"\n'
+            'needs = "gradle/wrapper/gradle-wrapper.jar"\n\n'
+            '[wrappers.maven]\nscript = "mvnw"\ntool = "mvn"\n',
+        )
+
+        assert runtimes.bundle_wrappers("gradle") == {
+            "gradle": {"script": "gradlew", "tool": "gradle", "needs": "gradle/wrapper/gradle-wrapper.jar"},
+            "maven": {"script": "mvnw", "tool": "mvn"},
+        }
+
+    def test_an_older_bundle_is_silent_rather_than_fatal(self, monkeypatch, tmp_path):
+        """Deliberately unlike [plugins], which raises.
+
+        A missing plugin version has no sensible default -- there is no
+        version to apply. A missing wrapper map only costs the caller its own
+        defaults, and a bundle that cannot describe its wrappers should still
+        build.
+        """
+        runtimes = self._bundle(monkeypatch, tmp_path, '[bundle]\nname = "jvm"\n')
+
+        assert runtimes.bundle_wrappers("gradle") == {}
+
+    def test_a_half_declared_wrapper_is_ignored(self, monkeypatch, tmp_path):
+        """Without both script and tool there is nothing to act on."""
+        runtimes = self._bundle(
+            monkeypatch,
+            tmp_path,
+            '[bundle]\nname = "jvm"\n\n'
+            '[wrappers.gradle]\nscript = "gradlew"\n\n'
+            '[wrappers.maven]\nscript = "mvnw"\ntool = "mvn"\n',
+        )
+
+        assert runtimes.bundle_wrappers("gradle") == {"maven": {"script": "mvnw", "tool": "mvn"}}
+
+    def test_a_bundle_without_a_manifest_says_nothing(self, monkeypatch, tmp_path):
+        from sbomify_action import runtimes
+
+        prefix = tmp_path / "bundle-jvm"
+        (prefix / "bin").mkdir(parents=True)
+        monkeypatch.setattr(runtimes, "ensure_runtime", lambda _tool: prefix / "bin")
+
+        assert runtimes.bundle_wrappers("gradle") == {}
+
+
+class TestPomVersions:
+    """Reading a pinned version out of tools/pom.xml.
+
+    defusedxml ships no stubs, so everything this walks is untyped. The version
+    it returns has to be a real string, not whatever the parser handed back.
+    """
+
+    POM = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <dependencies>
+    <dependency>
+      <groupId>org.cyclonedx</groupId>
+      <artifactId>cyclonedx-maven-plugin</artifactId>
+      <version>2.9.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.example</groupId>
+      <artifactId>no-version-here</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+"""
+
+    def _pom(self, tmp_path: Path) -> Path:
+        path = tmp_path / "pom.xml"
+        path.write_text(self.POM)
+        return path
+
+    def test_it_returns_the_pinned_version(self, tmp_path: Path) -> None:
+        version = tool_manifest._version_from_pom(self._pom(tmp_path), "cyclonedx-maven-plugin")
+
+        assert version == "2.9.1"
+        assert type(version) is str
+
+    def test_a_declared_but_unpinned_dependency_says_which_it_is(self, tmp_path: Path) -> None:
+        """The artifact is right there in the file; "not found" sends the reader
+        hunting for something that is not missing. Usually a parent pom or a
+        dependencyManagement block supplies the version."""
+        with pytest.raises(ManifestError, match="declares no version"):
+            tool_manifest._version_from_pom(self._pom(tmp_path), "no-version-here")
+
+    def test_an_unknown_artifact_says_so(self, tmp_path: Path) -> None:
+        with pytest.raises(ManifestError, match="not found in"):
+            tool_manifest._version_from_pom(self._pom(tmp_path), "nothing-like-this")
+
+
+@pytest.mark.parametrize(("vcs_ref", "expected"), [("master", "rolling"), ("v26.10.3", None), (None, None)])
+def test_bundles_come_from_the_pin_except_on_a_master_build(monkeypatch, vcs_ref, expected):
+    """A released action fetches the sbom-tools release it pins; a master build fetches sbom-tools master."""
+    pinned = tomllib.loads((REPO_ROOT / "sbomify_action" / "tools.toml").read_text())["tools_release"]
+    assert pinned != "rolling", "tools.toml must pin a cut sbom-tools release"
+    if vcs_ref is None:
+        monkeypatch.delenv("SBOMIFY_GITHUB_ACTION_VCS_REF", raising=False)
+    else:
+        monkeypatch.setenv("SBOMIFY_GITHUB_ACTION_VCS_REF", vcs_ref)
+    tool_manifest.load_bundles.cache_clear()
+    try:
+        assert tool_manifest.bundle_for("go").release == (expected or pinned)
+    finally:
+        tool_manifest.load_bundles.cache_clear()
