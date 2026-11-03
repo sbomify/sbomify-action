@@ -55,8 +55,12 @@ def get_default_headers(token: Optional[str] = None, content_type: Optional[str]
 
 
 def _is_loopback(host: str) -> bool:
-    """True for localhost, ``*.localhost`` (RFC 6761) and loopback IP literals."""
-    if host == "localhost" or host.endswith(".localhost"):
+    """True for the literal localhost and loopback IP literals (127.0.0.0/8, ::1).
+
+    Not ``*.localhost``: RFC 6761 asks resolvers to keep it on the machine, but
+    glibc with ``hosts: files dns`` (the action image) sends it to DNS.
+    """
+    if host == "localhost":
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
@@ -123,5 +127,5 @@ def validate_endpoint_url(
         raise ConfigurationError(
             f"{setting} must use https:// for {parts.hostname}. Over plain http:// {credential} "
             "crosses the network unencrypted, readable by anyone on the path. http:// is only "
-            f"accepted for localhost, 127.0.0.1 and ::1.{opt_in}"
+            f"accepted for localhost, 127.0.0.0/8 and ::1.{opt_in}"
         )

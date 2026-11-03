@@ -102,11 +102,17 @@ class TestValidateEndpointUrl(unittest.TestCase):
             "http://localhost:8080",
             "http://LOCALHOST",
             "http://127.0.0.1:8000/api",
+            "http://127.0.0.2",
             "http://[::1]:8081/api",
-            "http://dtrack.localhost/api",
         ):
             with self.subTest(url=url):
                 validate_endpoint_url(url, "SOME_URL")
+
+    def test_http_to_localhost_subdomain_rejected(self):
+        # glibc with `hosts: files dns` (the action image) sends these to DNS.
+        for url in ("http://foo.localhost", "http://dtrack.localhost/api"):
+            with self.subTest(url=url):
+                self.assert_rejected(url, "https://")
 
     def test_http_to_remote_host_rejected(self):
         message = self.assert_rejected("http://dtrack.example.com/api", "https://", "dtrack.example.com")
