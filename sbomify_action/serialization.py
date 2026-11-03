@@ -21,7 +21,7 @@ from packageurl import PackageURL
 from spdx_tools.spdx.model import Document  # type: ignore[attr-defined]
 
 from ._spdx_collections import spdx_objects
-from ._spdx_expression import parse_spdx_expression, spdx_licensing, unknown_spdx_keys
+from ._spdx_expression import is_known_spdx_expression, parse_spdx_expression, spdx_licensing, unknown_spdx_keys
 from .console import get_transformation_tracker
 from .logging_config import logger
 
@@ -1094,9 +1094,15 @@ def sanitize_cyclonedx_licenses(data: dict[str, Any]) -> int:
                         # JSON text and then demoted to `name`, so joining it
                         # raw produced `Apache-2.0 OR ["MIT"]`. An SPDX id
                         # under `name` -- which the demotion step above never
-                        # writes, but a generator may -- is left alone.
+                        # writes, but a generator may -- is left alone, and so
+                        # is a name that is already a valid SPDX expression
+                        # (`MIT OR Apache-2.0`), which joins cleanly as is.
                         if "id" not in lic and _canonical_spdx_license_id(part) is None:
-                            part = _to_license_ref(part)
+                            if is_known_spdx_expression(part):
+                                # Parenthesize AND to keep precedence in the OR join.
+                                part = f"({part})" if " AND " in part else part
+                            else:
+                                part = _to_license_ref(part)
                         parts.append(part)
 
         if not parts:
