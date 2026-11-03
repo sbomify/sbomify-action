@@ -139,10 +139,13 @@ class ValidationResult:
     - True: Validation passed
     - False: Validation failed
     - None: Validation was skipped (e.g., no schema available)
+
+    `sbom_format` is None only on a failure for a file that is missing, is not
+    JSON, or is neither CycloneDX nor SPDX, so it has no format to report.
     """
 
     valid: bool | None
-    sbom_format: SBOMFormat
+    sbom_format: SBOMFormat | None
     spec_version: str
     error_message: str | None = None
     error_path: str | None = None
@@ -155,7 +158,7 @@ class ValidationResult:
     @classmethod
     def failure(
         cls,
-        sbom_format: SBOMFormat,
+        sbom_format: SBOMFormat | None,
         spec_version: str,
         error_message: str,
         error_path: str | None = None,
@@ -334,20 +337,23 @@ def validate_sbom_file(
     return validate_sbom_data(sbom_data, sbom_format, spec_version)
 
 
-def detect_sbom_format_and_version(sbom_data: dict[str, Any]) -> tuple[SBOMFormat | None, str | None]:
+def detect_sbom_format_and_version(sbom_data: Any) -> tuple[SBOMFormat | None, str | None]:
     """
     Detect the format and version of an SBOM from its data.
 
     Args:
-        sbom_data: The parsed SBOM JSON data
+        sbom_data: The parsed SBOM JSON data, which may be any JSON value
 
     Returns:
         Tuple of (format, version) or (None, None) if unrecognized
     """
+    if not isinstance(sbom_data, dict):
+        return None, None
+
     # CycloneDX detection
     if "bomFormat" in sbom_data and sbom_data.get("bomFormat") == "CycloneDX":
         spec_version = sbom_data.get("specVersion")
-        if spec_version:
+        if isinstance(spec_version, str) and spec_version:
             return "cyclonedx", spec_version
         return "cyclonedx", None
 
@@ -362,7 +368,7 @@ def detect_sbom_format_and_version(sbom_data: dict[str, Any]) -> tuple[SBOMForma
     if "spdxVersion" in sbom_data:
         spdx_version = sbom_data.get("spdxVersion", "")
         # Extract version from "SPDX-2.3" format
-        if spdx_version.startswith("SPDX-"):
+        if isinstance(spdx_version, str) and spdx_version.startswith("SPDX-"):
             version = spdx_version[5:]  # Remove "SPDX-" prefix
             return "spdx", version
         return "spdx", None
@@ -383,17 +389,18 @@ def validate_sbom_file_auto(file_path: str) -> ValidationResult:
     path = Path(file_path)
     if not path.exists():
         return ValidationResult.failure(
-            sbom_format="cyclonedx",  # Default for error reporting
+            sbom_format=None,
             spec_version="unknown",
             error_message=f"File not found: {file_path}",
         )
 
     try:
-        with open(path, encoding="utf-8") as f:
+        # Read the file the way step 1's validate_sbom() does, so the two agree.
+        with open(path, encoding="utf-8-sig") as f:
             sbom_data = json.load(f)
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
         return ValidationResult.failure(
-            sbom_format="cyclonedx",
+            sbom_format=None,
             spec_version="unknown",
             error_message=f"Invalid JSON: {e}",
         )
@@ -402,7 +409,7 @@ def validate_sbom_file_auto(file_path: str) -> ValidationResult:
 
     if sbom_format is None:
         return ValidationResult.failure(
-            sbom_format="cyclonedx",
+            sbom_format=None,
             spec_version="unknown",
             error_message="Could not detect SBOM format (not CycloneDX or SPDX)",
         )
