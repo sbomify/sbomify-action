@@ -864,7 +864,8 @@ def resolve_npm_lockfile(directory: Path) -> Path | None:
     # missing one is a committed file removed from a checkout. Ownership is
     # recorded instead of inferred.
     candidates = (directory / "bun.lock", directory / "bun.lockb")
-    pre_existing = {c for c in candidates if c.is_symlink() or c.exists()}
+    # No is_symlink() here: a linked lock already returned above.
+    pre_existing = {c for c in candidates if c.exists()}
 
     try:
         subprocess.run(
