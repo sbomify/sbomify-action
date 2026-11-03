@@ -190,15 +190,16 @@ class DoneScreen(WizardScreen):
         """One line per publish run + where the local SBOM files live.
 
         Dry-run renders "would publish" phrasing since nothing was
-        generated or uploaded; error strings are escaped because they
-        quote subprocess/exception text that can contain ``[``.
+        generated or uploaded. Everything interpolated is escaped: lockfile
+        paths can legally contain ``[``/``]``, and error strings quote
+        subprocess/exception text.
         """
         from rich.markup import escape as _esc
 
         state = self.wizard.state
         lines: list[str] = []
         for outcome in state.publish_outcomes:
-            label = f"{outcome.rel_path}  [#5E5E5E]({outcome.sbom_format})[/]"
+            label = f"{_esc(outcome.rel_path)}  [#5E5E5E]({_esc(outcome.sbom_format)})[/]"
             if state.is_dry_run:
                 lines.append(f"[#5E5E5E]◌  would publish[/]  {label}")
             elif outcome.ok:

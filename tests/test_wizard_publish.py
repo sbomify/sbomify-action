@@ -490,6 +490,31 @@ def test_published_summary_shows_failure_reason_and_ci_note(monkeypatch: pytest.
     assert "CI retries on the next push" in text
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_published_summary_escapes_the_lockfile_path_and_format(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, dry_run: bool
+) -> None:
+    """A lockfile path may legally hold ``[``/``]``; it must render as typed,
+    not as a style tag that eats the text or restyles the rest of the line."""
+    from rich.text import Text
+
+    state = _state(tmp_path)
+    state.is_dry_run = dry_run
+    state.publish_outcomes = [
+        PublishOutcome(
+            rel_path="libs/[red]core/uv.lock",
+            sbom_format="[b]cyclonedx",
+            output_file=tmp_path / "w.cdx.json",
+            ok=True,
+        )
+    ]
+
+    plain = Text.from_markup(_done_screen(monkeypatch, state)._published_summary()).plain
+
+    assert "libs/[red]core/uv.lock" in plain
+    assert "([b]cyclonedx)" in plain
+
+
 def test_published_summary_dry_run_uses_would_publish_phrasing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     state = _state(tmp_path)
     state.is_dry_run = True
