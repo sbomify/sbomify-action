@@ -10,13 +10,14 @@ from cyclonedx.model.bom import Bom
 
 from ..console import get_audit_trail
 from ..logging_config import logger
-from ..serialization import serialize_cyclonedx_bom
+from ..serialization import load_cyclonedx_bom, serialize_cyclonedx_bom
 from ..spdx3 import is_spdx3
 from .models import HashAlgorithm, PackageHash, normalize_package_name
 from .parsers import (
     CargoLockParser,
     PackageLockParser,
     PipfileLockParser,
+    PlatformIOParser,
     PnpmLockParser,
     PoetryLockParser,
     PubspecLockParser,
@@ -45,6 +46,9 @@ def create_default_registry() -> ParserRegistry:
     registry.register(PackageLockParser())
     registry.register(YarnLockParser())
     registry.register(PnpmLockParser())
+
+    # PlatformIO: checksums come from the registry, not the project
+    registry.register(PlatformIOParser())
 
     return registry
 
@@ -303,7 +307,7 @@ def enrich_sbom_with_hashes(
     lock_path = Path(lock_file)
 
     # Load SBOM
-    with sbom_path.open("r") as f:
+    with sbom_path.open("r", encoding="utf-8") as f:
         sbom_data = json.load(f)
 
     enricher = HashEnricher()
@@ -311,13 +315,13 @@ def enrich_sbom_with_hashes(
     # Detect format and enrich
     if sbom_data.get("bomFormat") == "CycloneDX":
         # CycloneDX format
-        bom = Bom.from_json(sbom_data)  # type: ignore[attr-defined]
+        bom = load_cyclonedx_bom(sbom_data)
         stats = enricher.enrich_cyclonedx(bom, lock_path, overwrite_existing)
 
         # Serialize back
         spec_version = sbom_data.get("specVersion", "1.6")
         serialized = serialize_cyclonedx_bom(bom, spec_version)
-        with sbom_path.open("w") as f:
+        with sbom_path.open("w", encoding="utf-8") as f:
             f.write(serialized)
 
     elif sbom_data.get("spdxVersion"):
@@ -325,7 +329,7 @@ def enrich_sbom_with_hashes(
         stats = enricher.enrich_spdx(sbom_data, lock_path, overwrite_existing)
 
         # Write back
-        with sbom_path.open("w") as f:
+        with sbom_path.open("w", encoding="utf-8") as f:
             json.dump(sbom_data, f, indent=2)
 
     elif is_spdx3(sbom_data):

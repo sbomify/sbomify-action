@@ -75,6 +75,17 @@ class ToolNotAvailableError(SBOMGenerationError):
         super().__init__(message or f"No SBOM generation tools available for {input_type}")
 
 
+class ProjectResolutionError(SBOMGenerationError):
+    """Raised when the ecosystem's own tooling cannot resolve the user's project.
+
+    The generator ran correctly; the project it was pointed at could not be
+    read by its package manager -- a manifest that does not parse, a workspace
+    member that is missing, a private registry or git dependency the runner
+    cannot reach. Only the user can fix that, so it is reported to them with
+    the tool's own explanation and kept out of error telemetry.
+    """
+
+
 class SBOMValidationError(SbomifyError):
     """Raised when SBOM validation fails."""
 
@@ -87,8 +98,37 @@ class AuthError(APIError):
     """Raised when the sbomify API rejects credentials (401)."""
 
 
+class ForbiddenError(APIError):
+    """Raised when the sbomify API returns 403 — authenticated but not
+    permitted (e.g. a workspace-scoped token reaching a workspace outside
+    its scope). Distinct from ``AuthError`` (401, bad credentials) so callers
+    can tell "this token can't touch this resource" apart from a transient
+    failure and react accordingly."""
+
+
 class PlanLimitError(APIError):
-    """Raised when an API operation fails due to plan limits (e.g., max components)."""
+    """Raised when an API operation fails due to plan limits (e.g., max components).
+
+    ``resource`` names what hit the limit (``"product"`` or ``"component"``)
+    so UI layers (e.g. the wizard's apply screen) can offer a targeted
+    recovery path — reuse an existing product vs. reuse existing components.
+    """
+
+    def __init__(self, message: str, *, resource: str | None = None) -> None:
+        super().__init__(message)
+        self.resource = resource
+
+
+class DuplicateArtifactError(APIError):
+    """Raised when every upload failure was "this version already exists".
+
+    An expected outcome, not a defect: re-running a workflow on the same
+    commit, or two triggers racing on one push, both land here. The run
+    still fails so the user knows nothing new was published, but it is
+    filtered out of telemetry the same way the other user-side conditions
+    are — see ``initialize_sentry``. It accounted for ~10% of all reported
+    events before being classified.
+    """
 
 
 class OIDCError(APIError):
@@ -110,6 +150,21 @@ class OIDCExchangeError(OIDCError):
 
 class FileProcessingError(SbomifyError):
     """Raised when file operations fail."""
+
+
+class InputPathNotFoundError(FileProcessingError):
+    """Raised when the path the *user* named does not exist.
+
+    A distinct type only so telemetry can tell it apart. "You pointed
+    LOCK_FILE at a file that is not there" is a user-side condition like the
+    others ``initialize_sentry`` filters -- the run still fails and the user
+    still gets the message naming every location searched, but it is not a
+    defect in the action and does not belong in Sentry.
+
+    Deliberately narrow: it covers the paths a user supplies, not every
+    missing file. "No SBOM file found from previous step" stays a plain
+    ``FileProcessingError``, because that one *is* a bug in the pipeline.
+    """
 
 
 class CommandExecutionError(SbomifyError):

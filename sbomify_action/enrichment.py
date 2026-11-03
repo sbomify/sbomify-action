@@ -104,9 +104,10 @@ from .generation import (
 )
 from .logging_config import logger
 from .serialization import (
+    get_spdx_root_package,
     link_root_dependencies,
+    load_cyclonedx_bom,
     restore_spdx_document_describes,
-    sanitize_cyclonedx_licenses,
     sanitize_dependency_graph,
     sanitize_purls,
     sanitize_spdx_json_file,
@@ -186,6 +187,8 @@ LOCKFILE_DESCRIPTIONS = {
     # C++
     "conan.lock": "C++ Conan lockfile",
     "vcpkg.json": "C++ vcpkg manifest",
+    # Embedded
+    "platformio.ini": "PlatformIO project (installed libraries)",
 }
 
 # CycloneDX component type for operating system
@@ -288,7 +291,7 @@ def _enrich_lockfile_packages(document: Document) -> int:
 
     Instead of removing lockfiles, we enrich them with:
     - Description: Human-readable description based on lockfile type
-    - Supplier: Same as the main package (first package in document)
+    - Supplier: Same as the main package (the one the document describes)
     - Version: Inherited from main package or set to "0"
 
     Note: SPDX spdx_id already serves as the unique identifier.
@@ -300,17 +303,15 @@ def _enrich_lockfile_packages(document: Document) -> int:
     if not lockfile_packages:
         return 0
 
-    # Get supplier and version from the main package (usually first package represents the described component)
+    # Get supplier and version from the main package: the one the document
+    # describes, not the first dependency that happens to have them
     root_supplier = None
     root_version = None
-    if document.packages:
-        for pkg in document.packages:
-            if pkg.supplier and not isinstance(pkg.supplier, (SpdxNoAssertion, SpdxNone)):
-                root_supplier = pkg.supplier
-            if pkg.version and pkg.version != "NOASSERTION":
-                root_version = pkg.version
-            if root_supplier and root_version:
-                break
+    if (root := get_spdx_root_package(document)) is not None:
+        if root.supplier and not isinstance(root.supplier, (SpdxNoAssertion, SpdxNone)):
+            root_supplier = root.supplier
+        if root.version and root.version != "NOASSERTION":
+            root_version = root.version
 
     for pkg in lockfile_packages:
         # Add description if not present
@@ -382,7 +383,7 @@ def _extract_packages_from_spdx(document: Document) -> List[Tuple[Package, str]]
     return packages
 
 
-# Filename suffixes that BSI TR-03183-2 §5.2.2 recognises as archives.
+# Filename suffixes that BSI TR-03183-2 §5.2.2 recognizes as archives.
 # Covers common language-agnostic wheel / tarball / zip / container formats.
 _BSI_ARCHIVE_SUFFIXES = (
     ".whl",
@@ -450,7 +451,7 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
                                  component that reaches derivation has a
                                  distribution filename or a strongly-typed
                                  packaging semantics, both of which imply
-                                 an identifiable, parseable artefact per
+                                 an identifiable, parseable artifact per
                                  BSI §8.1.6. We don't have a reliable
                                  signal to emit "unstructured", so we
                                  leave that classification to operator
@@ -469,9 +470,9 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
     Returns the list of property names that were added (for audit trail).
     """
     added: List[str] = []
-    # `Component.properties` can be None on deserialised or user-constructed
+    # `Component.properties` can be None on deserialized or user-constructed
     # components (see _enrich_os_component which already handles this).
-    # Initialise with a plain `set()` so the subsequent `.add()` calls work
+    # Initialize with a plain `set()` so the subsequent `.add()` calls work
     # without depending on `sortedcontainers`.
     if component.properties is None:
         component.properties = set()
@@ -515,26 +516,26 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
             added.append("bsi:component:executable")
 
     # --- structured ---
-    # Packaged software artefacts (wheels, jars, debs, containers, firmware
+    # Packaged software artifacts (wheels, jars, debs, containers, firmware
     # images) all carry metadata files, so they qualify as "structured" per
     # BSI §8.1.6. Base the signal on the component's inherent shape, not on
     # whether this invocation happened to add archive/executable:
-    #   1. A recognised filename suffix (archive OR executable) → structured.
+    #   1. A recognized filename suffix (archive OR executable) → structured.
     #   2. An existing bsi:component:archive / bsi:component:executable
     #      property already on the component (operator-supplied) → structured.
     #   3. A deployable component type (application / container / firmware /
     #      operating-system) → structured.
-    # A bare `library` with an unrecognised filename suffix and no
+    # A bare `library` with an unrecognized filename suffix and no
     # operator-supplied archive/executable hints is ambiguous and gets
     # nothing — per the docstring contract, we do not guess "structured"
     # from weak signals.
-    has_recognised_filename = bool(filename) and (
+    has_recognized_filename = bool(filename) and (
         _filename_suffix_matches(filename, _BSI_ARCHIVE_SUFFIXES)
         or _filename_suffix_matches(filename, _BSI_EXECUTABLE_SUFFIXES)
     )
     operator_has_archive_exec = "bsi:component:archive" in existing or "bsi:component:executable" in existing
     has_structured_signal = bool(
-        has_recognised_filename
+        has_recognized_filename
         or operator_has_archive_exec
         or archive_value is not None
         or exec_value is not None
@@ -549,7 +550,7 @@ def _apply_bsi_derived_properties(component: Component, metadata: NormalizedMeta
 
 # Map SPDX-style algorithm names (PyPI digest keys) to CycloneDX HashAlgorithm.
 # The CycloneDX taxonomy uses upper-case SHA-256 etc.; the PyPI JSON API and
-# SPDX checksum fields use lower-case sha256 etc. We normalise to the enum.
+# SPDX checksum fields use lower-case sha256 etc. We normalize to the enum.
 _CYCLONEDX_HASH_ALGORITHMS: Dict[str, HashAlgorithm] = {
     "md5": HashAlgorithm.MD5,
     "sha1": HashAlgorithm.SHA_1,
@@ -607,7 +608,7 @@ _SPDX_CHECKSUM_ALGORITHMS: Dict[str, ChecksumAlgorithm] = {
 
 
 def _apply_spdx_checksums(package: Package, hashes: Dict[str, str]) -> List[str]:
-    """Add distribution-artefact checksums to an SPDX package.
+    """Add distribution-artifact checksums to an SPDX package.
 
     Shares the same hex-length validation as the CycloneDX path so that
     any non-hex or malformed payload is rejected rather than written out
@@ -682,14 +683,14 @@ def _is_valid_hex_hash(alg_key: str, value: str) -> bool:
 
 
 def _apply_component_hashes(component: Component, hashes: Dict[str, str]) -> List[str]:
-    """Add distribution-artefact hashes to a CycloneDX component from a
-    `{algorithm: hex}` map. Only recognised algorithms with valid hex
+    """Add distribution-artifact hashes to a CycloneDX component from a
+    `{algorithm: hex}` map. Only recognized algorithms with valid hex
     content of the expected length are emitted; the same (alg, content)
     pair is not duplicated across enrichment runs.
 
     `Component.hashes` defaults to an empty collection in the CycloneDX
-    library, but deserialised or user-constructed components may legitimately
-    have `hashes is None`. Initialise with a plain `set()` (matching
+    library, but deserialized or user-constructed components may legitimately
+    have `hashes is None`. Initialize with a plain `set()` (matching
     `_hash_enrichment/enricher.py`) so enrichment does not crash on such
     input and does not depend on the transitive `sortedcontainers` package.
     """
@@ -709,7 +710,7 @@ def _apply_component_hashes(component: Component, hashes: Dict[str, str]) -> Lis
             continue
         # `component.hashes` is typed as Iterable[HashType] by the
         # cyclonedx lib (the concrete default is SortedSet), so cast it
-        # locally to suppress mypy while preserving runtime behaviour.
+        # locally to suppress mypy while preserving runtime behavior.
         component.hashes.add(HashType(alg=cdx_alg, content=value))  # type: ignore[union-attr]
         added.append(f"hash:{alg_key}")
         existing.add((str(cdx_alg), value))
@@ -737,8 +738,8 @@ def _apply_metadata_to_cyclonedx_component(
     purl_str = str(component.purl) if component.purl else component.name
 
     # `Component.properties` / `.licenses` / `.external_references` can be
-    # `None` on deserialised or user-constructed components. The enrichment
-    # path below iterates/adds to all three, so normalise them up-front
+    # `None` on deserialized or user-constructed components. The enrichment
+    # path below iterates/adds to all three, so normalize them up-front
     # rather than scattering `is None` guards across every branch. Plain
     # `set()` matches `_hash_enrichment/enricher.py` and avoids relying on
     # the transitive `sortedcontainers` default.
@@ -757,8 +758,8 @@ def _apply_metadata_to_cyclonedx_component(
             added_fields.append("description")
 
     # Licenses (sanitized) — marked as "declared" because enrichment pulls
-    # the licence straight from the upstream registry (PyPI trove classifier,
-    # package metadata, etc.), which is BSI §5.2.4's "original licence".
+    # the license straight from the upstream registry (PyPI trove classifier,
+    # package metadata, etc.), which is BSI §5.2.4's "original license".
     has_licenses = component.licenses is not None and len(component.licenses) > 0
     if not has_licenses and metadata.licenses:
         sanitized_licenses: list[str] = [s for lic in metadata.licenses if (s := sanitize_license(lic)) is not None]
@@ -799,7 +800,7 @@ def _apply_metadata_to_cyclonedx_component(
     added_fields.extend(_added_bsi)
 
     # Hashes (NTIA / BSI §5.2.2 / CISA "Component Hash"). Only add algorithms
-    # we recognise and that aren't already on the component.
+    # we recognize and that aren't already on the component.
     if metadata.hashes:
         _added_hashes = _apply_component_hashes(component, metadata.hashes)
         added_fields.extend(_added_hashes)
@@ -1000,9 +1001,10 @@ def _apply_metadata_to_spdx_package(
             return True
         return False
 
-    # Registry URL (sanitized)
+    # Registry URL (sanitized). OTHER, because SPDX allows only purl,
+    # maven-central, npm, nuget and bower as PACKAGE-MANAGER reference types.
     if metadata.registry_url:
-        if _add_external_ref(ExternalPackageRefCategory.PACKAGE_MANAGER, "url", metadata.registry_url):
+        if _add_external_ref(ExternalPackageRefCategory.OTHER, "url", metadata.registry_url):
             added_fields.append("externalRef (registry)")
 
     # Documentation URL (sanitized)
@@ -1156,11 +1158,10 @@ def _enrich_self_referencing_packages(document: Document) -> int:
     Returns:
         Number of packages enriched
     """
-    if not document.packages:
+    main_package = get_spdx_root_package(document)
+    if main_package is None:
         return 0
 
-    # First package is usually the main/root package
-    main_package = document.packages[0]
     root_name = main_package.name
     if not root_name:
         return 0
@@ -1171,9 +1172,9 @@ def _enrich_self_referencing_packages(document: Document) -> int:
         return 0
 
     enriched_count = 0
-    for package in document.packages[1:]:  # Skip first (main) package
+    for package in document.packages:
         # Check if package name matches root package (self-referencing)
-        if package.name == root_name:
+        if package is not main_package and package.name == root_name:
             if not package.supplier or isinstance(package.supplier, (SpdxNoAssertion, SpdxNone)):
                 package.supplier = root_supplier
                 _add_enrichment_source_comment(package, "root-package")
@@ -1470,6 +1471,7 @@ def _enrich_spdx3_sbom(input_path: Path, output_path: Path, enricher: Enricher) 
         make_spdx3_creation_info,
         make_spdx3_spdx_id,
         parse_spdx3_file,
+        spdx3_ids_stating_a_license,
         spdx3_license_from_string,
         write_spdx3_file,
     )
@@ -1488,6 +1490,10 @@ def _enrich_spdx3_sbom(input_path: Path, output_path: Path, enricher: Enricher) 
         return
 
     logger.info(f"Found {len(packages)} packages to enrich")
+
+    # Once, not once per package: asking per package walks the whole payload
+    # each time, which over a large document is packages times elements.
+    already_declared = spdx3_ids_stating_a_license(payload)
 
     spdx3_sources: Dict[str, int] = {}
     stats: Dict[str, Any] = {
@@ -1536,7 +1542,10 @@ def _enrich_spdx3_sbom(input_path: Path, output_path: Path, enricher: Enricher) 
                 added_fields.append("download_location")
 
         # License
-        if metadata.licenses and not package.declared_license:
+        # `declared_license` is unset on any package whose author stated a
+        # licence the 3.0.1 way, as a relationship, so it alone is not enough
+        # to tell an undeclared package from a declared one.
+        if metadata.licenses and not package.declared_license and package.spdx_id not in already_declared:
             # Use first license
             license_str = metadata.licenses[0] if metadata.licenses else None
             if license_str:
@@ -1655,7 +1664,7 @@ def enrich_sbom(input_file: str, output_file: str, validate: bool = True) -> Non
 
     # Parse input file
     try:
-        with open(input_path, "r") as f:
+        with open(input_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
         raise FileNotFoundError(f"Input SBOM file not found: {input_file}")
@@ -1722,12 +1731,11 @@ def _enrich_cyclonedx_sbom(data: Dict[str, Any], input_path: Path, output_path: 
                     components.append(component_data)
                 data["metadata"]["tools"] = {"components": components, "services": []}
 
-    # Sanitize invalid license IDs (e.g., Trivy puts non-SPDX IDs in license.id field)
-    sanitize_cyclonedx_licenses(data)
-
-    # Parse BOM
+    # Parse BOM, repairing the licence shapes the deserializer refuses
+    # (Trivy puts non-SPDX ids in license.id, cdxgen puts a bare string in
+    # license.text).
     try:
-        bom = Bom.from_json(data)  # type: ignore[attr-defined]
+        bom = load_cyclonedx_bom(data)
     except Exception as e:
         raise SBOMValidationError(f"Failed to parse CycloneDX SBOM: {e}")
 
@@ -1741,7 +1749,7 @@ def _enrich_cyclonedx_sbom(data: Dict[str, Any], input_path: Path, output_path: 
     if not components:
         logger.warning("No components with PURLs found in SBOM, skipping enrichment")
         serialized = _sanitize_and_serialize_cyclonedx(bom, spec_version)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(serialized)
         return
 
@@ -1762,7 +1770,7 @@ def _enrich_cyclonedx_sbom(data: Dict[str, Any], input_path: Path, output_path: 
     # Write output
     try:
         serialized = _sanitize_and_serialize_cyclonedx(bom, spec_version)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(serialized)
         logger.info(f"Enriched SBOM written to: {output_path}")
     except Exception as e:

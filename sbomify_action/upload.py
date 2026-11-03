@@ -4,6 +4,10 @@ Public API for SBOM uploads using the plugin architecture.
 This module provides a simple interface for uploading SBOMs to various
 destinations using the plugin-based upload system.
 
+Documents (PDFs and the like) go through upload_document() instead: they are
+not SBOMs, they upload to a component of type "document", and only sbomify
+accepts them.
+
 Destinations:
 - sbomify: Uses global config (TOKEN, COMPONENT_ID, API_BASE_URL)
 - dependency-track: Uses DTRACK_* prefixed environment variables:
@@ -45,7 +49,8 @@ Usage:
 
 from typing import List, Optional
 
-from ._upload import UploadInput, UploadOrchestrator, UploadResult
+from ._upload import DocumentUploadInput, DocumentUploadResult, UploadInput, UploadOrchestrator, UploadResult
+from ._upload import upload_document as _upload_document
 
 
 def upload_sbom(
@@ -183,10 +188,68 @@ def upload_to_all(
     return orchestrator.upload_all(input_params)
 
 
+def upload_document(
+    document_file: str,
+    token: Optional[str] = None,
+    component_id: Optional[str] = None,
+    api_base_url: Optional[str] = None,
+    name: Optional[str] = None,
+    version: str = "1.0",
+    document_type: str = "other",
+    description: str = "",
+    compliance_subcategory: Optional[str] = None,
+) -> DocumentUploadResult:
+    """
+    Upload a document (PDF, Markdown, ...) to a sbomify document component.
+
+    Only sbomify takes documents, so there is no destination argument: a
+    document has no meaning to Dependency Track.
+
+    Args:
+        document_file: Path to the document to upload
+        token: sbomify API token
+        component_id: sbomify component ID -- must be a component of type "document"
+        api_base_url: sbomify API base URL
+        name: Document name in sbomify (defaults to the file name without its suffix)
+        version: Document version
+        document_type: One of VALID_DOCUMENT_TYPES (e.g. "pentest-report", "compliance")
+        description: Free-text description
+        compliance_subcategory: nda/soc2/iso27001, only for document_type="compliance"
+
+    Returns:
+        DocumentUploadResult with success status and the new document ID
+
+    Example:
+        result = upload_document(
+            document_file="pentest-2026.pdf",
+            token="my-token",
+            component_id="my-document-component",
+            document_type="pentest-report",
+            version="2026.1",
+        )
+    """
+    return _upload_document(
+        DocumentUploadInput(
+            document_file=document_file,
+            name=name,
+            version=version,
+            document_type=document_type,
+            description=description,
+            compliance_subcategory=compliance_subcategory,
+        ),
+        token=token,
+        component_id=component_id,
+        api_base_url=api_base_url,
+    )
+
+
 # Re-export key types for convenience
 __all__ = [
     "upload_sbom",
     "upload_to_all",
+    "upload_document",
     "UploadInput",
     "UploadResult",
+    "DocumentUploadInput",
+    "DocumentUploadResult",
 ]

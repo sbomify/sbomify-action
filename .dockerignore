@@ -1,6 +1,11 @@
 # Test files and data
 tests/
-scripts/
+
+# scripts/ is excluded except freeze_tool_versions.py, which the builder stage
+# runs to resolve tools/go.mod and tools/Cargo.lock into literal versions
+# before the wheel is built.
+scripts/*
+!scripts/freeze_tool_versions.py
 
 # Git
 .git/

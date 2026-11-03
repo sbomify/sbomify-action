@@ -25,9 +25,23 @@ class PipdeptreeExpander:
     in requirements.txt but are installed as dependencies of
     packages that ARE listed.
 
+    That only yields true results when the environment being inspected
+    *is* the environment the lockfile describes. It frequently is not:
+    installed via pipx/uvx (or run from the Docker image), the
+    interpreter belongs to sbomify-action and holds sbomify-action's own
+    dependencies, not the scanned project's. Because this tool depends
+    on common libraries (requests and its chain), the lookups still
+    resolve and the expansion silently reports *our* versions as the
+    project's transitive dependencies.
+
+    ``_verify_environment_matches`` is what stops that: expansion only
+    proceeds once the installed versions corroborate the lockfile's
+    pins. See :meth:`_verify_environment_matches` for the exact rules.
+
     Requirements:
         - pipdeptree must be installed
-        - Packages from requirements.txt must be installed in the environment
+        - Packages from requirements.txt must be installed in the
+          environment being inspected, at the versions it pins
     """
 
     SUPPORTED_LOCK_FILES = ("requirements.txt",)
@@ -51,10 +65,14 @@ class PipdeptreeExpander:
         return lock_file.name in self.SUPPORTED_LOCK_FILES
 
     def can_expand(self) -> bool:
-        """Check if expansion is possible.
+        """Check whether pipdeptree can run at all.
 
-        pipdeptree works by inspecting installed packages, so we check
-        if pipdeptree can run at all (packages installed in environment).
+        This is only an availability probe — it says nothing about
+        *which* environment pipdeptree would inspect, and it is true in
+        any environment where the tool is installed (including our own).
+        The check that the environment actually corresponds to the
+        lockfile lives in :meth:`_verify_environment_matches`, which
+        needs the lockfile and therefore runs inside :meth:`expand`.
         """
         if not _PIPDEPTREE_AVAILABLE:
             return False
@@ -85,7 +103,16 @@ class PipdeptreeExpander:
         if not direct_deps:
             return []
 
-        # 2. Run pipdeptree filtered to only the direct dependencies.
+        # 2. Refuse to expand from an environment that isn't the project's.
+        # Everything below reads installed versions and attributes them to
+        # the scanned project, so this has to hold before any of it runs.
+        installed = self._installed_versions()
+        if installed is None:
+            return []
+        if not self._verify_environment_matches(direct_deps, installed, lock_file):
+            return []
+
+        # 3. Run pipdeptree filtered to only the direct dependencies.
         # We pass original (non-normalized) names here because pipdeptree
         # performs its own name normalization internally via pkg_resources.
         # The normalized `direct_names` set is used later for comparison.
@@ -97,7 +124,7 @@ class PipdeptreeExpander:
 
         logger.debug(f"pipdeptree returned {len(tree)} direct dependency trees")
 
-        # 3. Find transitive dependencies (deps of direct packages that aren't in requirements.txt)
+        # 4. Find transitive dependencies (deps of direct packages that aren't in requirements.txt)
         discovered: list[DiscoveredDependency] = []
         seen_package_versions: set[str] = set()
 
@@ -113,6 +140,115 @@ class PipdeptreeExpander:
 
         logger.info(f"pipdeptree discovered {len(discovered)} transitive dependencies")
         return discovered
+
+    def _installed_versions(self) -> dict[str, str] | None:
+        """Every package installed in the inspected environment.
+
+        Uses pipdeptree's flat ``--json`` rather than the filtered
+        ``--json-tree`` used for discovery: passing ``--packages`` a name
+        that isn't installed makes pipdeptree emit nothing at all rather
+        than a partial tree, which is indistinguishable from a parse
+        failure and hides exactly the case the verification needs to
+        catch. Returns ``None`` if pipdeptree could not be read.
+        """
+        try:
+            # nosemgrep: dangerous-subprocess-use-audit  # list-form, shell=False, fixed executable
+            result = subprocess.run(
+                ["pipdeptree", "--json", "--warn", "silence"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                logger.warning(f"pipdeptree failed while listing installed packages: {result.stderr}")
+                return None
+            entries: list[dict[str, Any]] = json.loads(result.stdout)
+        except subprocess.TimeoutExpired:
+            logger.warning("pipdeptree timed out while listing installed packages")
+            return None
+        except json.JSONDecodeError as e:
+            logger.warning(f"pipdeptree package list not valid JSON: {e}")
+            return None
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"pipdeptree error while listing installed packages: {e}")
+            return None
+
+        versions: dict[str, str] = {}
+        for entry in entries:
+            package = entry.get("package") or {}
+            name = package.get("package_name") or package.get("key") or ""
+            if name:
+                versions[normalize_python_package_name(name)] = str(package.get("installed_version", "")).strip()
+        return versions
+
+    def _verify_environment_matches(
+        self,
+        direct_deps: dict[str, str | None],
+        installed: dict[str, str],
+        lock_file: Path,
+    ) -> bool:
+        """Decide whether the inspected environment is the lockfile's.
+
+        pipdeptree reports whatever the running interpreter has
+        installed. Attributing those versions to the scanned project is
+        only sound when the two coincide, so require positive evidence
+        rather than assuming it:
+
+        1. Every direct dependency must be installed. A lockfile whose
+           packages are largely absent describes a different project;
+           the few that resolve are coincidental overlap with our own
+           dependency chain.
+        2. Every ``==`` pin must equal the installed version. One
+           disagreement means a different (or stale) environment.
+        3. At least one ``==`` pin must exist to check. With nothing
+           pinned there is no evidence either way, and guessing here
+           writes fabricated versions into a signed document.
+
+        Versions are compared as exact strings, so an unusual but
+        equivalent spelling errs toward skipping. That direction is
+        deliberate: a skipped expansion logs why and loses only
+        transitive discovery, while a wrong one ships silently.
+        """
+        missing = sorted(name for name in direct_deps if normalize_python_package_name(name) not in installed)
+        if missing:
+            shown = ", ".join(missing[:5]) + (f" (+{len(missing) - 5} more)" if len(missing) > 5 else "")
+            logger.info(
+                f"Dependency expansion skipped: {len(missing)} of {len(direct_deps)} packages in "
+                f"{lock_file.name} are not installed in the environment running sbomify-action "
+                f"({shown}). Transitive discovery reads that environment, so expanding here would "
+                "report unrelated versions as the project's dependencies."
+            )
+            return False
+
+        pinned = {name: version for name, version in direct_deps.items() if version}
+        if not pinned:
+            logger.info(
+                f"Dependency expansion skipped: {lock_file.name} pins no exact versions (==), so there "
+                "is no way to confirm the environment running sbomify-action is the one it describes. "
+                "Transitive discovery reads that environment and would otherwise report its versions "
+                "as the project's."
+            )
+            return False
+
+        mismatches = [
+            f"{name} pins {version} but {installed[normalize_python_package_name(name)] or '<unknown>'} is installed"
+            for name, version in pinned.items()
+            if installed[normalize_python_package_name(name)] != str(version).strip()
+        ]
+        if mismatches:
+            shown = "; ".join(mismatches[:3]) + (f" (+{len(mismatches) - 3} more)" if len(mismatches) > 3 else "")
+            logger.info(
+                f"Dependency expansion skipped: the environment running sbomify-action does not match "
+                f"{lock_file.name} ({shown}). Transitive discovery reads that environment, so expanding "
+                "here would report its versions as the project's."
+            )
+            return False
+
+        logger.debug(
+            f"Environment matches {lock_file.name}: {len(pinned)} pinned version(s) confirmed installed; "
+            "proceeding with transitive discovery"
+        )
+        return True
 
     def _parse_requirements(self, lock_file: Path) -> dict[str, str | None]:
         """Parse requirements.txt and return {name: version} dict."""

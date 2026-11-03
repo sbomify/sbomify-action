@@ -35,7 +35,7 @@ class PublishScreen(WizardScreen):
     the first publish on the next push instead.
     """
 
-    step_index = 9
+    step_index = 10
     step_title = "Publish"
     step_subtitle = "Optional — publish your first SBOMs now instead of waiting for CI."
 
@@ -68,6 +68,8 @@ class PublishScreen(WizardScreen):
             yield Static(self._planned_markup(), classes="wizard-muted", id="publish-planned")
             yield banner
             yield RichLog(id="publish-log", wrap=True, markup=True, highlight=False)
+
+    def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Skip ▸", id="skip")

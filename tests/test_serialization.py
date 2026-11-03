@@ -1,6 +1,10 @@
 """Tests for the serialization module, including dependency graph sanitization."""
 
+import contextlib
+import copy
 import json
+import os
+from pathlib import Path
 
 import pytest
 from cyclonedx.model import BomRef
@@ -2310,3 +2314,366 @@ class TestSanitizeCycloneDXLicenses:
         # Should be treated as invalid ID (moved to name), not compound
         assert count == 1
         assert "name" in data["components"][0]["licenses"][0]["license"]
+
+    def test_bare_license_text_string_wrapped_in_attached_text(self):
+        """license.text as a bare string must become an attachedText object.
+
+        cdxgen emits `"text": "Copyright 2022 Google"`; cyclonedx-python-lib
+        calls .items() on it and the AttributeError aborts the whole run.
+        """
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [{"license": {"name": "Copyright", "text": "Copyright 2022 Google"}}],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert data["components"][0]["licenses"][0]["license"]["text"] == {"content": "Copyright 2022 Google"}
+
+    def test_bare_license_text_lets_the_bom_deserialize(self):
+        """The repaired document must survive Bom.from_json, which is the point."""
+        data = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "version": 1,
+            "components": [
+                {
+                    "type": "library",
+                    "name": "pkg",
+                    "version": "1.0",
+                    "licenses": [{"license": {"name": "Copyright", "text": "Copyright 2022 Google"}}],
+                }
+            ],
+        }
+        with pytest.raises(AttributeError):
+            Bom.from_json(copy.deepcopy(data))
+
+        sanitize_cyclonedx_licenses(data)
+        bom = Bom.from_json(data)
+        assert len(bom.components) == 1
+
+    def test_attached_text_object_left_alone(self):
+        """A spec-compliant attachedText object is not a defect and is untouched."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "licenses": [
+                        {"license": {"name": "Copyright", "text": {"content": "body", "contentType": "text/plain"}}}
+                    ],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 0
+        assert data["components"][0]["licenses"][0]["license"]["text"]["content"] == "body"
+
+    def test_nested_component_licenses_sanitized(self):
+        """Sub-components nest arbitrarily deep and are just as fatal to validation."""
+        data = {
+            "components": [
+                {
+                    "name": "image",
+                    "components": [
+                        {
+                            "name": "inner",
+                            "components": [
+                                {
+                                    "name": "deeper",
+                                    "licenses": [{"license": {"id": "Some Custom License"}}],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        deeper = data["components"][0]["components"][0]["components"][0]
+        assert deeper["licenses"][0]["license"]["name"] == "Some Custom License"
+
+    def test_nested_component_license_casing_corrected(self):
+        """The GITHUB-ACTION-F1 shape: a case-variant SPDX id on a nested component."""
+        data = {
+            "components": [
+                {
+                    "name": "image",
+                    "components": [
+                        {
+                            "name": "libselinux",
+                            "licenses": [{"license": {"id": "Libselinux-1.0"}}],
+                        }
+                    ],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert data["components"][0]["components"][0]["licenses"][0]["license"]["id"] == "libselinux-1.0"
+
+    def test_root_component_licenses_sanitized(self):
+        """metadata.component carries licenses too, and they reach the same enum."""
+        data = {
+            "metadata": {
+                "component": {
+                    "name": "root",
+                    "licenses": [{"license": {"id": "apache-2.0"}}],
+                }
+            },
+            "components": [],
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert data["metadata"]["component"]["licenses"][0]["license"]["id"] == "Apache-2.0"
+
+    def test_nested_services_sanitized(self):
+        """Services nest the same way components do."""
+        data = {
+            "services": [
+                {
+                    "name": "outer",
+                    "services": [
+                        {
+                            "name": "inner",
+                            "licenses": [{"license": {"id": "Some Custom License"}}],
+                        }
+                    ],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert data["services"][0]["services"][0]["licenses"][0]["license"]["name"] == "Some Custom License"
+
+    def test_evidence_licenses_are_sanitized(self):
+        """evidence.licenses reaches the same enum and the same deserializer.
+
+        cdxgen -- the generator that emits the bare license.text -- is also
+        the one that populates licence evidence, so this is the same defect
+        one level over.
+        """
+        data = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "version": 1,
+            "components": [
+                {
+                    "type": "library",
+                    "name": "pkg",
+                    "version": "1.0",
+                    "evidence": {
+                        "licenses": [{"license": {"name": "Copyright", "text": "Copyright 2022 Google"}}],
+                    },
+                }
+            ],
+        }
+        with pytest.raises(AttributeError):
+            Bom.from_json(copy.deepcopy(data))
+
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert Bom.from_json(data) is not None
+
+    def test_evidence_license_id_is_sanitized(self):
+        """An unlisted id under evidence fails schema validation just the same."""
+        data = {
+            "components": [
+                {
+                    "name": "pkg",
+                    "evidence": {"licenses": [{"license": {"id": "Some Custom License"}}]},
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        assert data["components"][0]["evidence"]["licenses"][0]["license"]["name"] == "Some Custom License"
+
+    def test_nested_component_evidence_is_sanitized(self):
+        """Evidence on a sub-component is reached by the same walk."""
+        data = {
+            "components": [
+                {
+                    "name": "image",
+                    "components": [
+                        {
+                            "name": "inner",
+                            "evidence": {"licenses": [{"license": {"id": "apache-2.0"}}]},
+                        }
+                    ],
+                }
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+        inner = data["components"][0]["components"][0]
+        assert inner["evidence"]["licenses"][0]["license"]["id"] == "Apache-2.0"
+
+    def test_non_dict_evidence_is_ignored(self):
+        data = {"components": [{"name": "pkg", "evidence": "not-a-dict"}]}
+        assert sanitize_cyclonedx_licenses(data) == 0
+
+    def test_non_dict_entries_do_not_break_the_walk(self):
+        """Malformed input should degrade, not raise."""
+        data = {
+            "components": [
+                None,
+                "not-a-component",
+                {"name": "pkg", "components": "not-a-list", "licenses": [{"license": {"id": "apache-2.0"}}]},
+            ]
+        }
+        count = sanitize_cyclonedx_licenses(data)
+        assert count == 1
+
+
+class TestSanitizeSpdx3Licenses:
+    """An SPDX 3 document has no `packages[]`, `files[]` or `snippets[]`.
+
+    It states a licence as a Relationship to a
+    `simplelicensing_LicenseExpression` element in `@graph`, so walked the 2.x
+    way this function returned 0 having looked at nothing. Zero reads as
+    "nothing to fix" at both call sites: on ingest for any SPDX input, and
+    before validating generated SPDX.
+    """
+
+    #: The published Yocto SBOMs, if whoever is running this has them. They are
+    #: release artefacts of tens of megabytes and are not in the repo, so the
+    #: guard points at a directory instead of hardcoding one machine's layout:
+    #: set SBOMIFY_YOCTO_CORPUS, or drop them in tests/test-data/yocto. Without
+    #: either the test skips, and says why.
+    YOCTO = Path(os.environ.get("SBOMIFY_YOCTO_CORPUS") or Path(__file__).parent / "test-data" / "yocto")
+
+    @staticmethod
+    def _document(*expressions: str) -> dict:
+        return {
+            "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+            "@graph": [
+                {
+                    "type": "simplelicensing_LicenseExpression",
+                    "spdxId": f"urn:lic:{index}",
+                    "simplelicensing_licenseExpression": expression,
+                }
+                for index, expression in enumerate(expressions)
+            ],
+        }
+
+    @staticmethod
+    def _expressions(document: dict) -> list[str]:
+        return [e["simplelicensing_licenseExpression"] for e in document["@graph"]]
+
+    @pytest.mark.parametrize("invalid", ["GPLv2+", "ASL 2.0", "Public Domain", "BSD-like"])
+    def test_an_invalid_expression_is_repaired(self, invalid):
+        document = self._document(invalid)
+
+        assert sanitize_spdx_licenses(document) == 1
+        assert self._expressions(document)[0].startswith("LicenseRef-")
+
+    def test_a_valid_expression_is_left_alone(self):
+        document = self._document("MIT", "Apache-2.0 AND MIT")
+
+        assert sanitize_spdx_licenses(document) == 0
+        assert self._expressions(document) == ["MIT", "Apache-2.0 AND MIT"]
+
+    def test_only_the_invalid_one_moves(self):
+        document = self._document("MIT", "GPLv2+", "Apache-2.0")
+
+        assert sanitize_spdx_licenses(document) == 1
+        assert self._expressions(document)[0::2] == ["MIT", "Apache-2.0"]
+
+    def test_other_element_types_are_not_touched(self):
+        """Only the licensing elements carry an expression to repair."""
+        document = self._document("MIT")
+        document["@graph"].append(
+            {"type": "software_Package", "spdxId": "urn:pkg", "simplelicensing_licenseExpression": "GPLv2+"}
+        )
+
+        assert sanitize_spdx_licenses(document) == 0
+
+    def test_an_element_typed_the_expanded_json_ld_way(self):
+        """`@type` and `@id` are the expanded JSON-LD spellings of `type` and
+        `spdxId`. A document using them is conforming, and reading only the
+        compact spelling walks past it and reports nothing to fix."""
+        document = {
+            "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+            "@graph": [
+                {
+                    "@type": "simplelicensing_LicenseExpression",
+                    "@id": "urn:lic",
+                    "simplelicensing_licenseExpression": "GPLv2+",
+                }
+            ],
+        }
+
+        assert sanitize_spdx_licenses(document) == 1
+        assert document["@graph"][0]["simplelicensing_licenseExpression"].startswith("LicenseRef-")
+
+    def test_a_graph_that_is_one_object_rather_than_an_array(self):
+        """JSON-LD allows @graph to be a single node object. The SPDX 3
+        schemas pin it to an array, so a document shaped that way fails
+        validation either way, but iterating a dict walks its keys and
+        reports "nothing to fix" about a document nobody looked at."""
+        document = {
+            "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+            "@graph": {
+                "type": "simplelicensing_LicenseExpression",
+                "spdxId": "urn:lic",
+                "simplelicensing_licenseExpression": "GPLv2+",
+            },
+        }
+
+        assert sanitize_spdx_licenses(document) == 1
+        assert document["@graph"]["simplelicensing_licenseExpression"].startswith("LicenseRef-")
+
+    def test_spdx2_still_works(self):
+        """The SPDX 3 walk is additive; nothing about the 2.x path changed."""
+        data = {"spdxVersion": "SPDX-2.3", "packages": [{"name": "p", "licenseDeclared": "GPLv2+"}]}
+
+        assert sanitize_spdx_licenses(data) == 1
+        assert data["packages"][0]["licenseDeclared"].startswith("LicenseRef-")
+
+    #: Matched on what the test needs rather than on a directory existing. The
+    #: in-repo corpus is real Yocto output but named per recipe
+    #: (busybox.spdx.json), so a glob written for the release-tarball names
+    #: found a directory, skipped nothing, and then had nothing to check.
+    DOCUMENTS = sorted(YOCTO.glob("*.spdx.json")) if YOCTO.is_dir() else []
+
+    @pytest.mark.skipif(
+        not DOCUMENTS,
+        reason="no Yocto SBOMs to check; set SBOMIFY_YOCTO_CORPUS to a directory holding some",
+    )
+    def test_the_real_yocto_documents_do_not_move(self):
+        """The issue says RPM-style strings matter most for the Yocto path.
+        They do not appear there: Yocto normalises licences itself, so every
+        expression it writes is already valid, and this is the guard that a
+        future change to the sanitizer does not start rewriting somebody's
+        correct licences.
+
+        What runs by default is the in-repo corpus, six per-recipe SPDX 2.2
+        documents carrying six expressions between them. That is thin, and it
+        is real Yocto output rather than something written to pass. The
+        measurement the issue quotes, 200 expressions all already valid, came
+        from the three published SPDX 3 images; point SBOMIFY_YOCTO_CORPUS at
+        a directory holding those to run the guard over them instead.
+        """
+        # Asserted as well as skipped on: a guard that iterates an empty list
+        # reports green precisely when it is not guarding.
+        assert self.DOCUMENTS, f"{self.YOCTO} holds no *.spdx.json to check"
+        for path in self.DOCUMENTS:
+            document = json.loads(path.read_text())
+            before = json.dumps(document, sort_keys=True)
+
+            with subtests_or_context(path.name):
+                assert sanitize_spdx_licenses(document) == 0
+                assert json.dumps(document, sort_keys=True) == before
+
+
+@contextlib.contextmanager
+def subtests_or_context(label: str):
+    """Name the fixture in a failure without depending on pytest-subtests."""
+    try:
+        yield
+    except AssertionError as error:  # pragma: no cover - only on failure
+        raise AssertionError(f"{label}: {error}") from error

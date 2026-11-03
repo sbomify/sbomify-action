@@ -1,8 +1,7 @@
 """Parser for poetry.lock files (Python Poetry)."""
 
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 from ..models import PackageHash
 

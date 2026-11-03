@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from sbomify_action import format_display_name
 from sbomify_action.exceptions import APIError, AuthError
 from sbomify_action.logging_config import logger
 from sbomify_action.sbomify_api import SbomifyApiClient, clean_validation_error
@@ -109,7 +110,7 @@ class SbomifyDestination:
                 validation_error=validation_error,
             )
 
-        format_display = "CycloneDX" if input.sbom_format == "cyclonedx" else "SPDX"
+        format_display = format_display_name(input.sbom_format)
         artifact_kind = input.bom_type.upper() if input.bom_type and input.bom_type != "sbom" else "SBOM"
         logger.info(f"Uploading {format_display} {artifact_kind} to component: {self._component_id}")
 
@@ -250,7 +251,7 @@ class SbomifyDestination:
             True if valid, False if invalid
         """
         try:
-            with Path(sbom_file_path).open("r") as f:
+            with Path(sbom_file_path).open("r", encoding="utf-8") as f:
                 sbom_data = json.load(f)
 
             # Check for basic CycloneDX structure

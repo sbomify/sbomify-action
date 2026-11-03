@@ -1,9 +1,8 @@
 """Parser for uv.lock files (Python uv package manager)."""
 
+import tomllib
 from pathlib import Path
 from typing import Any
-
-import tomllib
 
 from ..models import PackageHash
 

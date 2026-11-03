@@ -171,7 +171,7 @@ class DependencyTrackDestination:
 
         # Read SBOM file
         try:
-            with Path(input.sbom_file).open("r") as f:
+            with Path(input.sbom_file).open("r", encoding="utf-8") as f:
                 sbom_data = f.read()
         except FileNotFoundError:
             return UploadResult.failure_result(

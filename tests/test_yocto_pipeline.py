@@ -447,7 +447,9 @@ class TestSpdx3Pipeline:
 
         assert result.sboms_uploaded == 1
         assert result.release_id == "rel-200"
-        mock_create_release.assert_called_once_with(API_BASE, TOKEN, "test-product", "1.0.0")
+        # None, not False: 1.0.0 is not a prerelease, and the client omits the
+        # field when it is None so the backend's own default stands.
+        mock_create_release.assert_called_once_with(API_BASE, TOKEN, "test-product", "1.0.0", is_prerelease=None)
         mock_tag.assert_called_once_with(API_BASE, TOKEN, "sbom-100", "rel-200")
 
 

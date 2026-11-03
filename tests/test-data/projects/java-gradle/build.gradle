@@ -1,0 +1,222 @@
+plugins {
+    id("java-library")
+    id("checkstyle")
+    id("eclipse")
+    id("jacoco")
+    id("maven-publish")
+    id("ru.vyarus.animalsniffer") version "1.7.1"
+    id("me.champeau.gradle.jmh") version "0.5.3"
+    id("com.github.hierynomus.license") version "0.16.1"
+    id("biz.aQute.bnd.builder") version "6.4.0"
+    id("com.vanniktech.maven.publish") version "0.19.0"
+    id("org.beryx.jar") version "1.2.0"
+}
+
+ext {
+    reactiveStreamsVersion = "1.0.4"
+    junitVersion = "4.13.2"
+    testNgVersion = "7.5"
+    mockitoVersion = "4.11.0"
+    jmhLibVersion = "1.21"
+    guavaVersion = "33.2.1-jre"
+}
+
+def releaseTag = System.getenv("BUILD_TAG")
+if (releaseTag != null && !releaseTag.isEmpty()) {
+    if (releaseTag.startsWith("v")) {
+        releaseTag = releaseTag.substring(1)
+    }
+    project.version = releaseTag
+
+    logger.lifecycle("Releasing with version: " + project.version)
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    signature "org.codehaus.mojo.signature:java18:1.0@signature"
+
+    api "org.reactivestreams:reactive-streams:$reactiveStreamsVersion"
+    jmh "org.reactivestreams:reactive-streams:$reactiveStreamsVersion"
+
+    testImplementation "junit:junit:$junitVersion"
+    testImplementation "org.mockito:mockito-core:$mockitoVersion"
+
+    testImplementation "org.reactivestreams:reactive-streams-tck:$reactiveStreamsVersion"
+    testImplementation "org.testng:testng:$testNgVersion"
+    testImplementation "com.google.guava:guava:$guavaVersion"
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+tasks.withType(JavaCompile) {
+    options.compilerArgs << "-parameters"
+}
+
+apply from: file("gradle/javadoc_cleanup.gradle")
+
+javadoc {
+    exclude "**/internal/**"
+    exclude "**/test/**"
+    exclude "**/perf/**"
+    exclude "**/jmh/**"
+    options {
+        windowTitle = "RxJava Javadoc ${project.version}"
+    }
+    // Clear the following options to make the docs consistent with the old format
+    options.addStringOption("top").value = ""
+    options.addStringOption("doctitle").value = ""
+    options.addStringOption("header").value = ""
+    options.stylesheetFile = project.file("gradle/stylesheet.css")
+
+    options.links(
+            "https://docs.oracle.com/javase/8/docs/api/",
+            "https://reactivex.io/RxJava/org.reactivestreams.javadoc/${reactiveStreamsVersion}/"
+    )
+
+    finalizedBy javadocCleanup
+}
+
+animalsniffer {
+    annotation = "io.reactivex.rxjava3.internal.util.SuppressAnimalSniffer"
+}
+
+jar {
+    from('.') {
+        include 'LICENSE'
+        include 'COPYRIGHT'
+        into('META-INF/')
+    }
+
+    // Cover for bnd still not supporting MR Jars: https://github.com/bndtools/bnd/issues/2227
+    bnd('-fixupmessages': '^Classes found in the wrong directory: \\\\{META-INF/versions/9/module-info\\\\.class=module-info}$')
+    bnd(
+            "Bundle-Name": "rxjava",
+            "Bundle-Vendor": "RxJava Contributors",
+            "Bundle-Description": "Reactive Extensions for the JVM - a library for composing asynchronous and event-based programs using observable sequences for the Java VM.",
+            "Import-Package": "!org.junit,!junit.framework,!org.mockito.*,!org.testng.*,*",
+            "Bundle-DocURL": "https://github.com/ReactiveX/RxJava",
+            "Eclipse-ExtensibleAPI": "true",
+            "Export-Package": "!io.reactivex.rxjava3.internal.*, io.reactivex.rxjava3.*",
+            "Bundle-SymbolicName": "io.reactivex.rxjava3.rxjava",
+            "Multi-Release": "true"
+    )
+
+    moduleInfoPath = 'src/main/module/module-info.java'
+}
+
+license {
+    header project.file("config/license/HEADER")
+    ext.year = Calendar.getInstance().get(Calendar.YEAR)
+    skipExistingHeaders true
+    ignoreFailures true
+    excludes(["**/*.md", "**/*.txt"])
+}
+
+jmh {
+    jmhVersion = jmhLibVersion
+    humanOutputFile = null
+    includeTests = false
+    jvmArgs = ["-Djmh.ignoreLock=true"]
+    jvmArgsAppend = ["-Djmh.separateClasspathJAR=true"]
+
+    if (project.hasProperty("jmh")) {
+        include = [".*" + project.jmh + ".*"]
+        logger.info("JMH: {}", include)
+    }
+}
+
+test {
+    maxHeapSize = "1200m"
+}
+
+task testNG(type: Test) {
+    useTestNG()
+}
+
+check.dependsOn testNG
+
+tasks.withType(Test) {
+    testLogging {
+        events = ["skipped", "failed"]
+        exceptionFormat = "full"
+
+        debug.events = ["skipped", "failed"]
+        debug.exceptionFormat = "full"
+
+        info.events = ["failed", "skipped"]
+        info.exceptionFormat = "full"
+
+        warn.events = ["failed", "skipped"]
+        warn.exceptionFormat = "full"
+    }
+
+    if (System.getenv("CI") == null) {
+        maxParallelForks = Runtime.runtime.availableProcessors().intdiv(2) ?: 1
+    }
+}
+
+jacocoTestReport {
+    dependsOn test
+    dependsOn testNG
+
+    reports {
+        xml.enabled = true
+        html.enabled = true
+    }
+}
+
+check.dependsOn jacocoTestReport
+
+checkstyle {
+    configFile = project.file("config/checkstyle/checkstyle.xml")
+    configProperties = [
+            "checkstyle.suppressions.file": project.file("config/checkstyle/suppressions.xml"),
+            "checkstyle.header.file"      : project.file("config/license/HEADER_JAVA")
+    ]
+}
+
+if (project.hasProperty("releaseMode")) {
+    logger.lifecycle("ReleaseMode: {}", project.releaseMode)
+
+  /*
+  if ("branch" == project.releaseMode) {
+
+    if (version.endsWith("-SNAPSHOT")) {
+      publishing {
+        repositories {
+          maven {
+             url = "https://s01.oss.sonatype.org/content/repositories/snapshots/"
+          }
+        }
+      }
+
+      mavenPublish {
+        nexus {
+          stagingProfile = "io.reactivex"
+        }
+      }
+    }
+  }
+  */
+
+  if ("full" == project.releaseMode) {
+    signing {
+      if (project.hasProperty("SIGNING_PRIVATE_KEY") && project.hasProperty("SIGNING_PASSWORD")) {
+         useInMemoryPgpKeys(project.getProperty("SIGNING_PRIVATE_KEY"), project.getProperty("SIGNING_PASSWORD"))
+      }
+    }
+    /*
+    mavenPublish {
+      nexus {
+        stagingProfile = "io.reactivex"
+      }
+    }
+    */
+  }
+}

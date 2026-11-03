@@ -3,17 +3,17 @@
 Textual's stock ``RadioButton`` always renders ``▐●▌`` regardless of
 selection state — the on/off distinction is purely a CSS style
 (white+bold when selected, muted otherwise). That works in a richly
-coloured TTY but breaks in two practical cases:
+colored TTY but breaks in two practical cases:
 
-  - Users with limited contrast / colour vision can't tell which radio
+  - Users with limited contrast / color vision can't tell which radio
     is active.
   - Copy/pasting a wizard screen into chat or a bug report strips
-    colour formatting, leaving three identical ``▐●▌`` rows that
+    color formatting, leaving three identical ``▐●▌`` rows that
     look like a multi-select bug rather than a single-choice radio.
 
 ``StatefulRadioButton`` overrides the inner glyph to ``●`` only when
 selected; unselected radios render with ``○``. The visual difference
-is then encoded in the character itself, not just the colour.
+is then encoded in the character itself, not just the color.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ class StatefulRadioButton(RadioButton):
         Mirrors the parent's ``_button`` shape (left + inner + right
         glyphs styled per ``toggle--button`` / its side variant) but
         swaps the inner character based on ``self.value`` so the
-        selection state is visually unambiguous even with colour
+        selection state is visually unambiguous even with color
         information stripped.
         """
         button_style = self.get_visual_style("toggle--button")
