@@ -55,8 +55,12 @@ JVM_CYCLONEDX_DEFAULT = "1.6"
 #: in Keycloak against 340, because an unbuilt source tree has no jars to
 #: catalog. Conversion keeps every component and every purl -- measured, 106
 #: in and 106 out at 100% purl coverage.
+#:
+#: "SPDX-2.3" is an internal marker, not a version anyone sets: it keeps an
+#: explicit SPEC_VERSION of 2.3 on syft. The default is the version the
+#: conversion writes, which is what gets reported and validated.
 JVM_SPDX_VERSIONS = ("SPDX-2.3",)
-JVM_SPDX_DEFAULT = "SPDX-2.3"
+JVM_SPDX_DEFAULT = "2.3"
 
 
 #: Read from the JVM bundle, which is where these are pinned.
