@@ -21,8 +21,13 @@ from sbomify_action.runtimes import (
 
 
 @pytest.fixture(autouse=True)
-def _isolate(tmp_path, monkeypatch):
-    """Point the cache at a temp dir and clear memoisation between tests."""
+def _isolate(tmp_path, monkeypatch, linux_host):
+    """Point the cache at a temp dir and clear memoisation between tests.
+
+    Requests ``linux_host`` here rather than through a module-level
+    ``usefixtures`` mark: autouse fixtures run first, so the mark would
+    override the class-level ``_off_linux`` fixture below.
+    """
     monkeypatch.setenv("SBOMIFY_TOOL_CACHE", str(tmp_path / "cache"))
     reset_runtime_cache()
     yield

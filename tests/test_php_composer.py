@@ -35,6 +35,7 @@ def no_version_in_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.mark.usefixtures("linux_host")
 class TestTheBundleIsDeclared:
     def test_composer_resolves_to_the_php_bundle(self):
         bundle = bundle_for("composer")

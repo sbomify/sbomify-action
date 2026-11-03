@@ -106,6 +106,24 @@ def _no_runtime_fetching(monkeypatch, request):
         )
 
 
+@pytest.fixture
+def linux_host(monkeypatch):
+    """Tell the runtime fetcher it is on Linux, whatever host runs the suite.
+
+    The pinned runtimes are Linux builds, so ``runtimes.host_runs_runtimes``
+    is false on any other kernel and every generator that needs a runtime
+    declines its input. That is the right behaviour for a pip install on
+    macOS. It also meant the tests of fetching and routing, which CI runs on
+    Linux, failed on a macOS checkout. Those tests request this fixture. The
+    tests of the off-Linux behaviour set ``platform.system`` themselves (see
+    TestHostsTheRuntimesCannotRunOn in test_runtimes.py), so the guard stays
+    covered.
+    """
+    from sbomify_action import runtimes
+
+    monkeypatch.setattr(runtimes.platform, "system", lambda: "Linux")
+
+
 @pytest.fixture(autouse=True)
 def _no_persistent_enrichment_cache(monkeypatch):
     """Keep the on-disk enrichment cache out of the suite.

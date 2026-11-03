@@ -25,11 +25,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sbomify_action.tool_manifest import (  # noqa: E402
+    STAGE_BUILD,
     STAGE_IMAGE,
     STAGE_RUNTIME,
     image_package_urls,
-    load_tools,
     runtime_package_urls,
+    tools_for_stage,
 )
 
 
@@ -49,9 +50,9 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.env:
-        for name, tool in sorted(load_tools().items()):
-            if tool.dockerfile_arg:
-                print(f"{tool.dockerfile_arg}={tool.version}")
+        # CI installs the build tools (uv) at the versions the manifest pins.
+        for name, tool in sorted(tools_for_stage(STAGE_BUILD).items()):
+            print(f"{name.upper()}_VERSION={tool.version}")
         return 0
 
     purls: list[str] = []
