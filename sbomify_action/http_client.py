@@ -99,8 +99,10 @@ def validate_endpoint_url(
     """
     try:
         parts = urlsplit(url)
-    except ValueError as e:  # e.g. an unclosed IPv6 bracket
-        raise ConfigurationError(f"{setting} is not a valid URL: {e}") from e
+    except ValueError:  # e.g. an unclosed IPv6 bracket
+        # Not the parser's message, nor its traceback: it can quote the whole
+        # authority, and this runs before the userinfo check below.
+        raise ConfigurationError(f"{setting} is not a valid URL") from None
     if parts.scheme not in ("http", "https"):
         raise ConfigurationError(f"{setting} must start with http:// or https://")
     if "@" in parts.netloc:

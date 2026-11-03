@@ -147,6 +147,17 @@ class TestValidateEndpointUrl(unittest.TestCase):
     def test_unparseable_url_rejected(self):
         self.assert_rejected("http://[::1", "not a valid URL")
 
+    def test_an_unparseable_url_does_not_leak_its_password(self):
+        """urlsplit's ValueError can quote the whole authority, password included,
+        and it fails before the userinfo check gets to run."""
+        url = "https://user:hunter2@dtrack.example.com：443"
+        with self.assertRaises(ConfigurationError) as cm:
+            validate_endpoint_url(url, "DTRACK_API_URL")
+        self.assertIn("not a valid URL", str(cm.exception))
+        self.assertNotIn("hunter2", str(cm.exception))
+        self.assertIsNone(cm.exception.__cause__)
+        self.assertTrue(cm.exception.__suppress_context__)
+
     def test_missing_host_rejected(self):
         self.assert_rejected("https://", "hostname")
         self.assert_rejected("https:///api", "hostname")
