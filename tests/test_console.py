@@ -2,6 +2,7 @@
 
 import io
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -157,7 +158,9 @@ class TestUnencodableOutput(unittest.TestCase):
             capture_output=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(b"? Step 1 completed successfully", result.stdout)
+        # Under GitHub Actions the console forces a terminal, so strip the colour codes.
+        stdout = re.sub(rb"\x1b\[[0-9;]*m", b"", result.stdout)
+        self.assertIn(b"? Step 1 completed successfully", stdout)
 
     def test_stderr_keeps_its_own_handler(self):
         result = subprocess.run(
