@@ -1523,8 +1523,11 @@ def _expand_lock_file_or_substitute(path: str) -> str:
         searched = (Path.cwd() / named.parent, *(root / named.parent for root in roots))
     # The legacy roots alone do not keep the repository root out: inside the
     # action's container the mount point *is* the root. So under WORKING_DIR
-    # only directories inside it are scanned; see inside_working_dir.
-    directories = {d.resolve() for d in searched if d.is_dir() and inside_working_dir(d)}
+    # only directories inside it are scanned; see inside_working_dir. The
+    # first is the exception: it is the one LOCK_FILE names, and an absolute
+    # or `../..` path pointing out of WORKING_DIR is the user's choice.
+    named_dir, *fallbacks = searched
+    directories = {d.resolve() for d in (named_dir, *filter(inside_working_dir, fallbacks)) if d.is_dir()}
 
     # .NET project files are matched by suffix rather than by name, so a scan
     # over fixed names alone could never substitute one -- a stale

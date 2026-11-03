@@ -363,6 +363,33 @@ class TestInputsResolveInsideWorkingDir:
         assert "lock_file" not in seen, f"built from {seen.get('lock_file')}"
         assert result.exit_code != 0
 
+    @pytest.mark.parametrize("spelling", ["../../poetry.lock", "absolute"])
+    def test_a_stale_lock_file_named_outside_is_substituted_from_beside_it(self, monorepo, caplog, spelling):
+        """LOCK_FILE points outside WORKING_DIR on purpose. Its own directory is
+        the user's choice, so the lock file there is the substitute, not this
+        package's manifest -- an SBOM from that would describe another project."""
+        (monorepo / "packages" / "api" / "pyproject.toml").write_text("[project]\nname = 'api'\n")
+        lock_file = str(monorepo / "poetry.lock") if spelling == "absolute" else spelling
+
+        with caplog.at_level("WARNING"):
+            result, seen = _run_action(monorepo, WORKING_DIR="packages/api", LOCK_FILE=lock_file)
+
+        assert result.exit_code == 0, result.output
+        assert Path(seen["lock_file"]).resolve() == monorepo / "uv.lock"
+        assert "USING A DIFFERENT INPUT THAN THE ONE YOU CONFIGURED" in caplog.text
+
+    def test_a_stale_relative_lock_file_still_ignores_the_root(self, monorepo):
+        """The same layout with a plain relative name: the root is a fallback
+        location the scan added, not one the user named, so it stays out."""
+        package = monorepo / "packages" / "api"
+        (package / "pyproject.toml").write_text("[project]\nname = 'api'\n")
+
+        with patch.object(_main, "legacy_workspaces", return_value=(monorepo,)):
+            result, seen = _run_action(monorepo, WORKING_DIR="packages/api", LOCK_FILE="poetry.lock")
+
+        assert result.exit_code == 0, result.output
+        assert Path(seen["lock_file"]) == package / "pyproject.toml"
+
     def test_a_missing_source_dir_is_not_read_from_the_repository_root(self, monorepo):
         (monorepo / "dist").mkdir()
 
