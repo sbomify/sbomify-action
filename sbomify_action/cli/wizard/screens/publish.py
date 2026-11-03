@@ -207,8 +207,13 @@ class PublishScreen(WizardScreen):
                 self.app.pop_screen()
             return
         if event.button.id == "skip":
-            # Explicitly not publishing — leave publish_outcomes empty so
-            # the Done screen renders exactly as it did pre-publish-step.
+            # Explicitly not publishing — empty publish_outcomes so the
+            # Done screen renders exactly as it did pre-publish-step. Cleared
+            # here, not assumed: Back to Apply and into Publish again keeps
+            # the earlier pass's outcomes on the state.
+            state = self.wizard.state
+            state.publish_outcomes = []
+            state.publish_output_dir = None
             self._continue_to_done()
             return
         if event.button.id == "publish":

@@ -814,6 +814,47 @@ async def test_publish_screen_skip_advances_to_done_without_running(
         assert app.state.publish_outcomes == []
 
 
+async def test_publish_screen_skip_drops_an_earlier_passes_outcomes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Publish, Back to Apply, Publish again, Skip: Done must read as skipped,
+    not show the Published panel from the first pass."""
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / "uv.lock",
+            rel_path=Path("uv.lock"),
+            ecosystem="python",
+            suggested_name="widget-py",
+        )
+    ]
+    _stub_discovery(monkeypatch, lockfiles)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test() as pilot:
+        from textual.widgets import Button
+
+        from sbomify_action.cli.wizard.screens.done import DoneScreen
+        from sbomify_action.cli.wizard.screens.publish import PublishScreen
+        from sbomify_action.cli.wizard.state import PlannedComponent, PublishOutcome
+
+        app.state.plan.create_components = [PlannedComponent(lockfile=lockfiles[0], name="widget-py")]
+        app.state.component_ids = {Path("uv.lock"): "comp-1"}
+        # Left by the first pass.
+        app.state.publish_outcomes = [
+            PublishOutcome(rel_path="uv.lock", sbom_format="cyclonedx", output_file=tmp_path / "w.cdx.json", ok=True)
+        ]
+        app.state.publish_output_dir = tmp_path
+
+        app.push_screen(PublishScreen())
+        await pilot.pause()
+        app.screen.query_one("#skip", Button).press()
+        await pilot.pause()
+
+        assert isinstance(app.screen, DoneScreen)
+        assert app.state.publish_outcomes == []
+        assert app.state.publish_output_dir is None
+
+
 async def test_publish_screen_runs_worker_then_continues_to_done(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
