@@ -8,23 +8,40 @@ $RELEASES for ``gh api`` and logs every other call to $GH_LOG.
 """
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-PINNED_FILES = ("action.yml", "pipe.yml", "bitbucket-pipelines.yml")
+IMAGES = {
+    "action.yml": "docker://ghcr.io/sbomify/sbomify-action",
+    "pipe.yml": "sbomifyhub/sbomify-action",
+    "bitbucket-pipelines.yml": "docker://sbomifyhub/sbomify-action",
+}
+PINNED_FILES = tuple(IMAGES)
 DIGEST = "sha256:" + "a" * 64
 OTHER = "sha256:" + "b" * 64
 VERSION = "26.10.3"
 
 
+def unpinned(text: str, image: str) -> str:
+    """``text`` with ``image`` at :latest, as release.yml's pin job finds it."""
+    head, sep, tail = text.partition(f"{image}:")
+    if not tail.startswith("latest"):  # pinned to VERSION@DIGEST
+        tail = "latest" + tail[tail.index("@sha256:") + 1 + len(DIGEST) :]
+    return head + sep + tail
+
+
+# The v* tag push runs these tests on the release commit, where these files
+# already pin :VERSION@DIGEST, so start every test from them at :latest.
+BASELINE = {name: unpinned((ROOT / name).read_text(), image) for name, image in IMAGES.items()}
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     for name in PINNED_FILES:
-        shutil.copy(ROOT / name, tmp_path / name)
+        (tmp_path / name).write_text(BASELINE[name])
     fake = tmp_path / "bin" / "docker"
     fake.parent.mkdir()
     fake.write_text('#!/bin/sh\nprintf %s "$SERVED"\n')
@@ -41,13 +58,16 @@ def run(repo: Path, script: str, *args: str, served: str = DIGEST, **extra: str)
 
 def test_pin_replaces_only_latest(repo: Path) -> None:
     assert run(repo, "pin_release_image.sh", VERSION, DIGEST).returncode == 0
-    for name, image in zip(
-        PINNED_FILES,
-        ("docker://ghcr.io/sbomify/sbomify-action", "sbomifyhub/sbomify-action", "docker://sbomifyhub/sbomify-action"),
-    ):
-        before = (ROOT / name).read_text()
+    for name, image in IMAGES.items():
+        before = BASELINE[name]
         assert (repo / name).read_text() == before.replace(f"{image}:latest", f"{image}:{VERSION}@{DIGEST}"), name
         assert f"{image}:latest" in before, name
+
+
+def test_unpinned_undoes_a_release_pin(repo: Path) -> None:
+    assert run(repo, "pin_release_image.sh", "26.10.4", OTHER).returncode == 0
+    for name, image in IMAGES.items():
+        assert unpinned((repo / name).read_text(), image) == BASELINE[name], name
 
 
 @pytest.mark.parametrize(
@@ -66,7 +86,7 @@ def test_pin_rejects_bad_input(repo: Path, version: str, digest: str) -> None:
     assert result.returncode == 1
     assert "::error::" in result.stdout
     for name in PINNED_FILES:
-        assert (repo / name).read_text() == (ROOT / name).read_text(), name
+        assert (repo / name).read_text() == BASELINE[name], name
 
 
 def test_verify_passes_on_correct_pin(repo: Path) -> None:
