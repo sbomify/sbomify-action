@@ -224,6 +224,8 @@ def validate_sbom_data(
     sbom_data: dict[str, Any],
     sbom_format: SBOMFormat,
     spec_version: str,
+    *,
+    log_failure: bool = True,
 ) -> ValidationResult:
     """
     Validate SBOM data against its JSON schema.
@@ -232,6 +234,8 @@ def validate_sbom_data(
         sbom_data: The parsed SBOM JSON data
         sbom_format: The SBOM format ("cyclonedx" or "spdx")
         spec_version: The spec version (e.g., "1.6" or "2.3")
+        log_failure: Log a failure here. False for a caller that reports the
+            result itself, so the user does not see the same error twice.
 
     Returns:
         ValidationResult with validation status and any errors
@@ -247,7 +251,8 @@ def validate_sbom_data(
             # adding versions. 3.1 is the live case: it is at RC1, BSI accepts
             # released versions only, and the backend refuses it too.
             message = SPDX3_UNSUPPORTED_MESSAGE.format(version=spec_version, supported=_supported_spdx_versions())
-            logger.error(message)
+            if log_failure:
+                logger.error(message)
             return ValidationResult.failure(
                 sbom_format=sbom_format,
                 spec_version=spec_version,
@@ -276,9 +281,10 @@ def validate_sbom_data(
             # Return the first error (most relevant)
             e = errors[0]
             error_path = ".".join(str(p) for p in e.absolute_path) if e.absolute_path else None
-            logger.error(f"SBOM validation failed: {e.message}")
-            if error_path:
-                logger.error(f"Error at path: {error_path}")
+            if log_failure:
+                logger.error(f"SBOM validation failed: {e.message}")
+                if error_path:
+                    logger.error(f"Error at path: {error_path}")
             return ValidationResult.failure(
                 sbom_format=sbom_format,
                 spec_version=spec_version,
@@ -289,7 +295,8 @@ def validate_sbom_data(
         logger.info(f"SBOM validated successfully against {format_display_name(sbom_format)} {spec_version} schema")
         return ValidationResult.success(sbom_format, spec_version)
     except jsonschema.SchemaError as e:
-        logger.error(f"Invalid schema: {e.message}")
+        if log_failure:
+            logger.error(f"Invalid schema: {e.message}")
         return ValidationResult.failure(
             sbom_format=sbom_format,
             spec_version=spec_version,

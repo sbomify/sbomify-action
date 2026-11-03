@@ -22,6 +22,7 @@ from packageurl import PackageURL
 from spdx_tools.spdx.model import Document, Package, RelationshipType  # type: ignore[attr-defined]
 
 from .console import get_transformation_tracker
+from .exceptions import SBOMValidationError
 from .logging_config import logger
 
 
@@ -708,6 +709,26 @@ def link_root_dependencies(bom: Bom) -> int:
     logger.info(f"Linked {len(top_level_refs)} top-level component(s) as dependencies of root '{root_component.name}'")
 
     return len(top_level_refs)
+
+
+def load_sbom_json(path: str) -> dict[str, Any]:
+    """Read an SBOM file, refusing one whose top level is not a JSON object.
+
+    Every SBOM format is an object, and every reader goes straight to
+    ``.get()`` on what it loads. A file holding ``[]``, ``42`` or ``null``
+    crashed there with ``AttributeError``, which telemetry then reported as a
+    defect in the action rather than a bad input.
+
+    Read and decode errors propagate unchanged, so each caller keeps its own
+    handling of a missing file or broken JSON. ``utf-8-sig`` also accepts the
+    byte-order mark some Windows editors write.
+    """
+    with open(path, encoding="utf-8-sig") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        found = {list: "an array", str: "a string", bool: "a boolean", type(None): "null"}.get(type(data), "a number")
+        raise SBOMValidationError(f"'{path}' is not an SBOM: it holds {found}, and an SBOM is a JSON object.")
+    return data
 
 
 def load_cyclonedx_bom(data: dict[str, Any]) -> Bom:
