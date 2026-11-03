@@ -9,6 +9,7 @@ structural output (groups, step headers, annotations, banners) is delegated to
 everything else gets Rich styling.
 """
 
+import codecs
 import contextvars
 import os
 import sys
@@ -101,25 +102,34 @@ custom_theme = Theme(
 def _tolerate_unencodable_output(*streams: Any) -> None:
     """Let a stream that cannot encode our symbols replace them instead of raising.
 
-    A Windows console on a legacy code page such as cp1252 cannot encode the
-    check marks and box-drawing characters we print, and the strict default
-    turns a successful step into an unhandled UnicodeEncodeError. Those
-    characters are cosmetic, so they degrade to '?' instead.
+    On Windows, output that is redirected (to a file, an IDE, a CI agent's
+    pipe) is encoded with the ANSI code page, such as cp1252, not UTF-8: the
+    console device itself has been UTF-8 since Python 3.6, so this is about
+    redirected output, not an interactive console. Such a code page cannot
+    encode the check marks, crosses and arrows we print, and the strict
+    default turns a successful step into an unhandled UnicodeEncodeError.
+    Those characters are cosmetic, so they degrade to '?' instead.
+
+    Only a strict stream with a non-UTF encoding is touched. Testing the
+    encoding rather than one symbol also covers codecs such as shift_jis_2004
+    that encode some of our symbols but not others.
     """
     for stream in streams:
         encoding = getattr(stream, "encoding", None)
         reconfigure = getattr(stream, "reconfigure", None)
-        if not encoding or reconfigure is None:
+        if not encoding or reconfigure is None or getattr(stream, "errors", None) != "strict":
             continue
         try:
-            "✓".encode(encoding)
-        except UnicodeEncodeError:
-            reconfigure(errors="replace")
+            if codecs.lookup(encoding).name.startswith("utf"):
+                continue
         except LookupError:
             continue
+        reconfigure(errors="replace")
 
 
-_tolerate_unencodable_output(sys.stdout, sys.stderr)
+# Only stdout: Python already gives stderr the backslashreplace handler, so it
+# never raises, and replacing would lose the code point in tracebacks.
+_tolerate_unencodable_output(sys.stdout)
 
 # Shared console instance. Whether to force colors on is the platform's call --
 # some runners support ANSI but Rich cannot detect it through their pipe.

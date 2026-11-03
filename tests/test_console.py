@@ -2,6 +2,8 @@
 
 import io
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -111,7 +113,7 @@ class TestConsoleInstance(unittest.TestCase):
 
 
 class TestUnencodableOutput(unittest.TestCase):
-    """A legacy Windows code page must not crash the run over a check mark."""
+    """A non-UTF code page on redirected output must not crash the run over a check mark."""
 
     def _stream(self, encoding: str) -> io.TextIOWrapper:
         return io.TextIOWrapper(io.BytesIO(), encoding=encoding)
@@ -135,6 +137,36 @@ class TestUnencodableOutput(unittest.TestCase):
 
     def test_streams_without_reconfigure_are_skipped(self):
         _tolerate_unencodable_output(io.StringIO(), None)
+
+    def test_a_non_strict_stream_is_left_alone(self):
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="backslashreplace")
+        _tolerate_unencodable_output(stream)
+        self.assertEqual(stream.errors, "backslashreplace")
+
+    def test_a_codec_that_encodes_the_check_mark_but_not_the_cross_is_tolerant(self):
+        # shift_jis_2004 encodes \u2713 but not \u2717, so probing one symbol is not enough.
+        stream = self._stream("shift_jis_2004")
+        _tolerate_unencodable_output(stream)
+        self.assertEqual(stream.errors, "replace")
+
+    def test_redirected_cp1252_stdout_does_not_crash_at_import(self):
+        # Exercises the call at import time, which the in-process tests above cannot.
+        result = subprocess.run(
+            [sys.executable, "-c", "from sbomify_action.console import print_step_end; print_step_end(1)"],
+            env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b"? Step 1 completed successfully", result.stdout)
+
+    def test_stderr_keeps_its_own_handler(self):
+        result = subprocess.run(
+            [sys.executable, "-c", "import sys, sbomify_action.console; print(sys.stderr.errors)"],
+            env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), b"backslashreplace")
 
 
 class TestPrintBanner(unittest.TestCase):
