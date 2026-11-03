@@ -618,6 +618,26 @@ class TestComposerOnlySeesACopyOfTheManifest:
         assert resolve_composer_lockfile(project) == project / "composer.lock"
         assert seen == []
 
+    @pytest.mark.parametrize("bump", [True, "dev", "no-dev"])
+    def test_the_projects_composer_json_is_left_byte_for_byte(self, tmp_path, monkeypatch, composer_runs, bump):
+        """bump-after-update makes Composer rewrite the constraints in
+        composer.json after resolving, with scripts, plugins and install all
+        off. Removing the lock afterwards does not undo that, so the scanned
+        checkout would stay modified for every later CI step."""
+        manifest = {"require": {"monolog/monolog": "^3"}, "config": {"bump-after-update": bump}}
+        original = json.dumps(manifest, indent=4).encode()
+        (tmp_path / "composer.json").write_bytes(original)
+
+        def bumps(cmd, **kwargs):
+            (Path(kwargs["cwd"]) / "composer.json").write_text('{"require": {"monolog/monolog": "^3.9.0"}}')
+            (Path(kwargs["cwd"]) / "composer.lock").write_text('{"packages": []}')
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(utils.subprocess, "run", bumps)
+
+        assert resolve_composer_lockfile(tmp_path) == tmp_path / "composer.lock"
+        assert (tmp_path / "composer.json").read_bytes() == original
+
 
 class TestTheErrorSurvivesTheReport:
     """cdxgen splits one message across two streams: the marker on stderr and
