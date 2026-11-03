@@ -19,7 +19,7 @@ from license_expression import ExpressionError, Licensing, get_spdx_licensing
 if TYPE_CHECKING:
     from cyclonedx.model.component import Component
 from packageurl import PackageURL
-from spdx_tools.spdx.model import Document  # type: ignore[attr-defined]
+from spdx_tools.spdx.model import Document, Package, RelationshipType  # type: ignore[attr-defined]
 
 from .console import get_transformation_tracker
 from .logging_config import logger
@@ -482,6 +482,52 @@ def restore_spdx_document_describes(file_path: str) -> int:
         return 0
 
     return added_count
+
+
+def get_spdx_json_root_package(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the package an SPDX 2 JSON document describes, or None.
+
+    The root is what a DESCRIBES relationship from the document, or
+    ``documentDescribes``, points at. Never ``packages[0]``: syft lists a lock
+    file's dependencies first, so the first package is one of them, and the
+    component overrides written there renamed it. With several described
+    packages the first wins, as in ``get_spdx3_root_package``; dependency
+    expansion appends one for every package it discovers, after the
+    generator's own. A described file or a dangling reference is no root.
+
+    Relationships are read before ``documentDescribes``, the order spdx-tools
+    merges them in, so this agrees with the parsed document.
+    """
+    document_id = data.get("SPDXID", "SPDXRef-DOCUMENT")
+    described = [
+        relationship.get("relatedSpdxElement")
+        for relationship in data.get("relationships") or []
+        if relationship.get("spdxElementId") == document_id and relationship.get("relationshipType") == "DESCRIBES"
+    ]
+    if isinstance(data.get("documentDescribes"), list):
+        described += data["documentDescribes"]
+    packages = {package.get("SPDXID"): package for package in data.get("packages") or []}
+    return next((packages[ref] for ref in described if isinstance(ref, str) and ref in packages), None)
+
+
+def get_spdx_root_package(document: Document) -> Package | None:
+    """``get_spdx_json_root_package`` for a parsed SPDX 2 document.
+
+    spdx-tools turns ``documentDescribes`` into DESCRIBES relationships on
+    parse, so the relationships are all there is to read.
+    """
+    packages = {package.spdx_id: package for package in document.packages}
+    for relationship in document.relationships:
+        # NOASSERTION and NONE targets are objects, and unhashable.
+        target = relationship.related_spdx_element_id
+        if (
+            relationship.relationship_type == RelationshipType.DESCRIBES
+            and relationship.spdx_element_id == document.creation_info.spdx_id
+            and isinstance(target, str)
+            and target in packages
+        ):
+            return packages[target]
+    return None
 
 
 def sanitize_dependency_graph(bom: Bom) -> int:
@@ -975,7 +1021,7 @@ def _spdx_license_ids() -> tuple[frozenset[str], dict[str, str]]:
     try:
         from cyclonedx.schema._res import SPDX_JSON
 
-        with open(SPDX_JSON) as handle:
+        with open(SPDX_JSON, encoding="utf-8") as handle:
             enum = json.load(handle).get("enum") or []
     except Exception:  # noqa: BLE001 - fall back rather than fail the run
         logger.debug("Could not load the SPDX id enum; falling back to expression parsing", exc_info=True)

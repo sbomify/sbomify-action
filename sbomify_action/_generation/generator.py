@@ -14,6 +14,7 @@ from .generators import (
     CycloneDXPyGenerator,
     CycloneDXSbtGenerator,
     GradleLockfileGenerator,
+    PlatformIOGenerator,
     SyftFsGenerator,
     SyftImageGenerator,
 )
@@ -43,6 +44,8 @@ def create_default_registry() -> GeneratorRegistry:
       - Output: CycloneDX 1.4-1.6, SPDX 2.3 by conversion
     - GradleLockfileGenerator: Reads gradle.lockfile without running Gradle
       - Input: gradle.lockfile
+    - PlatformIOGenerator: Reads the libraries PlatformIO installed
+      - Input: platformio.ini (with .pio/libdeps present)
       - Output: CycloneDX 1.2-1.7, SPDX 2.2-2.3
 
     Priority 20 - Comprehensive Multi-Ecosystem (cdxgen):
@@ -94,6 +97,8 @@ def create_default_registry() -> GeneratorRegistry:
     # plugin when a project has one -- see the module docstring.
     registry.register(GradleLockfileGenerator())
     registry.register(CycloneDXSbtGenerator())
+    # Nothing else catalogs PlatformIO; reads what `pio pkg install` recorded.
+    registry.register(PlatformIOGenerator())
 
     # Priority 20: cdxgen generators (comprehensive multi-ecosystem)
     registry.register(CdxgenFsGenerator())

@@ -122,7 +122,10 @@ def test_no_supported_lock_file_is_unserved():
         SYFT_LOCK_FILES,
     )
 
-    claimed = set(CDXGEN_LOCK_FILES) | set(SYFT_LOCK_FILES) | set(CYCLONEDX_PY_LOCK_FILES) | {"Cargo.lock"}
+    # Cargo.lock and platformio.ini are claimed by native readers that keep no
+    # list of their own.
+    native = {"Cargo.lock", "platformio.ini"}
+    claimed = set(CDXGEN_LOCK_FILES) | set(SYFT_LOCK_FILES) | set(CYCLONEDX_PY_LOCK_FILES) | native
     unserved = sorted(set(ALL_LOCK_FILES) - claimed)
     assert unserved == [], f"discoverable but no generator claims them: {unserved}"
 

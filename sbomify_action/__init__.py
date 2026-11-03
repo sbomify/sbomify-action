@@ -66,7 +66,7 @@ def _get_version() -> str:
 
         pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
         if pyproject_path.exists():
-            with open(pyproject_path, "r") as f:
+            with open(pyproject_path, "r", encoding="utf-8") as f:
                 pyproject_data = toml.load(f)
             return str(pyproject_data.get("project", {}).get("version", "unknown"))
     except ImportError:
