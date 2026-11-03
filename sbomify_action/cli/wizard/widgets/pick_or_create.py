@@ -30,7 +30,7 @@ NEW_SENTINEL = "__new__"
 
 
 class PickOrCreate(Vertical):
-    """OptionList + Input with shared sentinel + auto-hide behaviour."""
+    """OptionList + Input with shared sentinel + auto-hide behavior."""
 
     DEFAULT_CSS = """
     PickOrCreate {

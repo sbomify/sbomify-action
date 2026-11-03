@@ -35,7 +35,7 @@ class PublishScreen(WizardScreen):
     the first publish on the next push instead.
     """
 
-    step_index = 9
+    step_index = 10
     step_title = "Publish"
     step_subtitle = "Optional — publish your first SBOMs now instead of waiting for CI."
 
@@ -65,9 +65,12 @@ class PublishScreen(WizardScreen):
         panel.border_title = "⏫  First publish"
         panel.border_subtitle = f"{len(self._rows())} run(s) planned"
         with panel:
-            yield Static(self._planned_markup(), classes="wizard-muted", id="publish-planned")
             yield banner
-            yield RichLog(id="publish-log", wrap=True, markup=True, highlight=False)
+            # min_width=0: RichLog's default of 78 renders every line 78 cells
+            # wide whatever the box, so at 80 columns the ends were cut off.
+            yield RichLog(id="publish-log", wrap=True, markup=True, highlight=False, min_width=0)
+
+    def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):
             yield Button("◂ Back", id="back")
             yield Button("Skip ▸", id="skip")
@@ -75,6 +78,10 @@ class PublishScreen(WizardScreen):
 
     def on_mount(self) -> None:
         self._log_widget = self.query_one("#publish-log", RichLog)
+        # The plan opens the log rather than sitting above it: a monorepo's
+        # worth of runs above the log left it no rows at 80x24, so the
+        # pipeline output streamed where nobody could see it.
+        self._log_widget.write(self._planned_markup(), scroll_end=False)
         self.query_one("#publish", Button).focus()
 
     def _rows(self) -> list[MatrixRow]:
@@ -205,8 +212,13 @@ class PublishScreen(WizardScreen):
                 self.app.pop_screen()
             return
         if event.button.id == "skip":
-            # Explicitly not publishing — leave publish_outcomes empty so
-            # the Done screen renders exactly as it did pre-publish-step.
+            # Explicitly not publishing — empty publish_outcomes so the
+            # Done screen renders exactly as it did pre-publish-step. Cleared
+            # here, not assumed: Back to Apply and into Publish again keeps
+            # the earlier pass's outcomes on the state.
+            state = self.wizard.state
+            state.publish_outcomes = []
+            state.publish_output_dir = None
             self._continue_to_done()
             return
         if event.button.id == "publish":

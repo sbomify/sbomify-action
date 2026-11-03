@@ -75,24 +75,6 @@ jobs:
             lockfile: uv.lock
             sbom_format: spdx
             output_file: sbomify-action.spdx.json
-          - name: javascript-cyclonedx
-            kind: source
-            is_action: false
-            component_name: JavaScript Dependencies
-            staging_id: PGyKXNbQd5eq
-            prod_id: IxwrYSb9rGql
-            lockfile: bun.lock
-            sbom_format: cyclonedx
-            output_file: sbomify-action-frontend.cdx.json
-          - name: javascript-spdx
-            kind: source
-            is_action: false
-            component_name: JavaScript Dependencies
-            staging_id: PGyKXNbQd5eq
-            prod_id: IxwrYSb9rGql
-            lockfile: bun.lock
-            sbom_format: spdx
-            output_file: sbomify-action-frontend.spdx.json
           - name: container-cyclonedx
             kind: container
             is_action: false
@@ -110,7 +92,7 @@ jobs:
             sbom_format: spdx
             output_file: sbomify-action-container.spdx.json
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -132,8 +114,13 @@ jobs:
         run: |
           SHORT_SHA="${HEAD_SHA:0:7}"
           if [[ "$HEAD_BRANCH" == v* ]]; then
-            # Production — version tag
+            # Production — version tag. The release includes the sbom-tools
+            # release (product PmdIuuj43CV3) this version pins in tools.toml:
+            # its bundles are what the action downloads at run time. sbom-tools
+            # versions its product releases without the tag's "v" (v26.10.3 -> 26.10.3).
+            TOOLS_RELEASE=$(sed -n 's/^tools_release = "\(.*\)"$/\1/p' sbomify_action/tools.toml)
             {
+              echo "release_includes=[\"PmdIuuj43CV3:${TOOLS_RELEASE#v}\"]"
               echo "is_prod=true"
               echo "version=${HEAD_BRANCH}"
               echo "docker_tag=${HEAD_BRANCH#v}"
@@ -164,6 +151,7 @@ jobs:
           LOCK_FILE: ${{ matrix.lockfile }}
           ADDITIONAL_PACKAGES_FILE: ${{ matrix.kind == 'container' && 'container_additional_packages.txt' || '' }}
           PRODUCT_RELEASE: '["${{ steps.cfg.outputs.product_release_id }}:${{ steps.cfg.outputs.version }}"]'
+          RELEASE_INCLUDES: ${{ steps.cfg.outputs.release_includes }}
           SBOM_FORMAT: ${{ matrix.sbom_format }}
           UPLOAD: 'true'
           AUGMENT: 'true'
@@ -185,6 +173,6 @@ jobs:
       # If you hit one of the unsupported configurations, either upgrade to
       # GitHub Enterprise Cloud, make the repo public, or remove this step.
       # Reference: https://github.com/actions/attest-build-provenance
-      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: '${{ github.workspace }}/${{ matrix.output_file }}'

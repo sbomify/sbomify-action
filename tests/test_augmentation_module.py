@@ -308,6 +308,8 @@ class TestSPDXAugmentation:
             CreationInfo,
             Document,
             Package,
+            Relationship,
+            RelationshipType,
         )
 
         creation_info = CreationInfo(
@@ -323,7 +325,11 @@ class TestSPDXAugmentation:
             spdx_id="SPDXRef-main", name="test-app", download_location="https://example.com", version="1.0.0"
         )
 
-        return Document(creation_info=creation_info, packages=[package])
+        return Document(
+            creation_info=creation_info,
+            packages=[package],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-main")],
+        )
 
     def test_spdx_supplier_augmentation(self, spdx_document):
         """Test SPDX supplier augmentation."""
@@ -776,6 +782,8 @@ class TestManufacturerHandling:
             CreationInfo,
             Document,
             Package,
+            Relationship,
+            RelationshipType,
         )
 
         creation_info = CreationInfo(
@@ -791,7 +799,11 @@ class TestManufacturerHandling:
             spdx_id="SPDXRef-main", name="test-app-mfg", download_location="https://example.com", version="1.0.0"
         )
 
-        return Document(creation_info=creation_info, packages=[package])
+        return Document(
+            creation_info=creation_info,
+            packages=[package],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-main")],
+        )
 
     def test_cyclonedx_14_manufacturer_sets_manufacture(self, cyclonedx_14_bom, manufacturer_data):
         """Test that CycloneDX 1.4 sets metadata.manufacture (no 'r')."""
@@ -1258,7 +1270,9 @@ class TestErrorHandling:
             assert "Invalid JSON in SBOM file" in str(exc_info.value)
 
     @patch("sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file")
-    @patch.dict(os.environ, {}, clear=True)
+    # DISABLE_VCS_AUGMENTATION silences the ci-platform provider, which would
+    # otherwise read this repository's own git checkout and return VCS metadata.
+    @patch.dict(os.environ, {"DISABLE_VCS_AUGMENTATION": "true"}, clear=True)
     @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_api_connection_error(self, mock_get, mock_find_config):
         """Test handling of API connection errors (provider returns None, not exception)."""
@@ -1280,7 +1294,9 @@ class TestErrorHandling:
         assert result == {}
 
     @patch("sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file")
-    @patch.dict(os.environ, {}, clear=True)
+    # DISABLE_VCS_AUGMENTATION silences the ci-platform provider, which would
+    # otherwise read this repository's own git checkout and return VCS metadata.
+    @patch.dict(os.environ, {"DISABLE_VCS_AUGMENTATION": "true"}, clear=True)
     @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_api_timeout_error(self, mock_get, mock_find_config):
         """Test handling of API timeout errors (provider returns None, not exception)."""
@@ -1301,7 +1317,9 @@ class TestErrorHandling:
         assert result == {}
 
     @patch("sbomify_action._augmentation.providers.json_config.JsonConfigProvider._find_config_file")
-    @patch.dict(os.environ, {}, clear=True)
+    # DISABLE_VCS_AUGMENTATION silences the ci-platform provider, which would
+    # otherwise read this repository's own git checkout and return VCS metadata.
+    @patch.dict(os.environ, {"DISABLE_VCS_AUGMENTATION": "true"}, clear=True)
     @patch("sbomify_action._augmentation.providers.sbomify_api.SbomifyApiProvider._fetch_backend_metadata")
     def test_api_404_error(self, mock_get, mock_find_config):
         """Test handling of API 404 errors (provider returns None, not exception)."""
@@ -2138,6 +2156,8 @@ class TestPurlVersionUpdate:
             ExternalPackageRef,
             ExternalPackageRefCategory,
             Package,
+            Relationship,
+            RelationshipType,
             SpdxNoAssertion,
         )
 
@@ -2168,6 +2188,7 @@ class TestPurlVersionUpdate:
                 created=datetime.now(),
             ),
             packages=[package],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-Package")],
         )
 
         # Augment with version override
@@ -2424,6 +2445,7 @@ class TestComponentPurlOverride:
             "name": "test-document",
             "documentNamespace": "https://example.com/test",
             "creationInfo": {"created": "2024-01-01T00:00:00Z", "creators": ["Tool: test"]},
+            "documentDescribes": ["SPDXRef-Package"],
             "packages": [
                 {
                     "SPDXID": "SPDXRef-Package",
@@ -2454,6 +2476,7 @@ class TestComponentPurlOverride:
             "name": "test-document",
             "documentNamespace": "https://example.com/test",
             "creationInfo": {"created": "2024-01-01T00:00:00Z", "creators": ["Tool: test"]},
+            "documentDescribes": ["SPDXRef-Package"],
             "packages": [
                 {
                     "SPDXID": "SPDXRef-Package",
@@ -2550,6 +2573,7 @@ class TestComponentPurlOverride:
             "dataLicense": "CC0-1.0",
             "documentNamespace": "https://example.com/test",
             "creationInfo": {"created": "2024-01-01T00:00:00Z", "creators": ["Tool: test"]},
+            "documentDescribes": ["SPDXRef-Package"],
             "packages": [
                 {
                     "SPDXID": "SPDXRef-Package",
@@ -2723,6 +2747,8 @@ class TestPurlConstructionFromVCS:
             CreationInfo,
             Document,
             Package,
+            Relationship,
+            RelationshipType,
             SpdxNoAssertion,
         )
 
@@ -2744,6 +2770,7 @@ class TestPurlConstructionFromVCS:
                 created=datetime.now(),
             ),
             packages=[package],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-Package")],
         )
 
         # Augment with VCS info
@@ -2773,6 +2800,8 @@ class TestPurlConstructionFromVCS:
             ExternalPackageRef,
             ExternalPackageRefCategory,
             Package,
+            Relationship,
+            RelationshipType,
             SpdxNoAssertion,
         )
 
@@ -2801,6 +2830,7 @@ class TestPurlConstructionFromVCS:
                 created=datetime.now(),
             ),
             packages=[package],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-Package")],
         )
 
         # Augment with VCS info (should not overwrite existing PURL)
@@ -3558,6 +3588,8 @@ class TestSpdxGenericFallbackPURL:
             CreationInfo,
             Document,
             Package,
+            Relationship,
+            RelationshipType,
         )
 
         doc = Document(
@@ -3578,6 +3610,7 @@ class TestSpdxGenericFallbackPURL:
                 download_location="NOASSERTION",
             )
         ]
+        doc.relationships = [Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-Package")]
         return doc
 
     def test_generic_fallback_when_no_vcs_url(self):

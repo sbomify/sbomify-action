@@ -13,7 +13,7 @@ from sbomify_action.cli.wizard.screens._base import WizardScreen
 class DoneScreen(WizardScreen):
     """Phase 6c — summary + next steps."""
 
-    step_index = 9
+    step_index = 10
     step_title = "Done"
     step_subtitle = "All set. Here's what you'll want to do next."
 
@@ -31,6 +31,15 @@ class DoneScreen(WizardScreen):
         # action no-ops cleanly when there isn't.
         Binding("c", "copy_first_url", "Copy URL", show=True),
     ]
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "copy_first_url":
+            # Hide the hint when pressing it could only ever produce a
+            # warning: nothing applied, or a dry-run whose component IDs are
+            # synthetic placeholders that resolve to a 404.
+            state = self.wizard.state
+            return bool(state.component_ids) and not state.is_dry_run
+        return True
 
     def compose_body(self) -> ComposeResult:
         applied = Vertical(classes="wizard-panel-emphasis")
@@ -74,7 +83,7 @@ class DoneScreen(WizardScreen):
                 # Failures are tracked per-component now, so a partial success
                 # falls through to the manual-fallback branch and lists ONLY
                 # the failed components rather than blanket-listing all of
-                # them (the prior behaviour, which made users re-bind already-
+                # them (the prior behavior, which made users re-bind already-
                 # bound components and hit 409 errors).
                 oidc = Vertical(classes="wizard-panel-emphasis")
                 oidc.border_title = "✓  OIDC trusted publishing is set up"
@@ -93,6 +102,7 @@ class DoneScreen(WizardScreen):
             with tok:
                 yield Static(self._token_instructions(), classes="wizard-muted")
 
+    def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):
             yield Button("Finish", id="finish", variant="primary")
 
@@ -165,7 +175,7 @@ class DoneScreen(WizardScreen):
             lines.append(f"     [#5E5E5E]reason: {state.attach_error}[/]")
         # Dry-run "would write" rows use a muted glyph + label so the user
         # can tell from the summary that nothing actually hit disk. The
-        # real-apply branch keeps the existing green ✓ + "Wrote" labelling.
+        # real-apply branch keeps the existing green ✓ + "Wrote" labeling.
         if state.is_dry_run:
             for path in state.written_files:
                 lines.append(f"[#5E5E5E]◌  would write[/]  {path}")
@@ -180,15 +190,16 @@ class DoneScreen(WizardScreen):
         """One line per publish run + where the local SBOM files live.
 
         Dry-run renders "would publish" phrasing since nothing was
-        generated or uploaded; error strings are escaped because they
-        quote subprocess/exception text that can contain ``[``.
+        generated or uploaded. Everything interpolated is escaped: lockfile
+        paths can legally contain ``[``/``]``, and error strings quote
+        subprocess/exception text.
         """
         from rich.markup import escape as _esc
 
         state = self.wizard.state
         lines: list[str] = []
         for outcome in state.publish_outcomes:
-            label = f"{outcome.rel_path}  [#5E5E5E]({outcome.sbom_format})[/]"
+            label = f"{_esc(outcome.rel_path)}  [#5E5E5E]({_esc(outcome.sbom_format)})[/]"
             if state.is_dry_run:
                 lines.append(f"[#5E5E5E]◌  would publish[/]  {label}")
             elif outcome.ok:

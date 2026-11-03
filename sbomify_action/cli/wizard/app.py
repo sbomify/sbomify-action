@@ -18,11 +18,12 @@ Phases (``step_index`` on each ``WizardScreen``):
                             (when augmentation=json_config) push to
                             configure (sbomify.json) for the in-repo
                             metadata form
-  8. review + apply        — table of planned writes → RichLog progress
-  9. publish + done        — optional local generate-and-upload of the
-                             first SBOMs (one pipeline subprocess per
-                             matrix row) → summary panel + OIDC
-                             instructions
+  8. review               — table of planned writes
+  9. apply                — RichLog progress
+ 10. publish + done       — optional local generate-and-upload of the
+                            first SBOMs (one pipeline subprocess per
+                            matrix row) → summary panel + OIDC
+                            instructions
 """
 
 from __future__ import annotations
@@ -48,6 +49,12 @@ class WizardApp(App[int]):
         Binding("ctrl+c", "quit_with_cancel", "Cancel", priority=True, show=True),
         Binding("ctrl+q", "quit_with_cancel", "Cancel", show=False),
         Binding("question_mark", "show_help", "Help", priority=True, show=True),
+        # Non-printable alias. Textual (correctly) lets a focused Input keep
+        # printable keys, so "?" types a literal question mark on the token
+        # and contact-profile forms rather than opening help — and the
+        # footer hint disappears with it. F1 has no such conflict, so help
+        # stays reachable from every screen including the forms.
+        Binding("f1", "show_help", "Help", priority=True, show=False),
     ]
 
     def __init__(self, opts: WizardOptions) -> None:
@@ -68,6 +75,14 @@ class WizardApp(App[int]):
             discovered=discovered,
             workflow_exists=wizard_workflow_exists(opts.repo_root),
         )
+        # Seed the release strategy from the repo rather than letting the
+        # Configure screen apply the heuristic to its radio buttons alone.
+        # The plan is the single source of truth for what the wizard will
+        # do, and that screen now both seeds from it and writes back to it
+        # — so a user who picks "tag" and then steps Back to re-check
+        # something doesn't come back to a silently reset "trunk".
+        if facts.has_release_tags:
+            self.state.plan.release_strategy = "tag"
 
     def on_mount(self) -> None:
         # Lazy import keeps screen imports off the hot path during test

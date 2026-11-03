@@ -168,6 +168,53 @@ def test_build_env_mirrors_workflow_env_with_session_token(tmp_path: Path, monke
     assert env["HOME"] == str(tmp_path)
 
 
+def test_build_env_scrubs_every_input_the_pipeline_cli_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Derived from the CLI's own options so a new input can't slip past.
+
+    SBOMIFY_TOKEN is the sharp one: it outranks TOKEN, so a token exported
+    for another workspace would silently replace the session token.
+    """
+    import click
+
+    from sbomify_action.cli.main import cli
+
+    envvars: set[str] = set()
+    for param in cli.params:
+        if isinstance(param, click.Option) and param.envvar:
+            envvars.update([param.envvar] if isinstance(param.envvar, str) else param.envvar)
+    assert "SBOMIFY_TOKEN" in envvars
+    for name in envvars:
+        monkeypatch.setenv(name, "stray")
+
+    state = _state(tmp_path)
+    runs = publish_mod.build_publish_runs(state, tmp_path / "out")
+    env = publish_mod._build_env(runs[0], state, _opts(tmp_path), version=None)
+
+    assert sorted(k for k in envvars if env.get(k) == "stray") == []
+
+
+def test_build_env_sets_submodule_path_for_a_nested_lockfile(tmp_path: Path) -> None:
+    """Same attach-or-backfill mode the CI row runs in, so the SBOM lands
+    under the submodule's pinned version rather than this repo's SHA."""
+    state = _state(tmp_path)
+    lock = DiscoveredLockfile(
+        path=tmp_path / "vendor/lib/Cargo.lock",
+        rel_path=Path("vendor/lib/Cargo.lock"),
+        ecosystem="rust",
+        suggested_name="lib",
+        nested_repo="vendor/lib",
+        nested_repo_kind="submodule",
+    )
+    state.plan.create_components.append(PlannedComponent(lockfile=lock, name="lib"))
+    state.component_ids[Path("vendor/lib/Cargo.lock")] = "comp-2"
+    runs = publish_mod.build_publish_runs(state, tmp_path / "out")
+
+    envs = [publish_mod._build_env(run, state, _opts(tmp_path), version="abc1234") for run in runs]
+
+    assert "SUBMODULE_PATH" not in envs[0]
+    assert envs[1]["SUBMODULE_PATH"] == "vendor/lib"
+
+
 def test_build_env_omits_version_when_unknown(tmp_path: Path) -> None:
     state = _state(tmp_path)
     runs = publish_mod.build_publish_runs(state, tmp_path / "out")
@@ -343,6 +390,29 @@ def test_run_publish_with_no_components_is_a_noop(
     assert any(k == "warning" for k, _m in logs)
 
 
+@pytest.mark.parametrize("case", ["no components", "dry-run"])
+def test_run_publish_makes_no_output_dir_when_nothing_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """No empty sbomify-wizard-publish-* dir left in /tmp, and no dir from
+    an earlier pass left on the state for Done to point at."""
+    state = _state(tmp_path)
+    state.publish_output_dir = tmp_path / "sbomify-wizard-publish-earlier"
+    if case == "no components":
+        state.plan.create_components = []
+        state.component_ids = {}
+    else:
+        state.is_dry_run = True
+
+    def _no_dir(prefix: str) -> str:
+        raise AssertionError("created an output dir with nothing to write into it")
+
+    monkeypatch.setattr(publish_mod.tempfile, "mkdtemp", _no_dir)
+
+    assert publish_mod.run_publish(state, _opts(tmp_path, dry_run=case == "dry-run")) is True
+    assert state.publish_output_dir is None
+
+
 def test_reset_apply_artifacts_clears_publish_state(tmp_path: Path) -> None:
     state = _state(tmp_path)
     state.publish_outcomes = [
@@ -418,6 +488,31 @@ def test_published_summary_shows_failure_reason_and_ci_note(monkeypatch: pytest.
     assert "Failed" in text
     assert "pipeline exited with code 1" in text
     assert "CI retries on the next push" in text
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_published_summary_escapes_the_lockfile_path_and_format(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, dry_run: bool
+) -> None:
+    """A lockfile path may legally hold ``[``/``]``; it must render as typed,
+    not as a style tag that eats the text or restyles the rest of the line."""
+    from rich.text import Text
+
+    state = _state(tmp_path)
+    state.is_dry_run = dry_run
+    state.publish_outcomes = [
+        PublishOutcome(
+            rel_path="libs/[red]core/uv.lock",
+            sbom_format="[b]cyclonedx",
+            output_file=tmp_path / "w.cdx.json",
+            ok=True,
+        )
+    ]
+
+    plain = Text.from_markup(_done_screen(monkeypatch, state)._published_summary()).plain
+
+    assert "libs/[red]core/uv.lock" in plain
+    assert "([b]cyclonedx)" in plain
 
 
 def test_published_summary_dry_run_uses_would_publish_phrasing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

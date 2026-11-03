@@ -59,6 +59,40 @@ def test_discover_keeps_one_lockfile_per_ecosystem_in_same_directory(tmp_path: P
     ]
 
 
+def test_discover_finds_rust_via_cargo_toml_when_no_lockfile(tmp_path: Path) -> None:
+    """A library crate without a committed Cargo.lock is still Rust.
+
+    ``cargo new --lib`` gitignores Cargo.lock by convention, so plenty of Rust
+    repos have only the manifest. Cargo.toml used to be absent from
+    RUST_LOCK_FILES, which made those repos look like they contained no Rust at
+    all -- in a polyglot repo the wizard would silently offer only the other
+    ecosystem.
+    """
+    (tmp_path / "Cargo.toml").write_text("")
+    (tmp_path / "bun.lock").write_text("")
+    (tmp_path / "package.json").write_text("{}")
+
+    found = discover(tmp_path, repo_name="dslf")
+    assert [(str(lf.rel_path), lf.ecosystem) for lf in found] == [
+        ("Cargo.toml", "rust"),
+        ("bun.lock", "javascript"),
+    ]
+
+
+def test_discover_prefers_cargo_lock_over_cargo_toml(tmp_path: Path) -> None:
+    """With both present the lockfile wins, and Rust yields exactly one entry."""
+    (tmp_path / "Cargo.lock").write_text("")
+    (tmp_path / "Cargo.toml").write_text("")
+    (tmp_path / "bun.lock").write_text("")
+    (tmp_path / "package.json").write_text("{}")
+
+    found = discover(tmp_path, repo_name="dslf")
+    assert [(str(lf.rel_path), lf.ecosystem) for lf in found] == [
+        ("Cargo.lock", "rust"),
+        ("bun.lock", "javascript"),
+    ]
+
+
 def test_discover_disambiguates_colliding_suggested_names(tmp_path: Path) -> None:
     # Same ecosystem at root and in a subdir would both suggest
     # ``<repo>-javascript`` — the nested one gets its directory in the name.
@@ -71,6 +105,21 @@ def test_discover_disambiguates_colliding_suggested_names(tmp_path: Path) -> Non
     assert names == {
         "bun.lock": "anthias-javascript",
         os.path.join("website", "bun.lock"): "anthias-website-javascript",
+    }
+
+
+def test_discover_disambiguates_with_full_relative_path(tmp_path: Path) -> None:
+    # Two nested dirs sharing a basename (apps/web + packages/web) must not
+    # collide — the full relative path goes into the suggestion.
+    for parent in ("apps", "packages"):
+        (tmp_path / parent / "web").mkdir(parents=True)
+        (tmp_path / parent / "web" / "bun.lock").write_text("")
+
+    found = discover(tmp_path, repo_name="anthias")
+    names = {str(lf.rel_path): lf.suggested_name for lf in found}
+    assert names == {
+        os.path.join("apps", "web", "bun.lock"): "anthias-apps-web-javascript",
+        os.path.join("packages", "web", "bun.lock"): "anthias-packages-web-javascript",
     }
 
 
@@ -109,6 +158,61 @@ def test_discover_skips_agent_worktree_dirs(tmp_path: Path) -> None:
     assert [str(lf.rel_path) for lf in found] == ["uv.lock"]
 
 
+def test_discover_annotates_submodule_lockfiles(tmp_path: Path) -> None:
+    # Lockfiles under a .gitmodules-declared path belong to another repo —
+    # they must be flagged so the wizard can steer the user to set up
+    # SBOMs there instead.
+    (tmp_path / ".gitmodules").write_text('[submodule "lib"]\n\tpath = extern/lib\n\turl = git@example.com:lib.git\n')
+    sub = tmp_path / "extern" / "lib"
+    (sub / "nested").mkdir(parents=True)
+    (sub / "uv.lock").write_text("")
+    (sub / "nested" / "bun.lock").write_text("")  # deeper inside the submodule
+    (tmp_path / "uv.lock").write_text("")
+
+    found = discover(tmp_path)
+    by_rel = {str(lf.rel_path): lf for lf in found}
+    assert by_rel["uv.lock"].nested_repo is None
+    assert by_rel["uv.lock"].nested_repo_kind is None
+    for rel in (os.path.join("extern", "lib", "uv.lock"), os.path.join("extern", "lib", "nested", "bun.lock")):
+        assert by_rel[rel].nested_repo == "extern/lib"
+        assert by_rel[rel].nested_repo_kind == "submodule"
+
+
+def test_discover_annotates_vendored_git_clone(tmp_path: Path) -> None:
+    # A checked-in clone (its own .git dir, not declared in .gitmodules)
+    # is flagged as vendored. Submodule checkouts use a .git *file*, so
+    # that shape must be detected too.
+    clone = tmp_path / "third_party" / "libfoo"
+    clone.mkdir(parents=True)
+    (clone / ".git").mkdir()
+    (clone / "Cargo.lock").write_text("")
+
+    gitfile_repo = tmp_path / "extern" / "bar"
+    gitfile_repo.mkdir(parents=True)
+    (gitfile_repo / ".git").write_text("gitdir: ../../.git/modules/bar\n")
+    (gitfile_repo / "go.sum").write_text("")
+
+    found = discover(tmp_path)
+    by_rel = {str(lf.rel_path): lf for lf in found}
+    assert by_rel[os.path.join("third_party", "libfoo", "Cargo.lock")].nested_repo == "third_party/libfoo"
+    assert by_rel[os.path.join("third_party", "libfoo", "Cargo.lock")].nested_repo_kind == "vendored"
+    assert by_rel[os.path.join("extern", "bar", "go.sum")].nested_repo == "extern/bar"
+    assert by_rel[os.path.join("extern", "bar", "go.sum")].nested_repo_kind == "vendored"
+
+
+def test_discover_gitmodules_quoted_path(tmp_path: Path) -> None:
+    # git quotes submodule paths containing spaces — the parser must strip
+    # the quotes before comparing.
+    (tmp_path / ".gitmodules").write_text('[submodule "spacey"]\n\tpath = "my lib"\n\turl = u\n')
+    sub = tmp_path / "my lib"
+    sub.mkdir()
+    (sub / "uv.lock").write_text("")
+
+    found = discover(tmp_path)
+    assert found[0].nested_repo == "my lib"
+    assert found[0].nested_repo_kind == "submodule"
+
+
 def test_discover_suggested_name_includes_repo_and_ecosystem(tmp_path: Path) -> None:
     (tmp_path / "uv.lock").write_text("")
     found = discover(tmp_path, repo_name="My Widget!")
@@ -140,14 +244,27 @@ def _stub_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _init_git_repo(path: Path, *, remote: str = "git@github.com:acme/widget.git") -> None:
-    env = {
+def _git_env() -> dict[str, str]:
+    """Git environment for the throwaway repos these tests build.
+
+    ``GIT_CONFIG_GLOBAL``/``GIT_CONFIG_SYSTEM`` are pinned to os.devnull so the
+    developer's own git config cannot leak in. Without that, settings such as
+    ``tag.gpgsign = true`` turn ``git tag v1.0.0`` into a signed tag, which
+    needs a message and fails with "no tag message?".
+    """
+    return {
         **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
         "GIT_AUTHOR_NAME": "T",
         "GIT_AUTHOR_EMAIL": "t@t",
         "GIT_COMMITTER_NAME": "T",
         "GIT_COMMITTER_EMAIL": "t@t",
     }
+
+
+def _init_git_repo(path: Path, *, remote: str = "git@github.com:acme/widget.git") -> None:
+    env = _git_env()
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True, env=env)
     subprocess.run(["git", "remote", "add", "origin", remote], cwd=path, check=True, env=env)
     (path / "README.md").write_text("# test")
@@ -167,14 +284,16 @@ def test_gather_repo_facts_parses_owner_repo(tmp_path: Path) -> None:
 
 def test_gather_repo_facts_with_release_tags(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
-    env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "T",
-        "GIT_AUTHOR_EMAIL": "t@t",
-        "GIT_COMMITTER_NAME": "T",
-        "GIT_COMMITTER_EMAIL": "t@t",
-    }
-    subprocess.run(["git", "tag", "v1.0.0"], cwd=tmp_path, check=True, env=env)
+    subprocess.run(["git", "tag", "v1.0.0"], cwd=tmp_path, check=True, env=_git_env())
+    facts = gather_repo_facts(tmp_path)
+    assert facts.has_release_tags is True
+
+
+def test_gather_repo_facts_with_calver_release_tags(tmp_path: Path) -> None:
+    """Bare-numeric version tags (CalVer / unprefixed SemVer) count as
+    release tags — the old ``v*``-only detection missed them."""
+    _init_git_repo(tmp_path)
+    subprocess.run(["git", "tag", "2026.7.1"], cwd=tmp_path, check=True, env=_git_env())
     facts = gather_repo_facts(tmp_path)
     assert facts.has_release_tags is True
 
@@ -334,3 +453,132 @@ def test_detect_visibility_rate_limit_returns_unknown(monkeypatch: pytest.Monkey
         lambda *args, **kwargs: _FakeResponse(403, {"message": "rate limit"}),
     )
     assert detect_visibility("git@github.com:acme/widget.git", "acme/widget") == "unknown"
+
+
+def test_discover_terminates_on_symlink_cycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A symlink pointing at an ancestor must not explode the walk.
+
+    crystal-lang/crystal ships three of these, written by its package
+    manager: ``lib/markd/lib -> ..``, ``lib/reply/lib -> ..``,
+    ``lib/sanitize/lib -> ..``. Each one re-enters ``lib/``, so the number
+    of distinct paths multiplies at every level and the walk explores an
+    astronomical number of them before the kernel's symlink limit stops it.
+    Against the real repo that ran for 59 minutes without returning.
+
+    DISCOVERY_CAP does not help: it counts unique (directory, ecosystem)
+    pairs, and the cycle contains no lockfiles to count.
+
+    The listing budget is what makes this a regression test rather than a
+    hang. A single cycling symlink terminates on its own via ELOOP after
+    ~40 levels, so asserting only on the result would pass unfixed; the
+    budget fails fast and loudly instead.
+    """
+    lib = tmp_path / "lib"
+    for pkg in ("markd", "reply", "sanitize"):
+        (lib / pkg).mkdir(parents=True)
+        (lib / pkg / "lib").symlink_to("..", target_is_directory=True)
+    (tmp_path / "uv.lock").write_text("")
+
+    real_scandir = os.scandir
+    budget = {"left": 200}
+
+    def counting_scandir(path):  # type: ignore[no-untyped-def]
+        budget["left"] -= 1
+        if budget["left"] < 0:
+            raise AssertionError(
+                "walk listed more than 200 directories for a 4-directory tree: "
+                "it is following symlinks back into their own ancestors"
+            )
+        return real_scandir(path)
+
+    monkeypatch.setattr("sbomify_action.cli.wizard.discovery.os.scandir", counting_scandir)
+
+    found = discover(tmp_path)
+
+    assert [str(lf.rel_path) for lf in found] == ["uv.lock"]
+
+
+def test_discover_ignores_lockfiles_only_reachable_through_a_symlinked_dir(tmp_path: Path) -> None:
+    """Contents of a symlinked directory are not offered as components.
+
+    Either the target is inside the repo, and its lockfiles are already
+    found by their real path, or it is outside, and they belong to another
+    project. This is the case that would otherwise put a stranger's
+    dependencies in this repo's SBOM.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "package.json").write_text("{}")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "uv.lock").write_text("")
+    (repo / "linked").symlink_to(outside, target_is_directory=True)
+
+    found = discover(repo)
+
+    assert [str(lf.rel_path) for lf in found] == ["uv.lock"]
+
+
+def test_discover_follows_a_symlinked_lockfile_inside_the_repo(tmp_path: Path) -> None:
+    """A symlinked lockfile pointing within the repo is this repo's lockfile.
+
+    The monorepo case: one resolved lockfile shared by several packages.
+    """
+    repo = tmp_path / "repo"
+    shared = repo / "shared"
+    shared.mkdir(parents=True)
+    (shared / "base.lock").write_text("")
+    (repo / "uv.lock").symlink_to(shared / "base.lock")
+
+    found = discover(repo)
+
+    assert "uv.lock" in [str(lf.rel_path) for lf in found]
+
+
+def test_discover_ignores_a_symlinked_lockfile_pointing_outside_the_repo(tmp_path: Path) -> None:
+    """A lockfile whose content lives outside the repo is not this repo's.
+
+    It is spelled as though it were inside, so only the resolved path
+    distinguishes it. Nothing the wizard offers may come from outside the
+    tree it was pointed at.
+    """
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "base.lock").write_text("")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "uv.lock").symlink_to(outside / "base.lock")
+    (repo / "package.json").write_text("{}")
+
+    found = discover(repo)
+
+    assert [str(lf.rel_path) for lf in found] == ["package.json"]
+
+
+def test_within_accepts_paths_when_the_root_is_the_filesystem_root() -> None:
+    """A prefix check would append a separator and produce "//".
+
+    Nothing under "/" starts with "//", so a repo rooted at the filesystem
+    root would have had every symlinked file rejected. Comparing path
+    components instead has no such corner.
+    """
+    from sbomify_action.cli.wizard.discovery import _within
+
+    assert _within("/etc", "/") is True
+    assert _within("/", "/") is True
+
+
+def test_within_does_not_confuse_a_sibling_with_a_prefix_name(tmp_path: Path) -> None:
+    """`/repo-other` must not read as inside `/repo`."""
+    from sbomify_action.cli.wizard.discovery import _within
+
+    repo = tmp_path / "repo"
+    sibling = tmp_path / "repo-other"
+    repo.mkdir()
+    sibling.mkdir()
+    (sibling / "f").write_text("")
+
+    assert _within(str(sibling / "f"), str(repo)) is False
+    assert _within(str(repo), str(repo)) is True

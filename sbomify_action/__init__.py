@@ -8,10 +8,11 @@ def format_display_name(fmt: str) -> str:
     Use this everywhere format names are shown to users.
 
     Args:
-        fmt: Format string ('cyclonedx' or 'spdx', case-insensitive)
+        fmt: Format string ('cyclonedx', 'spdx', 'openvex', or 'csaf',
+            case-insensitive; anything unrecognized maps to 'SPDX')
 
     Returns:
-        Display name: 'CycloneDX' or 'SPDX'
+        Display name, e.g. 'CycloneDX', 'SPDX', 'OpenVEX', 'CSAF'
 
     Examples:
         >>> format_display_name("cyclonedx")
@@ -19,7 +20,7 @@ def format_display_name(fmt: str) -> str:
         >>> format_display_name("SPDX")
         'SPDX'
     """
-    return "CycloneDX" if fmt.lower() == "cyclonedx" else "SPDX"
+    return {"cyclonedx": "CycloneDX", "openvex": "OpenVEX", "csaf": "CSAF"}.get(fmt.lower(), "SPDX")
 
 
 def _get_version() -> str:
@@ -43,9 +44,8 @@ def _get_version() -> str:
 
     # Try reading from pyproject.toml using tomllib (Python 3.11+)
     try:
-        from pathlib import Path
-
         import tomllib
+        from pathlib import Path
 
         pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
         if pyproject_path.exists():
@@ -66,7 +66,7 @@ def _get_version() -> str:
 
         pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
         if pyproject_path.exists():
-            with open(pyproject_path, "r") as f:
+            with open(pyproject_path, "r", encoding="utf-8") as f:
                 pyproject_data = toml.load(f)
             return str(pyproject_data.get("project", {}).get("version", "unknown"))
     except ImportError:

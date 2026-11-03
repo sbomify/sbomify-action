@@ -44,15 +44,15 @@ class NormalizedMetadata:
 
     # Distribution info (BSI TR-03183-2 compliance)
     distribution_filename: Optional[str] = None
-    # Hashes of the deployable artefact, keyed by algorithm name as the
+    # Hashes of the deployable artifact, keyed by algorithm name as the
     # source provided it. Keys are lower-case strings — typically SPDX /
     # CycloneDX canonical names such as "sha256", "sha512", "md5", but
     # some sources legitimately use their own variant spelling. The PyPI
     # source, for instance, returns BLAKE2b-256 under the underscore
     # form "blake2b_256" (matching PyPI's JSON API), and we keep that
     # form here so the downstream algorithm map (_CYCLONEDX_HASH_ALGORITHMS /
-    # _SPDX_CHECKSUM_ALGORITHMS in enrichment.py) can recognise it
-    # without a second normalisation step. Values are lower-case hex
+    # _SPDX_CHECKSUM_ALGORITHMS in enrichment.py) can recognize it
+    # without a second normalization step. Values are lower-case hex
     # strings. Used to populate NTIA / BSI §5.2.2 / CISA "Component
     # Hash" elements.
     hashes: Dict[str, str] = field(default_factory=dict)
@@ -102,7 +102,7 @@ class NormalizedMetadata:
         # conflicting algorithms, but every algorithm contributed by
         # `other` is preserved. Dropping other's keys would silently lose
         # useful digests when PyPI gives sha256 and another source
-        # contributes blake2b / md5 for the same artefact.
+        # contributes blake2b / md5 for the same artifact.
         #
         # Attribution for the union field: if `other` adds at least one
         # new algorithm key, refresh ``field_sources["hashes"]`` to

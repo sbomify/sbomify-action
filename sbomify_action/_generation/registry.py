@@ -1,10 +1,15 @@
 """Generator registry for managing SBOM generator plugins."""
 
 import json
+import os
+import pathlib
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from sbomify_action import format_display_name
-from sbomify_action.exceptions import SBOMGenerationError, ToolNotAvailableError
+from sbomify_action._platformio import PLATFORMIO_INI, lib_deps_are_pinned
+from sbomify_action.exceptions import ProjectResolutionError, SBOMGenerationError, ToolNotAvailableError
 from sbomify_action.logging_config import logger
 from sbomify_action.serialization import (
     restore_spdx_document_describes,
@@ -15,8 +20,387 @@ from sbomify_action.serialization import (
 from sbomify_action.tool_checks import check_tool_for_input, format_no_tools_error
 from sbomify_action.validation import validate_sbom_file
 
-from .protocol import FormatVersion, GenerationInput, Generator
+from .protocol import CYCLONEDX_VERSIONS, SPDX_VERSIONS, FormatVersion, GenerationInput, Generator
 from .result import GenerationResult
+
+# Set in the Dockerfile. Inside our own image the toolset is fixed and known,
+# so a generator that claims an input and then breaks is our bug, not the
+# user's environment -- and silently substituting a lower-priority tool hides
+# it. That is exactly how cyclonedx-cargo shipped broken: it asked for a spec
+# version it does not support, failed on every Rust project, and syft quietly
+# produced the SBOM instead.
+_CONTAINER_MARKER_ENV = "SBOMIFY_IN_CONTAINER"
+
+# Escape hatch for anyone who wants the old permissive behaviour in-container.
+_ALLOW_FALLBACK_ENV = "SBOMIFY_ALLOW_GENERATOR_FALLBACK"
+
+
+def fallback_is_a_bug() -> bool:
+    """Whether falling back to a lower-priority generator should abort.
+
+    True inside our own container image, where the installed tools are fixed
+    and a failure is a defect we shipped. False for pip installs, where the
+    surrounding environment is unknown and using whatever is present is the
+    helpful thing to do.
+    """
+    if os.environ.get(_ALLOW_FALLBACK_ENV, "").lower() in ("1", "true", "yes"):
+        return False
+    if os.environ.get(_CONTAINER_MARKER_ENV, "").lower() in ("1", "true", "yes"):
+        return True
+    # Belt and braces for images built before the marker existed.
+    return Path("/.dockerenv").exists()
+
+
+#: A manifest and the lock file that supersedes it, when both are present.
+#:
+#: These names are all documented as supported, and they are -- but a manifest
+#: declares ranges while its lock file pins versions, and several tools read
+#: only the latter. Pointed at pyproject.toml, package.json, composer.json or
+#: go.sum, syft emitted a one-package SPDX document: valid, exit code 0, and
+#: empty of everything the caller wanted. Package.swift was worse, producing
+#: nothing at all in CycloneDX while Package.resolved beside it worked.
+#:
+#: So when a caller names the manifest and the lock file is right there, the
+#: lock file is what gets read. It is the same project either way, described
+#: more precisely. Absent the sibling, nothing changes.
+LOCKFILE_FOR_MANIFEST = {
+    "pyproject.toml": ("poetry.lock", "uv.lock", "Pipfile.lock"),
+    "package.json": ("package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"),
+    "composer.json": ("composer.lock",),
+    "Cargo.toml": ("Cargo.lock",),
+    "Package.swift": ("Package.resolved",),
+    # go.sum records hashes for the whole module graph but is not itself a
+    # manifest; cyclonedx-gomod wants the go.mod beside it.
+    "go.sum": ("go.mod",),
+}
+
+
+#: Inputs that constrain dependencies without resolving them.
+#:
+#: The distinction is the whole point: a lock file records the versions a
+#: project committed to, and a manifest records the versions it would accept.
+#: An SBOM built from the first is a statement about the project. An SBOM
+#: built from the second is a statement about the day it was generated --
+#: `^4.18.0` resolves to whatever the registry offers at that moment, which is
+#: not what the project shipped and not what a consumer will install.
+#:
+#: Two names are deliberately absent, both decided by reading rather than by
+#: filename -- see `resolution_was_inferred`.
+#:
+#: `go.mod` cannot express a range: the format takes an exact version and Go
+#: resolves the graph by minimal version selection, which is deterministic
+#: against an immutable module proxy. Measured on kubernetes v1.35.1, 207 of
+#: 207 requires carry an exact semver and the file contains no range operator
+#: at all. Calling that inferred understated the strongest manifest in the
+#: corpus, and using go.sum as the signal for "recorded" was the wrong file for
+#: the job -- it verifies hashes, it does not decide versions.
+#:
+#: `requirements.txt` is the opposite: it can hold `==` pins, ranges, bare
+#: names or editable installs, in any mixture. Whether it resolves anything is
+#: a property of the contents, so the contents are what gets checked.
+UNRESOLVED_MANIFESTS = frozenset(
+    {
+        "pyproject.toml",
+        "package.json",
+        "composer.json",
+        "Cargo.toml",
+        "build.gradle",
+        "build.gradle.kts",
+        "pom.xml",
+        "build.sbt",
+        "deps.edn",
+        "project.clj",
+        "stack.yaml",
+        "mix.exs",
+        "Package.swift",
+    }
+)
+
+
+#: What to actually do about it, per manifest.
+#:
+#: "The versions were inferred" on its own is a complaint, not advice: it tells
+#: a reader their document is worse without telling them how to make it
+#: better, and the answer is different in every ecosystem. Each entry is the
+#: command that produces the missing lock file and the file to commit.
+#:
+#: The JVM entries are the honest exception. Maven and Gradle have no lock file
+#: by convention, so there is nothing to commit and the advice is to generate
+#: the SBOM from the build itself, where the resolved graph exists.
+RECOMMENDED_ACTION = {
+    "composer.json": ("composer update", "composer.lock"),
+    "package.json": ("npm install  (or pnpm/yarn/bun install)", "the lock file it writes"),
+    "pyproject.toml": ("uv lock  (or poetry lock)", "uv.lock or poetry.lock"),
+    "requirements.txt": ("pip-compile requirements.in", "a requirements.txt with every version pinned by =="),
+    "Cargo.toml": ("cargo generate-lockfile", "Cargo.lock"),
+    "Package.swift": ("swift package resolve", "Package.resolved"),
+    "mix.exs": ("mix deps.get", "mix.lock"),
+    "stack.yaml": ("stack build --dry-run", "stack.yaml.lock"),
+    "deps.edn": ("clojure -Stree", "a pinned deps.edn, or generate from the build"),
+    "project.clj": ("lein deps :tree", "a pinned project.clj, or generate from the build"),
+    "pom.xml": ("", "Maven has no lock file; run the CycloneDX Maven plugin in your build instead"),
+    "build.gradle": (
+        "",
+        "Gradle has no lock file by default; enable dependency locking, or run the CycloneDX Gradle plugin in your build",
+    ),
+    "build.gradle.kts": (
+        "",
+        "Gradle has no lock file by default; enable dependency locking, or run the CycloneDX Gradle plugin in your build",
+    ),
+    "build.sbt": ("", "sbt has no lock file; generate from the build with sbt-sbom instead"),
+    "platformio.ini": (
+        "",
+        "PlatformIO has no lock file; pin every lib_deps entry to one version (owner/Name@1.2.3, or a git URL with #<tag-or-commit>)",
+    ),
+}
+
+
+#: Files whose presence means the resolution was recorded rather than guessed.
+#:
+#: Deliberately not LOCKFILE_FOR_MANIFEST, which answers a different question.
+#: That map says *which file to read* -- and for Go it points go.sum at go.mod,
+#: because cyclonedx-gomod wants the manifest. Reusing it here asked "is there
+#: a committed resolution" and got back "which file is better to parse", which
+#: are the same answer for Python and PHP and opposite for Go.
+#:
+#: The cost of conflating them was a false accusation: Cargo.toml and go.mod
+#: had no entry, so a Rust or Go project with its lock file committed right
+#: there was told its versions had been inferred.
+COMMITTED_RESOLUTION_FOR = {
+    "pyproject.toml": ("poetry.lock", "uv.lock", "Pipfile.lock"),
+    "package.json": (
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lock",
+        # bun's older binary format. Omitting it meant a repository that had
+        # committed one was treated as having no lock file at all.
+        "bun.lockb",
+    ),
+    "composer.json": ("composer.lock",),
+    "Cargo.toml": ("Cargo.lock",),
+    "Package.swift": ("Package.resolved",),
+    "mix.exs": ("mix.lock",),
+    "stack.yaml": ("stack.yaml.lock",),
+    # Gradle has no lock file by default, but it has one when dependency
+    # locking is switched on, and gradle.lockfile is already a recognised
+    # input. Omitting it told projects that record their resolved graph
+    # that they had inferred it.
+    "build.gradle": ("gradle.lockfile",),
+    "build.gradle.kts": ("gradle.lockfile",),
+}
+
+
+def recommended_action(lock_file: str | None) -> tuple[str, str] | None:
+    """The command that would make this document authoritative, and what to commit."""
+    if not lock_file:
+        return None
+    return RECOMMENDED_ACTION.get(os.path.basename(lock_file))
+
+
+def _requirements_txt_is_pinned(path: str) -> bool:
+    """Whether every requirement in the file names an exact version.
+
+    A requirements.txt pinned throughout with `==` records a resolution as
+    firmly as any lock file. One with `flask` or `pytest>=2.8` in it records
+    nothing. The filename is identical either way, so the file is read.
+
+    Comments, blank lines, options (`-r`, `--index-url`) and environment
+    markers are skipped. Anything unreadable counts as not pinned: the cost of
+    being wrong that way is an unnecessary notice, and the cost of the other
+    way is a document that claims to be a record when it is a guess.
+    """
+    try:
+        text = pathlib.Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+    requirements = []
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+
+        # An include or an editable install defers the answer to a file this
+        # is not reading, so nothing here can call the result pinned. Dropping
+        # them meant `flask==3.1.0` beside `-r unpinned.txt` came back pinned
+        # and the disclosure was suppressed -- the one direction that matters.
+        if line.startswith(("-r", "--requirement", "-c", "--constraint", "-e", "--editable")):
+            return False
+
+        # Everything else beginning with a dash configures pip rather than
+        # requesting a package: --index-url, --find-links, --hash and friends.
+        if line.startswith("-"):
+            continue
+
+        requirements.append(line.split(";", 1)[0].strip())
+
+    if not requirements:
+        return False
+
+    # `==` is necessary and not sufficient: `package==1.*` is an equality
+    # match against a wildcard, and pip still chooses the version at install
+    # time.
+    return all("==" in requirement and "*" not in requirement for requirement in requirements)
+
+
+def records_a_resolution(path: str) -> bool:
+    """Whether this file, by itself, records resolved versions.
+
+    Not the same question as ``resolution_was_inferred``, which asks what
+    would happen if we generated from a given input -- and answers "not
+    inferred" for a manifest whose lock file sits beside it, because the
+    generator would read the sibling instead. True of the input, false of the
+    file: package.json never records a resolution, however good its neighbour.
+
+    Conflating the two ranked package.json as highly as pnpm-lock.yaml when
+    choosing a substitute, which is exactly the downgrade the ranking exists
+    to prevent. Two questions, two functions, both named for what they ask.
+    """
+    name = os.path.basename(path)
+    if name == "requirements.txt":
+        return _requirements_txt_is_pinned(path)
+    if name == PLATFORMIO_INI:
+        return lib_deps_are_pinned(pathlib.Path(path))
+    return name not in UNRESOLVED_MANIFESTS
+
+
+def resolution_was_inferred(lock_file: str | None) -> bool:
+    """Whether the versions in the document were resolved rather than recorded.
+
+    True when the input is a manifest and no lock file sits beside it, which
+    is exactly the case ``promote_to_lockfile`` could not improve on. The
+    caller has to say so: the versions are a snapshot of one moment, and a
+    reader who assumes otherwise is being misled by a document whose entire
+    job is to be trustworthy about provenance.
+    """
+    if not lock_file:
+        return False
+    name = os.path.basename(lock_file)
+
+    # Decided by content, not by name: a fully pinned requirements.txt records
+    # its resolution, and an unpinned one records nothing, and they are the
+    # same filename.
+    if name == "requirements.txt":
+        return not _requirements_txt_is_pinned(lock_file)
+
+    # Same question for PlatformIO: the installed libraries are what one
+    # build resolved, and lib_deps decides whether the next build agrees.
+    if name == PLATFORMIO_INI:
+        return not lib_deps_are_pinned(pathlib.Path(lock_file))
+
+    if name not in UNRESOLVED_MANIFESTS:
+        return False
+    directory = os.path.dirname(lock_file)
+    return not any(
+        os.path.isfile(os.path.join(directory, candidate)) for candidate in COMMITTED_RESOLUTION_FOR.get(name, ())
+    )
+
+
+def promote_to_lockfile(input: GenerationInput) -> GenerationInput:
+    """Read the lock file when the caller named a manifest sitting beside one."""
+    if not input.lock_file:
+        return input
+    # os.path rather than Path: tests substitute Path in this module to drive
+    # the fallback paths, and a helper this small should not be entangled with
+    # that. The operations are basename/dirname/isfile either way.
+    name = os.path.basename(input.lock_file)
+    for candidate in LOCKFILE_FOR_MANIFEST.get(name, ()):
+        sibling = os.path.join(os.path.dirname(input.lock_file), candidate)
+        if os.path.isfile(sibling):
+            logger.info(f"Reading {candidate} rather than {name}: it pins what the manifest only constrains")
+            return replace(input, lock_file=sibling)
+    return input
+
+
+def _describes_nothing(result: GenerationResult) -> bool:
+    """True when a successful result contains no components at all.
+
+    Exit status alone made this invisible. cyclonedx-maven pointed at a
+    multi-module aggregator, or syft pointed at a manifest whose lock file
+    is not committed, writes a schema-valid document holding its root
+    component and nothing else, and returns 0. The run then reported
+    success while describing none of the software it was asked about.
+
+    Worse, it stopped the search: the registry returns on the first
+    generator that exits 0, so an empty result kept a working generator
+    from ever being tried. On apache/dubbo, cyclonedx-maven produced 0
+    components and cdxgen -- next in line, never reached -- produces 763.
+
+    Emptiness is treated as "keep looking", not as failure, because an
+    empty SBOM is the correct answer for a project with no dependencies.
+    The caller only falls back to it once nothing else has found anything.
+
+    Anything unreadable, unparseable or otherwise surprising returns False.
+    This only classifies a result that already succeeded, so it must never
+    be the reason a run fails -- hence the bare ``Exception`` and the plain
+    ``open`` rather than ``Path``, which callers monkeypatch in this module.
+    """
+    if not result.output_file:
+        return False
+    try:
+        with open(result.output_file, encoding="utf-8") as handle:
+            document = json.load(handle)
+    except Exception:  # noqa: BLE001 - classification must not raise
+        return False
+    if not isinstance(document, dict):
+        return False
+    # CycloneDX counts `components`, SPDX `packages`. An SPDX document
+    # always describes the root as a package, so one entry there is the
+    # same emptiness as zero in CycloneDX.
+    if "packages" in document:
+        packages = document.get("packages")
+        return isinstance(packages, list) and len(packages) <= 1
+    components = document.get("components")
+    return isinstance(components, list) and len(components) == 0
+
+
+class _DowngradeRefused(SBOMGenerationError):
+    """Raised by strict mode to abort rather than silently downgrade.
+
+    A dedicated type so the retry loop can let *this* through while still
+    letting a generator's own SBOMGenerationError take the normal fallback
+    path. Catching the base class here would abort for pip users too, which
+    is exactly the behaviour strict mode is not supposed to change.
+    """
+
+
+def _degraded_message(failed: str, remaining: list[str], error: str) -> str:
+    """Explain a silent quality downgrade that we are refusing to perform."""
+    return (
+        f"Generator '{failed}' claimed this input and then failed: {error}\n"
+        f"Falling back to {', '.join(remaining)} would silently produce a "
+        f"lower-quality SBOM than the one that was asked for, so this is being "
+        f"treated as a bug in the sbomify image rather than papered over.\n"
+        f"Set {_ALLOW_FALLBACK_ENV}=1 to fall back anyway."
+    )
+
+
+def _no_generator_message(input: GenerationInput) -> str:
+    """Why nothing here can generate that, in terms the caller can act on.
+
+    The versions come from the two canonical tuples rather than from what the
+    registered generators declare. Those declarations carry an internal marker
+    spelling, ``SPDX-2.3``, which selects nothing when a user sets it, and the
+    old message listed it beside ``2.3`` as though they were two versions.
+    """
+    generatable = SPDX_VERSIONS if input.output_format == "spdx" else CYCLONEDX_VERSIONS
+    display = format_display_name(input.output_format)
+    # A caller that asked for no particular version renders as "CycloneDX None"
+    # otherwise, which names a version nobody requested and sends the reader
+    # looking for where they set it.
+    asked_for = f" {input.spec_version}" if input.spec_version else " at any version this input allows"
+    message = f"Nothing here generates {display}{asked_for}. Generatable versions: {', '.join(generatable)}."
+    if input.output_format == "spdx" and str(input.spec_version).startswith("3"):
+        # The likeliest way to arrive here, and the only one where the answer
+        # is a different input rather than a different version.
+        message += (
+            " SPDX 3 is read, validated and written, but no generator produces"
+            " one, so supply an existing document with SBOM_FILE instead of"
+            " generating from a lock file or an image."
+        )
+    return message
 
 
 class GeneratorRegistry:
@@ -114,6 +498,7 @@ class GeneratorRegistry:
         Raises:
             ValueError: If no generator supports the input
         """
+        input = promote_to_lockfile(input)
         generators = self.get_generators_for(input)
 
         if not generators:
@@ -124,10 +509,7 @@ class GeneratorRegistry:
                 input_type = "lock_file"
             else:
                 # SBOM file input or other - these don't need generation tools
-                raise SBOMGenerationError(
-                    f"No generator found for input. "
-                    f"Requested: format={input.output_format}, version={input.spec_version}."
-                )
+                raise SBOMGenerationError(_no_generator_message(input))
 
             # Check if this is due to missing tools
             lock_file = input.lock_file if input.is_lock_file else None
@@ -139,12 +521,7 @@ class GeneratorRegistry:
                 raise ToolNotAvailableError(input_type, lock_file, error_msg)
             else:
                 # Tools available but don't support this format/version
-                available_formats = self._get_available_formats()
-                raise SBOMGenerationError(
-                    f"No generator found for input. "
-                    f"Requested: format={input.output_format}, version={input.spec_version}. "
-                    f"Available formats: {available_formats}"
-                )
+                raise SBOMGenerationError(_no_generator_message(input))
 
         # Try generators in priority order, collecting errors for better diagnostics
         generator_names = [g.name for g in generators]
@@ -152,11 +529,34 @@ class GeneratorRegistry:
 
         errors: list[str] = []
         attempted_generators: list[str] = []
-        for generator in generators:
+        strict = fallback_is_a_bug()
+        # A generator that exits 0 having described nothing. Kept rather than
+        # returned, because a project with no dependencies is entitled to an
+        # empty SBOM -- but only used if nothing else does better. See
+        # _describes_nothing.
+        empty: GenerationResult | None = None
+        empty_from: str | None = None
+        for index, generator in enumerate(generators):
             logger.info(f"Trying generator: {generator.name}")
             attempted_generators.append(generator.name)
             try:
                 result = generator.generate(input)
+                if result.success and _describes_nothing(result):
+                    # Always hand on, including from the last generator.
+                    # Returning here instead would skip the block after the
+                    # loop, which is the only thing that tells the caller the
+                    # document is empty and where to look -- and would hand
+                    # back whichever generator happened to be last rather than
+                    # the first, highest-priority one recorded below.
+                    if empty is None:
+                        empty, empty_from = result, generator.name
+                    errors.append(f"{generator.name}: produced an SBOM with no components")
+                    if remaining := [g.name for g in generators[index + 1 :]]:
+                        logger.warning(
+                            f"Generator '{generator.name}' produced an SBOM with no components; "
+                            f"trying {remaining[0]} to see if it can read this input"
+                        )
+                    continue
                 if result.success:
                     logger.info(f"Successfully generated SBOM with {generator.name}")
 
@@ -165,14 +565,50 @@ class GeneratorRegistry:
                         result = self._validate_result(result)
 
                     return result
+
+                remaining = [g.name for g in generators[index + 1 :]]
+                errors.append(f"{generator.name}: {result.error_message}")
+                if result.declined:
+                    # A routing decision, not a defect: always hand on.
+                    logger.info(f"Generator {generator.name} declined this input: {result.error_message}")
+                elif strict and remaining:
+                    raise _DowngradeRefused(_degraded_message(generator.name, remaining, str(result.error_message)))
                 else:
-                    errors.append(f"{generator.name}: {result.error_message}")
-                    # Log at INFO level to ensure it appears in Sentry breadcrumbs
-                    logger.info(f"Generator {generator.name} failed, will try next: {result.error_message}")
+                    self._warn_degraded(generator.name, remaining, str(result.error_message))
+            except _DowngradeRefused:
+                raise
             except Exception as e:
+                remaining = [g.name for g in generators[index + 1 :]]
                 errors.append(f"{generator.name}: {e}")
-                # Log at INFO level to ensure it appears in Sentry breadcrumbs
-                logger.info(f"Generator {generator.name} raised exception, will try next: {e}")
+                if strict and remaining and isinstance(e, ProjectResolutionError):
+                    # Still no silent downgrade, but nothing in the image is
+                    # broken: the project is. Say so, keeping the error's type
+                    # so it reaches the user rather than our bug tracker.
+                    raise ProjectResolutionError(
+                        f"{e}\nSet {_ALLOW_FALLBACK_ENV}=1 to generate with {', '.join(remaining)} instead, "
+                        f"which read the lock file without resolving the project.",
+                        stderr=e.stderr,
+                        stdout=e.stdout,
+                        returncode=e.returncode,
+                    ) from e
+                if strict and remaining:
+                    raise _DowngradeRefused(_degraded_message(generator.name, remaining, str(e))) from e
+                self._warn_degraded(generator.name, remaining, str(e))
+
+        # Nothing found components, but something did produce a well-formed
+        # empty document. A project genuinely without dependencies is
+        # entitled to exactly that, and refusing it would be worse than
+        # reporting it -- so hand it back, saying clearly what it contains.
+        if empty is not None:
+            logger.warning(
+                f"No generator found any components for this input; returning the empty "
+                f"SBOM from '{empty_from}'. If this project does have dependencies, they "
+                f"are not being read -- check that the file passed to LOCK_FILE is the one "
+                f"that declares them."
+            )
+            if validate and empty.output_file:
+                empty = self._validate_result(empty)
+            return empty
 
         # All generators failed - check if it's a tool availability issue
         logger.info(f"All {len(attempted_generators)} generator(s) failed: {', '.join(attempted_generators)}")
@@ -201,6 +637,16 @@ class GeneratorRegistry:
             spec_version=spec_version,
             generator_name="none",
         )
+
+    def _warn_degraded(self, failed: str, remaining: list[str], error: str) -> None:
+        """Say plainly what quality is being lost by moving down the chain."""
+        if remaining:
+            logger.warning(
+                f"Generator '{failed}' failed and is being replaced by "
+                f"'{remaining[0]}', which may produce a lower-quality SBOM: {error}"
+            )
+        else:
+            logger.info(f"Generator {failed} failed and no generators remain: {error}")
 
     def _validate_result(self, result: GenerationResult) -> GenerationResult:
         """Validate a generation result and update with validation info."""

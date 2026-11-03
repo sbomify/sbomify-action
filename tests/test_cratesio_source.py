@@ -7,6 +7,7 @@ import pytest
 import requests
 from packageurl import PackageURL
 
+from sbomify_action._enrichment.exceptions import TransientSourceError
 from sbomify_action._enrichment.sources.cratesio import CratesIOSource, clear_cache
 
 
@@ -193,9 +194,8 @@ class TestCratesIOSourceFetch:
 
         mock_session.get.side_effect = requests.exceptions.Timeout()
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_fetch_connection_error(self, mock_session):
         """Test handling of connection error."""
@@ -204,9 +204,8 @@ class TestCratesIOSourceFetch:
 
         mock_session.get.side_effect = requests.exceptions.ConnectionError()
 
-        metadata = source.fetch(purl, mock_session)
-
-        assert metadata is None
+        with pytest.raises(TransientSourceError):
+            source.fetch(purl, mock_session)
 
     def test_fetch_json_decode_error(self, mock_session):
         """Test handling of JSON decode error."""

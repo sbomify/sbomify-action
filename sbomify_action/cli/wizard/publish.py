@@ -48,6 +48,7 @@ def _noop(_kind: LogKind, _message: str) -> None:
 # silently redirect the run away from the lockfile the wizard planned.
 _PIPELINE_ENV_VARS = (
     "TOKEN",
+    "SBOMIFY_TOKEN",  # outranks TOKEN in the pipeline
     "COMPONENT_ID",
     "COMPONENT_NAME",
     "COMPONENT_VERSION",
@@ -58,11 +59,20 @@ _PIPELINE_ENV_VARS = (
     "SBOM_FILE",
     "LOCK_FILE",
     "DOCKER_IMAGE",
+    "SOURCE_DIR",
+    "DOCUMENT_FILE",
+    "DOCUMENT_NAME",
+    "DOCUMENT_TYPE",
+    "DOCUMENT_VERSION",
+    "DOCUMENT_DESCRIPTION",
+    "DOCUMENT_COMPLIANCE_SUBCATEGORY",
     "UPLOAD",
     "UPLOAD_DESTINATIONS",
     "AUGMENT",
     "ENRICH",
     "PRODUCT_RELEASE",
+    "RELEASE_INCLUDES",
+    "SUBMODULE_PATH",
     "API_BASE_URL",
     "SBOM_FORMAT",
     "OUTPUT_FILE",
@@ -164,6 +174,10 @@ def _build_env(run: PublishRun, state: WizardState, opts: WizardOptions, version
     )
     if version:
         env["COMPONENT_VERSION"] = version
+    if run.row.submodule_path:
+        # Same attach-or-backfill mode as the CI row: the pipeline swaps
+        # the short SHA above for the submodule's pin-derived version.
+        env["SUBMODULE_PATH"] = run.row.submodule_path
     return env
 
 
@@ -211,17 +225,24 @@ def run_publish(state: WizardState, opts: WizardOptions, *, log: LogFn = _noop) 
     would clobber, and an interleaved log would be unreadable anyway.
     """
     state.publish_outcomes = []
-    output_dir = Path(tempfile.mkdtemp(prefix="sbomify-wizard-publish-"))
-    state.publish_output_dir = output_dir
-    runs = build_publish_runs(state, output_dir)
+    # Cleared before the early returns, so Done never points at a dir an
+    # earlier pass left behind.
+    state.publish_output_dir = None
+    planned = build_publish_runs(state, Path())
 
-    if not runs:
+    if not planned:
         log("warning", "Nothing to publish — no components were applied.")
         return True
 
     if opts.dry_run:
-        _run_publish_dry_run(state, runs, log)
+        _run_publish_dry_run(state, planned, log)
         return True
+
+    # Made only now that a run will write into it; an empty one would be
+    # left behind in the temp dir.
+    output_dir = Path(tempfile.mkdtemp(prefix="sbomify-wizard-publish-"))
+    state.publish_output_dir = output_dir
+    runs = build_publish_runs(state, output_dir)
 
     version = component_version(opts.repo_root)
     all_ok = True

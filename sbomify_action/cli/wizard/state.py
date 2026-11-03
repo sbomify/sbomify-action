@@ -34,14 +34,15 @@ AugmentationStrategy = Literal["profile", "skip", "json_config"]
   fields the user fills in on the Configure (sbomify.json) screen.
   The action's ``json_config`` provider reads it at workflow run time.
 - ``skip`` — set ``AUGMENT: 'false'``; the user will manage metadata
-  out-of-band (or accept blank organisational fields).
+  out-of-band (or accept blank organizational fields).
 """
 
 ReleaseStrategy = Literal["trunk", "tag", "manual"]
 """How the emitted workflow's ``on:`` block fires.
 
 - ``trunk`` — push to the default branch (every push is a "release").
-- ``tag`` — push of a ``v*`` tag (tag-driven releases).
+- ``tag`` — push of a version tag, ``v*`` or bare-numeric like CalVer
+  (tag-driven releases).
 - ``manual`` — ``workflow_dispatch`` only.
 """
 
@@ -61,6 +62,18 @@ component publishing in both formats produces two artifacts.
 """
 
 
+NestedRepoKind = Literal["submodule", "vendored"]
+"""Why a lockfile's directory belongs to a different repository.
+
+- ``submodule`` — under a path declared in ``.gitmodules``.
+- ``vendored`` — under a directory carrying its own ``.git`` entry
+  without being declared in ``.gitmodules``. Typically a checked-in
+  clone, but the entry may equally be a ``.git`` *file* (a worktree, or
+  a submodule checkout the parent never declared); detection does not
+  distinguish them, so they all land here.
+"""
+
+
 @dataclass(frozen=True)
 class DiscoveredLockfile:
     """One lockfile the wizard found in the repo."""
@@ -69,6 +82,12 @@ class DiscoveredLockfile:
     rel_path: Path
     ecosystem: str
     suggested_name: str
+    nested_repo: str | None = None
+    """Repo-relative POSIX path of the enclosing submodule / vendored
+    repo root, when the lockfile belongs to one. Those lockfiles are
+    better tracked from their own repository, so the discover screen
+    annotates them and leaves them deselected by default."""
+    nested_repo_kind: NestedRepoKind | None = None
 
 
 @dataclass(frozen=True)
@@ -181,6 +200,17 @@ class Plan:
     attestation: bool = False
     """When True, the workflow appends an ``actions/attest-build-provenance``
     step after each SBOM upload to produce a signed build attestation."""
+    normalize_version: bool = False
+    """When True, a release tag is reduced to the version a registry would
+    recognise before it becomes the component version: ``curl-8_21_0`` to
+    ``8.21.0``, ``rel/release-3.5.0`` to ``3.5.0``, ``svelte@5.56.8`` to
+    ``5.56.8``.
+
+    Off by default because it rewrites what the project itself called the
+    release, which is a choice to offer rather than to make quietly. Measured
+    across 500 popular open source projects: 403 of the 446 with a release tag
+    already tag a clean version and are unaffected either way; the other 43 use
+    a convention no registry or CVE feed can match without this."""
 
 
 @dataclass(frozen=True)

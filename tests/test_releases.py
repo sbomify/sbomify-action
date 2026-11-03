@@ -66,7 +66,19 @@ def test_get_release_details_delegates(stub_client: MagicMock) -> None:
 def test_create_release_delegates(stub_client: MagicMock) -> None:
     stub_client.create_release.return_value = "rel-new"
     assert create_release(API_BASE, TOKEN, "prod-1", "v1.0.0") == "rel-new"
-    stub_client.create_release.assert_called_once_with("prod-1", "v1.0.0")
+    # None rather than False. The client omits the field entirely when it is
+    # None, so the backend keeps its own default; False would assert "this is
+    # a final release" about a version nothing has judged.
+    stub_client.create_release.assert_called_once_with("prod-1", "v1.0.0", is_prerelease=None)
+
+
+def test_create_release_forwards_prerelease(stub_client: MagicMock) -> None:
+    """The wrapper used to drop this, so every alpha was recorded as final."""
+    stub_client.create_release.return_value = "rel-new"
+
+    create_release(API_BASE, TOKEN, "prod-1", "6.1a1", is_prerelease=True)
+
+    stub_client.create_release.assert_called_once_with("prod-1", "6.1a1", is_prerelease=True)
 
 
 def test_create_release_error_propagates(stub_client: MagicMock) -> None:
