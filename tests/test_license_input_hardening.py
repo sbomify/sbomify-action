@@ -425,6 +425,30 @@ class TestMixedWrongTypeConsolidation:
 
         assert expression == "Apache-2.0 OR MIT"
 
+    @pytest.mark.parametrize(
+        ("name", "other", "expected"),
+        [
+            ("MIT OR Apache-2.0", "BSD-3-Clause", "MIT OR Apache-2.0 OR BSD-3-Clause"),
+            (
+                "GPL-2.0-only WITH Classpath-exception-2.0",
+                "MIT",
+                "GPL-2.0-only WITH Classpath-exception-2.0 OR MIT",
+            ),
+            ("MIT AND Apache-2.0", "BSD-3-Clause", "(MIT AND Apache-2.0) OR BSD-3-Clause"),
+        ],
+    )
+    def test_a_valid_spdx_expression_under_name_is_kept(self, name: str, other: str, expected: str) -> None:
+        """A name that is already a valid SPDX expression is not demoted to a LicenseRef."""
+        expression = self._consolidated(
+            [
+                {"license": {"name": name}},
+                {"expression": other},
+            ]
+        )
+
+        assert expression == expected
+        self._assert_valid_expression(expression)
+
     def test_a_compound_expression_keeps_its_precedence(self) -> None:
         expression = self._consolidated(
             [
