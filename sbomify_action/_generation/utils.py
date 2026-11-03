@@ -997,9 +997,45 @@ def resolve_composer_lockfile(directory: Path) -> Path | None:
             "composer.json has no composer.lock beside it, and resolving one means reaching Packagist, "
             f"which SBOMIFY_FETCH_RUNTIMES rules out. {advice}"
         )
-    if refusal := _composer_manifest_refusal(directory / "composer.json"):
-        raise InputRefusedError(f"Not resolving composer.json: {refusal}. {advice}")
 
+    # Composer resolves a copy of the manifest in a scratch directory and never
+    # sees the project. It reads more than composer.json from where it runs:
+    # an auth.json beside the manifest's real path is merged into its config,
+    # where a schema violation only warns, so disable-tls or cache-repo-dir in
+    # one walked past every check made on the manifest. And it writes back:
+    # bump-after-update rewrites composer.json's constraints after resolving,
+    # scripts and plugins off or not. Only the lock comes back.
+    with tempfile.TemporaryDirectory(prefix="sbomify-composer-") as scratch:
+        home, work = Path(scratch), Path(scratch) / "project"
+        work.mkdir()
+        try:
+            shutil.copyfile(directory / "composer.json", work / "composer.json")
+        except OSError as e:
+            raise InputRefusedError(f"Not resolving composer.json: it could not be read ({e}). {advice}") from e
+        # The copy, not the original: what is checked is what Composer reads.
+        if refusal := _composer_manifest_refusal(work / "composer.json"):
+            raise InputRefusedError(f"Not resolving composer.json: {refusal}. {advice}")
+        _run_composer_update(work, home, advice)
+
+        resolved = work / "composer.lock"
+        if resolved.is_symlink() or not resolved.is_file():
+            raise SBOMGenerationError(f"Composer reported success but left no regular composer.lock file. {advice}")
+        # "x" is O_CREAT|O_EXCL: a new file in the project, never written
+        # through a link or over a file that appeared meanwhile, so what the
+        # caller deletes is only ever ours.
+        try:
+            with lock.open("xb") as out:
+                out.write(resolved.read_bytes())
+        except OSError as e:
+            raise SBOMGenerationError(
+                f"Could not write composer.lock into {directory} as a new regular file: {e}. {advice}"
+            ) from e
+    logger.info("Resolved composer.json into a temporary composer.lock for this run only")
+    return lock
+
+
+def _run_composer_update(work: Path, home: Path, advice: str) -> None:
+    """Run ``composer update`` on the copied manifest in ``work``."""
     try:
         ensure_php_installed()
     except SBOMGenerationError as e:
@@ -1031,33 +1067,21 @@ def resolve_composer_lockfile(directory: Path) -> Path | None:
         "--no-interaction",
     ]
     try:
-        with tempfile.TemporaryDirectory(prefix="sbomify-composer-") as home:
-            subprocess.run(
-                cmd,
-                cwd=str(directory),
-                capture_output=True,
-                text=True,
-                timeout=DEFAULT_TIMEOUT,
-                check=True,
-                env=_composer_env(Path(home)),
-            )
+        subprocess.run(
+            cmd,
+            cwd=str(work),
+            capture_output=True,
+            text=True,
+            timeout=DEFAULT_TIMEOUT,
+            check=True,
+            env=_composer_env(home),
+        )
     except subprocess.CalledProcessError as e:
         raise SBOMGenerationError(
             f"Composer could not resolve composer.json:\n{combined_output(e.stderr, e.stdout)[-2000:]}\n{advice}"
         ) from e
     except (subprocess.TimeoutExpired, OSError) as e:
         raise SBOMGenerationError(f"Composer could not resolve composer.json: {e}. {advice}") from e
-
-    if not lock.is_symlink() and not lock.exists():
-        raise SBOMGenerationError(f"Composer reported success but wrote no composer.lock. {advice}")
-    # Checked again before the caller registers it for deletion: whatever is
-    # there now has to be a file we made, in the project, and nothing else.
-    if lock.is_symlink() or not lock.is_file() or not lock.resolve().is_relative_to(directory.resolve()):
-        raise InputRefusedError(
-            f"Composer left a composer.lock that is not a regular file inside {directory}; not using it. {advice}"
-        )
-    logger.info("Resolved composer.json into a temporary composer.lock for this run only")
-    return lock
 
 
 #: What Composer gets from the job's environment: PATH to find itself and

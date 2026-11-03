@@ -239,7 +239,7 @@ class TestComposerJsonIsResolvedWithoutRunningTheProject:
         assert "--no-scripts" in cmd, "the root package's scripts are code from the scanned repository"
         assert "--no-plugins" in cmd, "plugins are code too, and a repository can commit vendor/"
         assert "--no-install" in cmd, "resolving must not download package contents"
-        assert kwargs["cwd"] == str(tmp_path)
+        assert not Path(kwargs["cwd"]).resolve().is_relative_to(tmp_path.resolve()), "Composer saw the project"
 
     def test_a_committed_lock_is_left_alone(self, tmp_path, monkeypatch):
         (tmp_path / "composer.json").write_text('{"require": {}}')
@@ -333,7 +333,9 @@ class TestComposerJsonIsResolvedWithoutRunningTheProject:
         (tmp_path / "composer.json").write_text('{"require": {}}')
 
         def leaves_a_link(cmd, **kwargs):
-            (tmp_path / "composer.lock").symlink_to(outside)
+            (Path(kwargs["cwd"]) / "composer.lock").write_text('{"packages": []}')
+            if not (tmp_path / "composer.lock").is_symlink():
+                (tmp_path / "composer.lock").symlink_to(outside)
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         monkeypatch.setattr(utils.subprocess, "run", leaves_a_link)
@@ -569,6 +571,52 @@ class TestTheManifestCannotSteerTheResolution:
         assert "bug" not in message
         assert "repositories" in message and "Commit a composer.lock" in message, "the refusal's advice was lost"
         assert composer_runs == []
+
+
+class TestComposerOnlySeesACopyOfTheManifest:
+    """Composer reads and writes more than composer.json in the directory it
+    runs in, so it resolves a copy in a scratch directory and only the lock
+    comes back."""
+
+    @pytest.mark.parametrize("layout", ["beside", "symlinked", "beside-the-manifests-target"])
+    def test_no_auth_json_reaches_composer(self, tmp_path, monkeypatch, composer_runs, layout):
+        """Composer merges an auth.json found beside the real path of
+        composer.json into its config, and a schema violation there only
+        warns. So disable-tls or cache-repo-dir in an auth.json walked past
+        every check made on the manifest."""
+        project, elsewhere = tmp_path / "project", tmp_path / "elsewhere"
+        project.mkdir()
+        elsewhere.mkdir()
+        weakening = json.dumps({"disable-tls": True, "cache-repo-dir": "cache"})
+        manifest = project / "composer.json"
+        if layout == "beside-the-manifests-target":
+            (elsewhere / "composer.json").write_text('{"require": {}}')
+            (elsewhere / "auth.json").write_text(weakening)
+            manifest.symlink_to(elsewhere / "composer.json")
+        else:
+            manifest.write_text('{"require": {}}')
+            if layout == "symlinked":
+                (elsewhere / "auth.json").write_text(weakening)
+                (project / "auth.json").symlink_to(elsewhere / "auth.json")
+            else:
+                (project / "auth.json").write_text(weakening)
+        seen: list[Path] = []
+
+        def composer(cmd, **kwargs):
+            # Where Composer 2.10.3 looks: Factory::createConfig reads
+            # COMPOSER_HOME/auth.json, Factory::createComposer reads
+            # dirname(realpath(composer.json))/auth.json.
+            beside = Path(os.path.realpath(Path(kwargs["cwd"]) / "composer.json")).parent / "auth.json"
+            for auth in (Path(kwargs["env"]["COMPOSER_HOME"]) / "auth.json", beside):
+                if os.path.lexists(auth):
+                    seen.append(auth)
+            (Path(kwargs["cwd"]) / "composer.lock").write_text('{"packages": []}')
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(utils.subprocess, "run", composer)
+
+        assert resolve_composer_lockfile(project) == project / "composer.lock"
+        assert seen == []
 
 
 class TestTheErrorSurvivesTheReport:
