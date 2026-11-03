@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from textual.widgets import Button
+from textual.widgets import Button, RichLog
 
 from sbomify_action.cli.wizard.app import WizardApp
 from sbomify_action.cli.wizard.options import WizardOptions
@@ -961,6 +961,61 @@ async def test_a_monorepos_worth_of_lockfiles_stays_navigable(
         geometry = screen._compositor.full_map.get(last)
         assert geometry is not None and geometry.region.height > 0, "last lockfile card unreachable"
         assert not _offscreen_buttons(screen), "action row moved while scrolling"
+
+
+@pytest.mark.parametrize(("width", "height"), SIZES)
+@pytest.mark.parametrize("lockfile_count", [1, 4, 20])
+async def test_publish_keeps_its_log_and_action_row_on_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, width: int, height: int, lockfile_count: int
+) -> None:
+    """The log is where every run's pipeline output streams, so the plan of
+    runs must never push it out of view: not with one lockfile at 80x24, and
+    not with a monorepo's worth in two formats."""
+    from sbomify_action.cli.wizard.screens.publish import PublishScreen
+    from sbomify_action.cli.wizard.state import PlannedComponent
+
+    lockfiles = [
+        DiscoveredLockfile(
+            path=tmp_path / f"services/svc-{index:02d}/uv.lock",
+            rel_path=Path(f"services/svc-{index:02d}/uv.lock"),
+            ecosystem="python",
+            suggested_name=f"svc-{index:02d}",
+        )
+        for index in range(lockfile_count)
+    ]
+    _stub_wizard(monkeypatch, tmp_path, 1)
+
+    app = WizardApp(_opts(tmp_path))
+    async with app.run_test(size=(width, height)) as pilot:
+        app.state.plan.create_components = [PlannedComponent(lockfile=lf, name=lf.suggested_name) for lf in lockfiles]
+        app.state.plan.sbom_formats = ["cyclonedx", "spdx"]
+        app.state.component_ids = {lf.rel_path: f"comp-{i}" for i, lf in enumerate(lockfiles)}
+        app.state.is_dry_run = True
+        app.push_screen(PublishScreen())
+        await pilot.pause()
+
+        def check(label: str) -> None:
+            screen = app.screen
+            shown = [b for b in _offscreen_buttons(screen) if screen.query_one(f"#{b}", Button).display]
+            assert not shown, f"{label} at {width}x{height}: {shown} off-screen"
+            full_map = screen._compositor.full_map
+            log_widget = screen.query_one("#publish-log", RichLog)
+            log = full_map[log_widget].region
+            body = full_map[screen.query_one(".wizard-scroll")].region
+            rows = min(log.bottom, body.bottom) - max(log.y, body.y)
+            assert rows >= 5, f"{label} at {width}x{height}, {lockfile_count} lockfiles: {rows} log rows on screen"
+            # Wrapped to the box, not cut off at its right edge.
+            assert log_widget.virtual_size.width <= log_widget.scrollable_content_region.width, (
+                f"{label} at {width}x{height}: log lines wider than the log"
+            )
+
+        check("before publishing")
+        log_lines = [strip.text for strip in app.screen.query_one("#publish-log", RichLog).lines]
+        assert any("svc-00" in line for line in log_lines), "the plan of runs is not on screen"
+        await _advance(pilot, "publish")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        check("after publishing")
 
 
 @pytest.mark.parametrize(("width", "height"), [(80, 24), (80, 12), (250, 70)])

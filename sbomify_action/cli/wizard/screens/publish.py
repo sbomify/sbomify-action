@@ -65,9 +65,10 @@ class PublishScreen(WizardScreen):
         panel.border_title = "⏫  First publish"
         panel.border_subtitle = f"{len(self._rows())} run(s) planned"
         with panel:
-            yield Static(self._planned_markup(), classes="wizard-muted", id="publish-planned")
             yield banner
-            yield RichLog(id="publish-log", wrap=True, markup=True, highlight=False)
+            # min_width=0: RichLog's default of 78 renders every line 78 cells
+            # wide whatever the box, so at 80 columns the ends were cut off.
+            yield RichLog(id="publish-log", wrap=True, markup=True, highlight=False, min_width=0)
 
     def compose_actions(self) -> ComposeResult:
         with Horizontal(classes="button-row"):
@@ -77,6 +78,10 @@ class PublishScreen(WizardScreen):
 
     def on_mount(self) -> None:
         self._log_widget = self.query_one("#publish-log", RichLog)
+        # The plan opens the log rather than sitting above it: a monorepo's
+        # worth of runs above the log left it no rows at 80x24, so the
+        # pipeline output streamed where nobody could see it.
+        self._log_widget.write(self._planned_markup(), scroll_end=False)
         self.query_one("#publish", Button).focus()
 
     def _rows(self) -> list[MatrixRow]:
