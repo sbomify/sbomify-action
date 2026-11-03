@@ -10,6 +10,8 @@ That is the common case rather than a corner: PHP libraries gitignore
 composer.lock, leaving the consuming application to resolve it.
 """
 
+import errno
+import io
 import json
 import os
 import subprocess
@@ -446,6 +448,51 @@ class TestComposerJsonIsResolvedWithoutRunningTheProject:
             resolve_composer_lockfile(tmp_path)
 
         assert outside.read_text() == "not ours"
+
+    def test_a_lock_that_could_not_be_written_in_full_is_removed(self, tmp_path, monkeypatch, composer_runs):
+        """The caller never gets the path of a lock whose write failed, so it
+        cannot remove it, and a partial one left behind reads as committed:
+        the next run skips resolution and reads whatever half was written."""
+        (tmp_path / "composer.json").write_text('{"require": {}}')
+
+        class FullDisk(io.FileIO):
+            """Takes half of what it is given, then the disk is full."""
+
+            def write(self, data):
+                super().write(bytes(data)[: len(data) // 2])
+                raise OSError(errno.ENOSPC, "No space left on device")
+
+        real_open = Path.open
+        monkeypatch.setattr(
+            utils.Path,
+            "open",
+            lambda self, mode="r", *a, **k: FullDisk(self, mode) if mode == "xb" else real_open(self, mode, *a, **k),
+        )
+
+        with pytest.raises(SBOMGenerationError, match="No space left on device"):
+            resolve_composer_lockfile(tmp_path)
+
+        assert not os.path.lexists(tmp_path / "composer.lock")
+
+    def test_a_lock_that_appeared_meanwhile_is_not_removed(self, tmp_path, monkeypatch, composer_runs):
+        """The exclusive open fails because the file is already there, so it
+        is someone else's, and removing it on the way out would delete their
+        work."""
+        (tmp_path / "composer.json").write_text('{"require": {}}')
+
+        def someone_else_writes_one(cmd, **kwargs):
+            if cmd[0] != "composer":
+                return _real_run(cmd, **kwargs)
+            (Path(kwargs["cwd"]) / "composer.lock").write_text('{"packages": []}')
+            (tmp_path / "composer.lock").write_text("not ours")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(utils.subprocess, "run", someone_else_writes_one)
+
+        with pytest.raises(SBOMGenerationError, match="new regular file"):
+            resolve_composer_lockfile(tmp_path)
+
+        assert (tmp_path / "composer.lock").read_text() == "not ours"
 
     def test_the_generator_removes_the_lock_it_created(self, tmp_path, monkeypatch, composer_runs):
         """A working file. Left in the checkout, it would also stop the SBOM

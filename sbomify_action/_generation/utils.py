@@ -1023,10 +1023,23 @@ def resolve_composer_lockfile(directory: Path) -> Path | None:
         # "x" is O_CREAT|O_EXCL: a new file in the project, never written
         # through a link or over a file that appeared meanwhile, so what the
         # caller deletes is only ever ours.
+        created = False
         try:
             with lock.open("xb") as out:
+                created = True
                 out.write(resolved.read_bytes())
-        except OSError as e:
+        except BaseException as e:
+            # Once the exclusive open succeeds the file is ours, and the caller
+            # never gets its path: a partial one left behind reads as a
+            # committed lock, and the next run skips resolution. When the open
+            # itself failed, what is there was never ours to remove.
+            if created:
+                try:
+                    lock.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    logger.warning(f"Could not remove the partial {lock}, which this run created: {cleanup_error}")
+            if not isinstance(e, OSError):
+                raise
             raise SBOMGenerationError(
                 f"Could not write composer.lock into {directory} as a new regular file: {e}. {advice}"
             ) from e
