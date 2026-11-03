@@ -23,6 +23,8 @@ class ProcessorInput:
             says what the ID actually points at.
         sbom_file: Path to the SBOM file
         product_releases: List of product releases in "product_id:version" format
+        release_includes: Releases of other products, "product_id:version", that
+            each of ``product_releases`` includes
         api_base_url: Base URL for the sbomify API
         token: API authentication token
         artifact_kind: "sbom" (default) or "document" -- a release holds both,
@@ -32,6 +34,7 @@ class ProcessorInput:
     sbom_id: str
     sbom_file: Optional[str] = None
     product_releases: Optional[List[str]] = None
+    release_includes: Optional[List[str]] = None
     api_base_url: Optional[str] = None
     token: Optional[str] = None
     artifact_kind: str = "sbom"
