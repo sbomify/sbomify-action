@@ -47,7 +47,7 @@ runs:
   # The digest only exists once the release's image is published, so a
   # release is two steps: tag and publish the image, then pin its digest here
   # in a follow-up commit. Until that lands, this points at the previous image.
-  image: 'docker://ghcr.io/sbomify/sbomify-action:26.9.0@sha256:f5355ed44e6618d3fd9e8640517d03d7a58eb1e2137c533ba5c24cd92676be98'
+  image: 'docker://ghcr.io/sbomify/sbomify-action:26.10.3@sha256:5a82366a10de59ae10d9c2f414bf3f331d6d015518754382fc6f61a56f54608d'
   env:
     WORKING_DIR: ${{ inputs['working-dir'] }}
     COMPONENT_PURL: ${{ inputs['component-purl'] }}
