@@ -188,17 +188,16 @@ jobs:
               [.packages[]?.SPDXID] - [.documentDescribes[]?,
                 (.relationships[]? | select(.relationshipType == "DESCRIBES") | .relatedSpdxElement)]
             else .components end | length > 0' "$SBOM"
-      # Upload the document that was just checked, as it is: no generation,
-      # augmentation or enrichment, so what lands in sbomify is what the
-      # attestation below covers.
+      # Upload the document that was just checked. No generation,
+      # augmentation, enrichment or overrides: only the action's idempotent
+      # output fixups run, so the component list is the one checked above.
+      # The attestation below reads the file this call writes, so it covers
+      # exactly what was uploaded.
       - uses: sbomify/sbomify-action@master  # zizmor: ignore[unpinned-uses] dogfoods this repo's own master
         env:
           API_BASE_URL: ${{ steps.cfg.outputs.api_base_url }}
           OIDC_AUDIENCE: ${{ steps.cfg.outputs.oidc_audience }}
           COMPONENT_ID: ${{ steps.cfg.outputs.is_prod == 'true' && matrix.prod_id || matrix.staging_id }}
-          COMPONENT_NAME: ${{ matrix.component_name }}
-          COMPONENT_VERSION: ${{ steps.cfg.outputs.version }}
-          COMPONENT_PURL: ${{ (matrix.kind == 'container' || matrix.is_action) && format('pkg:docker/sbomify/sbomify-action@{0}?repository_url=ghcr.io', steps.cfg.outputs.docker_tag) || '' }}
           SBOM_FILE: ${{ matrix.output_file }}
           PRODUCT_RELEASE: '["${{ steps.cfg.outputs.product_release_id }}:${{ steps.cfg.outputs.version }}"]'
           RELEASE_INCLUDES: ${{ steps.cfg.outputs.release_includes }}
