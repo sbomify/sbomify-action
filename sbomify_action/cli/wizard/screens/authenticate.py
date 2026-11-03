@@ -26,7 +26,8 @@ def _pick_default_workspace_key(workspaces: list[dict[str, object]]) -> str | No
     ``list_products`` / ``list_components`` ARE scoped — to the token's
     bound team for scoped tokens, or the authenticating user's *default*
     workspace for PATs. Mirror that scoping by reading the
-    ``is_default_team`` flag on the current user's membership entry —
+    ``is_default_workspace`` flag on the current user's membership entry,
+    falling back to the deprecated ``is_default_team`` —
     the same signal the backend uses for the component listing.
 
     Caveat: for a *scoped* token bound to a non-default workspace, the
@@ -57,9 +58,27 @@ def _pick_default_workspace_key(workspaces: list[dict[str, object]]) -> str | No
         for member in members:
             if not isinstance(member, dict):
                 continue
-            if member.get("is_me") and member.get("is_default_team"):
+            if member.get("is_me") and _is_default_member(member):
                 return key
     return fallback
+
+
+def _is_default_member(member: dict[str, object]) -> bool:
+    """Is this membership the user's default workspace?
+
+    Two names for one flag while the backend renames it. ``is_default_team``
+    is deprecated but still served, and reading only the new one would break
+    against any backend that has not shipped it yet.
+
+    Reading only the *old* one is the worse failure: when it is finally
+    dropped, ``.get`` returns None, this returns False for every membership,
+    and the caller falls through to the first workspace in the list. No error,
+    no warning, just uploads landing in a workspace nobody picked. So prefer
+    the new name and fall back, rather than the other way round.
+    """
+    if "is_default_workspace" in member:
+        return bool(member.get("is_default_workspace"))
+    return bool(member.get("is_default_team"))
 
 
 def _resolve_profile_workspace(
