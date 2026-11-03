@@ -120,8 +120,7 @@ request nobody can check.
 - Re-serialising a JSON or YAML file with different indentation or key order.
   SBOM fixtures under `tests/test-data/` are byte-for-byte inputs: a
   re-indented fixture is a thousand-line diff that changes nothing.
-- Touching `uv.lock` or `bun.lock` by hand. Regenerate with `uv` or `bun`, or
-  leave them alone.
+- Touching `uv.lock` by hand. Regenerate it with `uv`, or leave it alone.
 
 **The formatters own the shape of a file, you do not.** `ruff format` and the
 pre-commit hooks are the only things allowed to reformat, and what they change

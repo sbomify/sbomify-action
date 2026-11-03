@@ -1,6 +1,6 @@
 [project]
 name = "sbomify-action"
-version = "26.10.2"
+version = "26.10.3"
 description = "Generate, augment, enrich, and manage SBOMs in your CI/CD pipeline"
 authors = [{ name = "sbomify", email = "hello@sbomify.com" }]
 requires-python = ">=3.11"
@@ -49,7 +49,6 @@ Changelog = "https://github.com/sbomify/sbomify-action/releases"
 
 [project.scripts]
 sbomify-action = "sbomify_action.cli.main:main"
-sbomify-license-db = "sbomify_action._enrichment.license_db_generator:main"
 
 [dependency-groups]
 dev = [
