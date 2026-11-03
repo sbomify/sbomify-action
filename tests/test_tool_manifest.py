@@ -168,14 +168,14 @@ def test_lockfiles_are_the_ones_dependabot_watches():
     assert (root / "uv.lock").exists(), "uv.lock is missing"
 
     config = (root / ".github" / "dependabot.yml").read_text()
-    for ecosystem in ("uv", "bun", "docker", "github-actions"):
+    for ecosystem in ("uv", "docker", "github-actions"):
         assert f'package-ecosystem: "{ecosystem}"' in config, f"{ecosystem} is not configured"
 
     # Everything that pinned a tool moved to sbomify/sbom-tools with the tool,
     # and is watched there. Watching any of it here would open PRs against
     # manifests this repository no longer has -- and, while both copies
     # existed, let the two disagree about which plugin version we apply.
-    for ecosystem in ("gomod", "cargo", "maven", "gradle"):
+    for ecosystem in ("gomod", "cargo", "maven", "gradle", "bun"):
         assert f'package-ecosystem: "{ecosystem}"' not in config, (
             f"{ecosystem} is still watched here, but what it pinned moved to sbom-tools"
         )
@@ -538,3 +538,19 @@ class TestPomVersions:
     def test_an_unknown_artifact_says_so(self, tmp_path: Path) -> None:
         with pytest.raises(ManifestError, match="not found in"):
             tool_manifest._version_from_pom(self._pom(tmp_path), "nothing-like-this")
+
+
+@pytest.mark.parametrize(("vcs_ref", "expected"), [("master", "rolling"), ("v26.10.3", None), (None, None)])
+def test_bundles_come_from_the_pin_except_on_a_master_build(monkeypatch, vcs_ref, expected):
+    """A released action fetches the sbom-tools release it pins; a master build fetches sbom-tools master."""
+    pinned = tomllib.loads((REPO_ROOT / "sbomify_action" / "tools.toml").read_text())["tools_release"]
+    assert pinned != "rolling", "tools.toml must pin a cut sbom-tools release"
+    if vcs_ref is None:
+        monkeypatch.delenv("SBOMIFY_GITHUB_ACTION_VCS_REF", raising=False)
+    else:
+        monkeypatch.setenv("SBOMIFY_GITHUB_ACTION_VCS_REF", vcs_ref)
+    tool_manifest.load_bundles.cache_clear()
+    try:
+        assert tool_manifest.bundle_for("go").release == (expected or pinned)
+    finally:
+        tool_manifest.load_bundles.cache_clear()

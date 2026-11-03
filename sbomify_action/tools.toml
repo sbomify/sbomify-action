@@ -13,11 +13,9 @@
 # trusted because it is written down. That is also what makes the rolling
 # release usable at all, since its bytes change on every push to master.
 
-# Which sbom-tools release to fetch from. "tools-rolling" tracks master;
-# scripts/freeze_tool_versions.py stamps a release tag in its place when the
-# image is built, so a cut release keeps fetching the bundles it was tested
-# against for as long as it exists.
-tools_release = "tools-rolling"
+# The sbom-tools release to fetch from: a cut release, bumped by PR. An image
+# built from master fetches the rolling release instead (tool_manifest._bundle_release).
+tools_release = "v26.10.3"
 
 # ---------------------------------------------------------------------------
 # Bundles. `provides` is the lookup that decides what to download when a

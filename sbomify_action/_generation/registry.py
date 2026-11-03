@@ -9,7 +9,7 @@ from typing import Any
 
 from sbomify_action import format_display_name
 from sbomify_action._platformio import PLATFORMIO_INI, lib_deps_are_pinned
-from sbomify_action.exceptions import SBOMGenerationError, ToolNotAvailableError
+from sbomify_action.exceptions import ProjectResolutionError, SBOMGenerationError, ToolNotAvailableError
 from sbomify_action.logging_config import logger
 from sbomify_action.serialization import (
     restore_spdx_document_describes,
@@ -599,6 +599,17 @@ class GeneratorRegistry:
                 remaining = [g.name for g in generators[index + 1 :]]
                 errors.append(f"{generator.name}: {e}")
                 reported = reported or getattr(e, "telemetry_reported", False)
+                if strict and remaining and isinstance(e, ProjectResolutionError):
+                    # Still no silent downgrade, but nothing in the image is
+                    # broken: the project is. Say so, keeping the error's type
+                    # so it reaches the user rather than our bug tracker.
+                    raise ProjectResolutionError(
+                        f"{e}\nSet {_ALLOW_FALLBACK_ENV}=1 to generate with {', '.join(remaining)} instead, "
+                        f"which read the lock file without resolving the project.",
+                        stderr=e.stderr,
+                        stdout=e.stdout,
+                        returncode=e.returncode,
+                    ) from e
                 if strict and remaining:
                     raise _refusal(generator.name, remaining, str(e), getattr(e, "telemetry_reported", False)) from e
                 self._warn_degraded(generator.name, remaining, str(e))
