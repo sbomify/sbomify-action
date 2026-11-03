@@ -30,6 +30,10 @@ This security policy covers:
 - The sbomify-action Docker image
 - CI/CD workflow configurations in this repository
 
+## Telemetry
+
+sbomify-action sends error reports to Sentry by default. See [Telemetry](https://github.com/sbomify/sbomify-action/blob/master/README.md#telemetry) for what a report contains and what it leaves out; set `TELEMETRY: false` or pass `--no-telemetry` to turn it off.
+
 ## Security Best Practices for Users
 
 When using sbomify-action in your workflows:
