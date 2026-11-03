@@ -1047,6 +1047,7 @@ def _run_composer_update(work: Path, home: Path, advice: str) -> None:
             f"composer.json has no composer.lock beside it, and Composer is not on PATH to resolve one. {advice}"
         )
 
+    env = _composer_env(home)
     logger.info("No composer.lock beside composer.json; resolving one without running the project's scripts")
     # --no-blocking: since 2.9, update refuses versions with security
     # advisories, so an exact pin to one fails and a range resolves around it
@@ -1055,14 +1056,37 @@ def _run_composer_update(work: Path, home: Path, advice: str) -> None:
     # the manifest cannot turn blocking back on. --no-audit: the audit has
     # nothing to give us, and it is where Composer fetches the URL sources a
     # config.policy custom list names. Both checked in 2.10.3's source.
+    #
+    # Each flag exists only from the release that added it, and Composer
+    # stops at an option it does not know. Outside the image any installed
+    # Composer is accepted, so the flags follow its version. From the
+    # changelog and each release's UpdateCommand: 2.4.0 added the audit and
+    # --no-audit; 2.9.0 added blocking; 2.9.2 added --no-security-blocking,
+    # which, like --no-blocking, overrides the project's config; 2.10.0 added
+    # --no-blocking, which also lifts the malware and policy blocks.
+    version = _composer_version(env, home)
+    if version is None or version >= (2, 10):
+        flags = ["--no-blocking", "--no-audit"]
+    elif version >= (2, 9, 2):
+        flags = ["--no-security-blocking", "--no-audit"]
+    elif version >= (2, 9):
+        raise SBOMGenerationError(
+            f"Composer {'.'.join(map(str, version))} drops versions with security advisories from the resolution, "
+            "and only the project's own config can stop it; 2.9.2 added --no-security-blocking. Resolving here "
+            f"would leave out the vulnerable versions the SBOM exists to report. Upgrade Composer to 2.9.2 or later. "
+            f"{advice}"
+        )
+    elif version >= (2, 4):
+        flags = ["--no-audit"]
+    else:
+        flags = []
     cmd = [
         "composer",
         "update",
         "--no-install",
         "--no-scripts",
         "--no-plugins",
-        "--no-blocking",
-        "--no-audit",
+        *flags,
         "--ignore-platform-reqs",
         "--no-interaction",
     ]
@@ -1074,7 +1098,7 @@ def _run_composer_update(work: Path, home: Path, advice: str) -> None:
             text=True,
             timeout=DEFAULT_TIMEOUT,
             check=True,
-            env=_composer_env(home),
+            env=env,
         )
     except subprocess.CalledProcessError as e:
         raise SBOMGenerationError(
@@ -1082,6 +1106,35 @@ def _run_composer_update(work: Path, home: Path, advice: str) -> None:
         ) from e
     except (subprocess.TimeoutExpired, OSError) as e:
         raise SBOMGenerationError(f"Composer could not resolve composer.json: {e}. {advice}") from e
+
+
+def _composer_version(env: dict[str, str], cwd: Path) -> tuple[int, ...] | None:
+    """The installed Composer's version, or None when it cannot be read.
+
+    ``--version`` loads no plugins and no composer.json. A release prints
+    "Composer version 2.10.3 2026-08-27 13:10:43"; a snapshot build prints a
+    commit where the version goes, and reads as None.
+    """
+    try:
+        output = subprocess.run(
+            ["composer", "--version", "--no-ansi"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+            env=env,
+        ).stdout
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return None
+    for line in output.splitlines():
+        words = line.split()
+        if words[:2] == ["Composer", "version"] and len(words) > 2:
+            # "2.10.0-RC2" counts as 2.10.0.
+            core = words[2].split("-")[0].split(".")
+            if all(part.isdigit() for part in core):
+                return tuple(int(part) for part in core)
+    return None
 
 
 #: What Composer gets from the job's environment: PATH to find itself and

@@ -45,10 +45,12 @@ def no_version_in_env(monkeypatch):
 
 @pytest.fixture
 def composer_runs(monkeypatch):
-    """Composer on PATH, with every call recorded and a composer.lock written."""
+    """Composer 2.10.3 on PATH, with every update recorded and a composer.lock written."""
     calls: list[tuple[list[str], dict]] = []
 
     def fake_run(cmd, **kwargs):
+        if cmd[1:2] == ["--version"]:
+            return subprocess.CompletedProcess(cmd, 0, "Composer version 2.10.3 2026-08-27 13:10:43\n", "")
         home = (kwargs.get("env") or {}).get("HOME")
         calls.append((cmd, {**kwargs, "home_existed": bool(home) and Path(home).is_dir()}))
         (Path(kwargs["cwd"]) / "composer.lock").write_text('{"packages": []}')
@@ -637,6 +639,65 @@ class TestComposerOnlySeesACopyOfTheManifest:
 
         assert resolve_composer_lockfile(tmp_path) == tmp_path / "composer.lock"
         assert (tmp_path / "composer.json").read_bytes() == original
+
+
+class TestTheFlagsFitTheInstalledComposer:
+    """Outside the image, ensure_runtime('composer') takes whatever Composer
+    the host has, with no version check, and Composer stops at an option it
+    does not know. So the flags follow `composer --version`: 2.4.0 added the
+    post-update audit and --no-audit, 2.9.0 started blocking versions with
+    advisories, 2.9.2 added --no-security-blocking, 2.10.0 --no-blocking."""
+
+    @staticmethod
+    def _composer(monkeypatch, composer_runs, version_output):
+        def composer(cmd, **kwargs):
+            if cmd[1:2] == ["--version"]:
+                return subprocess.CompletedProcess(cmd, 0, version_output, "")
+            composer_runs.append((cmd, kwargs))
+            (Path(kwargs["cwd"]) / "composer.lock").write_text('{"packages": []}')
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(utils.subprocess, "run", composer)
+
+    @pytest.mark.parametrize(
+        "version_output,flags",
+        [
+            ("Composer version 2.3.10 2022-07-13 15:48:23", []),
+            ("Composer version 2.4.0 2022-08-16 16:10:48", ["--no-audit"]),
+            ("Composer version 2.8.12 2025-09-19 13:41:59", ["--no-audit"]),
+            ("Composer version 2.9.2 2025-11-19 21:57:25", ["--no-security-blocking", "--no-audit"]),
+            ("Composer version 2.9.8 2026-05-13 10:00:00", ["--no-security-blocking", "--no-audit"]),
+            ("Composer version 2.10.0 2026-05-28 10:00:00", ["--no-blocking", "--no-audit"]),
+            ("Composer version 2.10.3 2026-08-27 13:10:43", ["--no-blocking", "--no-audit"]),
+            # A snapshot build prints a commit, and nothing parses: taken as current.
+            ("Composer version 4d3b1a2 (2.10.x-dev) 2026-09-01 10:00:00", ["--no-blocking", "--no-audit"]),
+            ("", ["--no-blocking", "--no-audit"]),
+        ],
+    )
+    def test_each_version_gets_the_flags_it_has(self, tmp_path, monkeypatch, composer_runs, version_output, flags):
+        self._composer(monkeypatch, composer_runs, version_output)
+        (tmp_path / "composer.json").write_text('{"require": {}}')
+
+        assert resolve_composer_lockfile(tmp_path) == tmp_path / "composer.lock"
+
+        cmd = composer_runs[0][0]
+        assert [f for f in cmd if f in ("--no-blocking", "--no-security-blocking", "--no-audit")] == flags
+
+    @pytest.mark.parametrize("version", ["2.9.0", "2.9.1"])
+    def test_a_version_that_blocks_with_no_switch_to_stop_it_is_refused(
+        self, tmp_path, monkeypatch, composer_runs, version
+    ):
+        """2.9.0 and 2.9.1 block, and only the project's own config can stop
+        them. Resolving there would quietly leave vulnerable versions out."""
+        self._composer(monkeypatch, composer_runs, f"Composer version {version} 2025-11-13 10:37:16")
+        (tmp_path / "composer.json").write_text('{"require": {}}')
+
+        with pytest.raises(SBOMGenerationError, match="2.9.2") as error:
+            resolve_composer_lockfile(tmp_path)
+
+        assert "Commit a composer.lock" in str(error.value)
+        assert composer_runs == []
+        assert not (tmp_path / "composer.lock").exists()
 
 
 class TestTheErrorSurvivesTheReport:
