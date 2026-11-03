@@ -447,6 +447,25 @@ class TestSbomifyReleasesProcessor(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.processed_items, 1)
         self.assertIn("new-release-id", result.metadata["release_ids"])
+        self.assertFalse(client.tag_artifact_with_release.call_args.kwargs["replace"])
+
+    @patch("sbomify_action._processors.releases_api._client")
+    def test_process_passes_replace_through(self, mock_client_factory):
+        client = Mock()
+        client.create_release.return_value = "rel-1"
+        client.get_release_details.return_value = None
+        mock_client_factory.return_value = client
+
+        input_obj = ProcessorInput(
+            sbom_id="sbom-123",
+            product_releases=["product-id:v1.0.0"],
+            api_base_url="https://api.test.com",
+            token="test-token",
+            replace_release_artifact=True,
+        )
+
+        self.assertTrue(self.processor.process(input_obj).success)
+        self.assertTrue(client.tag_artifact_with_release.call_args.kwargs["replace"])
 
     @patch("sbomify_action._processors.releases_api._client")
     def test_process_handles_existing_release(self, mock_client_factory):

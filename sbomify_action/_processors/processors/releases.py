@@ -102,6 +102,7 @@ class SbomifyReleasesProcessor:
                     product_id=product_id,
                     version=version,
                     artifact_kind=input.artifact_kind,
+                    replace=input.replace_release_artifact,
                 )
 
                 if release_id:
@@ -143,6 +144,7 @@ class SbomifyReleasesProcessor:
         product_id: str,
         version: str,
         artifact_kind: str = "sbom",
+        replace: bool = False,
     ) -> Optional[str]:
         """
         Process a single release: check/create and tag.
@@ -209,7 +211,9 @@ class SbomifyReleasesProcessor:
                 logger.info(f"Tagging {artifact_label} {sbom_id} with {friendly_name} (ID: {release_id})")
             else:
                 logger.info(f"Tagging {artifact_label} {sbom_id} with release {version} (ID: {release_id})")
-            tag_artifact_with_release(api_base_url, token, sbom_id, release_id, artifact_kind=artifact_kind)
+            tag_artifact_with_release(
+                api_base_url, token, sbom_id, release_id, artifact_kind=artifact_kind, replace=replace
+            )
         else:
             logger.error(f"Could not get release ID for {product_id}:{version}")
 

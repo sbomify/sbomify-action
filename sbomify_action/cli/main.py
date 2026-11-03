@@ -255,6 +255,10 @@ class Config:
     component_name: Optional[str] = None
     component_purl: Optional[str] = None
     product_releases: Optional[str | list[str]] = None
+    product_release_replace: bool = False
+    """Replace the component's artifact of the same kind already in a release
+    instead of failing. Off by default so a release is never silently
+    overwritten; set it to re-run a release job."""
     submodule_path: Optional[str] = None
     api_base_url: str = SBOMIFY_PRODUCTION_API
     sbom_format: SBOMFormat = "cyclonedx"
@@ -841,6 +845,7 @@ def build_config(
     component_name: Optional[str] = None,
     component_purl: Optional[str] = None,
     product_releases: Optional[str] = None,
+    product_release_replace: bool = False,
     submodule_path: Optional[str] = None,
     api_base_url: str = SBOMIFY_PRODUCTION_API,
     sbom_format: str = "cyclonedx",
@@ -1013,6 +1018,7 @@ def build_config(
         component_name=final_component_name,
         component_purl=component_purl,
         product_releases=product_releases,
+        product_release_replace=product_release_replace,
         submodule_path=normalized_submodule_path,
         api_base_url=api_base_url,
         sbom_format=sbom_format_lower,
@@ -1071,6 +1077,9 @@ def load_config() -> Config:
         component_name=os.getenv("COMPONENT_NAME"),
         component_purl=os.getenv("COMPONENT_PURL"),
         product_releases=os.getenv("PRODUCT_RELEASE"),
+        product_release_replace=evaluate_boolean(
+            os.getenv("PRODUCT_RELEASE_REPLACE", "False"), source="PRODUCT_RELEASE_REPLACE"
+        ),
         submodule_path=os.getenv("SUBMODULE_PATH"),
         api_base_url=os.getenv("API_BASE_URL", SBOMIFY_PRODUCTION_API),
         sbom_format=os.getenv("SBOM_FORMAT", "cyclonedx"),
@@ -2042,6 +2051,7 @@ def _run_post_upload_processing(
             api_base_url=config.api_base_url,
             token=config.token,
             artifact_kind=artifact_kind,
+            replace_release_artifact=config.product_release_replace,
         )
 
         # Check if any processors are enabled
@@ -3903,6 +3913,17 @@ def _parse_upload_destinations_callback(
     help="Tag SBOM with product releases (JSON array: '[\"product_id:v1.0.0\"]').",
 )
 @click.option(
+    "--product-release-replace/--no-product-release-replace",
+    default=False,
+    show_default=True,
+    callback=_make_bool_envvar_callback("PRODUCT_RELEASE_REPLACE", False),
+    is_eager=True,
+    help=(
+        "Replace the component's SBOM or document of the same kind already in a product release "
+        "instead of failing, e.g. to re-run a release job. [env: PRODUCT_RELEASE_REPLACE]"
+    ),
+)
+@click.option(
     "--submodule-path",
     envvar="SUBMODULE_PATH",
     default=None,
@@ -4009,6 +4030,7 @@ def cli(
     component_name: Optional[str],
     component_purl: Optional[str],
     product_releases: Optional[str],
+    product_release_replace: bool,
     submodule_path: Optional[str],
     api_base_url: str,
     sbom_format: str,
@@ -4155,6 +4177,7 @@ def cli(
         component_name=component_name,
         component_purl=component_purl,
         product_releases=product_releases,
+        product_release_replace=product_release_replace,
         submodule_path=submodule_path,
         api_base_url=api_base_url,
         sbom_format=sbom_format,

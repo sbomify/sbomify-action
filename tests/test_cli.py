@@ -395,6 +395,20 @@ class TestCLIEnvVarFallback(unittest.TestCase):
                 config = mock_run.call_args[0][0]
                 self.assertFalse(config.upload)
 
+    @patch.object(cli_main_module, "run_pipeline")
+    @patch.object(cli_main_module, "setup_dependencies")
+    @patch.object(cli_main_module, "initialize_sentry")
+    def test_product_release_replace_is_off_unless_set(self, mock_sentry, mock_deps, mock_run):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            lock_file = Path(tmp_dir) / "requirements.txt"
+            lock_file.write_text("requests==2.28.0")
+
+            for env, expected in (({}, False), ({"PRODUCT_RELEASE_REPLACE": "true"}, True)):
+                mock_run.reset_mock()
+                result = self.runner.invoke(cli, ["--lock-file", str(lock_file)], env={"UPLOAD": "false", **env})
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertIs(mock_run.call_args[0][0].product_release_replace, expected)
+
 
 class TestTokenEnvVarPrecedence(unittest.TestCase):
     """$SBOMIFY_TOKEN must authenticate the pipeline, not just the wizard.

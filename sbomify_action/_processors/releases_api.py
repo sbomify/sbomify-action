@@ -71,9 +71,15 @@ def tag_artifact_with_release(
     artifact_id: str,
     release_id: str,
     artifact_kind: str = "sbom",
+    replace: bool = False,
 ) -> None:
-    """Associate an SBOM or a document with a release; idempotent on DUPLICATE_ARTIFACT."""
-    _client(api_base_url, token).tag_artifact_with_release(artifact_id, release_id, artifact_kind=artifact_kind)
+    """Associate an SBOM or a document with a release; idempotent on DUPLICATE_ARTIFACT.
+
+    ``replace`` lets it supersede the component's artifact of the same kind already in the release.
+    """
+    _client(api_base_url, token).tag_artifact_with_release(
+        artifact_id, release_id, artifact_kind=artifact_kind, replace=replace
+    )
 
 
 def get_release_friendly_name(release_details: Optional[dict[str, Any]], version: str) -> str:

@@ -18,7 +18,7 @@ from sbomify_action._upload import DocumentUploadInput, DocumentUploadResult
 from sbomify_action._upload.documents import MAX_DOCUMENT_SIZE
 from sbomify_action._upload.documents import upload_document as upload_document_input
 from sbomify_action.cli.main import SBOMIFY_PRODUCTION_API, build_config, run_pipeline
-from sbomify_action.exceptions import AuthError
+from sbomify_action.exceptions import APIError, AuthError
 from sbomify_action.sbomify_api import SbomifyApiClient
 from sbomify_action.upload import upload_document
 
@@ -165,27 +165,47 @@ def test_client_rejects_invalid_document_type():
 
 def test_client_tags_document_into_release_with_document_id():
     """The release-artifact endpoint takes exactly one of sbom_id/document_id;
-    sending a document under sbom_id would attach the wrong artifact kind.
-    replace lets a re-run release job supersede the earlier run's artifact."""
+    sending a document under sbom_id would attach the wrong artifact kind."""
     session = MagicMock()
     session.request.return_value = _response(200, {})
     client = SbomifyApiClient(SBOMIFY_PRODUCTION_API, "tok", session=session)
 
     client.tag_artifact_with_release("doc-1", "rel-1", artifact_kind="document")
-    assert session.request.call_args.kwargs["json"] == {"document_id": "doc-1", "replace": True}
+    assert session.request.call_args.kwargs["json"] == {"document_id": "doc-1"}
 
     client.tag_artifact_with_release("sbom-1", "rel-1")
+    assert session.request.call_args.kwargs["json"] == {"sbom_id": "sbom-1"}
+
+
+def test_client_only_asks_to_replace_when_told_to():
+    """A release must not be silently overwritten: replace is opt-in (PRODUCT_RELEASE_REPLACE)."""
+    session = MagicMock()
+    session.request.return_value = _response(201, {})
+    client = SbomifyApiClient(SBOMIFY_PRODUCTION_API, "tok", session=session)
+
+    client.tag_artifact_with_release("sbom-1", "rel-1", replace=True)
     assert session.request.call_args.kwargs["json"] == {"sbom_id": "sbom-1", "replace": True}
 
 
+def test_client_refusal_points_at_the_replace_setting():
+    session = MagicMock()
+    session.request.return_value = _response(
+        400, {"detail": "Release already contains an SBOM of format cyclonedx from component app"}
+    )
+    client = SbomifyApiClient(SBOMIFY_PRODUCTION_API, "tok", session=session)
+
+    with pytest.raises(APIError, match="PRODUCT_RELEASE_REPLACE=true"):
+        client.tag_artifact_with_release("sbom-1", "rel-1")
+
+
 def test_client_warns_when_the_server_reports_a_replacement():
-    """Two jobs publishing to one component now overwrite each other; that must not be silent."""
+    """With replace on, superseding an artifact is reported rather than silent."""
     session = MagicMock()
     session.request.return_value = _response(201, {"replaced": True, "replaced_artifact_name": "app-amd64"})
     client = SbomifyApiClient(SBOMIFY_PRODUCTION_API, "tok", session=session)
 
     with patch("sbomify_action.sbomify_api.logger") as logger:
-        client.tag_artifact_with_release("sbom-2", "rel-1")
+        client.tag_artifact_with_release("sbom-2", "rel-1", replace=True)
     logger.warning.assert_called_once()
     assert "replaced app-amd64" in logger.warning.call_args.args[0]
 
@@ -193,7 +213,7 @@ def test_client_warns_when_the_server_reports_a_replacement():
     for body in ({"replaced": False, "replaced_artifact_name": None}, {"id": "ra-1"}):
         session.request.return_value = _response(201, body)
         with patch("sbomify_action.sbomify_api.logger") as logger:
-            client.tag_artifact_with_release("sbom-2", "rel-1")
+            client.tag_artifact_with_release("sbom-2", "rel-1", replace=True)
         logger.warning.assert_not_called()
 
 

@@ -925,39 +925,36 @@ class SbomifyApiClient:
         """Associate an SBOM with a release. Idempotent on DUPLICATE_ARTIFACT."""
         self.tag_artifact_with_release(sbom_id, release_id)
 
-    def tag_artifact_with_release(self, artifact_id: str, release_id: str, *, artifact_kind: str = "sbom") -> None:
+    def tag_artifact_with_release(
+        self, artifact_id: str, release_id: str, *, artifact_kind: str = "sbom", replace: bool = False
+    ) -> None:
         """Associate an SBOM or a document with a release.
 
         The release-artifact endpoint takes exactly one of ``sbom_id`` /
         ``document_id`` and rejects a payload carrying both, so the kind
         selects the key. Idempotent on DUPLICATE_ARTIFACT.
 
-        Sends ``replace`` so the artifact supersedes one of the same kind the
-        component already has in the release. Without it, re-running a release
-        job fails here with a 400: the job uploads a fresh SBOM for the same
-        version and the previous run's SBOM is still pinned. Servers that
-        predate the flag ignore it and keep the old 400.
-
-        Replacing is also what happens when two jobs publish the same kind of
-        artifact for one component (a matrix build sharing a component), so a
-        replacement the server reports is logged as a warning.
+        By default the server refuses an artifact when the component already
+        has one of the same kind in the release, so a release cannot be
+        silently overwritten. ``replace`` (PRODUCT_RELEASE_REPLACE) opts in to
+        superseding it instead, e.g. to re-run a release job. Servers that
+        predate the flag ignore it and keep refusing. A replacement the server
+        reports is logged as a warning.
         """
         if artifact_kind not in ("sbom", "document"):
             raise ValueError(f"Invalid artifact_kind {artifact_kind!r}; expected 'sbom' or 'document'.")
         label = "SBOM" if artifact_kind == "sbom" else "document"
-        response = self._request(
-            "POST",
-            f"/api/v1/releases/{release_id}/artifacts",
-            json_body={f"{artifact_kind}_id": artifact_id, "replace": True},
-        )
+        json_body: dict[str, Any] = {f"{artifact_kind}_id": artifact_id}
+        if replace:
+            json_body["replace"] = True
+        response = self._request("POST", f"/api/v1/releases/{release_id}/artifacts", json_body=json_body)
         if response.ok:
             body = self._safe_json_dict(response)
             if body is not None and body.get("replaced"):
                 replaced = body.get("replaced_artifact_name") or "an earlier one"
                 logger.warning(
-                    f"{label} {artifact_id} replaced {replaced} from the same component in release {release_id}. "
-                    "That is expected when a release job is re-run. If several jobs publish to the same "
-                    "component, only the last one is kept: give each its own component."
+                    f"{label} {artifact_id} replaced {replaced} from the same component in release {release_id} "
+                    "(PRODUCT_RELEASE_REPLACE is set)."
                 )
             return
         if response.status_code == 409:
@@ -970,6 +967,11 @@ class SbomifyApiClient:
         body = self._safe_json_dict(response)
         if body is not None and "detail" in body:
             err_msg += f" - {body['detail']}"
+            if response.status_code == 400 and "already contains" in str(body["detail"]) and not replace:
+                err_msg += (
+                    ". Set PRODUCT_RELEASE_REPLACE=true to replace it, e.g. when re-running a release job; "
+                    "if several jobs publish to this component, give each its own component instead."
+                )
         raise APIError(err_msg)
 
     # ------------------------------------------------------------------

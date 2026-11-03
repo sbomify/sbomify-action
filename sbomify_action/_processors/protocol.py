@@ -27,6 +27,8 @@ class ProcessorInput:
         token: API authentication token
         artifact_kind: "sbom" (default) or "document" -- a release holds both,
             and the API keys them differently
+        replace_release_artifact: Replace the component's artifact of the same
+            kind already in a release instead of failing (PRODUCT_RELEASE_REPLACE)
     """
 
     sbom_id: str
@@ -35,6 +37,7 @@ class ProcessorInput:
     api_base_url: Optional[str] = None
     token: Optional[str] = None
     artifact_kind: str = "sbom"
+    replace_release_artifact: bool = False
 
     def __post_init__(self) -> None:
         """Validate input parameters."""
