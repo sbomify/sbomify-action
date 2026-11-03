@@ -771,6 +771,15 @@ class AuditTrail:
         """Get all entries for a specific category."""
         return [e for e in self.entries if e.category == category]
 
+    def enrichment_counts(self) -> tuple[int, int]:
+        """Return (components that gained at least one field, fields added).
+
+        Transitive discovery is recorded under ENRICHMENT too, but it adds a
+        component rather than filling one in, so it counts towards neither.
+        """
+        entries = [e for e in self.get_entries_by_category("ENRICHMENT") if e.field != "transitive_dependency"]
+        return len({e.component for e in entries if e.component}), len(entries)
+
     # ==========================================================================
     # Output Methods
     # ==========================================================================
@@ -834,7 +843,9 @@ class AuditTrail:
         if counts["augmentation"]:
             data.append(("Augmentation changes", counts["augmentation"]))
         if counts["enrichment"]:
-            data.append(("Components enriched", counts["enrichment"]))
+            components, fields = self.enrichment_counts()
+            data.append(("Components enriched", components))
+            data.append(("Enrichment fields added", fields))
         if counts["sanitization"]:
             data.append(("Sanitization fixes", counts["sanitization"]))
 
