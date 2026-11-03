@@ -11,6 +11,7 @@ everything else gets Rich styling.
 
 import contextvars
 import os
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -95,6 +96,30 @@ custom_theme = Theme(
         "brand.orange": BRAND_COLORS["orange"],
     }
 )
+
+
+def _tolerate_unencodable_output(*streams: Any) -> None:
+    """Let a stream that cannot encode our symbols replace them instead of raising.
+
+    A Windows console on a legacy code page such as cp1252 cannot encode the
+    check marks and box-drawing characters we print, and the strict default
+    turns a successful step into an unhandled UnicodeEncodeError. Those
+    characters are cosmetic, so they degrade to '?' instead.
+    """
+    for stream in streams:
+        encoding = getattr(stream, "encoding", None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not encoding or reconfigure is None:
+            continue
+        try:
+            "✓".encode(encoding)
+        except UnicodeEncodeError:
+            reconfigure(errors="replace")
+        except LookupError:
+            continue
+
+
+_tolerate_unencodable_output(sys.stdout, sys.stderr)
 
 # Shared console instance. Whether to force colors on is the platform's call --
 # some runners support ANSI but Rich cannot detect it through their pipe.

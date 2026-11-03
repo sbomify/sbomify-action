@@ -1,5 +1,6 @@
 """Tests for the console module."""
 
+import io
 import os
 import tempfile
 import unittest
@@ -16,6 +17,7 @@ from sbomify_action.console import (
     AuditTrail,
     TransformationTracker,
     _audit_path,
+    _tolerate_unencodable_output,
     console,
     get_audit_trail,
     get_transformation_tracker,
@@ -106,6 +108,33 @@ class TestConsoleInstance(unittest.TestCase):
     def test_console_exists(self):
         """Test that console instance is created."""
         self.assertIsNotNone(console)
+
+
+class TestUnencodableOutput(unittest.TestCase):
+    """A legacy Windows code page must not crash the run over a check mark."""
+
+    def _stream(self, encoding: str) -> io.TextIOWrapper:
+        return io.TextIOWrapper(io.BytesIO(), encoding=encoding)
+
+    def test_cp1252_stream_replaces_instead_of_raising(self):
+        stream = self._stream("cp1252")
+        with self.assertRaises(UnicodeEncodeError):
+            stream.write("✓")
+            stream.flush()
+
+        stream = self._stream("cp1252")
+        _tolerate_unencodable_output(stream)
+        stream.write("✓ Step 1 completed successfully")
+        stream.flush()
+        self.assertEqual(stream.buffer.getvalue(), b"? Step 1 completed successfully")
+
+    def test_utf8_stream_is_left_strict(self):
+        stream = self._stream("utf-8")
+        _tolerate_unencodable_output(stream)
+        self.assertEqual(stream.errors, "strict")
+
+    def test_streams_without_reconfigure_are_skipped(self):
+        _tolerate_unencodable_output(io.StringIO(), None)
 
 
 class TestPrintBanner(unittest.TestCase):
