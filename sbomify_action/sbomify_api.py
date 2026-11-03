@@ -937,6 +937,10 @@ class SbomifyApiClient:
         job fails here with a 400: the job uploads a fresh SBOM for the same
         version and the previous run's SBOM is still pinned. Servers that
         predate the flag ignore it and keep the old 400.
+
+        Replacing is also what happens when two jobs publish the same kind of
+        artifact for one component (a matrix build sharing a component), so a
+        replacement the server reports is logged as a warning.
         """
         if artifact_kind not in ("sbom", "document"):
             raise ValueError(f"Invalid artifact_kind {artifact_kind!r}; expected 'sbom' or 'document'.")
@@ -947,6 +951,14 @@ class SbomifyApiClient:
             json_body={f"{artifact_kind}_id": artifact_id, "replace": True},
         )
         if response.ok:
+            body = self._safe_json_dict(response)
+            if body is not None and body.get("replaced"):
+                replaced = body.get("replaced_artifact_name") or "an earlier one"
+                logger.warning(
+                    f"{label} {artifact_id} replaced {replaced} from the same component in release {release_id}. "
+                    "That is expected when a release job is re-run. If several jobs publish to the same "
+                    "component, only the last one is kept: give each its own component."
+                )
             return
         if response.status_code == 409:
             error_data = self._safe_json_dict(response)

@@ -178,6 +178,25 @@ def test_client_tags_document_into_release_with_document_id():
     assert session.request.call_args.kwargs["json"] == {"sbom_id": "sbom-1", "replace": True}
 
 
+def test_client_warns_when_the_server_reports_a_replacement():
+    """Two jobs publishing to one component now overwrite each other; that must not be silent."""
+    session = MagicMock()
+    session.request.return_value = _response(201, {"replaced": True, "replaced_artifact_name": "app-amd64"})
+    client = SbomifyApiClient(SBOMIFY_PRODUCTION_API, "tok", session=session)
+
+    with patch("sbomify_action.sbomify_api.logger") as logger:
+        client.tag_artifact_with_release("sbom-2", "rel-1")
+    logger.warning.assert_called_once()
+    assert "replaced app-amd64" in logger.warning.call_args.args[0]
+
+    # A plain add, or a server that predates the field, logs nothing.
+    for body in ({"replaced": False, "replaced_artifact_name": None}, {"id": "ra-1"}):
+        session.request.return_value = _response(201, body)
+        with patch("sbomify_action.sbomify_api.logger") as logger:
+            client.tag_artifact_with_release("sbom-2", "rel-1")
+        logger.warning.assert_not_called()
+
+
 def test_client_rejects_unknown_artifact_kind():
     client = SbomifyApiClient(SBOMIFY_PRODUCTION_API, "tok", session=MagicMock())
     with pytest.raises(ValueError, match="Invalid artifact_kind"):
