@@ -2,7 +2,12 @@
 version: 2
 updates:
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # "/" covers .github/workflows/ and action.yml. Any other directory is
+    # scanned for its own *.yml files, so the copy-paste examples stay pinned
+    # to current releases.
+    directories:
+      - "/"
+      - "/examples/github"
     schedule:
       interval: "weekly"
     exclude-paths:
