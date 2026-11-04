@@ -531,6 +531,53 @@ class SbomifyApiClient:
                 return str(sbom["id"])
         return None
 
+    def latest_component_sbom(self, component_id: str, sbom_format: str) -> dict[str, Any] | None:
+        """The listing entry (``{id, version, format, ...}``) of the component's
+        newest SBOM in ``sbom_format``, or None if it has none.
+
+        One page of ``GET /api/v1/components/{id}/sboms``, which is newest
+        first, rather than the whole history ``list_component_sboms`` walks.
+        A small page: only the first match is used, and the backend builds
+        vulnerability, release and assessment data for every row. Ten still
+        leaves room for the format recheck, done client-side as in
+        ``find_component_sbom``.
+
+        A 403 raises ``ForbiddenError``: a token that may upload to a
+        component cannot always read it back -- the OIDC trusted-publishing
+        bot cannot read a private one -- and callers need to tell that
+        apart from a fault.
+        """
+        response = self._request(
+            "GET",
+            f"/api/v1/components/{component_id}/sboms",
+            params={"format": sbom_format, "page_size": 10},
+        )
+        if response.status_code == 403:
+            raise ForbiddenError(self._build_error("Failed to list component SBOMs.", response))
+        if not response.ok:
+            raise APIError(self._build_error("Failed to list component SBOMs.", response))
+        for item in (self._safe_json_dict(response) or {}).get("items") or []:
+            sbom = item.get("sbom") if isinstance(item, dict) else None
+            if isinstance(sbom, dict) and sbom.get("format") == sbom_format and sbom.get("id"):
+                return sbom
+        return None
+
+    def download_sbom(self, sbom_id: str) -> dict[str, Any]:
+        """One SBOM document as it was uploaded (``GET /api/v1/sboms/{id}/download``).
+
+        Raises ``ForbiddenError`` on a 403, for the same reason as
+        ``latest_component_sbom``.
+        """
+        response = self._request("GET", f"/api/v1/sboms/{sbom_id}/download")
+        if response.status_code == 403:
+            raise ForbiddenError(self._build_error(f"Failed to download SBOM {sbom_id}.", response))
+        if not response.ok:
+            raise APIError(self._build_error(f"Failed to download SBOM {sbom_id}.", response))
+        document = self._safe_json_dict(response)
+        if document is None:
+            raise APIError(f"Failed to download SBOM {sbom_id}: the response is not a JSON document")
+        return document
+
     def get_augmentation_meta(self, component_id: str) -> dict[str, Any]:
         """Fetch augmentation metadata for a component.
 
