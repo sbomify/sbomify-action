@@ -32,8 +32,15 @@ TOKEN = "test-token"
 def stub_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Replace the per-call client factory with a single MagicMock instance."""
     stub = MagicMock()
-    monkeypatch.setattr("sbomify_action._yocto.api._client", lambda _base, _token: stub)
+    monkeypatch.setattr("sbomify_action._yocto.api._client", lambda *_args: stub)
     return stub
+
+
+def test_allow_insecure_http_reaches_the_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    client_cls = MagicMock()
+    monkeypatch.setattr("sbomify_action._yocto.api.SbomifyApiClient", client_cls)
+    list_components("http://sbomify.corp", TOKEN, allow_insecure_http=True)
+    client_cls.assert_called_once_with("http://sbomify.corp", TOKEN, allow_insecure_http=True)
 
 
 def test_list_components_delegates(stub_client: MagicMock) -> None:

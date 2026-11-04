@@ -3,7 +3,8 @@
 import re
 import unittest
 
-from sbomify_action.http_client import USER_AGENT, get_default_headers
+from sbomify_action.exceptions import ConfigurationError
+from sbomify_action.http_client import USER_AGENT, get_default_headers, validate_endpoint_url
 
 
 class TestUserAgent(unittest.TestCase):
@@ -77,6 +78,107 @@ class TestGetDefaultHeaders(unittest.TestCase):
         self.assertIn("User-Agent", headers)
         self.assertNotIn("Authorization", headers)
         self.assertNotIn("Content-Type", headers)
+
+
+class TestValidateEndpointUrl(unittest.TestCase):
+    """validate_endpoint_url refuses URLs that would put credentials at risk."""
+
+    def assert_rejected(self, url: str, *needles: str) -> str:
+        with self.assertRaises(ConfigurationError) as cm:
+            validate_endpoint_url(url, "SOME_URL")
+        message = str(cm.exception)
+        self.assertIn("SOME_URL", message)
+        for needle in needles:
+            self.assertIn(needle, message)
+        return message
+
+    def test_https_accepted(self):
+        for url in ("https://app.sbomify.com", "https://dtrack.example.com:8443/api", "HTTPS://Example.COM/x"):
+            with self.subTest(url=url):
+                validate_endpoint_url(url, "SOME_URL")
+
+    def test_http_to_loopback_accepted(self):
+        for url in (
+            "http://localhost:8080",
+            "http://LOCALHOST",
+            "http://127.0.0.1:8000/api",
+            "http://127.0.0.2",
+            "http://[::1]:8081/api",
+        ):
+            with self.subTest(url=url):
+                validate_endpoint_url(url, "SOME_URL")
+
+    def test_http_to_localhost_subdomain_rejected(self):
+        # glibc with `hosts: files dns` (the action image) sends these to DNS.
+        for url in ("http://foo.localhost", "http://dtrack.localhost/api"):
+            with self.subTest(url=url):
+                self.assert_rejected(url, "https://")
+
+    def test_http_to_remote_host_rejected(self):
+        message = self.assert_rejected("http://dtrack.example.com/api", "https://", "dtrack.example.com")
+        self.assertIn("unencrypted", message)
+
+    def test_http_to_lookalike_loopback_rejected(self):
+        # The old check was a substring test on netloc, which these all passed.
+        for url in (
+            "http://localhost.evil.example",
+            "http://127.0.0.1.nip.io",
+            "http://evil.example/?localhost",
+            "http://0.0.0.0:8000",
+        ):
+            with self.subTest(url=url):
+                self.assert_rejected(url, "https://")
+
+    def test_userinfo_rejected_without_echoing_it(self):
+        for url in (
+            "https://user:hunter2@dtrack.example.com",
+            "https://hunter2@dtrack.example.com",
+            "http://user:hunter2@localhost",
+        ):
+            with self.subTest(url=url):
+                message = self.assert_rejected(url, "user:password@")
+                self.assertNotIn("hunter2", message)
+
+    def test_non_http_scheme_rejected(self):
+        for url in ("ftp://dtrack.example.com", "file:///etc/passwd", "dtrack.example.com/api", ""):
+            with self.subTest(url=url):
+                self.assert_rejected(url, "http:// or https://")
+
+    def test_unparseable_url_rejected(self):
+        self.assert_rejected("http://[::1", "not a valid URL")
+
+    def test_an_unparseable_url_does_not_leak_its_password(self):
+        """urlsplit's ValueError can quote the whole authority, password included,
+        and it fails before the userinfo check gets to run."""
+        url = "https://user:hunter2@dtrack.example.com：443"
+        with self.assertRaises(ConfigurationError) as cm:
+            validate_endpoint_url(url, "DTRACK_API_URL")
+        self.assertIn("not a valid URL", str(cm.exception))
+        self.assertNotIn("hunter2", str(cm.exception))
+        self.assertIsNone(cm.exception.__cause__)
+        self.assertTrue(cm.exception.__suppress_context__)
+
+    def test_missing_host_rejected(self):
+        self.assert_rejected("https://", "hostname")
+        self.assert_rejected("https:///api", "hostname")
+
+    def test_http_rejection_names_the_opt_in(self):
+        with self.assertRaises(ConfigurationError) as cm:
+            validate_endpoint_url("http://dtrack.corp", "SOME_URL", allow_http_setting="SOME_ALLOW_HTTP")
+        self.assertIn("SOME_ALLOW_HTTP=true", str(cm.exception))
+
+    def test_allow_http_accepts_remote_http_with_warning(self):
+        with self.assertLogs("sbomify_action.http_client", "WARNING") as logs:
+            validate_endpoint_url(
+                "http://dtrack.corp/api", "SOME_URL", allow_http=True, allow_http_setting="SOME_ALLOW_HTTP"
+            )
+        self.assertIn("SOME_ALLOW_HTTP", logs.output[0])
+        self.assertIn("unencrypted", logs.output[0])
+
+    def test_allow_http_does_not_relax_other_checks(self):
+        for url in ("ftp://dtrack.corp", "http://user:pw@dtrack.corp", "http://"):
+            with self.subTest(url=url), self.assertRaises(ConfigurationError):
+                validate_endpoint_url(url, "SOME_URL", allow_http=True)
 
 
 if __name__ == "__main__":
