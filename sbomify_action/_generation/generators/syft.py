@@ -293,6 +293,7 @@ class SyftFsGenerator:
                 sbom_format=input.output_format,
                 spec_version=input.spec_version or self._get_default_version(input.output_format),
                 generator_name=self.name,
+                telemetry_reported=e.telemetry_reported,
             )
 
     def _get_default_version(self, format: str) -> str:
@@ -434,6 +435,7 @@ class SyftImageGenerator:
                 sbom_format=input.output_format,
                 spec_version=input.spec_version or self._get_default_version(input.output_format),
                 generator_name=self.name,
+                telemetry_reported=e.telemetry_reported,
             )
 
     def _get_default_version(self, format: str) -> str:
