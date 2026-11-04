@@ -37,6 +37,7 @@ from ..utils import (
     ensure_php_installed,
     get_lock_file_ecosystem,
     has_required_manifest,
+    image_ref_scheme,
     resolve_npm_lockfile,
     run_command,
 )
@@ -391,6 +392,14 @@ class CdxgenImageGenerator:
 
         # Only supports Docker images
         if not input.is_docker_image:
+            return False
+
+        # A scheme-prefixed reference is syft's syntax. generate() invokes
+        # cdxgen with `-t oci`, which takes a bare image name or archive path
+        # and knows nothing of `docker:`/`oci-archive:` prefixes, so a
+        # prefixed value is read as part of the name and fails to resolve.
+        # Decline, and let the syft generator take it.
+        if image_ref_scheme(input.docker_image):
             return False
 
         # Only supports CycloneDX format (cdxgen doesn't output SPDX)
