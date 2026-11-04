@@ -44,7 +44,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from sbomify_action._runtime import workspace_candidates
+from sbomify_action._runtime import inside_working_dir, workspace_candidates
 from sbomify_action.logging_config import logger
 
 from ..metadata import AugmentationMetadata
@@ -154,11 +154,23 @@ class JsonConfigProvider:
         # followed by the well-known roots earlier releases probed regardless of
         # platform. This has to agree with path_expansion -- a config file and a
         # lock file sitting side by side must both be found, or neither.
+        #
+        # Except under WORKING_DIR, where path_expansion refuses a root lock file
+        # and this keeps the root config. A lock file at the root lists the whole
+        # repository's dependencies, which is a false SBOM for one package; a
+        # config there mostly carries supplier, authors and contacts, which are
+        # usually org-wide, and dropping it would cost every package the
+        # supplier and author the NTIA minimum elements and the EU CRA ask for.
         for workspace in workspace_candidates():
             if workspace == cwd or not workspace.is_dir():
                 continue
             path = workspace / DEFAULT_CONFIG_FILE
             if path.is_file():
+                if not inside_working_dir(path):
+                    logger.info(
+                        f"Using '{path}' from the repository root; '{cwd}' has none. Put a "
+                        f"{DEFAULT_CONFIG_FILE} in '{cwd}' to override it for this package."
+                    )
                 return path
 
         return None

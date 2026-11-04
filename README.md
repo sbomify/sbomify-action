@@ -174,7 +174,7 @@ also available as `with:` inputs:
 
 | Input | Environment variable | Description |
 | --- | --- | --- |
-| `working-dir` | `WORKING_DIR` | Directory to work in, relative to the repo root |
+| `working-dir` | `WORKING_DIR` | Directory to work in, relative to the repo root. Relative input paths are looked up only inside it, so a monorepo package's SBOM lists its own dependencies, not the whole repository's. Reach outside with `../../uv.lock` or an absolute path. `sbomify.json` falls back to the repository root's |
 | `component-purl` | `COMPONENT_PURL` | Override the component PURL in the SBOM |
 | `bom-type` | `BOM_TYPE` | `sbom` (default), `vex`, `cbom` or `hbom` |
 | `sbom-format` | `SBOM_FORMAT` | `cyclonedx` (default) or `spdx` |
