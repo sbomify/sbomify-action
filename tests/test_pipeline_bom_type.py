@@ -71,6 +71,32 @@ def test_pipeline_output_file_colliding_with_step_file_survives_cleanup(tmp_path
     assert (tmp_path / "step_1.json").read_bytes() == AUTHORED_VEX
 
 
+def test_pipeline_ignores_step_files_left_in_working_directory(tmp_path, monkeypatch):
+    """A step_3.json another run left in the checkout must not become this
+    run's output. Finalize picks the newest step file, and when those lived in
+    the working directory a stale one was shipped in place of the real SBOM."""
+    stale = b'{"bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1}'
+    for name in ("step_1.json", "step_2.json", "step_3.json"):
+        (tmp_path / name).write_bytes(stale)
+    config, _ = _vex_config(tmp_path, monkeypatch)
+    run_pipeline(config)
+    assert (tmp_path / "out.vex.json").read_bytes() == AUTHORED_VEX
+    # Nor are another run's files this run's to delete.
+    assert (tmp_path / "step_3.json").read_bytes() == stale
+
+
+def test_pipeline_leaves_no_step_files_behind(tmp_path, monkeypatch):
+    """The intermediate files live in a directory of the run's own, which is
+    gone once the output is written; nothing is left in the working directory."""
+    steps_root = tmp_path / "tmp"
+    steps_root.mkdir()
+    monkeypatch.setattr("tempfile.tempdir", str(steps_root))
+    config, _ = _vex_config(tmp_path, monkeypatch)
+    run_pipeline(config)
+    assert list(tmp_path.glob("step_*.json")) == []
+    assert list(steps_root.iterdir()) == []
+
+
 AUTHORED_OPENVEX = (
     b'{"@context": "https://openvex.dev/ns/v0.2.0",\r\n'
     b'  "@id": "https://example.com/vex-1",\n'
