@@ -90,6 +90,7 @@ This tool wraps generation in three more steps — inject, augment, enrich — a
 - **Hashes and lifecycle data** — integrity hashes pulled from your lock file, CLE end-of-support dates for OS packages and tracked runtimes
 - **Audit trail** — every modification logged with UTC timestamps, for attestation and compliance
 - **Upload** to sbomify or Dependency Track, tag product releases, attest with GitHub build provenance
+- **Pass through** pre-authored VEX, CBOM and HBOM artifacts verbatim, with no rewriting
 - **Documents** — publish the evidence an SBOM cannot carry (pentest reports, SOC 2 attestations, threat models, declarations of conformity) to the same component and the same release
 - **Tokenless publishing** on GitHub Actions via OIDC trusted publishing
 
@@ -180,6 +181,28 @@ also available as `with:` inputs:
 | `sbom-format` | `SBOM_FORMAT` | `cyclonedx` (default) or `spdx` |
 | `spec-version` | `SPEC_VERSION` | Spec version to generate. CycloneDX 1.2–1.7, SPDX 2.2 or 2.3, or SPDX 3.0.1 with `LOCK_FILE: none`. Ignored when `SBOM_FILE` names a real file |
 | `oidc-audience` | `OIDC_AUDIENCE` | Audience for trusted publishing; override for self-hosted |
+
+## Hardware BOM (HBOM)
+
+A hardware BOM lists the physical parts of a product: connectors, chips, PCBs. In CycloneDX it is a document whose components are `type: device`. An SBOM tells you what code ships; an HBOM tells you what is on the board.
+
+The action does not generate one. It uploads an HBOM you already have, byte for byte.
+
+```yaml
+- uses: sbomify/sbomify-action@master
+  env:
+    TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
+    COMPONENT_ID: 'your-component-id'
+    BOM_TYPE: 'hbom'
+    SBOM_FILE: 'hardware/mainboard.hbom.cdx.json'
+    PRODUCT_RELEASE: '["my-product:v1.2.3"]'
+```
+
+**Where an HBOM comes from.** Usually a hardware BOM export from your PLM or EDA tooling, converted to CycloneDX. The [cdx-hbom](https://github.com/cdxgen/cdx-hbom) project from the [cdxgen](https://github.com/cdxgen/cdxgen) authors can also produce one, though check its scope first: it inventories the machine it runs on (CPU, disks, PCI and USB devices), so you get an asset record of a host rather than a parts list for a product you manufacture. If you build hardware, the document comes from your own design data.
+
+**Verbatim upload.** sbomify stores an HBOM exactly as you authored it, the same as VEX and CBOM. The action skips augmentation, enrichment, name and version overrides, and additional-package injection; setting `AUGMENT` or `ENRICH` logs a warning and continues rather than failing the run. Part numbers are the document's whole value, and a rewritten one is a different parts list.
+
+SPDX has no device component type, so `BOM_TYPE=hbom` requires CycloneDX. The action refuses an SPDX file before it uploads.
 
 ## Documents
 
