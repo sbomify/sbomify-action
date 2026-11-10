@@ -1688,6 +1688,14 @@ def enrich_sbom(input_file: str, output_file: str, validate: bool = True) -> Non
         else:
             raise ValueError("Neither CycloneDX nor SPDX format found in JSON file")
 
+        # At info so it shows: a generator that put vcs_url on published
+        # packages would otherwise cost them their enrichment silently.
+        if skipped := enricher.registry.unpublished_skipped:
+            logger.info(
+                f"Skipped registry lookups for {skipped} package(s) no public registry publishes "
+                "(pkg:yocto, vcs_url, Maven -SNAPSHOT, or a file:/link:/path reference)"
+            )
+
     # Validate the enriched SBOM
     if validate:
         validation_result = validate_sbom_file_auto(str(output_path))
