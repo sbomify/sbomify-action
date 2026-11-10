@@ -126,3 +126,16 @@ def _no_persistent_enrichment_cache(monkeypatch):
     cache.close()
     yield
     cache.close()
+
+
+@pytest.fixture(autouse=True)
+def _no_runner_file_commands(monkeypatch):
+    """Keep the suite out of the CI job's own summary and step outputs.
+
+    The suite itself runs on GitHub Actions, where these point at the real
+    files for the test step. Every pipeline a test runs would otherwise append
+    its summary to the page and its outputs to the step. Tests that want them
+    set their own, pointing into tmp_path.
+    """
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)

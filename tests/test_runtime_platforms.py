@@ -447,6 +447,56 @@ class TestLogFormatters(unittest.TestCase):
             formatter.group_end()
             mock_print.assert_not_called()
 
+    def test_github_formatter_escapes_annotation_text(self):
+        """A newline would otherwise end the annotation and start a raw log line."""
+        with patch("builtins.print") as mock_print:
+            GitHubActionsFormatter().error("line one\nline two 100%", "Step: 1, input")
+        mock_print.assert_called_with("::error title=Step%3A 1%2C input::line one%0Aline two 100%25")
+
+    def test_only_github_mirrors_logged_warnings(self):
+        """Elsewhere the log line is all there is; repeating it adds nothing."""
+        self.assertTrue(GitHubActionsFormatter().annotates_warnings)
+        self.assertFalse(PlainFormatter().annotates_warnings)
+
+    def test_github_formatter_appends_summary_and_outputs(self):
+        """Both files are appended to, never truncated: other steps share them."""
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, outputs = Path(tmp, "summary.md"), Path(tmp, "outputs.txt")
+            env = {"GITHUB_STEP_SUMMARY": str(summary), "GITHUB_OUTPUT": str(outputs)}
+            with patch.dict(os.environ, env):
+                formatter = GitHubActionsFormatter()
+                formatter.job_summary("### one\n")
+                formatter.job_summary("### two\n")
+                formatter.set_output("sbom-id", "abc")
+
+            self.assertEqual(summary.read_text(encoding="utf-8"), "### one\n### two\n")
+            header, value, closing = outputs.read_text(encoding="utf-8").splitlines()
+            name, delimiter = header.split("<<")
+            self.assertEqual((name, value, closing), ("sbom-id", "abc", delimiter))
+
+    def test_an_output_value_cannot_forge_another_output(self):
+        """The value comes back from a server; a newline in it must stay inside it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            outputs = Path(tmp, "outputs.txt")
+            with patch.dict(os.environ, {"GITHUB_OUTPUT": str(outputs)}):
+                GitHubActionsFormatter().set_output("sbom-id", "abc\ncomponent-url=https://evil.example")
+
+            header, *body, closing = outputs.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(header, f"sbom-id<<{closing}")
+            self.assertEqual(body, ["abc", "component-url=https://evil.example"])
+
+    def test_plain_formatter_writes_no_summary_or_outputs(self):
+        """Only GitHub Actions has these files, even if the variables leak in."""
+        with tempfile.TemporaryDirectory() as tmp:
+            summary, outputs = Path(tmp, "summary.md"), Path(tmp, "outputs.txt")
+            env = {"GITHUB_STEP_SUMMARY": str(summary), "GITHUB_OUTPUT": str(outputs)}
+            with patch.dict(os.environ, env):
+                PlainFormatter().job_summary("### one\n")
+                PlainFormatter().set_output("sbom-id", "abc")
+
+            self.assertFalse(summary.exists())
+            self.assertFalse(outputs.exists())
+
 
 class TestOidc(unittest.TestCase):
     """Which platforms can mint an OIDC token."""
