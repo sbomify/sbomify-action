@@ -14,6 +14,10 @@ inputs:
     description: 'Artifact type to record on upload: sbom (default), vex, cbom or hbom. Only the sbomify destination supports non-SBOM types; other upload-destinations entries are rejected for them. Non-SBOM types are uploaded verbatim: augmentation, enrichment, overrides, additional-package injection and the SBOM-specific finalization fixups are skipped.'
     required: false
     default: 'sbom'
+  cbom-generate:
+    description: 'Generate a CBOM (Cryptography Bill of Materials) of the certificate, key and keystore files in the LOCK_FILE directory (and its subdirectories for Java, Scala and .NET) via cdxgen, and upload it with bom-type cbom. Algorithms in source code are not detected in any language (use cbomkit-action for Java and Python source scanning). Needs CycloneDX 1.6 or later, and fails if no cryptographic asset is found. Mutually exclusive with SBOM_FILE.'
+    required: false
+    default: 'false'
   sbom-format:
     description: 'SBOM format to generate: cyclonedx (default) or spdx. Ignored when SBOM_FILE supplies an existing document.'
     required: false
@@ -39,6 +43,7 @@ runs:
     WORKING_DIR: ${{ inputs['working-dir'] }}
     COMPONENT_PURL: ${{ inputs['component-purl'] }}
     BOM_TYPE: ${{ inputs['bom-type'] }}
+    CBOM_GENERATE: ${{ inputs['cbom-generate'] }}
     SBOM_FORMAT: ${{ inputs['sbom-format'] }}
     SPEC_VERSION: ${{ inputs['spec-version'] }}
     OIDC_AUDIENCE: ${{ inputs['oidc-audience'] }}

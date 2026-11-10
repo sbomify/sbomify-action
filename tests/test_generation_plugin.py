@@ -1889,6 +1889,128 @@ class TestRustManifestSupport(unittest.TestCase):
         self.assertEqual(unreachable, [])
 
 
+class TestIncludeCrypto(unittest.TestCase):
+    """CBOM generation routes to cdxgen only; the flag rides the command line."""
+
+    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cdxgen.run_command")
+    @patch("pathlib.Path.exists")
+    def test_cdxgen_fs_appends_include_crypto(self, mock_exists, mock_run):
+        from sbomify_action._generation.generators.cdxgen import CdxgenFsGenerator
+
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_exists.return_value = True
+        generator = CdxgenFsGenerator()
+        input_params = GenerationInput(lock_file="/path/requirements.txt", include_crypto=True)
+
+        self.assertTrue(generator.supports(input_params))
+        generator.generate(input_params)
+
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--include-crypto", cmd)
+
+    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cdxgen.run_command")
+    @patch("pathlib.Path.exists")
+    def test_cdxgen_fs_omits_flag_without_include_crypto(self, mock_exists, mock_run):
+        from sbomify_action._generation.generators.cdxgen import CdxgenFsGenerator
+
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_exists.return_value = True
+        CdxgenFsGenerator().generate(GenerationInput(lock_file="/path/requirements.txt"))
+        self.assertNotIn("--include-crypto", mock_run.call_args[0][0])
+
+    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cdxgen.run_command")
+    @patch("pathlib.Path.exists")
+    def test_cdxgen_fs_crypto_run_reaches_the_certificate_scan_in_scope(self, mock_exists, mock_run):
+        # cdxgen 12.8.x scans for certificates and keystores only on its
+        # multi-type path, which a single -t routes around (0 assets on a
+        # package-lock.json fixture holding a .pem, .p12 and .jks). Dropping
+        # -t and --no-recurse reaches it, but also evaluated a nested
+        # build.gradle. The type twice, the copy upper-cased, reaches it in
+        # scope: 3 assets, and neither a postinstall nor build.gradle ran.
+        from sbomify_action._generation.generators.cdxgen import CdxgenFsGenerator
+
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_exists.return_value = True
+
+        CdxgenFsGenerator().generate(GenerationInput(lock_file="/path/package-lock.json", include_crypto=True))
+        cmd = mock_run.call_args[0][0]
+        start = cmd.index("-t")
+        self.assertEqual(cmd[start : start + 4], ["-t", "js", "-t", "JS"])
+        self.assertEqual(cmd.count("-t"), 2)
+        self.assertIn("--no-recurse", cmd)
+        self.assertIn("--no-install-deps", cmd)
+        self.assertIn("--include-crypto", cmd)
+
+        # A plain SBOM run is unchanged.
+        CdxgenFsGenerator().generate(GenerationInput(lock_file="/path/package-lock.json"))
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd.count("-t"), 1)
+        self.assertIn("--no-recurse", cmd)
+        self.assertNotIn("--no-install-deps", cmd)
+
+    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cdxgen.run_command")
+    def test_cdxgen_fs_crypto_run_fails_without_cryptographic_assets(self, mock_run):
+        # A crypto run that found nothing has written a dependency SBOM, and
+        # uploading that as bom_type=cbom would claim an inventory it lacks.
+        import json
+        import tempfile
+        from pathlib import Path as _Path
+
+        from sbomify_action._generation.generators.cdxgen import CdxgenFsGenerator
+
+        library = {"type": "library", "name": "ms", "version": "2.1.3"}
+        certificate = {"type": "cryptographic-asset", "name": "server.pem"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_file = _Path(tmp) / "package-lock.json"
+            lock_file.write_text("{}")
+            output = _Path(tmp) / "cbom.json"
+            crypto_input = GenerationInput(lock_file=str(lock_file), output_file=str(output), include_crypto=True)
+
+            def writes(components):
+                def run(*args, **kwargs):
+                    output.write_text(json.dumps({"bomFormat": "CycloneDX", "components": components}))
+                    return MagicMock(returncode=0)
+
+                return run
+
+            mock_run.side_effect = writes([library])
+            result = CdxgenFsGenerator().generate(crypto_input)
+            self.assertFalse(result.success)
+            self.assertIn("no cryptographic assets", result.error_message)
+
+            mock_run.side_effect = writes([library, certificate])
+            self.assertTrue(CdxgenFsGenerator().generate(crypto_input).success)
+
+    @patch("sbomify_action._generation.generators.syft._SYFT_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.trivy._TRIVY_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cyclonedx_py._CYCLONEDX_PY_AVAILABLE", True)
+    @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
+    def test_registry_only_selects_crypto_capable_generators(self):
+        from sbomify_action._generation.generators.cdxgen import CdxgenFsGenerator
+        from sbomify_action._generation.generators.cyclonedx_py import CycloneDXPyGenerator
+        from sbomify_action._generation.generators.syft import SyftFsGenerator
+        from sbomify_action._generation.generators.trivy import TrivyFsGenerator
+        from sbomify_action._generation.registry import GeneratorRegistry
+
+        registry = GeneratorRegistry()
+        for generator in (CycloneDXPyGenerator(), SyftFsGenerator(), TrivyFsGenerator(), CdxgenFsGenerator()):
+            registry.register(generator)
+
+        crypto = GenerationInput(lock_file="/path/requirements.txt", include_crypto=True)
+        selected = registry.get_generators_for(crypto)
+        # Crypto capability is opt-in at the registry: only cdxgen-fs qualifies,
+        # so a future generator without the flag can never claim CBOM requests.
+        self.assertEqual([g.name for g in selected], ["cdxgen-fs"])
+
+        plain = GenerationInput(lock_file="/path/requirements.txt")
+        self.assertGreater(len(registry.get_generators_for(plain)), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
 
