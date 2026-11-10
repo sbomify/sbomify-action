@@ -1,8 +1,10 @@
+import atexit
 import json
 import logging
 import os
 import shutil
 import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -1626,14 +1628,17 @@ def directory_expansion(path: str) -> str:
     )
 
 
-def get_last_sbom_from_last_step() -> Optional[str]:
+def get_last_sbom_from_last_step(step_dir: Path) -> Optional[str]:
     """
     Helper function to get the SBOM from the previous step.
+
+    Args:
+        step_dir: The run's own directory of intermediate step files
 
     Returns:
         Path to the most recent SBOM file, or None if not found
     """
-    steps = [STEP_3_FILE, STEP_2_FILE, STEP_1_FILE]
+    steps = [str(step_dir / STEP_3_FILE), str(step_dir / STEP_2_FILE), str(step_dir / STEP_1_FILE)]
     for file in steps:
         if Path(file).is_file():
             return file
@@ -2246,6 +2251,19 @@ def run_pipeline(config: Config) -> None:
         _run_document_pipeline(config)
         return
 
+    # The intermediate SBOMs go in a directory of this run's own, not the
+    # working directory. Finalize takes whichever step file is newest, so a
+    # step_3.json left in the checkout by an earlier run that failed after
+    # enrichment was shipped -- and uploaded -- in place of this run's SBOM.
+    # Two runs sharing a directory also deleted each other's step files:
+    # cdxgen wrote step_1.json, and a moment later the run that needed it
+    # found nothing and failed with "No SBOM file found to finalize".
+    step_dir = Path(tempfile.mkdtemp(prefix="sbomify-steps-"))
+    atexit.register(shutil.rmtree, step_dir, ignore_errors=True)
+    step_1_file = str(step_dir / STEP_1_FILE)
+    step_2_file = str(step_dir / STEP_2_FILE)
+    step_3_file = str(step_dir / STEP_3_FILE)
+
     # Submodule mode: resolve the pin to a version and check whether the
     # submodule's component already published an SBOM at exactly that
     # version. Hit → attach it to the configured release(s), skipping
@@ -2292,7 +2310,7 @@ def run_pipeline(config: Config) -> None:
 
         logger.info("Additional packages only mode: creating empty SBOM")
         try:
-            FORMAT = create_empty_sbom(STEP_1_FILE, config.sbom_format, config.spec_version)
+            FORMAT = create_empty_sbom(step_1_file, config.sbom_format, config.spec_version)
         except Exception as e:
             logger.error(f"Failed to create empty SBOM: {e}")
             _log_step_end(1, success=False)
@@ -2322,17 +2340,17 @@ def run_pipeline(config: Config) -> None:
                             f"BOM_TYPE='{config.bom_type}' requires {accepted}, but the file "
                             f"content is {FORMAT}; it would be re-serialized and break the verbatim upload."
                         )
-                shutil.copy(FILE, STEP_1_FILE)
+                shutil.copy(FILE, step_1_file)
 
                 # Sanitize SPDX licenses in input SBOMs (e.g. RPM-style "GPLv2+", "ASL 2.0")
                 # so that downstream steps can parse the file with spdx_tools
                 if FORMAT == "spdx":
                     try:
-                        with open(STEP_1_FILE, encoding="utf-8") as f:
+                        with open(step_1_file, encoding="utf-8") as f:
                             spdx_data = json.load(f)
                         sanitized = sanitize_spdx_licenses(spdx_data)
                         if sanitized > 0:
-                            with open(STEP_1_FILE, "w", encoding="utf-8") as f:
+                            with open(step_1_file, "w", encoding="utf-8") as f:
                                 json.dump(spdx_data, f, ensure_ascii=False)
                     except (OSError, json.JSONDecodeError) as e:
                         logger.warning(f"Could not sanitize SPDX licenses in input SBOM: {e}")
@@ -2371,11 +2389,11 @@ def run_pipeline(config: Config) -> None:
                     if config.sbom_format == "cyclonedx":
                         cdx_spec = config.spec_version or "1.6"
                         cdx_json = convert_spdx_to_cyclonedx(spdx_sbom, cdx_spec)
-                        with open(STEP_1_FILE, "w", encoding="utf-8") as f:
+                        with open(step_1_file, "w", encoding="utf-8") as f:
                             f.write(cdx_json)
                         actual_spec_version = cdx_spec
                     else:
-                        with open(STEP_1_FILE, "w", encoding="utf-8") as f:
+                        with open(step_1_file, "w", encoding="utf-8") as f:
                             json.dump(spdx_sbom, f, ensure_ascii=False)
                         # Use the actual SPDX version from the document
                         spdx_version = str(spdx_sbom.get("spdxVersion", "SPDX-2.3"))
@@ -2399,7 +2417,7 @@ def run_pipeline(config: Config) -> None:
                         title="Chainguard Image Detected",
                     )
                     result = GenerationResult.success_result(
-                        output_file=STEP_1_FILE,
+                        output_file=step_1_file,
                         sbom_format=config.sbom_format,
                         spec_version=actual_spec_version,
                         generator_name="chainguard-sbom",
@@ -2409,7 +2427,7 @@ def run_pipeline(config: Config) -> None:
                     logger.info(f"Generating SBOM from Docker image: {config.docker_image}")
                     result = generate_sbom(
                         docker_image=config.docker_image,
-                        output_file=STEP_1_FILE,
+                        output_file=step_1_file,
                         output_format=config.sbom_format,
                         spec_version=config.spec_version,
                     )
@@ -2419,7 +2437,7 @@ def run_pipeline(config: Config) -> None:
                 logger.info(f"Generating SBOM from lock file: {FILE}")
                 result = process_lock_file(
                     FILE,
-                    output_file=STEP_1_FILE,
+                    output_file=step_1_file,
                     output_format=config.sbom_format,
                     spec_version=config.spec_version,
                 )
@@ -2433,7 +2451,7 @@ def run_pipeline(config: Config) -> None:
                 logger.info(f"Generating SBOM by scanning directory: {FILE}")
                 result = generate_sbom(
                     source_dir=FILE,
-                    output_file=STEP_1_FILE,
+                    output_file=step_1_file,
                     output_format=config.sbom_format,
                     spec_version=config.spec_version,
                 )
@@ -2477,7 +2495,7 @@ def run_pipeline(config: Config) -> None:
     # Set the SBOM format based on the output (silent detection for generated SBOMs)
     try:
         if FILE_TYPE not in ("SBOM", "ADDITIONAL_ONLY"):  # Only detect format if we generated the SBOM
-            FORMAT = _detect_sbom_format_silent(STEP_1_FILE)
+            FORMAT = _detect_sbom_format_silent(step_1_file)
             logger.info(f"Generated SBOM format: {format_display_name(FORMAT)}")
     except SBOMValidationError as e:
         logger.error(f"Generated SBOM validation failed: {e}")
@@ -2501,12 +2519,12 @@ def run_pipeline(config: Config) -> None:
     # Apply component version override if specified (regardless of augmentation settings)
     if config.component_version:
         logger.info(f"Applying component version override: {config.component_version}")
-        _apply_sbom_version_override(STEP_1_FILE, config)
+        _apply_sbom_version_override(step_1_file, config)
 
     # Apply component name override if specified (regardless of augmentation settings)
     if config.component_name:
         logger.info(f"Applying component name override: {config.component_name}")
-        _apply_sbom_name_override(STEP_1_FILE, config)
+        _apply_sbom_name_override(step_1_file, config)
 
     # Everything below here edits the document itself, and none of it applies
     # to a non-SBOM artifact: a VEX, CBOM or HBOM is uploaded verbatim, which
@@ -2517,16 +2535,16 @@ def run_pipeline(config: Config) -> None:
         # First, because it changes how the rest of the document should be
         # read: are these versions a record of what the project committed to,
         # or a resolution performed just now.
-        _disclose_inferred_resolution(STEP_1_FILE, config)
+        _disclose_inferred_resolution(step_1_file, config)
 
     # Apply component PURL override if specified (regardless of augmentation settings)
     if config.component_purl:
         logger.info(f"Applying component PURL override: {config.component_purl}")
-        _apply_sbom_purl_override(STEP_1_FILE, config)
+        _apply_sbom_purl_override(step_1_file, config)
     elif is_sbom:
         # No explicit PURL, so check the generator did not name the root
         # component after the directory it was pointed at.
-        _repair_directory_derived_purl(STEP_1_FILE, config)
+        _repair_directory_derived_purl(step_1_file, config)
 
     # Inject additional packages if specified (file or environment variables).
     # Non-SBOM artifacts upload verbatim, so injection is skipped for them.
@@ -2536,7 +2554,7 @@ def run_pipeline(config: Config) -> None:
     else:
         _skip_injection = False
     try:
-        injected_count = 0 if _skip_injection else inject_additional_packages(STEP_1_FILE)
+        injected_count = 0 if _skip_injection else inject_additional_packages(step_1_file)
         if injected_count > 0:
             logger.info(f"Successfully injected {injected_count} additional package(s) into SBOM")
         elif config.is_additional_packages_only:
@@ -2548,7 +2566,7 @@ def run_pipeline(config: Config) -> None:
             sys.exit(1)
         logger.warning(
             f"Failed to inject additional packages into SBOM: {e}. "
-            f"Verify that the SBOM file '{STEP_1_FILE}' exists and is readable, and that any "
+            f"Verify that the SBOM file '{step_1_file}' exists and is readable, and that any "
             "additional package configuration (ADDITIONAL_PACKAGES env var or "
             "additional_packages.txt file) is present and correctly formatted."
         )
@@ -2568,7 +2586,7 @@ def run_pipeline(config: Config) -> None:
                 logger.info("Discovering transitive dependencies...")
 
                 expansion_result = expand_sbom_dependencies(
-                    sbom_file=STEP_1_FILE,
+                    sbom_file=step_1_file,
                     lock_file=config.lock_file,
                 )
 
@@ -2609,7 +2627,7 @@ def run_pipeline(config: Config) -> None:
             logger.info(f"Extracting hashes from lockfile: {config.lock_file}")
 
             stats = enrich_sbom_with_hashes(
-                sbom_file=STEP_1_FILE,
+                sbom_file=step_1_file,
                 lock_file=config.lock_file,
                 overwrite_existing=False,
             )
@@ -2645,7 +2663,7 @@ def run_pipeline(config: Config) -> None:
             )
 
         try:
-            sbom_input_file = get_last_sbom_from_last_step()
+            sbom_input_file = get_last_sbom_from_last_step(step_dir)
             if not sbom_input_file:
                 raise FileProcessingError("No SBOM file found from previous step")
 
@@ -2655,7 +2673,7 @@ def run_pipeline(config: Config) -> None:
             # Note: PURL override is applied separately via _apply_sbom_purl_override()
             sbom_format = augment_sbom_from_file(
                 input_file=sbom_input_file,
-                output_file=STEP_2_FILE,
+                output_file=step_2_file,
                 api_base_url=config.api_base_url,
                 token=config.token,
                 component_id=config.component_id,
@@ -2680,13 +2698,13 @@ def run_pipeline(config: Config) -> None:
     if config.enrich:
         _log_step_header(3, "SBOM Enrichment with Ecosystem Data")
         try:
-            sbom_input_file = get_last_sbom_from_last_step()
+            sbom_input_file = get_last_sbom_from_last_step(step_dir)
             if not sbom_input_file:
                 raise FileProcessingError("No SBOM file found from previous step")
 
             logger.info("Enriching SBOM components with metadata from multiple data sources")
-            enrich_sbom(sbom_input_file, STEP_3_FILE)
-            _detect_sbom_format_silent(STEP_3_FILE)  # Silent validation
+            enrich_sbom(sbom_input_file, step_3_file)
+            _detect_sbom_format_silent(step_3_file)  # Silent validation
             _log_step_end(3)
         except (FileProcessingError, SBOMGenerationError, SBOMValidationError) as e:
             logger.error(f"Step 3 (enrichment) failed: {e}")
@@ -2701,7 +2719,7 @@ def run_pipeline(config: Config) -> None:
     artifact_label = config.bom_type.upper() if config.bom_type and config.bom_type != "sbom" else "SBOM"
     _log_step_header(4, f"Finalizing {artifact_label} Output")
     try:
-        final_sbom_file = get_last_sbom_from_last_step()
+        final_sbom_file = get_last_sbom_from_last_step(step_dir)
         if not final_sbom_file:
             raise FileProcessingError("No SBOM file found to finalize")
 
@@ -2714,12 +2732,8 @@ def run_pipeline(config: Config) -> None:
 
         _write_final_output(final_sbom_file, config.output_file, config.bom_type)
 
-        # Clean up temporary step files — never the final output itself, which
-        # OUTPUT_FILE may resolve to (the write above is then a copy-to-self no-op).
-        output_realpath = os.path.realpath(config.output_file)
-        for temp_file in (STEP_3_FILE, STEP_2_FILE, STEP_1_FILE):
-            if Path(temp_file).is_file() and os.path.realpath(temp_file) != output_realpath:
-                Path(temp_file).unlink()
+        # The step files are this run's alone, so the whole directory goes.
+        shutil.rmtree(step_dir, ignore_errors=True)
 
         logger.info(f"Final {artifact_label} saved to: {config.output_file}")
         _log_step_end(4)
