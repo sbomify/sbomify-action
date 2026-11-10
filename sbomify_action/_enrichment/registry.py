@@ -99,9 +99,12 @@ class SourceRegistry:
         """
         Fetch metadata using the priority chain of sources.
 
-        Tries sources in priority order, stopping early when we have
-        sufficient data (description, licenses, supplier). Only continues
-        to lower-priority sources if critical fields are missing.
+        Tries sources in priority order with two-phase early exit:
+        1. If NTIA fields (description, licenses, supplier) AND all CLE
+           fields (release_date, eos, eol) are filled, stop entirely.
+        2. If only NTIA fields are filled but CLE is missing, skip
+           non-CLE sources and continue only with lifecycle-capable
+           sources (those declaring ``provides_cle = True``).
 
         Args:
             purl: Parsed PackageURL object
@@ -119,10 +122,19 @@ class SourceRegistry:
         result: Optional[NormalizedMetadata] = None
 
         for source in sources:
-            # Stop early if we already have all core NTIA fields
+            # Two-phase early exit: (1) if NTIA + all CLE fields are filled, stop entirely;
+            # (2) if only NTIA is filled but CLE is missing, skip non-CLE sources and
+            # continue only with lifecycle-capable sources (those declaring provides_cle=True).
             if result and result.description and result.licenses and result.supplier:
-                logger.debug(f"Skipping {source.name} - already have sufficient data for {purl.name}")
-                break
+                if result.cle_release_date and result.cle_eos and result.cle_eol:
+                    logger.debug(f"Skipping {source.name} - already have sufficient data for {purl.name}")
+                    break
+                # NTIA complete but CLE missing — only continue with lifecycle-capable sources.
+                # Sources opt in by declaring `provides_cle = True` (not in the Protocol;
+                # checked via getattr so non-CLE sources need no changes).
+                if not getattr(source, "provides_cle", False):
+                    logger.debug(f"Skipping {source.name} - NTIA complete, not a CLE provider for {purl.name}")
+                    continue
 
             # And skip a source whose whole contribution is already present.
             # The stop above needs *all three* core fields, so a source that
@@ -155,6 +167,11 @@ class SourceRegistry:
                 # let one throttled run suppress a package's enrichment until
                 # the entry expired.
                 cache_key = purl.to_string()
+                # A source whose answer depends on more than the coordinate (which
+                # server, which credentials) declares `cache_scope`, so one
+                # configuration's results are never served to another.
+                if scope := getattr(source, "cache_scope", None):
+                    cache_key = f"{scope}:{cache_key}"
                 hit, metadata = cache.get(source.name, cache_key)
                 if hit:
                     logger.debug(f"Cache hit ({source.name}) for {purl.name}")
