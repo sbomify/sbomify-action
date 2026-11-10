@@ -37,6 +37,7 @@ from spdx_tools.spdx.writer.write_anything import write_file as spdx_write_file
 from .logging_config import logger
 from .serialization import (
     load_cyclonedx_bom,
+    load_sbom_json,
     restore_spdx_document_describes,
     sanitize_spdx_json_file,
     serialize_cyclonedx_bom,
@@ -543,8 +544,7 @@ def inject_additional_packages(sbom_file: str) -> int:
     # Load and detect format
     sbom_path = Path(sbom_file)
     try:
-        with open(sbom_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = load_sbom_json(sbom_file)
     except FileNotFoundError:
         logger.error(f"SBOM file not found: {sbom_file}")
         return 0

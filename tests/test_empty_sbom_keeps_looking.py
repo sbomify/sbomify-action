@@ -13,13 +13,20 @@ entitled to one.
 """
 
 import json
+from dataclasses import replace
+from importlib import import_module
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+from click.testing import CliRunner
 
 from sbomify_action._generation.protocol import FormatVersion, GenerationInput
 from sbomify_action._generation.registry import GeneratorRegistry, _describes_nothing
 from sbomify_action._generation.result import GenerationResult
+
+# The dotted name resolves to the main() function the package re-exports.
+cli_main = import_module("sbomify_action.cli.main")
 
 
 class _Stub:
@@ -222,3 +229,117 @@ def test_the_empty_returned_is_the_highest_priority_one(tmp_path):
     assert result.generator_name == "cyclonedx-maven", (
         "the empty result handed back should be the preferred generator's"
     )
+
+
+def _lock_input(tmp_path, name, content):
+    lock = tmp_path / name
+    lock.write_text(content)
+    return GenerationInput(lock_file=str(lock), output_file=str(tmp_path / "sbom.json"), output_format="cyclonedx")
+
+
+def test_a_lock_file_with_content_that_yields_nothing_fails(tmp_path):
+    """#384: a real package-lock.json went in, every generator found nothing,
+    and the run passed with an SBOM that reads as "no dependencies".
+
+    A lock file with content usually lists dependencies, so an empty SBOM
+    from one usually means they were not read. Fail, say who tried what, and
+    name the opt-out for a project that really has none.
+    """
+    registry = GeneratorRegistry()
+    registry.register(_Stub("cdxgen-fs", 10, []))
+    registry.register(_Stub("syft-fs", 20, []))
+
+    result = registry.generate(
+        _lock_input(tmp_path, "package-lock.json", '{"lockfileVersion": 3, "packages": {"node_modules/a": {}}}'),
+        validate=False,
+    )
+
+    assert not result.success
+    assert "package-lock.json" in result.error_message
+    assert "cdxgen-fs" in result.error_message
+    assert "syft-fs" in result.error_message
+    assert "ALLOW_EMPTY_SBOM=true" in result.error_message
+
+
+def test_an_empty_lock_file_may_yield_nothing(tmp_path):
+    """Nothing in, nothing out: there is no contradiction to fail on."""
+    registry = GeneratorRegistry()
+    registry.register(_Stub("syft-fs", 10, []))
+
+    result = registry.generate(_lock_input(tmp_path, "uv.lock", ""), validate=False)
+
+    assert result.success
+
+
+def test_a_manifest_that_yields_nothing_is_still_returned(tmp_path):
+    """A manifest records no resolution, so an empty result from one is not
+    the signal it is from a lock file. It keeps the warning."""
+    registry = GeneratorRegistry()
+    registry.register(_Stub("syft-fs", 10, []))
+
+    result = registry.generate(_lock_input(tmp_path, "package.json", '{"name": "x"}'), validate=False)
+
+    assert result.success
+
+
+def test_allow_empty_sbom_returns_the_empty_sbom(tmp_path):
+    """A Cargo.lock holding only the root crate is not empty and has nothing
+    to list. ALLOW_EMPTY_SBOM gives that project its SBOM back."""
+    registry = GeneratorRegistry()
+    registry.register(_Stub("cargo-cyclonedx", 10, []))
+    input = replace(_lock_input(tmp_path, "Cargo.lock", '[[package]]\nname = "solo"\n'), allow_empty_sbom=True)
+
+    result = registry.generate(input, validate=False)
+
+    assert result.success
+    assert json.loads(Path(result.output_file).read_text())["components"] == []
+
+
+@pytest.mark.parametrize(
+    "args,env,expected",
+    [(["--allow-empty-sbom"], {}, True), ([], {"ALLOW_EMPTY_SBOM": "true"}, True), ([], {}, False)],
+    ids=["flag", "env", "default"],
+)
+def test_allow_empty_sbom_reaches_the_config(tmp_path, monkeypatch, args, env, expected):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.delenv("ALLOW_EMPTY_SBOM", raising=False)
+    run = Mock()
+    monkeypatch.setattr(cli_main, "run_pipeline", run)
+    monkeypatch.setattr(cli_main, "setup_dependencies", Mock())
+
+    result = CliRunner().invoke(cli_main.cli, ["--lock-file", "Cargo.lock", "--no-upload", *args], env=env)
+
+    assert result.exit_code == 0, result.output
+    assert run.call_args.args[0].allow_empty_sbom is expected
+
+
+def test_load_config_reads_allow_empty_sbom(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    monkeypatch.setenv("LOCK_FILE", "Cargo.lock")
+    monkeypatch.setenv("UPLOAD", "false")
+    monkeypatch.setenv("ALLOW_EMPTY_SBOM", "true")
+
+    assert cli_main.load_config().allow_empty_sbom is True
+
+
+def test_allow_empty_sbom_reaches_the_registry(tmp_path, monkeypatch):
+    """Config to run_pipeline to process_lock_file to the GenerationInput the
+    registry reads."""
+    from sbomify_action import generation
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "Cargo.lock").write_text("version = 3\n")
+    seen = []
+
+    def generate(input):
+        seen.append(input)
+        return GenerationResult.failure_result("stop here", "cyclonedx", "1.6", "stub")
+
+    monkeypatch.setattr(generation, "_get_orchestrator", lambda: Mock(generate=generate))
+    config = cli_main.build_config(lock_file="Cargo.lock", upload=False, allow_empty_sbom=True)
+
+    with pytest.raises(SystemExit):
+        cli_main.run_pipeline(config)
+    assert seen[0].allow_empty_sbom is True
