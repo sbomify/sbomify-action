@@ -1065,6 +1065,11 @@ jobs:
           if [[ "${GH_REF_TYPE}" == "tag" ]]; then
             # For tags, strip a leading 'v' (v1.2.3 -> 1.2.3)
             VERSION="${GH_REF_NAME#v}"
+            # Never push a :<version> image built from code declaring another version
+            if [[ "${VERSION}" != "${BASE_VERSION}" ]]; then
+              echo "::error::Tag ${GH_REF_NAME} does not match pyproject.toml version ${BASE_VERSION}. Bump the version, then tag that commit."
+              exit 1
+            fi
             IMAGE_TAG="${VERSION}"
           else
             # For master, version carries the short SHA as semver build metadata; tag is 'latest'
