@@ -1,0 +1,8 @@
+rules:
+  unpinned-images:
+    ignore:
+      # action.yml runs ghcr.io/sbomify/sbomify-action:latest on master on
+      # purpose, so master always runs the image built from it. Release tags
+      # pin it by digest once sbomify/sbomify-action#474 lands. This lives
+      # here, not inline, because that PR's release script rewrites the line.
+      - action.yml
