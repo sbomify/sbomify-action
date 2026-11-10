@@ -72,8 +72,7 @@ def create_default_registry() -> ProviderRegistry:
     registry.register(JsonConfigProvider())
 
     # Priority 15: Docker-image input sets lifecycle_phase=post-build.
-    # Beats the CI platform's pre-build default; loses to json_config so
-    # operators can still override.
+    # Loses to json_config so operators can still override.
     registry.register(DockerImageProvider())
 
     # Priority 20: VCS from whichever CI platform this run is under. Supporting
