@@ -22,6 +22,7 @@ import io
 import json
 import os
 import re
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -138,6 +139,9 @@ def get_cache_dir() -> Path:
     1. SBOMIFY_CACHE_DIR environment variable (explicit cache location)
     2. XDG_CACHE_HOME/sbomify/license-db (XDG standard)
     3. ~/.cache/sbomify/license-db (fallback)
+    4. <tmp>/sbomify/license-db, when the above cannot be created -- a
+       container run as a uid without a home directory gets HOME=/, and
+       /.cache is not writable there
     """
     explicit_cache = os.environ.get("SBOMIFY_CACHE_DIR")
     if explicit_cache:
@@ -145,8 +149,14 @@ def get_cache_dir() -> Path:
     else:
         cache_dir = DEFAULT_CACHE_DIR
 
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir
+    except OSError as e:
+        fallback = Path(tempfile.gettempdir()) / "sbomify" / "license-db"
+        logger.warning(f"License database cache {cache_dir} is not writable ({e}); using {fallback} instead")
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
 
 
 class LicenseDBSource:
