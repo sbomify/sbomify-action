@@ -475,15 +475,10 @@ class TestAnUnknownSPDX3VersionFails(unittest.TestCase):
         self.assertIn("3.1.0", result.error_message)
         self.assertIn("3.0.1", result.error_message)
 
-    def test_it_does_not_refuse_a_version_it_claims_to_accept(self):
-        """The wording came from the backend, where "3.0.x" is true because
-        its schema takes a semver pattern. Here a schema is chosen by exact
-        key, so 3.0.2 is refused, and the sentence was refusing a 3.0.x while
-        claiming to accept 3.0.x."""
+    def test_a_later_30_patch_is_not_refused_as_unsupported(self):
         result = validate_sbom_data({"@graph": []}, "spdx", "3.0.2")
 
-        self.assertIs(result.valid, False)
-        self.assertNotIn("3.0.x", result.error_message)
+        self.assertNotIn("is not supported", result.error_message or "")
 
     def test_the_list_is_what_is_bundled_rather_than_a_written_out_one(self):
         """So bundling a version updates the sentence with it."""
@@ -502,6 +497,45 @@ class TestAnUnknownSPDX3VersionFails(unittest.TestCase):
         result = validate_sbom_data({"spdxVersion": "SPDX-2.1"}, "spdx", "2.1")
 
         self.assertIsNone(result.valid)
+
+
+class TestALaterSPDX30PatchIsAccepted(unittest.TestCase):
+    """The backend holds a 3.0 patch above 3.0.1 to the 3.0.1 schema, so the
+    action does too rather than refusing what the upload accepts."""
+
+    FIXTURE = Path(__file__).parent / "test-data" / "spdx3_conformant.json"
+
+    def _validate(self, context_version: str, spec_version: str, extra: dict | None = None) -> ValidationResult:
+        document = json.loads(self.FIXTURE.read_text())
+        document["@context"] = f"https://spdx.org/rdf/{context_version}/spdx-context.jsonld"
+        for element in document["@graph"]:
+            if element.get("type") == "CreationInfo":
+                element["specVersion"] = spec_version
+        if extra:
+            document["@graph"].append(extra)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sbom.json"
+            path.write_text(json.dumps(document))
+            return validate_sbom_file_auto(str(path))
+
+    def test_a_302_document_with_the_301_context_is_valid(self):
+        """What the backend's own 3.0.2 test sends."""
+        result = self._validate("3.0.1", "3.0.2")
+
+        self.assertIs(result.valid, True, result.error_message)
+        self.assertEqual(result.spec_version, "3.0.2")
+
+    def test_a_302_context_is_refused_as_the_backend_refuses_it(self):
+        """The 3.0.1 schema pins @context, and the backend keeps that pin."""
+        result = self._validate("3.0.2", "3.0.2")
+
+        self.assertIs(result.valid, False)
+        self.assertNotIn("is not supported", result.error_message)
+
+    def test_it_is_still_held_to_the_schema(self):
+        result = self._validate("3.0.1", "3.0.2", {"type": "software_Package", "spdxId": "urn:x:p2", "nonsense": True})
+
+        self.assertIs(result.valid, False)
 
 
 class TestSPDX31IsRejectedByName(unittest.TestCase):
