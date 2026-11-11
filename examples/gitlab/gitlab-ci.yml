@@ -1,0 +1,17 @@
+# GitLab CI: a CycloneDX SBOM from a lock file, run in the sbomify-action
+# container image and kept as a job artifact, so no sbomify account is needed.
+# Save as .gitlab-ci.yml, or add the job to yours.
+sbom:
+  image: ghcr.io/sbomify/sbomify-action:26.10.2
+  variables:
+    LOCK_FILE: uv.lock # any supported lock file, e.g. package-lock.json, go.mod
+    OUTPUT_FILE: sbom.cdx.json
+    ENRICH: 'true'
+    UPLOAD: 'false' # 'true' to upload to sbomify, with COMPONENT_ID below and
+    # a masked CI/CD variable SBOMIFY_TOKEN in Settings > CI/CD > Variables.
+    # COMPONENT_ID: your-component-id
+  script:
+    - sbomify-action
+  artifacts:
+    paths:
+      - sbom.cdx.json
