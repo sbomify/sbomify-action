@@ -141,6 +141,7 @@ def upload_document(
     token: str | None,
     component_id: str | None,
     api_base_url: str | None = None,
+    allow_insecure_http: bool = False,
 ) -> DocumentUploadResult:
     """Upload a document to a sbomify ``document`` component.
 
@@ -149,6 +150,7 @@ def upload_document(
         token: sbomify API token
         component_id: Document component to upload to
         api_base_url: API base URL (defaults to production)
+        allow_insecure_http: API_ALLOW_INSECURE_HTTP, passed to the client
 
     Returns:
         DocumentUploadResult with the new document id on success.
@@ -207,7 +209,9 @@ def upload_document(
         f"to component: {component_id}"
     )
 
-    client = SbomifyApiClient(api_base_url or SBOMIFY_PRODUCTION_API, token, timeout=UPLOAD_TIMEOUT)
+    client = SbomifyApiClient(
+        api_base_url or SBOMIFY_PRODUCTION_API, token, timeout=UPLOAD_TIMEOUT, allow_insecure_http=allow_insecure_http
+    )
     try:
         response = client.upload_document(
             component_id=str(component_id),
