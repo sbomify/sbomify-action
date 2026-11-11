@@ -467,6 +467,24 @@ class TestEvidencePathsAreResolvedNotFlattened:
 
         assert not _cites_a_phantom_lockfile("frontend/composer.lock", tmp_path)
 
+    def test_a_real_lockfile_outside_working_dir_is_not_phantom(self, tmp_path, monkeypatch):
+        """WORKING_DIR limits which files may be inputs, not which files exist.
+        A citation of the root's `frontend/composer.lock` is still real evidence."""
+        from importlib import import_module
+
+        from sbomify_action import _runtime
+
+        main = import_module("sbomify_action.cli.main")
+        root = tmp_path.resolve()
+        package = root / "packages" / "api"
+        package.mkdir(parents=True)
+        (root / "frontend").mkdir()
+        (root / "frontend" / "composer.lock").write_text("{}")
+        monkeypatch.setattr(main, "workspace_candidates", lambda: (root,))
+        monkeypatch.setattr(_runtime, "_working_dir", package)
+
+        assert not main._cites_a_phantom_lockfile("frontend/composer.lock", package)
+
     def test_a_lockfile_that_is_genuinely_absent_is_phantom(self, tmp_path):
         from sbomify_action.cli.main import _cites_a_phantom_lockfile
 
