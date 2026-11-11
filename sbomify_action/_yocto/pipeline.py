@@ -10,11 +10,12 @@ from sbomify_action._processors.releases_api import create_release, tag_sbom_wit
 from sbomify_action.augmentation import augment_sbom_from_file
 from sbomify_action.console import console
 from sbomify_action.enrichment import enrich_sbom
-from sbomify_action.exceptions import APIError, ConfigurationError, PlanLimitError
+from sbomify_action.exceptions import APIError, ConfigurationError, PlanLimitError, SBOMValidationError
 from sbomify_action.logging_config import logger
 from sbomify_action.release_version import is_prerelease
 from sbomify_action.spdx3 import is_spdx3
 from sbomify_action.upload import upload_sbom
+from sbomify_action.validation import validate_sbom_file_auto
 
 from .api import get_or_create_component, list_components, patch_component_visibility
 from .archive import extract_archive
@@ -33,11 +34,41 @@ def _prerelease_flag(version: str) -> bool | None:
     return True if is_prerelease(version) else None
 
 
+def _check_before_upload(pkg_name: str, sbom_file: str, *, spdx3: bool = False) -> None:
+    """Hold SPDX 3 to its schema, and warn about an SPDX 2 document that fails.
+
+    Yocto writes relationship types that SPDX added in 2.3, such as AMENDS,
+    into documents that declare SPDX-2.2, and the 2.2 schema refuses them.
+    Nobody running the build can fix that, and refusing the document would
+    drop the package from the release, so an SPDX 2 failure is uploaded with a
+    warning that names the package and the reason. A document that could not
+    be validated at all, such as a version with no bundled schema, is treated
+    the same way: it is not a pass.
+
+    ``spdx3`` is the pipeline's own reading of the document. A result whose
+    version could not be read reports ``unknown``, which says nothing about
+    which policy applies, so the caller's knowledge decides.
+    """
+    result = validate_sbom_file_auto(sbom_file)
+    if result.valid is True:
+        return
+    if result.valid is None:
+        reason = f"SPDX {result.spec_version} document could not be validated: {result.error_message}"
+    else:
+        where = f" at {result.error_path}" if result.error_path else ""
+        reason = f"SPDX {result.spec_version} document failed validation{where}: {result.error_message}"
+    if spdx3 or result.spec_version.startswith("3"):
+        raise SBOMValidationError(f"{pkg_name}: {reason}")
+    logger.warning(f"{pkg_name}: {reason}. Uploading it anyway.")
+
+
 def _process_single_package(
     pkg_name: str,
     pkg_spdx_file: str,
     component_id: str,
     config: YoctoConfig,
+    *,
+    spdx3: bool = False,
 ) -> str | None:
     """Process a single package SBOM: augment, enrich, upload.
 
@@ -69,6 +100,8 @@ def _process_single_package(
             validate=False,
         )
         working_file = enriched_file
+
+    _check_before_upload(pkg_name, working_file, spdx3=spdx3)
 
     result = upload_sbom(
         sbom_file=working_file,
@@ -171,6 +204,7 @@ def _run_spdx3_pipeline(config: YoctoConfig, data: dict[str, Any]) -> YoctoPipel
             pkg_spdx_file=config.input_path,
             component_id=config.component_id,
             config=config,
+            spdx3=True,
         )
 
         if sbom_id:
