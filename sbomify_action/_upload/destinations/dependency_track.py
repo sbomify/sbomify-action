@@ -217,6 +217,10 @@ class DependencyTrackDestination:
                 error_message=(
                     "Dependency Track requires either DTRACK_PROJECT_ID or both COMPONENT_NAME and COMPONENT_VERSION"
                 ),
+                # Missing inputs, not a defect. Coded so step 5 can keep it
+                # out of telemetry the way it already does for the other
+                # conditions the action cannot fix.
+                error_code="CONFIGURATION_ERROR",
             )
 
         # add project tags if set
@@ -235,6 +239,7 @@ class DependencyTrackDestination:
                 error_message=(
                     "Dependency Track parent project configuration requires either DTRACK_PARENT_ID or both DTRACK_PARENT_NAME and DTRACK_PARENT_VERSION"
                 ),
+                error_code="CONFIGURATION_ERROR",
             )
 
         # Execute the upload

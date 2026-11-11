@@ -188,7 +188,9 @@ def process_lock_file(
     )
 
     if not result.success:
-        raise SBOMGenerationError(result.error_message or "SBOM generation failed")
+        failure = SBOMGenerationError(result.error_message or "SBOM generation failed")
+        failure.telemetry_reported = result.telemetry_reported
+        raise failure
 
     logger.info(
         f"Generated {format_display_name(result.sbom_format)} {result.spec_version} SBOM with {result.generator_name}"
