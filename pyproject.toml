@@ -25,7 +25,7 @@ classifiers = [
 dependencies = [
     "click>=8.0,<9",
     "requests>=2.32.3,<3",
-    "cyclonedx-bom>=7.2.1,<8",
+    "cyclonedx-bom>=7.2.1,<9",
     "cyclonedx-python-lib>=11.5.0,<12",
     "sentry-sdk>=2.21.0,<3",
     "spdx-tools>=0.8.3",
@@ -64,7 +64,7 @@ dev = [
     "types-pyyaml>=6.0.12.20250915",
     "types-toml>=0.10.8.20240310",
     "types-defusedxml>=0.7.0.20260504",
-    "uv==0.13.5",
+    "uv==0.13.7",
 ]
 
 [tool.hatch.build.targets.sdist]
