@@ -27,6 +27,15 @@ except ValueError:
 GZIP_THRESHOLD = 1_000_000
 
 
+def component_url(api_base_url: str, component_id: str) -> str:
+    """Link to a component's page in the sbomify app.
+
+    The app is served from the API's own origin; the wizard links to the
+    same page for the same reason.
+    """
+    return f"{api_base_url.rstrip('/')}/component/{component_id}/"
+
+
 class SbomifyDestination:
     """
     Destination for uploading SBOMs to the sbomify platform.
@@ -225,12 +234,14 @@ class SbomifyDestination:
             response_data = response.json()
             sbom_id = response_data.get("sbom_id") or response_data.get("id")
             response_metadata = response_data
-            if sbom_id:
-                logger.info(f"SBOM ID: {sbom_id}")
         except (ValueError, json.JSONDecodeError):
             logger.warning("Could not extract SBOM ID from upload response")
 
         logger.info("SBOM uploaded successfully to sbomify")
+        # is_configured() guarantees a component ID by this point.
+        url = component_url(self._api_base_url, str(self._component_id))
+        id_note = f" (SBOM ID: {sbom_id})" if sbom_id else ""
+        logger.info(f"View it in sbomify: {url}{id_note}")
 
         return UploadResult.success_result(
             destination_name=self.name,
