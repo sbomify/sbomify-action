@@ -8,7 +8,7 @@ sbom-job:
     AUGMENT: true
     ENRICH: true
     COMPONENT_VERSION: "$CI_COMMIT_SHA"
-    LOCK_FILE: 'poetry.lock'
+    LOCK_FILE: 'uv.lock'
     OUTPUT_FILE: "gitlab-sbom.cdx.json"
 
   script:
