@@ -757,6 +757,31 @@ class TestEnrichSPDX:
         # Verify PURL in external refs
         assert any(ref["referenceLocator"] == "pkg:pypi/urllib3@2.0.4" for ref in new_pkg["externalRefs"])
 
+    def test_a_valid_spdx_22_document_stays_valid(self, tmp_path):
+        """2.2 requires licence and copyright fields on every package and
+        accepts only the PACKAGE_MANAGER spelling of the category."""
+        from sbomify_action.validation import validate_sbom_file
+
+        sbom_file = tmp_path / "sbom.json"
+        sbom_file.write_text((Path(__file__).parent / "test-data" / "yocto" / "busybox.spdx.json").read_text())
+        before = validate_sbom_file(str(sbom_file), "spdx", "2.2")
+        assert before.valid is True, before.error_message
+
+        mock_expander = MagicMock()
+        mock_expander.name = "pipdeptree"
+        mock_expander.priority = 10
+        mock_expander.supports.return_value = True
+        mock_expander.can_expand.return_value = True
+        mock_expander.expand.return_value = self._make_discovered(parent="busybox")
+        registry = ExpanderRegistry()
+        registry.register(mock_expander)
+
+        result = DependencyEnricher(registry=registry).expand_sbom(str(sbom_file), str(tmp_path / "requirements.txt"))
+
+        assert result.added_count == 1
+        validation = validate_sbom_file(str(sbom_file), "spdx", "2.2")
+        assert validation.valid is True, validation.error_message
+
     def test_deduplicates_existing_spdx_packages(self, tmp_path):
         """Test that existing packages are not duplicated in SPDX."""
         sbom_file = tmp_path / "sbom.json"
