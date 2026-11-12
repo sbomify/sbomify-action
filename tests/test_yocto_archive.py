@@ -2,11 +2,11 @@
 
 import json
 import os
+import sys
 import tarfile
 from pathlib import Path
 
 import pytest
-import zstandard
 
 from sbomify_action._yocto.archive import _detect_archive_type, extract_archive
 from sbomify_action.exceptions import FileProcessingError
@@ -29,9 +29,15 @@ def _create_tar_zst(dest_path: str, source_dir: str) -> None:
         for f in Path(source_dir).glob("*.spdx.json"):
             tar.add(f, arcname=f.name)
 
-    cctx = zstandard.ZstdCompressor()
     with open(tar_path, "rb") as ifh, open(dest_path, "wb") as ofh:
-        cctx.copy_stream(ifh, ofh)
+        if sys.version_info >= (3, 14):
+            from compression import zstd
+
+            ofh.write(zstd.compress(ifh.read()))
+        else:
+            import zstandard
+
+            zstandard.ZstdCompressor().copy_stream(ifh, ofh)
     os.unlink(tar_path)
 
 
