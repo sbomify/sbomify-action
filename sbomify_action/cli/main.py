@@ -52,6 +52,7 @@ from ..exceptions import (
     SBOMGenerationError,
     SBOMValidationError,
     ToolNotAvailableError,
+    UnsupportedLockFileError,
 )
 from ..generation import (
     ALL_LOCK_FILES,
@@ -1206,6 +1207,9 @@ def initialize_sentry() -> None:
                     # there. The message already lists every location searched;
                     # a stack trace in Sentry adds nothing.
                     InputPathNotFoundError,
+                    # LOCK_FILE names a file the action does not read, such as
+                    # a lock file renamed by the user. Their input to change.
+                    UnsupportedLockFileError,
                     # The package manager rejected the user's project (a
                     # manifest that does not parse, an unreachable registry).
                     ProjectResolutionError,
@@ -2456,9 +2460,9 @@ def run_pipeline(config: Config) -> None:
                     logger.error(f"Please use LOCK_FILE instead of SBOM_FILE for '{file_name}'.")
             _log_step_end(1, success=False)
             sys.exit(1)
-        except ProjectResolutionError as e:
-            # The project, not this tool, needs fixing. The prefix is what
-            # keeps the record out of Sentry; see before_send.
+        except (ProjectResolutionError, UnsupportedLockFileError) as e:
+            # The project or the input, not this tool, needs fixing. The
+            # prefix is what keeps the record out of Sentry; see before_send.
             logger.error(f"Configuration error: Step 1 failed: {e}")
             _log_step_end(1, success=False)
             sys.exit(1)
