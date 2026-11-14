@@ -48,7 +48,7 @@ from ._generation.utils import (
     get_lock_file_ecosystem,
     is_supported_lock_file,
 )
-from .exceptions import FileProcessingError, SBOMGenerationError
+from .exceptions import SBOMGenerationError, UnsupportedLockFileError
 from .logging_config import logger
 
 # Module-level orchestrator instance (lazy initialization)
@@ -146,6 +146,35 @@ def generate_sbom(
     return orchestrator.generate(input_params)
 
 
+#: Characters that may join a prefix to a conventional lock file name, as in
+#: ``main.conan.lock`` or ``filtered-yarn.lock``.
+_LOCK_NAME_SEPARATORS = ("-", "_", ".")
+
+
+def _unsupported_lock_file_message(file_path: str) -> str:
+    """Explain why ``file_path`` was refused, and what name would be accepted.
+
+    The common case is a lock file under a name of the user's choosing --
+    ``at_c_conan.lock``, ``filtered-yarn.lock`` -- so when the name ends in a
+    known one, say which, rather than leaving the reader to guess that the
+    match is on the exact file name.
+    """
+    name = Path(file_path).name
+    message = f"{file_path} is not a recognized lock file type."
+    candidates = [
+        known
+        for known in ALL_LOCK_FILES
+        if len(name) > len(known) and name.endswith(known) and name[-len(known) - 1] in _LOCK_NAME_SEPARATORS
+    ]
+    if candidates:
+        known = max(candidates, key=len)
+        return (
+            f"{message} Lock files are recognised by their standard name; "
+            f"if this is a {known}, copy or rename it to '{known}' and point LOCK_FILE at that."
+        )
+    return f"{message} Supported names: {', '.join(sorted(set(ALL_LOCK_FILES)))}, and .NET project files."
+
+
 def process_lock_file(
     file_path: str,
     output_file: str = "step_1.json",
@@ -165,14 +194,14 @@ def process_lock_file(
         GenerationResult with output file path and metadata
 
     Raises:
-        FileProcessingError: If lock file type is not supported
+        UnsupportedLockFileError: If lock file type is not supported
         SBOMGenerationError: If SBOM generation fails
     """
     lock_file_name = Path(file_path).name
 
     # Check if lock file is supported
     if not is_supported_lock_file(lock_file_name):
-        raise FileProcessingError(f"{file_path} is not a recognized lock file type")
+        raise UnsupportedLockFileError(_unsupported_lock_file_message(file_path))
 
     # Log detected ecosystem
     ecosystem = get_lock_file_ecosystem(lock_file_name)
