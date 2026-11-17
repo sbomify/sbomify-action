@@ -131,7 +131,7 @@ additional fields beyond NTIA 2021. sbomify supports these where applicable:
 | ---------------------- | ------------------------------------ | ----------------------------- | ------------------------------ |
 | **Component Hash**     | `components[].hashes[]`              | `packages[].checksums[]`      | From generators                |
 | **License**            | `components[].licenses[]`            | `packages[].licenseDeclared`  | Enrichment adds                |
-| **Tool Name/Version**  | `metadata.tools`                     | `creationInfo.creators[]`     | Augmentation adds sbomify      |
-| **Generation Context** | `metadata.lifecycles[].phase` (1.5+) | `creationInfo.creatorComment` | Augmentation adds from backend |
+| **Tool Name/Version**  | `metadata.tools`                     | `creationInfo.creators[]`     | Generator and sbomify-action   |
+| **Generation Context** | `metadata.lifecycles[].phase` (1.5+) | `creationInfo.creatorComment` | From input; config overrides   |
 
 _Generated: 2025-12-17 — Run `uv run scripts/generate_ntia_comparison.py` to update_
