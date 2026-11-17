@@ -1,6 +1,6 @@
 ---
 name: 'sbomify'
-description: 'A GitHub Action to upload an SBOM CycloneDX or SPDX to sbomify'
+description: 'Generate and enrich CycloneDX or SPDX SBOMs from lock files or images, then optionally upload to sbomify or Dependency-Track'
 author: 'sbomify'
 inputs:
   working-dir:
