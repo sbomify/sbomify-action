@@ -8,10 +8,14 @@ on:
     branches:
       - master
 
+permissions:
+  contents: read
+
 jobs:
   build-and-publish-testpypi:
     name: Build and publish to TestPyPI
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     environment:
       name: testpypi
@@ -25,7 +29,7 @@ jobs:
           persist-credentials: false
 
       - name: Generate SBOM (PEP 770)
-        uses: sbomify/sbomify-action@master
+        uses: sbomify/sbomify-action@master  # zizmor: ignore[unpinned-uses] dogfoods this repo's own master
         env:
           TOKEN: ${{ secrets.SBOMIFY_STAGE_TOKEN }}
           API_BASE_URL: 'https://stage.sbomify.com'
@@ -37,6 +41,11 @@ jobs:
           AUGMENT: "true"
           ENRICH: "true"
           UPLOAD: "false"
+
+      # A generator that cannot read the lockfile still exits 0 with a valid
+      # SBOM listing nothing, and this wheel would ship it.
+      - name: Fail if the SBOM lists no components
+        run: jq -e '.components | length > 0' sbomify-action.cdx.json
 
       - name: Determine version
         id: version
@@ -76,6 +85,7 @@ jobs:
   build-and-publish-pypi:
     name: Build and publish to PyPI
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.event_name == 'release'
     environment:
       name: pypi
@@ -89,7 +99,7 @@ jobs:
           persist-credentials: false
 
       - name: Generate SBOM (PEP 770)
-        uses: sbomify/sbomify-action@master
+        uses: sbomify/sbomify-action@master  # zizmor: ignore[unpinned-uses] dogfoods this repo's own master
         env:
           TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
           COMPONENT_ID: 'XNsX40tonzvv'
@@ -100,6 +110,11 @@ jobs:
           AUGMENT: "true"
           ENRICH: "true"
           UPLOAD: "false"
+
+      # A generator that cannot read the lockfile still exits 0 with a valid
+      # SBOM listing nothing, and this wheel would ship it.
+      - name: Fail if the SBOM lists no components
+        run: jq -e '.components | length > 0' sbomify-action.cdx.json
 
       - name: Determine version
         id: version
