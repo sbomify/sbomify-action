@@ -768,15 +768,54 @@ class TestIsInvalidPurl:
 
     def test_root_namespace(self):
         """Test that root namespace is rejected."""
-        # Test with @root namespace (proper npm scoped package format)
-        is_invalid, reason = _is_invalid_purl("pkg:npm/%40root/some-pkg@1.0.0")
-        assert is_invalid
-        assert "root" in reason
-
-        # Also test unscoped root namespace
+        # Unscoped root namespace: npm scopes start with "@", so npm cannot publish this
         is_invalid, reason = _is_invalid_purl("pkg:npm/root/some-pkg@1.0.0")
         assert is_invalid
         assert "root" in reason
+
+    @pytest.mark.parametrize(
+        "purl",
+        [
+            # The npm scope @root is real: @root/request is on the registry at 1.9.2
+            "pkg:npm/%40root/request@1.9.2",
+            "pkg:npm/%40root/walk@1.1.0",
+            # root is an ordinary namespace for every other type
+            "pkg:github/root/root@v6.30.00",
+            "pkg:generic/root/x@1",
+        ],
+    )
+    def test_real_root_namespace_keeps_its_purl(self, purl):
+        """Only the bare npm `root` namespace is the generator bug; real packages keep their PURL."""
+        assert _is_invalid_purl(purl) == (False, "")
+
+    @pytest.mark.parametrize(
+        "purl",
+        [
+            # A CPAN module name: "Makefile::Parser" contains the text "file:"
+            "pkg:cpan/Makefile::Parser@0.216",
+            # A name that contains the text "link:"
+            "pkg:pypi/unlink:er@1",
+        ],
+    )
+    def test_file_or_link_text_outside_version_and_qualifiers_is_valid(self, purl):
+        """Only the version and qualifiers can point at a local path, not the name."""
+        assert _is_invalid_purl(purl) == (False, "")
+
+    @pytest.mark.parametrize(
+        "purl,reason",
+        [
+            ("pkg:npm/x@file:../x", "file:"),
+            ("pkg:npm/x@file%3A..%2Fx", "file:"),
+            ("pkg:npm/x@git%2Bfile:///src/x", "file:"),
+            ("pkg:npm/x@link:../x", "link:"),
+            ("pkg:npm/x@./local", "path-based"),
+        ],
+    )
+    def test_local_reference_in_version_is_rejected(self, purl, reason):
+        """file:, link: and path versions are read from the parsed version, encoded or not."""
+        is_invalid, got = _is_invalid_purl(purl)
+        assert is_invalid
+        assert reason in got
 
     def test_missing_version_npm_allowed(self):
         """PURLs without version are valid per the PURL spec (ECMA-427)."""
