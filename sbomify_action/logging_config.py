@@ -66,6 +66,55 @@ class SanitizingFilter(logging.Filter):
         return True
 
 
+#: Most logged warnings one run raises as annotations. GitHub shows ten warning
+#: annotations per step at most, and the job summary carries the full count.
+MAX_WARNING_ANNOTATIONS = 10
+
+
+class WarningAnnotations(logging.Handler):
+    """Raise logged warnings as CI annotations, a few per run at most.
+
+    A run-level warning -- a substituted lock file, an invalid sbomify.json --
+    is easy to miss in a green run's log, so it goes on the run page too. Each
+    call site is raised once at most: a warning logged for every component (a
+    registry timeout, say) becomes one annotation, never one per component.
+    Every warning is counted, annotated or not, for the job summary.
+
+    Whether to annotate is the platform's call; elsewhere this only counts.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self.addFilter(SanitizingFilter())
+        self.reset()
+
+    def reset(self) -> None:
+        """Forget every warning seen so far."""
+        self.count = 0
+        self.annotated = 0
+        self._sites: set[tuple[str, int]] = set()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno != logging.WARNING:
+            return  # warnings only: a failed run already ends with an error annotation
+        self.count += 1
+        site = (record.pathname, record.lineno)
+        if site in self._sites or self.annotated >= MAX_WARNING_ANNOTATIONS:
+            return
+        try:
+            formatter = get_platform().log_formatter()
+            if formatter.annotates_warnings:
+                self._sites.add(site)
+                self.annotated += 1
+                formatter.warning(record.getMessage())
+        except Exception:
+            self.handleError(record)
+
+
+#: The one instance, attached to the sbomify_action logger by setup_logging().
+warning_annotations = WarningAnnotations()
+
+
 def setup_logging(level: str = "INFO", structured: bool = False, use_rich: bool = True) -> logging.Logger:
     """
     Set up logging configuration with Rich integration.
@@ -126,6 +175,7 @@ def setup_logging(level: str = "INFO", structured: bool = False, use_rich: bool 
 
     handler.addFilter(SanitizingFilter())
     logger.addHandler(handler)
+    logger.addHandler(warning_annotations)
 
     return logger
 
