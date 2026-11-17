@@ -20,6 +20,8 @@ DEFAULT_TIMEOUT = 15  # seconds - ecosyste.ms can be slower
 
 # Package types that ecosyste.ms doesn't support well
 # OS packages (deb, rpm, apk) should use PURL/Repology instead
+# (pkg:yocto, which no registry carries, is kept from every network source in
+# registry.py rather than here)
 UNSUPPORTED_TYPES = {"deb", "rpm", "apk", "alpm", "ebuild"}
 
 # Simple in-memory cache

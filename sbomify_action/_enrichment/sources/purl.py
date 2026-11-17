@@ -145,6 +145,9 @@ class PURLSource:
         # Tier 3: Fallback sources (70-99) - Last resort, basic or rate-limited
         return 70
 
+    # Still asked about a package no registry publishes (see registry.py).
+    offline = True
+
     def supports(self, purl: PackageURL) -> bool:
         """Check if this source supports the given PURL type."""
         return purl.type in OS_PACKAGE_TYPES
