@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from sbomify_action._runtime import workspace_candidates
+from sbomify_action.exceptions import ConfigurationError
 from sbomify_action.logging_config import logger
 
 from ..metadata import AugmentationMetadata
@@ -52,6 +53,12 @@ from ..utils import is_vcs_augmentation_disabled
 
 # Default config file name
 DEFAULT_CONFIG_FILE = "sbomify.json"
+
+_WHY_IT_STOPS = (
+    "With AUGMENT=true it supplies metadata such as the supplier and authors, which the NTIA "
+    "minimum elements and the EU CRA require, so the run stops rather than publish an SBOM "
+    "without it. Fix the file, or set AUGMENT=false."
+)
 
 
 class JsonConfigProvider:
@@ -86,6 +93,12 @@ class JsonConfigProvider:
 
         Returns:
             AugmentationMetadata if config file found and valid, None otherwise
+
+        Raises:
+            ConfigurationError: If the config file exists but does not parse
+                as a JSON object. This provider only runs with AUGMENT=true, so carrying
+                on would publish an SBOM without the metadata the user asked
+                for while the run reported success.
         """
         # Find config file
         config_file = self._find_config_file(config_path)
@@ -99,8 +112,7 @@ class JsonConfigProvider:
                 data = json.load(f)
 
             if not isinstance(data, dict):
-                logger.warning(f"Invalid JSON config format in {config_file}: expected object")
-                return None
+                raise ConfigurationError(f"{config_file} must hold a JSON object. {_WHY_IT_STOPS}")
 
             # Strip VCS fields if VCS augmentation is disabled
             if is_vcs_augmentation_disabled():
@@ -118,9 +130,8 @@ class JsonConfigProvider:
                 logger.debug(f"No augmentation metadata found in {config_file}")
                 return None
 
-        except json.JSONDecodeError as e:
-            logger.warning(f"Invalid JSON in config file {config_file}: {e}")
-            return None
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            raise ConfigurationError(f"{config_file} is not valid JSON: {e}. {_WHY_IT_STOPS}") from e
         except OSError as e:
             logger.warning(f"Error reading config file {config_file}: {e}")
             return None

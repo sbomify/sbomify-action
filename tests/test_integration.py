@@ -36,7 +36,7 @@ class TestIntegration(unittest.TestCase):
     def test_main_sbom_file_workflow(self, mock_sentry, mock_setup):
         """Test main workflow with SBOM file input."""
         # Create a temporary SBOM file
-        test_sbom = {"bomFormat": "CycloneDX", "specVersion": "1.4"}
+        test_sbom = {"bomFormat": "CycloneDX", "specVersion": "1.4", "version": 1}
         with open("test_sbom.json", "w") as f:
             json.dump(test_sbom, f)
 

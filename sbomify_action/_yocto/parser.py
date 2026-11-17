@@ -5,8 +5,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sbomify_action.exceptions import FileProcessingError
+from sbomify_action.exceptions import FileProcessingError, SBOMValidationError
 from sbomify_action.logging_config import logger
+from sbomify_action.serialization import load_sbom_json
 
 from .models import YoctoPackage
 
@@ -107,9 +108,8 @@ def discover_packages(extract_dir: str) -> list[YoctoPackage]:
 
     for spdx_file in spdx_files:
         try:
-            with open(spdx_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
+            data = load_sbom_json(str(spdx_file))
+        except (json.JSONDecodeError, OSError, SBOMValidationError) as e:
             logger.warning(f"Skipping {spdx_file.name}: {e}")
             continue
 

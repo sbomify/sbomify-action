@@ -170,7 +170,7 @@ is the one that clears the BSI floor without needing a document from elsewhere.
 
 Everything the action does is driven by environment variables, listed in the
 [configuration reference](https://sbomify.com/sbomify-action/configuration/). These few are
-also available as `with:` inputs:
+also available as `with:` inputs, except where the input is `—`:
 
 | Input | Environment variable | Description |
 | --- | --- | --- |
@@ -180,6 +180,7 @@ also available as `with:` inputs:
 | `sbom-format` | `SBOM_FORMAT` | `cyclonedx` (default) or `spdx` |
 | `spec-version` | `SPEC_VERSION` | Spec version to generate. CycloneDX 1.2–1.7, SPDX 2.2 or 2.3, or SPDX 3.0.1 with `LOCK_FILE: none`. Ignored when `SBOM_FILE` names a real file |
 | `oidc-audience` | `OIDC_AUDIENCE` | Audience for trusted publishing; override for self-hosted |
+| — | `ALLOW_EMPTY_SBOM` | `false` (default) fails the run when a lock file that is not empty yields no components. An empty SBOM reads as "no dependencies" to anyone checking NTIA minimum elements or EU CRA compliance, so it is opt-in: set `true` only for a project that really has none, such as a `Cargo.lock` holding just its own crate, a `go.mod` for a stdlib-only module, or a `.csproj` that uses only the BCL |
 
 ## Documents
 

@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
+from sbomify_action.exceptions import ConfigurationError
 from sbomify_action.logging_config import logger
 
 from .metadata import AugmentationMetadata
@@ -106,6 +107,11 @@ class ProviderRegistry:
                         # First result wins, stop here
                         break
 
+            except ConfigurationError:
+                # The user's own config is broken, which no other provider can
+                # make up for. Swallowing it was how a malformed sbomify.json
+                # became a warning and exit 0.
+                raise
             except Exception as e:
                 logger.warning(f"Error fetching from augmentation provider {provider.name}: {e}")
                 continue
