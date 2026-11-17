@@ -32,6 +32,7 @@ from .sources import (
     PURLSource,
     PyPISource,
     RepologySource,
+    TeaSource,
 )
 
 
@@ -57,6 +58,7 @@ def create_default_registry() -> SourceRegistry:
 
     Tier 2 - Primary Aggregators (40-49):
     - DepsDevSource (40) - Google Open Source Insights
+    - TeaSource (43) - TEA server (auto-discovers from PURL type, TEA_BASE_URL overrides)
     - EcosystemsSource (45) - ecosyste.ms multi-ecosystem aggregator
 
     Tier 3 - Fallback Sources (70-99):
@@ -64,9 +66,12 @@ def create_default_registry() -> SourceRegistry:
     - ClearlyDefinedSource (75) - license and attribution data
     - RepologySource (90) - cross-distro metadata (rate-limited)
 
-    Sources are queried sequentially in priority order. If a source returns
-    all required NTIA fields (description, licenses, supplier), subsequent
-    sources are skipped.
+    Sources are queried sequentially in priority order with two-phase early exit:
+    1. If NTIA fields (description, licenses, supplier) AND all CLE fields
+       (release_date, eos, eol) are filled, remaining sources are skipped.
+    2. If only NTIA fields are filled but CLE is missing, non-CLE sources
+       are skipped while lifecycle-capable sources (provides_cle=True)
+       continue to run.
 
     Returns:
         Configured SourceRegistry
@@ -80,6 +85,7 @@ def create_default_registry() -> SourceRegistry:
     registry.register(ConanSource())
     registry.register(DebianSource())
     registry.register(DepsDevSource())
+    registry.register(TeaSource())
     registry.register(EcosystemsSource())
     registry.register(PURLSource())
     registry.register(ClearlyDefinedSource())
@@ -271,6 +277,7 @@ def clear_all_caches() -> None:
     from .sources.pubdev import clear_cache as clear_pubdev
     from .sources.pypi import clear_cache as clear_pypi
     from .sources.repology import clear_cache as clear_repology
+    from .sources.tea import clear_cache as clear_tea
 
     clear_license_db()
     clear_lifecycle()
@@ -280,6 +287,7 @@ def clear_all_caches() -> None:
     clear_conan()
     clear_debian()
     clear_depsdev()
+    clear_tea()
     clear_ecosystems()
     clear_clearlydefined()
     clear_repology()

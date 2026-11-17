@@ -38,6 +38,7 @@ dependencies = [
     "defusedxml>=0.7.1",
     "jsonschema>=4.25.1",
     "referencing>=0.28.4",
+    "libtea>=0.4.0,<1",
 ]
 
 [project.urls]

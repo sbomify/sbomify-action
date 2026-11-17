@@ -156,6 +156,27 @@ class TestRegistryIntegration:
         assert len(source.calls) == 1, "second lookup should have been served from cache"
         assert first.supplier == second.supplier == "Acme"
 
+    def test_a_cache_scope_partitions_one_sources_entries(self):
+        """A source whose answer depends on more than the coordinate says so with `cache_scope`."""
+        source = RecordingSource(result=_metadata(), name="scoped")
+        session = requests.Session()
+
+        for scope, calls_so_far in (("a", 1), ("a", 1), ("b", 2), ("a", 2)):
+            source.cache_scope = scope
+            registry = SourceRegistry()
+            registry.register(source)
+            registry.fetch_metadata(PURL, session)
+            assert len(source.calls) == calls_so_far, f"after a lookup under scope {scope!r}"
+
+    def test_a_source_without_a_scope_keeps_the_plain_coordinate_key(self):
+        source = RecordingSource(result=_metadata(), name="plain")
+        registry = SourceRegistry()
+        registry.register(source)
+
+        registry.fetch_metadata(PURL, requests.Session())
+
+        assert cache.get("plain", PURL.to_string())[0], "existing entries must stay readable"
+
     def test_negative_result_is_cached_so_absent_packages_are_asked_once(self):
         source = RecordingSource(result=None)
         registry = SourceRegistry()
