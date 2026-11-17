@@ -2220,7 +2220,11 @@ def run_pipeline(config: Config) -> None:
                 )
                 config.token_is_oidc_minted = True
             except OIDCBindingMissingError as exc:
-                logger.error(str(exc))
+                # A binding the user has not created yet. The prefix keeps the
+                # record out of Sentry (see before_send); the exception itself
+                # is already filtered, but it is caught here and logged, so the
+                # type check never sees it.
+                logger.error(f"Configuration error: {exc}")
                 sys.exit(1)
             except OIDCExchangeError as exc:
                 logger.error(f"OIDC trusted publishing failed: {exc}")
@@ -2763,6 +2767,12 @@ def run_pipeline(config: Config) -> None:
             # Subset of failed_destinations whose only problem was that the
             # version is already published — see DuplicateArtifactError.
             duplicate_destinations: list[str] = []
+            # Subset whose only problem was a 401/403 -- a token or permission
+            # the user has to fix. Tracked for the same reason as duplicates:
+            # the per-destination record is already kept out of Sentry by its
+            # status marker, but the step-level echo below carries no status,
+            # so without this it reached Sentry as a bare "Upload failed".
+            refused_destinations: list[str] = []
             for destination in config.upload_destinations or []:
                 logger.info(f"Uploading to: {destination}")
 
@@ -2823,6 +2833,10 @@ def run_pipeline(config: Config) -> None:
                         print_component_not_found_error(config.component_id)
                     else:
                         logger.error(f"Upload to {destination} failed: {upload_result.error_message}")
+                        if upload_result.error_code == "AUTH_FAILED" or _is_auth_failure(
+                            upload_result.error_message or ""
+                        ):
+                            refused_destinations.append(destination)
                     failed_destinations.append(destination)
                 else:
                     logger.info(f"Upload to {destination} succeeded")
@@ -2839,6 +2853,13 @@ def run_pipeline(config: Config) -> None:
                 # type ``before_send`` filters instead of a bare APIError.
                 if set(failed_destinations) == set(duplicate_destinations):
                     raise DuplicateArtifactError(message)
+                # Likewise when every failure was the destination refusing the
+                # credentials (or a duplicate): the user's setup to fix, and
+                # already explained by the per-destination record above.
+                if refused_destinations and set(failed_destinations) <= set(
+                    refused_destinations + duplicate_destinations
+                ):
+                    raise ForbiddenError(message)
                 raise APIError(message)
 
             _log_step_end(5)
@@ -2849,7 +2870,7 @@ def run_pipeline(config: Config) -> None:
             # one, regardless of the exception type below it. Log the expected
             # duplicate case at warning so a re-run publishes nothing and
             # reports nothing, while still failing the job.
-            if isinstance(e, DuplicateArtifactError):
+            if isinstance(e, (DuplicateArtifactError, AuthError, ForbiddenError)):
                 logger.warning(f"Step 5 (upload) failed: {e}")
             else:
                 logger.error(f"Step 5 (upload) failed: {e}")
