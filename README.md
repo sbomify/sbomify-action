@@ -254,7 +254,7 @@ In this repository:
 
 **Trivy** is currently not shipped, after [compromised releases in March 2026](https://sbomify.com/2026/03/26/trivy-compromise-hardening-sbomify-action/). The remaining generators cover every supported ecosystem.
 
-**Pinning.** Examples here use `@master` so they stay correct as the action moves. Do not ship that: pin to a release tag, or for production to a full 40-character commit SHA — see [SECURITY.md](https://github.com/sbomify/sbomify-action/blob/master/SECURITY.md). The wizard does this automatically for the workflows it generates.
+**Pinning.** Examples here use `@master` so they stay correct as the action moves. Do not ship that: pin to a release tag, or for production to the full 40-character commit SHA of a release tag — see [SECURITY.md](https://github.com/sbomify/sbomify-action/blob/master/SECURITY.md). The wizard does this automatically for the workflows it generates. Release tags after v26.10.2 run their Docker image pinned by digest, so `@vX` and the commit SHA it points to always run the image built for that release. A commit on master, by SHA or as `@master`, runs `:latest`.
 
 ## Security
 
