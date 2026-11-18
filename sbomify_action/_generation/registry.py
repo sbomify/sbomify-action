@@ -9,7 +9,12 @@ from typing import Any
 
 from sbomify_action import format_display_name
 from sbomify_action._platformio import PLATFORMIO_INI, lib_deps_are_pinned
-from sbomify_action.exceptions import ProjectResolutionError, SBOMGenerationError, ToolNotAvailableError
+from sbomify_action.exceptions import (
+    DockerImageNotFoundError,
+    ProjectResolutionError,
+    SBOMGenerationError,
+    ToolNotAvailableError,
+)
 from sbomify_action.logging_config import logger
 from sbomify_action.serialization import (
     restore_spdx_document_describes,
@@ -575,7 +580,10 @@ class GeneratorRegistry:
                     raise _DowngradeRefused(_degraded_message(generator.name, remaining, str(result.error_message)))
                 else:
                     self._warn_degraded(generator.name, remaining, str(result.error_message))
-            except _DowngradeRefused:
+            except (_DowngradeRefused, DockerImageNotFoundError):
+                # An image the registry will not hand over is the same image for
+                # every generator, so trying the next one only repeats the pull,
+                # and strict mode would call the failure a bug in the sbomify image.
                 raise
             except Exception as e:
                 remaining = [g.name for g in generators[index + 1 :]]

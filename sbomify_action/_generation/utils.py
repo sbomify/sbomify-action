@@ -407,6 +407,12 @@ DOCKER_IMAGE_NOT_FOUND_PATTERNS = [
     r"pull access denied",
     r"repository does not exist",
     r"name unknown: repository .* not found",
+    # The image may exist, but the registry refused to hand it over: a private
+    # repository the runner is not logged in to. Still the user's to fix.
+    r"unauthorized: ",
+    r"unauthorized to access repository",
+    r"denied: requested access to the resource is denied",
+    r"no basic auth credentials",
 ]
 
 
@@ -612,13 +618,13 @@ def run_command(
         # Check if this is a Docker image not found error (user configuration issue)
         # Log at WARNING level since this isn't a bug - user specified a non-existent image
         if docker_image and detect_docker_image_not_found(stderr):
-            logger.warning(f"Docker image '{docker_image}' not found")
+            logger.warning(f"Docker image '{docker_image}' could not be pulled")
             log_command_error(command_name, stderr, stdout, level="warning")
             raise DockerImageNotFoundError(
                 image=docker_image,
                 message=(
-                    f"Docker image '{docker_image}' not found. "
-                    "Verify the image exists in the registry and the tag is correct."
+                    f"Docker image '{docker_image}' not found, or the registry refused to pull it. "
+                    "Verify the image name and tag, and that this runner is logged in to the registry."
                 ),
                 stderr=stderr,
                 stdout=stdout,

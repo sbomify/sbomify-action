@@ -1031,6 +1031,40 @@ class TestRegistryGenerateWithFallback(unittest.TestCase):
         self.assertEqual(cm.exception.input_type, "lock_file")
         self.assertEqual(cm.exception.lock_file, "/path/requirements.txt")
 
+    def test_image_the_registry_will_not_hand_over_stops_the_chain(self):
+        """Every generator pulls the same image, so the first refusal is the answer.
+
+        Falling through would repeat the pull, and in strict mode would report
+        the user's private image as a bug in the sbomify image.
+        """
+        from sbomify_action.exceptions import DockerImageNotFoundError
+
+        def generator(name: str, priority: int) -> MagicMock:
+            mock = MagicMock()
+            mock.name = name
+            mock.priority = priority
+            mock.supported_formats = [FormatVersion("cyclonedx", ("1.6",), "1.6")]
+            mock.supports.return_value = True
+            return mock
+
+        first = generator("syft-image", 10)
+        first.generate.side_effect = DockerImageNotFoundError(image="registry.example.com/team/app:1.0")
+        second = generator("cdxgen-image", 20)
+
+        registry = GeneratorRegistry()
+        registry.register(first)
+        registry.register(second)
+
+        input = GenerationInput(docker_image="registry.example.com/team/app:1.0", output_format="cyclonedx")
+        for strict in (True, False):
+            with (
+                self.subTest(strict=strict),
+                patch("sbomify_action._generation.registry.fallback_is_a_bug", return_value=strict),
+            ):
+                with self.assertRaises(DockerImageNotFoundError):
+                    registry.generate(input)
+                second.generate.assert_not_called()
+
     @patch("sbomify_action._generation.generators.cyclonedx_py.run_command")
     def test_generate_falls_back_on_failure(self, mock_run):
         """Test that generate tries next generator on failure."""
@@ -1330,6 +1364,24 @@ class TestDockerImageNotFoundDetection(unittest.TestCase):
         stderr = "pull access denied for private/image, repository does not exist"
         self.assertTrue(detect_docker_image_not_found(stderr))
 
+    def test_detect_registry_refused_pull(self):
+        """A private image the runner is not logged in to is the user's to fix."""
+        from sbomify_action._generation.utils import detect_docker_image_not_found
+
+        refusals = [
+            # syft, pulling through the Docker daemon
+            "could not determine source: errors occurred attempting to resolve 'registry.example.com/team/app:1.0':\n"
+            "  - docker: pull failed: Error response from daemon: unauthorized: unauthorized to access repository: "
+            "team/app, action: pull: unauthorized to access repository: team/app, action: pull",
+            # ghcr.io and most OCI registries, pulled directly
+            "GET https://ghcr.io/v2/org/app/manifests/1.0: UNAUTHORIZED: authentication required",
+            "denied: requested access to the resource is denied",
+            "no basic auth credentials",
+        ]
+        for stderr in refusals:
+            with self.subTest(stderr=stderr):
+                self.assertTrue(detect_docker_image_not_found(stderr))
+
     def test_detect_repository_does_not_exist(self):
         """Test detection of 'repository does not exist' error."""
         from sbomify_action._generation.utils import detect_docker_image_not_found
@@ -1486,8 +1538,8 @@ class TestTrivyImageGeneratorDockerNotFound(unittest.TestCase):
         self.generator = TrivyImageGenerator()
 
     @patch("sbomify_action._generation.generators.trivy.run_command")
-    def test_returns_clear_error_for_image_not_found(self, mock_run):
-        """Test that clear error is returned when image is not found."""
+    def test_propagates_image_not_found(self, mock_run):
+        """The typed error propagates, so the orchestrator can stop at it."""
         from sbomify_action.exceptions import DockerImageNotFoundError
 
         mock_run.side_effect = DockerImageNotFoundError(
@@ -1500,11 +1552,10 @@ class TestTrivyImageGeneratorDockerNotFound(unittest.TestCase):
             output_file="/tmp/sbom.json",
             output_format="spdx",
         )
-        result = self.generator.generate(gen_input)
+        with self.assertRaises(DockerImageNotFoundError) as cm:
+            self.generator.generate(gen_input)
 
-        self.assertFalse(result.success)
-        self.assertIn("not found", result.error_message)
-        self.assertIn("sbomifyhub/sbomify-action:v0.11", result.error_message)
+        self.assertEqual(cm.exception.image, "sbomifyhub/sbomify-action:v0.11")
 
 
 @patch("sbomify_action._generation.generators.syft._SYFT_AVAILABLE", True)
@@ -1517,8 +1568,8 @@ class TestSyftImageGeneratorDockerNotFound(unittest.TestCase):
 
     @patch("sbomify_action._generation.generators.syft.ensure_runtime", lambda *a, **k: None)
     @patch("sbomify_action._generation.generators.syft.run_command")
-    def test_returns_clear_error_for_image_not_found(self, mock_run):
-        """Test that clear error is returned when image is not found."""
+    def test_propagates_image_not_found(self, mock_run):
+        """The typed error propagates, so the orchestrator can stop at it."""
         from sbomify_action.exceptions import DockerImageNotFoundError
 
         mock_run.side_effect = DockerImageNotFoundError(
@@ -1531,11 +1582,10 @@ class TestSyftImageGeneratorDockerNotFound(unittest.TestCase):
             output_file="/tmp/sbom.json",
             output_format="cyclonedx",
         )
-        result = self.generator.generate(gen_input)
+        with self.assertRaises(DockerImageNotFoundError) as cm:
+            self.generator.generate(gen_input)
 
-        self.assertFalse(result.success)
-        self.assertIn("not found", result.error_message)
-        self.assertIn("sbomifyhub/sbomify-action:v0.11", result.error_message)
+        self.assertEqual(cm.exception.image, "sbomifyhub/sbomify-action:v0.11")
 
 
 @patch("sbomify_action._generation.generators.cdxgen._CDXGEN_AVAILABLE", True)
@@ -1547,8 +1597,8 @@ class TestCdxgenImageGeneratorDockerNotFound(unittest.TestCase):
         self.generator = CdxgenImageGenerator()
 
     @patch("sbomify_action._generation.generators.cdxgen.run_command")
-    def test_returns_clear_error_for_image_not_found(self, mock_run):
-        """Test that clear error is returned when image is not found."""
+    def test_propagates_image_not_found(self, mock_run):
+        """The typed error propagates, so the orchestrator can stop at it."""
         from sbomify_action.exceptions import DockerImageNotFoundError
 
         mock_run.side_effect = DockerImageNotFoundError(
@@ -1561,11 +1611,10 @@ class TestCdxgenImageGeneratorDockerNotFound(unittest.TestCase):
             output_file="/tmp/sbom.json",
             output_format="cyclonedx",
         )
-        result = self.generator.generate(gen_input)
+        with self.assertRaises(DockerImageNotFoundError) as cm:
+            self.generator.generate(gen_input)
 
-        self.assertFalse(result.success)
-        self.assertIn("not found", result.error_message)
-        self.assertIn("sbomifyhub/sbomify-action:v0.11", result.error_message)
+        self.assertEqual(cm.exception.image, "sbomifyhub/sbomify-action:v0.11")
 
 
 class TestToolNotAvailableError(unittest.TestCase):
