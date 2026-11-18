@@ -29,6 +29,8 @@ class ProcessorInput:
         token: API authentication token
         artifact_kind: "sbom" (default) or "document" -- a release holds both,
             and the API keys them differently
+        allow_insecure_http: API_ALLOW_INSECURE_HTTP, for an http:// api_base_url
+            on a host other than localhost
     """
 
     sbom_id: str
@@ -38,6 +40,7 @@ class ProcessorInput:
     api_base_url: Optional[str] = None
     token: Optional[str] = None
     artifact_kind: str = "sbom"
+    allow_insecure_http: bool = False
 
     def __post_init__(self) -> None:
         """Validate input parameters."""

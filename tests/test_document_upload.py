@@ -9,6 +9,7 @@ report.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -17,7 +18,8 @@ import pytest
 from sbomify_action._upload import DocumentUploadInput, DocumentUploadResult
 from sbomify_action._upload.documents import MAX_DOCUMENT_SIZE
 from sbomify_action._upload.documents import upload_document as upload_document_input
-from sbomify_action.cli.main import SBOMIFY_PRODUCTION_API, build_config, run_pipeline
+from sbomify_action._yocto.models import YoctoConfig
+from sbomify_action.cli.main import SBOMIFY_PRODUCTION_API, Config, build_config, run_pipeline
 from sbomify_action.exceptions import AuthError
 from sbomify_action.sbomify_api import SbomifyApiClient
 from sbomify_action.upload import upload_document
@@ -211,6 +213,34 @@ def test_upload_without_credentials_fails_before_any_request(pdf):
     assert not result.success
     assert "not configured" in result.error_message
     client_cls.assert_not_called()
+
+
+def test_upload_positional_call_still_binds_name(pdf):
+    """The fifth positional argument is ``name``, as it was before the plain-http
+    opt-in existed. Had the flag taken that slot, "Report" would bind to it and
+    silently turn plain http on."""
+    with patch("sbomify_action._upload.documents.SbomifyApiClient") as client_cls:
+        client_cls.return_value.upload_document.return_value = _response()
+        result = upload_document(str(pdf), "tok", "comp-1", SBOMIFY_PRODUCTION_API, "Report")
+
+    assert result.success
+    assert client_cls.return_value.upload_document.call_args.kwargs["name"] == "Report"
+    assert client_cls.call_args.kwargs["allow_insecure_http"] is False
+
+
+@pytest.mark.parametrize(
+    ("callable_", "param"),
+    [
+        (upload_document, "allow_insecure_http"),
+        (build_config, "api_allow_insecure_http"),
+        (Config, "api_allow_insecure_http"),
+        (YoctoConfig, "api_allow_insecure_http"),
+    ],
+)
+def test_the_plain_http_opt_in_is_keyword_only(callable_, param):
+    """Each of these gained the opt-in in the middle of its parameters; a
+    positional slot there would shift every later argument onto it."""
+    assert inspect.signature(callable_).parameters[param].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 def test_upload_missing_file_reports_the_path(tmp_path):

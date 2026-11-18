@@ -128,6 +128,19 @@ class TestYoctoCli:
         config = mock_pipeline.call_args[0][0]
         assert config.api_base_url == "https://custom.example.com"  # trailing slash stripped
 
+    @patch("sbomify_action._yocto.pipeline.run_yocto_pipeline")
+    def test_api_allow_insecure_http(self, mock_pipeline, tmp_path):
+        archive = _make_tar_gz(tmp_path)
+        mock_pipeline.return_value = YoctoPipelineResult()
+
+        result = CliRunner().invoke(
+            cli,
+            ["--token", "t", "--api-base-url", "http://sbomify.corp", "--api-allow-insecure-http"]
+            + ["yocto", archive, "--release", "prod:1.0"],
+        )
+        assert result.exit_code == 0, result.output
+        assert mock_pipeline.call_args[0][0].api_allow_insecure_http is True
+
     def test_nonexistent_archive(self):
         runner = CliRunner()
         result = runner.invoke(cli, ["yocto", "/nonexistent/path.tar.zst", "--token", "t", "--release", "prod:1.0"])

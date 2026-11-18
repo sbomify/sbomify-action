@@ -145,6 +145,22 @@ class TestExchangeForSbomifyToken(unittest.TestCase):
         self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer oidc.jwt.here")
 
     @patch("sbomify_action.oidc.requests.post")
+    def test_refuses_plain_http_without_sending_the_jwt(self, mock_post):
+        with self.assertRaises(OIDCExchangeError) as ctx:
+            exchange_for_sbomify_token("oidc.jwt.here", "comp-1", "http://sbomify.corp")
+        self.assertIn("API_ALLOW_INSECURE_HTTP", str(ctx.exception))
+        mock_post.assert_not_called()
+
+    @patch("sbomify_action.oidc.requests.post")
+    def test_plain_http_allowed_with_opt_in(self, mock_post):
+        mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"access_token": "t"}))
+        token, _ = exchange_for_sbomify_token(
+            "oidc.jwt.here", "comp-1", "http://sbomify.corp", allow_insecure_http=True
+        )
+        self.assertEqual(token, "t")
+        self.assertEqual(mock_post.call_args.args[0], "http://sbomify.corp/api/v1/auth/oidc/github/exchange")
+
+    @patch("sbomify_action.oidc.requests.post")
     def test_trailing_slash_normalized(self, mock_post):
         mock_response = Mock()
         mock_response.status_code = 200

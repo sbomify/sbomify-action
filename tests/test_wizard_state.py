@@ -333,7 +333,7 @@ def test_resolve_profile_workspace_uses_picked_key_when_readable(monkeypatch) ->
     calls: list[str] = []
 
     class _FakeClient:
-        def __init__(self, base_url: str, token: str) -> None:
+        def __init__(self, base_url: str, token: str, allow_insecure_http: bool = False) -> None:
             pass
 
         def list_contact_profiles(self, key: str) -> list[dict[str, object]]:
@@ -359,7 +359,7 @@ def test_resolve_profile_workspace_probes_when_picked_key_forbidden(monkeypatch)
     from sbomify_action.exceptions import ForbiddenError
 
     class _FakeClient:
-        def __init__(self, base_url: str, token: str) -> None:
+        def __init__(self, base_url: str, token: str, allow_insecure_http: bool = False) -> None:
             pass
 
         def list_contact_profiles(self, key: str) -> list[dict[str, object]]:
@@ -385,7 +385,7 @@ def test_resolve_profile_workspace_stays_put_on_transient_error(monkeypatch) -> 
     probed: list[str] = []
 
     class _FakeClient:
-        def __init__(self, base_url: str, token: str) -> None:
+        def __init__(self, base_url: str, token: str, allow_insecure_http: bool = False) -> None:
             pass
 
         def list_contact_profiles(self, key: str) -> list[dict[str, object]]:
@@ -410,7 +410,7 @@ def test_resolve_profile_workspace_none_readable(monkeypatch) -> None:
     from sbomify_action.exceptions import ForbiddenError
 
     class _FakeClient:
-        def __init__(self, base_url: str, token: str) -> None:
+        def __init__(self, base_url: str, token: str, allow_insecure_http: bool = False) -> None:
             pass
 
         def list_contact_profiles(self, key: str) -> list[dict[str, object]]:

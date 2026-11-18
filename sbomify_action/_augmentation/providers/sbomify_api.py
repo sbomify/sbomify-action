@@ -45,7 +45,7 @@ class SbomifyApiProvider:
             api_base_url: Base URL for the API (required)
             token: Authentication token (required)
             config_path: Ignored (not needed for API provider)
-            **kwargs: Additional arguments (ignored)
+            **kwargs: ``allow_insecure_http`` (API_ALLOW_INSECURE_HTTP); others ignored
 
         Returns:
             AugmentationMetadata if API call succeeds, None otherwise
@@ -63,7 +63,9 @@ class SbomifyApiProvider:
 
         # Fetch from API
         try:
-            data = self._fetch_backend_metadata(api_base_url, token, component_id)
+            data = self._fetch_backend_metadata(
+                api_base_url, token, component_id, bool(kwargs.get("allow_insecure_http", False))
+            )
             if not data:
                 return None
 
@@ -93,6 +95,7 @@ class SbomifyApiProvider:
         api_base_url: str,
         token: str,
         component_id: str,
+        allow_insecure_http: bool = False,
     ) -> Dict[str, Any]:
         """Fetch augmentation metadata for ``component_id`` from the API.
 
@@ -103,7 +106,7 @@ class SbomifyApiProvider:
         Raises:
             APIError: If API call fails
         """
-        client = SbomifyApiClient(api_base_url, token)
+        client = SbomifyApiClient(api_base_url, token, allow_insecure_http=allow_insecure_http)
         return client.get_augmentation_meta(component_id)
 
     def _extract_from_contact_profile(self, data: Dict[str, Any]) -> None:
