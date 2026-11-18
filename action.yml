@@ -31,6 +31,17 @@ inputs:
   oidc-audience:
     description: 'OIDC audience for trusted publishing (default: sbomify.com; override for self-hosted)'
     required: false
+outputs:
+  sbom-file:
+    description: 'Path of the SBOM the run wrote, relative to the working directory unless OUTPUT_FILE was absolute'
+  sbom-format:
+    description: 'Format of that file: cyclonedx or spdx, or for a VEX document openvex or csaf'
+  component-count:
+    description: 'Number of components in the SBOM. Unset for SPDX 3 and VEX documents'
+  sbom-id:
+    description: 'ID sbomify gave the uploaded SBOM. Set only after an upload to sbomify'
+  component-url:
+    description: 'Link to the component in the sbomify app. Set only after an upload to sbomify'
 runs:
   using: 'docker'
   # Bump/pin this to release
