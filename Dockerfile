@@ -5,7 +5,7 @@ ARG UV_VERSION=0.13.5
 FROM ghcr.io/astral-sh/uv:${UV_VERSION}@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv-fetcher
 
 # Python builder stage
-FROM python:3.14-slim-trixie AS builder
+FROM python:3.15-slim-trixie AS builder
 
 ARG VERSION=0.0.0
 
@@ -42,7 +42,7 @@ RUN rm -rf dist/ && uv build
 RUN uv pip install dist/sbomify_action-*.whl
 
 # Final stage
-FROM python:3.14-slim-trixie
+FROM python:3.15-slim-trixie
 
 # Build arguments for dynamic labels (passed at build time)
 ARG VERSION=0.0.0
@@ -63,7 +63,7 @@ LABEL org.opencontainers.image.title="sbomify action" \
       org.opencontainers.image.vendor="sbomify" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.authors="sbomify <hello@sbomify.com>" \
-      org.opencontainers.image.base.name="python:3.14-slim-trixie"
+      org.opencontainers.image.base.name="python:3.15-slim-trixie"
 
 # Additional metadata labels
 LABEL com.sbomify.maintainer="sbomify <hello@sbomify.com>" \
