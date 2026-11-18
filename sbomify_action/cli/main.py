@@ -2456,9 +2456,9 @@ def run_pipeline(config: Config) -> None:
                     logger.error(f"Please use LOCK_FILE instead of SBOM_FILE for '{file_name}'.")
             _log_step_end(1, success=False)
             sys.exit(1)
-        except ProjectResolutionError as e:
-            # The project, not this tool, needs fixing. The prefix is what
-            # keeps the record out of Sentry; see before_send.
+        except (ProjectResolutionError, DockerImageNotFoundError) as e:
+            # The project, or the image named, needs fixing, not this tool. The
+            # prefix is what keeps the record out of Sentry; see before_send.
             logger.error(f"Configuration error: Step 1 failed: {e}")
             _log_step_end(1, success=False)
             sys.exit(1)
