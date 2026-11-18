@@ -118,6 +118,8 @@ This tool wraps generation in three more steps — inject, augment, enrich — a
 
 Naming a *manifest* that sits beside its lock file reads the lock file instead: `package.json` defers to `package-lock.json`, `pyproject.toml` to `poetry.lock`.
 
+**Commit a lock file.** For Python that means `uv.lock`, `poetry.lock` or a fully pinned `requirements.txt`; for .NET, `packages.lock.json` (`RestorePackagesWithLockFile`). The action does not install a project to discover what it depends on, because installing runs the project's own code (`setup.py`, build backends, MSBuild targets) inside your CI job. Maven, Gradle and sbt are the exception: they have to run the build to resolve it. So a `pyproject.toml` with no lock file beside it gets no dependencies listed, which falls short of the NTIA minimum elements and of the EU CRA's requirement to list at least the top-level dependencies. A bare `package.json` or `composer.json` is still resolved, with install scripts and plugins switched off, and the SBOM records that its versions were inferred at build time rather than committed. A `composer.json` is not resolved when it declares its own repositories or sets any trust, host, credential or cache option in its `config`, so commit a `composer.lock` instead.
+
 Container images are supported via `DOCKER_IMAGE`, and a whole directory via `SOURCE_DIR` — though a directory scan is a weaker claim than a lock file, so reach for it only when nothing else applies.
 
 📖 [Input sources](https://sbomify.com/sbomify-action/sources/)

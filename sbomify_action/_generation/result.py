@@ -25,6 +25,9 @@ class GenerationResult:
             cargo workspace cyclonedx-cargo cannot express); a failure is a
             defect. The orchestrator treats the two very differently -- see
             GeneratorRegistry.generate.
+        refused: True when the failure is a deliberate refusal (an
+            InputRefusedError), so strict mode reports it as one rather than
+            as a bug in the image.
     """
 
     success: bool
@@ -36,6 +39,7 @@ class GenerationResult:
     validated: bool = False
     validation_error: Optional[str] = None
     declined: bool = False
+    refused: bool = False
 
     def __post_init__(self) -> None:
         """Validate result state."""
