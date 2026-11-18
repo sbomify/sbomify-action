@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import sys
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -70,6 +71,7 @@ from ..release_version import (
 from ..sbomify_api import VALID_COMPLIANCE_SUBCATEGORIES, VALID_DOCUMENT_TYPES
 from ..serialization import (
     _add_compositions_if_missing,
+    _add_serial_number_if_missing,
     _fix_purl_encoding_bugs_in_json,
     get_spdx_json_root_package,
     load_cyclonedx_bom,
@@ -1907,8 +1909,8 @@ def _write_final_output(src_path: str, dst_path: str, bom_type: Optional[str]) -
 def _finalize_output_content(content: str, bom_type: Optional[str]) -> str:
     """Return the content to upload after format-specific output fixes.
 
-    CycloneDX SBOMs get PURL-encoding repairs and a compositions completeness
-    indicator. For non-SBOM CycloneDX artifacts (VEX, CBOM, ...) this helper
+    CycloneDX SBOMs get PURL-encoding repairs, a compositions completeness
+    indicator and, if they have none, a serialNumber. For non-SBOM CycloneDX artifacts (VEX, CBOM, ...) this helper
     skips those SBOM-specific fixups; the wider verbatim contract (no
     augment/enrich, no overrides, byte-copy on write) is enforced by Config
     validation and the finalize step. SPDX and other content pass through
@@ -1921,6 +1923,7 @@ def _finalize_output_content(content: str, bom_type: Optional[str]) -> str:
         return content
     content = _fix_purl_encoding_bugs_in_json(content)
     content = _add_compositions_if_missing(content)
+    content = _add_serial_number_if_missing(content)
     return content
 
 
@@ -2331,9 +2334,16 @@ def run_pipeline(config: Config) -> None:
                         with open(STEP_1_FILE, encoding="utf-8") as f:
                             spdx_data = json.load(f)
                         sanitized = sanitize_spdx_licenses(spdx_data)
-                        if sanitized > 0:
+                        # spdx_tools also refuses an SPDX 2 document with no
+                        # documentNamespace, and the namespace is the document's
+                        # identity (BSI TR-03183-2's SBOM-URI). Mint one only
+                        # where it is missing; SPDX 3 has no such field.
+                        named = "spdxVersion" in spdx_data and not spdx_data.get("documentNamespace")
+                        if named:
+                            spdx_data["documentNamespace"] = f"https://sbomify.com/spdx/{uuid.uuid4()}"
+                        if sanitized > 0 or named:
                             with open(STEP_1_FILE, "w", encoding="utf-8") as f:
-                                json.dump(spdx_data, f, ensure_ascii=False)
+                                json.dump(spdx_data, f, indent=2, ensure_ascii=False)
                     except (OSError, json.JSONDecodeError) as e:
                         logger.warning(f"Could not sanitize SPDX licenses in input SBOM: {e}")
             elif config.docker_image:
