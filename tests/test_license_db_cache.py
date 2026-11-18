@@ -86,3 +86,17 @@ class TestLicenseDBCacheDir:
             assert "license-db" in str(cache_dir)
             # Should NOT be empty string path
             assert str(cache_dir) != "/license-db"
+
+    def test_unwritable_cache_dir_falls_back_to_tempdir(self, tmp_path: Path):
+        """A home without write access (HOME=/ under a non-root uid) must not abort enrichment."""
+        import sbomify_action._enrichment.sources.license_db as license_db_module
+
+        blocked = tmp_path / "blocked"
+        blocked.write_text("")  # a file, so mkdir beneath it fails like a read-only /.cache
+        with (
+            patch.dict(os.environ, {"SBOMIFY_CACHE_DIR": str(blocked)}, clear=False),
+            patch.object(license_db_module.tempfile, "gettempdir", return_value=str(tmp_path / "tmp")),
+        ):
+            cache_dir = get_cache_dir()
+        assert cache_dir == tmp_path / "tmp" / "sbomify" / "license-db"
+        assert cache_dir.is_dir()
