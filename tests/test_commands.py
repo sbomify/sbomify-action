@@ -7,6 +7,7 @@ from sbomify_action.exceptions import (
     ConfigurationError,
     FileProcessingError,
     SBOMGenerationError,
+    UnsupportedLockFileError,
 )
 from sbomify_action.generation import (
     generate_sbom,
@@ -100,6 +101,28 @@ class TestLockFileProcessing(unittest.TestCase):
             process_lock_file(test_file)
 
         self.assertIn("not a recognized lock file type", str(cm.exception))
+        self.assertIsInstance(cm.exception, UnsupportedLockFileError)
+        # Nothing to suggest a rename to, so list what is accepted.
+        self.assertIn("Supported names:", str(cm.exception))
+        self.assertIn("conan.lock", str(cm.exception))
+
+    def test_process_lock_file_renamed_lock_file_names_the_expected_name(self):
+        """A lock file under a name of the user's choosing says what to call it."""
+        for given, expected in [
+            ("/w/at_c_conan.lock", "conan.lock"),
+            ("/w/main.conan.lock", "conan.lock"),
+            ("/w/filtered-yarn.lock", "yarn.lock"),
+        ]:
+            with self.subTest(given=given):
+                with self.assertRaises(UnsupportedLockFileError) as cm:
+                    process_lock_file(given)
+                self.assertIn(f"rename it to '{expected}'", str(cm.exception))
+
+    def test_process_lock_file_only_matches_whole_names(self):
+        """``conan2.lock`` is not ``conan.lock`` with a prefix, so no rename hint."""
+        with self.assertRaises(UnsupportedLockFileError) as cm:
+            process_lock_file("/w/myconan.lock")
+        self.assertNotIn("rename it", str(cm.exception))
 
     @patch("sbomify_action.generation.generate_sbom")
     def test_process_lock_file_failure(self, mock_generate):

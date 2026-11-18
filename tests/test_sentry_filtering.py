@@ -12,6 +12,7 @@ from sbomify_action.exceptions import (
     ProjectResolutionError,
     SBOMGenerationError,
     SBOMValidationError,
+    UnsupportedLockFileError,
 )
 from tests.conftest import NoNetworkTransport
 
@@ -121,6 +122,21 @@ class TestSentryFiltering(unittest.TestCase):
         event = {"exception": {"values": [{"type": "ProjectResolutionError"}]}}
 
         self.assertIsNone(before_send(event, {"exc_info": (ProjectResolutionError, error, None)}))
+
+    def test_sentry_filters_unsupported_lock_files(self):
+        """A LOCK_FILE the action does not read is the user's input to change."""
+        initialize_sentry()
+
+        before_send = sentry_sdk.get_client().options["before_send"]
+        error = UnsupportedLockFileError("/w/at_c_conan.lock is not a recognized lock file type.")
+        event = {"exception": {"values": [{"type": "UnsupportedLockFileError"}]}}
+
+        self.assertIsNone(before_send(event, {"exc_info": (UnsupportedLockFileError, error, None)}))
+
+        # Step 1 logs it with the configuration prefix, which is what keeps
+        # the log record itself out of Sentry.
+        record = {"message": f"Configuration error: Step 1 failed: {error}"}
+        self.assertIsNone(before_send(record, {}))
 
     def test_sentry_filters_configuration_error_log_messages(self):
         """
