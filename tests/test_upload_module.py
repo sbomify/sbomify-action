@@ -18,6 +18,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import requests
+
 from sbomify_action._upload import (
     DependencyTrackConfig,
     DependencyTrackDestination,
@@ -527,6 +529,57 @@ class TestSbomifyDestination(unittest.TestCase):
             self.assertIn("Some other conflict", result.error_message)
         finally:
             Path(sbom_file).unlink()
+
+    def _upload_answered_with(self, mock_client_cls, status: int, content_type: str, body: str) -> UploadResult:
+        response = requests.Response()
+        response.status_code = status
+        response.headers["Content-Type"] = content_type
+        response._content = body.encode()
+        mock_client_cls.return_value.upload_sbom.return_value = response
+        with tempfile.TemporaryDirectory() as tmp:
+            sbom_file = Path(tmp) / "sbom.json"
+            sbom_file.write_text(json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.6"}))
+            dest = SbomifyDestination(token="test-token", component_id="my-component")
+            return dest.upload(UploadInput(sbom_file=str(sbom_file), sbom_format="cyclonedx"))
+
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_a_plain_text_400_names_its_reason(self, mock_client_cls):
+        """The server's gzip middleware refuses with a bare text body, not JSON."""
+        result = self._upload_answered_with(
+            mock_client_cls,
+            400,
+            "text/html; charset=utf-8",
+            "Decompressed request body exceeds the 104857600 byte limit",
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(
+            result.error_message,
+            "Failed to upload SBOM file. [400] - Decompressed request body exceeds the 104857600 byte limit",
+        )
+
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_an_html_error_page_is_not_pasted_into_the_message(self, mock_client_cls):
+        result = self._upload_answered_with(
+            mock_client_cls, 502, "text/html", "<html><body><h1>502 Bad Gateway</h1></body></html>"
+        )
+
+        self.assertEqual(result.error_message, "Failed to upload SBOM file. [502]")
+
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_a_plain_text_reason_may_contain_an_angle_bracket(self, mock_client_cls):
+        result = self._upload_answered_with(mock_client_cls, 413, "text/plain", "Body must be < 100 MB")
+
+        self.assertEqual(result.error_message, "Failed to upload SBOM file. [413] - Body must be < 100 MB")
+
+    @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
+    def test_a_json_detail_is_still_used(self, mock_client_cls):
+        result = self._upload_answered_with(
+            mock_client_cls, 400, "application/json", json.dumps({"detail": "Bad SBOM", "error_code": "BAD_REQUEST"})
+        )
+
+        self.assertEqual(result.error_message, "Failed to upload SBOM file. [400] - Bad SBOM")
+        self.assertEqual(result.error_code, "BAD_REQUEST")
 
     @patch("sbomify_action._upload.destinations.sbomify.SbomifyApiClient")
     def test_upload_component_not_found_error(self, mock_client_cls):

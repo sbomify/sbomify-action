@@ -119,6 +119,27 @@ def clean_validation_error(detail: Any) -> str | None:
     return str(detail)
 
 
+def response_error_detail(response: requests.Response) -> str | None:
+    """The server's reason for a non-2xx response, or None if it gave none.
+
+    The API answers with JSON carrying ``detail``. Middleware in front of it
+    can answer with a bare text body instead (a gzip upload that inflates past
+    the limit is one), which is still the only reason the user will get. A body
+    that looks like markup is an error page, not a reason, and is left out.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict):
+        return clean_validation_error(body.get("detail"))
+    text = response.text
+    if not isinstance(text, str) or text.lstrip().startswith("<"):
+        return None
+    text = " ".join(text.split())
+    return text[:300] or None
+
+
 class SbomifyApiClient:
     """Thin wrapper around the sbomify REST API.
 
@@ -196,11 +217,9 @@ class SbomifyApiClient:
     def _build_error(prefix: str, response: requests.Response) -> str:
         """Format ``prefix [status] - detail`` from a non-2xx response."""
         message = f"{prefix} [{response.status_code}]"
-        body = SbomifyApiClient._safe_json_dict(response)
-        if body is not None:
-            detail = SbomifyApiClient._clean_validation_error(body.get("detail"))
-            if detail:
-                message += f" - {detail}"
+        detail = response_error_detail(response)
+        if detail:
+            message += f" - {detail}"
         return message
 
     @staticmethod
