@@ -2,11 +2,31 @@
 
 
 class SbomifyError(Exception):
-    """Base exception for all sbomify operations."""
+    """Base exception for all sbomify operations.
+
+    Attributes:
+        telemetry_reported: set by the layer that raises when it has already
+            logged this failure at error level -- and so already offered it
+            to Sentry. The step handler that catches it logs its own one-line
+            echo as "already accounted for" rather than as a second
+            occurrence. See ``logging_config.already_reported``.
+    """
+
+    telemetry_reported = False
+
+    #: Set on types that describe something the *user* changes -- a wrong
+    #: path, an image that does not exist, a token that is not allowed -- as
+    #: opposed to a defect in the action. ``initialize_sentry`` drops these,
+    #: and so does any step-level echo of one: before this existed the type
+    #: filter caught the exception while the one-line "Step N failed: ..."
+    #: record that followed sailed straight through.
+    user_side = False
 
 
 class ConfigurationError(SbomifyError):
     """Raised when configuration validation fails."""
+
+    user_side = True
 
 
 class SBOMGenerationError(SbomifyError):
@@ -42,6 +62,8 @@ class DockerImageNotFoundError(SBOMGenerationError):
         message: Detailed error message
     """
 
+    user_side = True
+
     def __init__(
         self,
         image: str,
@@ -69,6 +91,8 @@ class ToolNotAvailableError(SBOMGenerationError):
     hasn't installed any of the required external tools (trivy, syft, cdxgen).
     """
 
+    user_side = True
+
     def __init__(self, input_type: str, lock_file: str | None = None, message: str | None = None):
         self.input_type = input_type
         self.lock_file = lock_file
@@ -85,9 +109,13 @@ class ProjectResolutionError(SBOMGenerationError):
     the tool's own explanation and kept out of error telemetry.
     """
 
+    user_side = True
+
 
 class SBOMValidationError(SbomifyError):
     """Raised when SBOM validation fails."""
+
+    user_side = True
 
 
 class APIError(SbomifyError):
@@ -97,6 +125,8 @@ class APIError(SbomifyError):
 class AuthError(APIError):
     """Raised when the sbomify API rejects credentials (401)."""
 
+    user_side = True
+
 
 class ForbiddenError(APIError):
     """Raised when the sbomify API returns 403 — authenticated but not
@@ -104,6 +134,8 @@ class ForbiddenError(APIError):
     its scope). Distinct from ``AuthError`` (401, bad credentials) so callers
     can tell "this token can't touch this resource" apart from a transient
     failure and react accordingly."""
+
+    user_side = True
 
 
 class PlanLimitError(APIError):
@@ -130,9 +162,21 @@ class DuplicateArtifactError(APIError):
     events before being classified.
     """
 
+    user_side = True
+
 
 class OIDCError(APIError):
-    """Base exception for OIDC trusted-publishing failures."""
+    """Base exception for OIDC trusted-publishing failures.
+
+    Attributes:
+        user_side: whether this is something the user fixes -- a binding that
+            was never created, a component id that is wrong, a workflow that
+            does not grant ``id-token: write`` -- rather than a defect or an
+            outage. Telemetry needs the distinction stated here because every
+            caller *logs* these and exits: by the time Sentry sees the event
+            there is no exception left to type-check, so listing ``OIDCError``
+            in ``before_send``'s type filter never fired for any of them.
+    """
 
 
 class OIDCBindingMissingError(OIDCError):
@@ -142,10 +186,23 @@ class OIDCBindingMissingError(OIDCError):
     trusted publishing will work from this repository.
     """
 
+    user_side = True
+
 
 class OIDCExchangeError(OIDCError):
     """Raised when the OIDC -> sbomify token exchange fails for any other reason
-    (invalid OIDC token, rate limit, backend unavailable, etc.)."""
+    (invalid OIDC token, rate limit, backend unavailable, etc.).
+
+    ``user_side`` is per-raise here because the cases genuinely differ: a 404
+    on the component id or a workflow with no ``id-token: write`` is the
+    caller's to fix, while a 5xx or a malformed response is the backend
+    falling over and is worth knowing about -- the same line
+    ``_USER_SIDE_HTTP_STATUSES`` draws for upload failures.
+    """
+
+    def __init__(self, message: str, *, user_side: bool = False):
+        self.user_side = user_side
+        super().__init__(message)
 
 
 class FileProcessingError(SbomifyError):
@@ -165,6 +222,8 @@ class InputPathNotFoundError(FileProcessingError):
     missing file. "No SBOM file found from previous step" stays a plain
     ``FileProcessingError``, because that one *is* a bug in the pipeline.
     """
+
+    user_side = True
 
 
 class CommandExecutionError(SbomifyError):

@@ -661,12 +661,18 @@ def run_command(
         if error_summary:
             message += f": {error_summary}"
 
-        raise SBOMGenerationError(
+        failure = SBOMGenerationError(
             message,
             stderr=stderr,
             stdout=stdout,
             returncode=e.returncode,
         )
+        # Already logged at error level just above, so whichever step catches
+        # this should echo it without opening a second issue for it. Only
+        # when ``log_errors`` is set: a priority-chain generator logs at debug
+        # and its failure has not been reported anywhere yet.
+        failure.telemetry_reported = log_errors
+        raise failure
     except subprocess.TimeoutExpired:
         elapsed = int(time.time() - start_time)
         # Honor log_errors here too: a cdxgen timeout on, say, a Python
