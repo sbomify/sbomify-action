@@ -135,6 +135,31 @@ class TestExpiry:
         assert cache.get("src", "k")[0] is True
 
 
+class TestVersioning:
+    """A fixed source must stop serving the wrong answers it cached before the fix."""
+
+    def test_bumping_a_source_version_invalidates_only_that_source(self, monkeypatch):
+        cache.set("fixed-source", "k", _metadata())
+        cache.set("other-source", "k", _metadata())
+        monkeypatch.setitem(cache.SOURCE_VERSIONS, "fixed-source", cache.SOURCE_VERSIONS.get("fixed-source", 0) + 1)
+        assert cache.get("fixed-source", "k") == (False, None)
+        assert cache.get("other-source", "k")[0] is True
+
+    def test_bumping_the_schema_version_invalidates_every_source(self, monkeypatch):
+        cache.set("src", "k", _metadata())
+        monkeypatch.setattr(cache, "SCHEMA_VERSION", cache.SCHEMA_VERSION + 1)
+        assert cache.get("src", "k") == (False, None)
+
+    def test_entries_written_before_versioning_are_not_served(self):
+        conn = cache._connect()
+        conn.execute(
+            "INSERT INTO entries (source, key, payload, fetched_at) VALUES (?, ?, ?, ?)",
+            ("src", "k", cache._serialize(_metadata()), time.time()),
+        )
+        conn.commit()
+        assert cache.get("src", "k") == (False, None)
+
+
 class TestDisabling:
     def test_env_var_disables_reads_and_writes(self, monkeypatch):
         monkeypatch.setenv("SBOMIFY_ENRICHMENT_CACHE", "off")
