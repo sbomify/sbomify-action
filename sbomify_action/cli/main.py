@@ -1159,6 +1159,19 @@ def _is_auth_failure(message: str) -> bool:
     return any(status in message for status in _USER_SIDE_HTTP_STATUSES)
 
 
+#: Pass as ``extra=`` on a log call that reports a condition only the user can
+#: fix. Step handlers catch the typed exception and log it, so the event Sentry
+#: receives is a log record with no exception attached, and the type check in
+#: ``before_send`` never sees it. The marker travels on the record instead,
+#: which keeps the message text the user reads unchanged.
+USER_ERROR: dict[str, Any] = {"sbomify_user_error": True}
+
+
+def _is_user_error_record(hint: dict[str, Any]) -> bool:
+    """Whether the event came from a log call marked with :data:`USER_ERROR`."""
+    return bool(getattr(hint.get("log_record"), "sbomify_user_error", False))
+
+
 def initialize_sentry() -> None:
     """Initialize Sentry for error tracking.
 
@@ -1224,6 +1237,9 @@ def initialize_sentry() -> None:
         # These come through the logging integration, not as exceptions
         message = event.get("message") or event.get("logentry", {}).get("formatted", "")
         if message.startswith("Configuration error:"):
+            return None
+
+        if _is_user_error_record(hint):
             return None
 
         # The backend's 401s and 403s reach Sentry as log records, not
@@ -2220,10 +2236,10 @@ def run_pipeline(config: Config) -> None:
                 )
                 config.token_is_oidc_minted = True
             except OIDCBindingMissingError as exc:
-                logger.error(str(exc))
+                logger.error(str(exc), extra=USER_ERROR)
                 sys.exit(1)
             except OIDCExchangeError as exc:
-                logger.error(f"OIDC trusted publishing failed: {exc}")
+                logger.error(f"OIDC trusted publishing failed: {exc}", extra=USER_ERROR)
                 sys.exit(1)
         elif config.requires_sbomify_api:
             # validate() let this config through assuming OIDC would be
@@ -2444,16 +2460,16 @@ def run_pipeline(config: Config) -> None:
                 sys.exit(1)
         except SBOMValidationError as e:
             # User-provided SBOM validation errors - don't send to Sentry
-            logger.error(f"Step 1 failed: {e}")
+            logger.error(f"Step 1 failed: {e}", extra=USER_ERROR)
             if FILE_TYPE == "SBOM":
                 file_name = Path(FILE).name
-                logger.error(f"The provided SBOM file '{FILE}' appears to be invalid.")
-                logger.error("Please ensure the file is a valid CycloneDX or SPDX JSON document.")
+                logger.error(f"The provided SBOM file '{FILE}' appears to be invalid.", extra=USER_ERROR)
+                logger.error("Please ensure the file is a valid CycloneDX or SPDX JSON document.", extra=USER_ERROR)
 
                 # Check if user accidentally provided a lock file instead of an SBOM
                 if file_name in ALL_LOCK_FILES:
-                    logger.error(f"'{file_name}' is a lock file, not an SBOM.")
-                    logger.error(f"Please use LOCK_FILE instead of SBOM_FILE for '{file_name}'.")
+                    logger.error(f"'{file_name}' is a lock file, not an SBOM.", extra=USER_ERROR)
+                    logger.error(f"Please use LOCK_FILE instead of SBOM_FILE for '{file_name}'.", extra=USER_ERROR)
             _log_step_end(1, success=False)
             sys.exit(1)
         except ProjectResolutionError as e:
@@ -2463,7 +2479,9 @@ def run_pipeline(config: Config) -> None:
             _log_step_end(1, success=False)
             sys.exit(1)
         except (FileProcessingError, SBOMGenerationError, ValueError) as e:
-            logger.error(f"Step 1 failed: {e}")
+            # FileProcessingError is the input itself: a file whose name matches
+            # no ecosystem, or an archive of the wrong type. Nothing here to fix.
+            logger.error(f"Step 1 failed: {e}", extra=USER_ERROR if isinstance(e, FileProcessingError) else None)
             # The remedy is worth more here than on the happy path. A run that
             # produced nothing from a manifest is exactly the case where "no
             # lock file was committed" is the likely cause and "here is the
