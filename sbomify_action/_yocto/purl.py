@@ -7,6 +7,15 @@ from packageurl import PackageURL
 
 from sbomify_action.logging_config import logger
 
+#: PURL type for a package that came out of a Yocto build.
+#:
+#: There is no Yocto package registry, and this type is not in the PURL spec:
+#: we mint it here so a recipe has a stable identifier at all. Anything that
+#: would take it to a registry has to know that, or it spends a network round
+#: trip per recipe on a lookup that cannot succeed.
+YOCTO_PURL_TYPE = "yocto"
+YOCTO_PURL_PREFIX = f"pkg:{YOCTO_PURL_TYPE}/"
+
 
 def generate_yocto_purl(name: str, version: str | None = None) -> str:
     """Build a ``pkg:yocto/<name>@<version>`` PURL string.
@@ -20,7 +29,7 @@ def generate_yocto_purl(name: str, version: str | None = None) -> str:
     """
     return str(
         PackageURL(
-            type="yocto",
+            type=YOCTO_PURL_TYPE,
             name=name,
             version=version if version else None,
         )
@@ -33,7 +42,7 @@ def _has_yocto_purl_spdx22(package_data: dict[str, Any]) -> bool:
         if (
             ref.get("referenceType") == "purl"
             and isinstance(ref.get("referenceLocator"), str)
-            and ref["referenceLocator"].startswith("pkg:yocto/")
+            and ref["referenceLocator"].startswith(YOCTO_PURL_PREFIX)
         ):
             return True
     return False

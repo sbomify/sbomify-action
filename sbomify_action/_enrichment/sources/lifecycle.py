@@ -68,6 +68,9 @@ class LifecycleSource:
         # Priority 5: Very high - local data with no API calls
         return 5
 
+    # Still asked about a package no registry publishes (see registry.py).
+    offline = True
+
     def supports(self, purl: PackageURL) -> bool:
         """
         Check if this source supports the given PURL.
