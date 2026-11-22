@@ -11,7 +11,7 @@ is ``post-build``:
     available for further analysis."
 
 The provider registers at priority 15 so it beats the CI providers
-(priority 20, default ``pre-build``) but still loses to ``json_config``
+(priority 20) but still loses to ``json_config``
 (priority 10) — operators keep the final word via ``sbomify.json``.
 
 Environment variables used:
@@ -36,9 +36,8 @@ class DockerImageProvider:
     """
 
     name: str = "docker-image"
-    # Priority 15 — beats CI providers (20) so post-build wins over the
-    # CI default pre-build when the input is a container image; still
-    # loses to json_config (10) so operators can override.
+    # Priority 15 — ahead of the CI providers (20), which set no phase;
+    # still loses to json_config (10) so operators can override.
     priority: int = 15
 
     def fetch(

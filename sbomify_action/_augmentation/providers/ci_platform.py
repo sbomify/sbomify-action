@@ -75,27 +75,15 @@ class CIPlatformProvider:
         # The metadata is attributed to the platform, not to this provider, so
         # audit trails keep naming the actual source ("github-actions").
         #
-        # CycloneDX 1.7 schema meta:enum defines the lifecycle phases as:
-        #   * pre-build  — "information obtained prior to a build process
-        #                  and may contain source files and development
-        #                  artifacts and manifests" (lockfiles are manifests)
-        #   * build      — "information obtained during a build process"
-        #                  (emitted by compiler / build tool itself)
-        #   * post-build — "information obtained after a build process has
-        #                  completed and the resulting component(s) are
-        #                  available for further analysis" (e.g. scanning
-        #                  a built container image)
-        # The common usage of sbomify-action is scanning lockfiles / source
-        # manifests, so default to ``pre-build``. When the action runs against a
-        # built artifact (``--docker-image``), the docker-image augmentation
-        # overrides to ``post-build``. Users who emit a BOM mid-compilation
-        # (Maven / Gradle plugins, ``cargo bom`` and similar) can override via
-        # ``sbomify.json`` / ``json_config`` (priority 10 beats this at 20).
+        # No lifecycle phase. Running in CI says where the action ran, not
+        # what it was given: this used to stamp ``pre-build`` on everything,
+        # including a user's SBOM_FILE of a built image. The pipeline now
+        # derives the phase from the input itself (_finalize_sbom_fields in
+        # cli/main.py), and ``sbomify.json`` can still set one explicitly.
         return AugmentationMetadata(
             source=platform.name,
             vcs_url=vcs.url,
             vcs_commit_sha=vcs.commit_sha,
             vcs_ref=vcs.ref,
             vcs_commit_url=vcs.commit_url,
-            lifecycle_phase="pre-build",
         )

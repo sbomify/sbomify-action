@@ -176,7 +176,7 @@ also available as `with:` inputs:
 | --- | --- | --- |
 | `working-dir` | `WORKING_DIR` | Directory to work in, relative to the repo root |
 | `component-purl` | `COMPONENT_PURL` | Override the component PURL in the SBOM |
-| `bom-type` | `BOM_TYPE` | `sbom` (default), `vex`, `cbom` or `hbom` |
+| `bom-type` | `BOM_TYPE` | `sbom` (default), `vex`, `cbom` or `hbom`. With `sbom`, a CycloneDX `vulnerabilities[]` is removed, because BSI TR-03183-2 does not allow vulnerability data in an SBOM; upload it as `vex`, or set `KEEP_VULNERABILITIES: true` to keep it |
 | `sbom-format` | `SBOM_FORMAT` | `cyclonedx` (default) or `spdx` |
 | `spec-version` | `SPEC_VERSION` | Spec version to generate. CycloneDX 1.2–1.7, SPDX 2.2 or 2.3, or SPDX 3.0.1 with `LOCK_FILE: none`. Ignored when `SBOM_FILE` names a real file |
 | `oidc-audience` | `OIDC_AUDIENCE` | Audience for trusted publishing; override for self-hosted |
