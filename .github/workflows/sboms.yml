@@ -12,7 +12,9 @@
 #
 # Container components generate an SBOM from the published ghcr image
 # (ghcr.io/sbomify/sbomify-action:<tag>), which is built and pushed by the
-# CI/CD Pipeline workflow's push-images job. To guarantee that image exists
+# CI/CD Pipeline workflow's push-images job on master, and for a release by
+# release.yml before the tag exists (the tag's verify-release-pin job checks
+# that). To guarantee that image exists
 # first, this workflow is gated on workflow_run — it only starts after
 # CI/CD Pipeline completes successfully, the cross-workflow equivalent of
 # `needs: push-images`. (Note: this requires the *whole* pipeline to be
