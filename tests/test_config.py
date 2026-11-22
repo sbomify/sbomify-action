@@ -159,20 +159,25 @@ class TestConfig(unittest.TestCase):
             config.validate()
         self.assertIn("dependency-track", str(cm.exception))
 
-    def test_bom_type_non_sbom_rejects_product_release(self):
-        """Releases hold one SBOM per component and format; tagging a VEX/CBOM
-        into a release either collides with the component's SBOM or occupies
-        its slot, so PRODUCT_RELEASE is rejected for non-SBOM artifacts."""
-        config = Config(
-            token="test-token",
-            component_id="test-component",
-            bom_type="vex",
-            sbom_file="/path/to/authored.vex.cdx.json",
-            product_releases='["myproduct:v1.0.0"]',
-        )
-        with self.assertRaises(ConfigurationError) as cm:
-            config.validate()
-        self.assertIn("PRODUCT_RELEASE", str(cm.exception))
+    def test_bom_type_non_sbom_allows_product_release(self):
+        """A release slot is keyed on (component, format, bom_type), so a VEX,
+        CBOM or HBOM occupies its own slot and cannot displace the component's
+        SBOM. This was rejected on the assumption of one SBOM per component and
+        format, which left a hardware or crypto BOM unable to be part of the
+        release it ships in."""
+        for bom_type in ("vex", "cbom", "hbom"):
+            with self.subTest(bom_type=bom_type):
+                config = Config(
+                    token="test-token",
+                    component_id="test-component",
+                    bom_type=bom_type,
+                    sbom_file=f"/path/to/authored.{bom_type}.cdx.json",
+                    product_releases='["myproduct:v1.0.0"]',
+                )
+
+                config.validate()
+
+                self.assertEqual(config.product_releases, ["myproduct:v1.0.0"])
 
     def test_bom_type_non_sbom_no_upload_allows_other_destinations(self):
         """With UPLOAD=false nothing is sent anywhere, so configured
