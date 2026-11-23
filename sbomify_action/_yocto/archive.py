@@ -1,10 +1,9 @@
 """Archive extraction for Yocto SPDX tar.zst and tar.gz files."""
 
+import sys
 import tarfile
 import tempfile
 from pathlib import Path
-
-import zstandard
 
 from sbomify_action.exceptions import FileProcessingError
 from sbomify_action.logging_config import logger
@@ -75,7 +74,19 @@ def extract_archive(archive_path: str, dest_dir: str | None = None) -> str:
 
 
 def _extract_tar_zst(archive: Path, dest: Path) -> None:
-    """Extract a tar.zst archive."""
+    """Extract a tar.zst archive.
+
+    Python 3.14+ reads zstd natively (PEP 784), so the zstandard package is
+    only needed on older interpreters. It ships no wheels for 3.15, and the
+    image has no compiler to build it from source.
+    """
+    if sys.version_info >= (3, 14):
+        with tarfile.open(archive, mode="r|zst") as tar:
+            tar.extractall(path=dest, filter="data")
+        return
+
+    import zstandard
+
     dctx = zstandard.ZstdDecompressor()
     with open(archive, "rb") as fh:
         with dctx.stream_reader(fh) as reader:
