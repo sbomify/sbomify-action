@@ -31,7 +31,7 @@ TOKEN = "test-token"
 @pytest.fixture
 def stub_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     stub = MagicMock()
-    monkeypatch.setattr("sbomify_action._processors.releases_api._client", lambda _base, _token: stub)
+    monkeypatch.setattr("sbomify_action._processors.releases_api._client", lambda *_args: stub)
     return stub
 
 
