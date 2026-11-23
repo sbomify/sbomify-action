@@ -449,14 +449,10 @@ class CdxgenImageGenerator:
                 spec_version=version,
                 generator_name=self.name,
             )
-        except DockerImageNotFoundError as e:
-            # Provide a clear error message for missing Docker images
-            return GenerationResult.failure_result(
-                error_message=str(e),
-                sbom_format="cyclonedx",
-                spec_version=version,
-                generator_name=self.name,
-            )
+        except DockerImageNotFoundError:
+            # The registry has no such image, or will not hand it over. No other
+            # generator can pull it either, so keep the type for the orchestrator.
+            raise
         except SBOMGenerationError as e:
             return GenerationResult.failure_result(
                 error_message=str(e),
