@@ -67,7 +67,9 @@ def inject_yocto_purls_spdx22(spdx_file: str) -> int:
         refs = pkg.setdefault("externalRefs", [])
         refs.append(
             {
-                "referenceCategory": "PACKAGE-MANAGER",
+                # The underscore is the only spelling the SPDX 2.2 schema
+                # accepts; 2.3 accepts it too. The hyphen is 2.3-only.
+                "referenceCategory": "PACKAGE_MANAGER",
                 "referenceType": "purl",
                 "referenceLocator": purl,
             }
@@ -86,8 +88,12 @@ def inject_yocto_purls_spdx3(spdx3_file: str) -> int:
     """Inject yocto PURLs into SPDX 3 Package elements missing one.
 
     Reads *spdx3_file* as JSON-LD, iterates ``@graph`` for Package /
-    software_Package elements, and sets ``packageUrl`` for those without
-    an existing value.  Writes the file back in-place.
+    software_Package elements, and sets ``software_packageUrl`` for those
+    without an existing value.  Writes the file back in-place.
+
+    The 3.0 JSON-LD context names these properties with the ``software_``
+    prefix, and the schema refuses the bare ``packageUrl``. Both spellings are
+    read, since converter output uses the bare one.
 
     Returns:
         Number of PURLs injected.
@@ -104,7 +110,7 @@ def inject_yocto_purls_spdx3(spdx3_file: str) -> int:
         if el_type not in ("software_Package", "Package"):
             continue
 
-        existing = element.get("packageUrl")
+        existing = element.get("software_packageUrl") or element.get("packageUrl")
         if existing:
             continue
 
@@ -112,8 +118,8 @@ def inject_yocto_purls_spdx3(spdx3_file: str) -> int:
         if not name:
             continue
 
-        version = element.get("packageVersion") or None
-        element["packageUrl"] = generate_yocto_purl(name, version)
+        version = element.get("software_packageVersion") or element.get("packageVersion") or None
+        element["software_packageUrl"] = generate_yocto_purl(name, version)
         injected += 1
 
     if injected:
