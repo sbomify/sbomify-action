@@ -31,6 +31,11 @@ class SBOMGenerationError(SbomifyError):
         super().__init__(message)
 
 
+class InputRefusedError(SBOMGenerationError):
+    """Raised when an input is deliberately not processed, for a reason the
+    user can act on -- a decision, not a defect, and reported as one."""
+
+
 class DockerImageNotFoundError(SBOMGenerationError):
     """Raised when a Docker image cannot be found in any registry.
 

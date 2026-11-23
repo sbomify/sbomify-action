@@ -366,8 +366,19 @@ class _DowngradeRefused(SBOMGenerationError):
     """
 
 
-def _degraded_message(failed: str, remaining: list[str], error: str) -> str:
-    """Explain a silent quality downgrade that we are refusing to perform."""
+def _degraded_message(failed: str, remaining: list[str], error: str, refused: bool = False) -> str:
+    """Explain a silent quality downgrade that we are refusing to perform.
+
+    A deliberate refusal is a decision, not a bug in the image, so it is not
+    called one: its own message already says what to change.
+    """
+    if refused:
+        return (
+            f"Generator '{failed}' refused this input: {error}\n"
+            f"Falling back to {', '.join(remaining)} would silently produce a "
+            f"lower-quality SBOM than the one that was asked for, so the run stops here.\n"
+            f"Set {_ALLOW_FALLBACK_ENV}=1 to fall back anyway."
+        )
     return (
         f"Generator '{failed}' claimed this input and then failed: {error}\n"
         f"Falling back to {', '.join(remaining)} would silently produce a "
@@ -572,7 +583,9 @@ class GeneratorRegistry:
                     # A routing decision, not a defect: always hand on.
                     logger.info(f"Generator {generator.name} declined this input: {result.error_message}")
                 elif strict and remaining:
-                    raise _DowngradeRefused(_degraded_message(generator.name, remaining, str(result.error_message)))
+                    raise _DowngradeRefused(
+                        _degraded_message(generator.name, remaining, str(result.error_message), result.refused)
+                    )
                 else:
                     self._warn_degraded(generator.name, remaining, str(result.error_message))
             except _DowngradeRefused:
