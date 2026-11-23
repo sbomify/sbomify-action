@@ -69,6 +69,8 @@ The image's working directory is `/workspace`, so mounting your repository there
 
 📖 [Runtime guides](https://sbomify.com/sbomify-action/runtimes/) — GitHub Actions, GitLab CI, Bitbucket, Jenkins, CircleCI, Azure DevOps, TeamCity, any container runner, and local
 
+📂 [Examples](https://github.com/sbomify/sbomify-action/tree/master/examples) — complete, pinned workflows to copy: Python, Node, Go, Rust, Java and a container image on GitHub Actions, plus GitLab CI, Bitbucket Pipelines and a monorepo matrix
+
 ## Why not just run a scanner?
 
 A scanner's job is **detection**. It gives you a name, a version and a PURL, and leaves supplier, license, description and hashes empty — which are exactly the fields [NTIA](https://sbomify.com/compliance/ntia-minimum-elements/), [CISA](https://sbomify.com/compliance/cisa-minimum-elements/) and the [EU CRA](https://sbomify.com/compliance/eu-cra/) ask for. A raw scan is a dependency list; compliance needs an SBOM.
@@ -121,6 +123,12 @@ Naming a *manifest* that sits beside its lock file reads the lock file instead: 
 Container images are supported via `DOCKER_IMAGE`, and a whole directory via `SOURCE_DIR` — though a directory scan is a weaker claim than a lock file, so reach for it only when nothing else applies.
 
 📖 [Input sources](https://sbomify.com/sbomify-action/sources/)
+
+## Monorepos
+
+One run reads one input and writes one SBOM, so a repository with several packages runs the action once per package, usually as a matrix job, each uploading to its own sbomify component. The SBOMs are not merged on the client, by design: `PRODUCT_RELEASE` tags each one into the same product release, and the release in sbomify is the combined view. Point each run at its package with `working-dir`, and give each its own `LOCK_FILE`, `COMPONENT_NAME` and `OUTPUT_FILE`.
+
+📖 [Monorepo guide](https://github.com/sbomify/sbomify-action/blob/master/docs/monorepo.md) — working directories, matrix jobs, workspace lock files, naming and versioning, and the pitfalls · [matrix workflow](https://github.com/sbomify/sbomify-action/blob/master/examples/github/monorepo.yml)
 
 ## Format support
 
@@ -244,6 +252,8 @@ Documents are capped at 50 MB each.
 
 In this repository:
 
+- [Examples](https://github.com/sbomify/sbomify-action/tree/master/examples) — copy-paste workflows per ecosystem and CI system
+- [Monorepos](https://github.com/sbomify/sbomify-action/blob/master/docs/monorepo.md) — one component per package, matrix jobs and their pitfalls
 - [Enrichment coverage](https://github.com/sbomify/sbomify-action/blob/master/docs/enrichment_coverage.md) — expected field coverage per ecosystem
 - [NTIA comparison](https://github.com/sbomify/sbomify-action/blob/master/docs/ntia_comparison.md) — how output maps to the NTIA minimum elements
 - [Architecture decision records](https://github.com/sbomify/sbomify-action/tree/master/docs/adr)

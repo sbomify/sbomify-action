@@ -1,0 +1,35 @@
+# Rust: a CycloneDX SBOM from Cargo.lock on every push to main, kept as a build
+# artifact so no sbomify account is needed. Copy to .github/workflows/.
+# No toolchain step: the action fetches its own Rust toolchain on first use.
+name: SBOM
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  # id-token: write  # sbomify trusted publishing (OIDC), instead of a TOKEN
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: sbomify/sbomify-action@57ca9ba7de2232b073a3799bc8c0dc002e6777b9 # v26.10.2
+        env:
+          LOCK_FILE: Cargo.lock
+          OUTPUT_FILE: sbom.cdx.json
+          ENRICH: 'true'
+          UPLOAD: 'false' # 'true' to upload to sbomify, with the two lines below
+          # TOKEN: ${{ secrets.SBOMIFY_TOKEN }}
+          # COMPONENT_ID: your-component-id
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: sbom.cdx.json
+          if-no-files-found: error
