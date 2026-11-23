@@ -10,6 +10,7 @@ import json
 import os
 import platform
 import subprocess
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -372,7 +373,12 @@ def fetch_chainguard_sbom(info: ChainguardBaseImage) -> dict[str, Any]:
             if predicate.get("spdxVersion"):
                 pkg_count = len(predicate.get("packages", []))
                 logger.info(f"Found Chainguard SPDX SBOM with {pkg_count} packages")
-                return dict(predicate)
+                document = dict(predicate)
+                # apko writes this one namespace into every image SBOM, so it
+                # names no one document. The copy this action writes gets its own.
+                if document.get("documentNamespace") in (None, "", "https://spdx.org/spdxdocs/apko/"):
+                    document["documentNamespace"] = f"https://sbomify.com/spdx/chainguard/{uuid.uuid4()}"
+                return document
 
     raise RuntimeError(f"No SPDX SBOM found in attestations for {image_with_digest}")
 
