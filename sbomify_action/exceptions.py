@@ -167,5 +167,17 @@ class InputPathNotFoundError(FileProcessingError):
     """
 
 
+class UnsupportedLockFileError(FileProcessingError):
+    """Raised when LOCK_FILE names a file the action does not know how to read.
+
+    Lock files are recognised by their conventional name (``conan.lock``,
+    ``yarn.lock``, ...), so ``at_c_conan.lock`` or ``Podfile.lock`` is turned
+    away before any generator runs. That is the user's input to change, not a
+    defect in the action: like ``InputPathNotFoundError`` it is a distinct type
+    so telemetry can leave it out. Because the message carries the path, every
+    such run used to open its own error-tracking issue.
+    """
+
+
 class CommandExecutionError(SbomifyError):
     """Raised when external command execution fails."""
