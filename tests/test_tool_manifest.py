@@ -33,6 +33,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 
 
+# ``version_from = { ... }`` as an actual entry, not the words in a comment.
+# The manifest explains its own freezing mechanism in prose, and a substring
+# check on the whole file reads that explanation as an unresolved pin -- which
+# is what it did: the build freezes correctly and the test failed on the
+# sentence describing it.
+UNRESOLVED_PIN = re.compile(r"^\s*version_from\s*=", re.MULTILINE)
+
+
 def test_versions_come_from_native_lockfiles_on_master():
     """Tool versions must not be restated in tools.toml.
 
@@ -106,11 +114,11 @@ def test_a_built_wheel_carries_resolved_versions(tmp_path):
         # extraction is not something to leave to chance.
         assert [n for n in names if n.endswith("tools.toml")] == ["sbomify_action/tools.toml"]
         manifest = wheel.read("sbomify_action/tools.toml").decode()
-    assert "version_from" not in manifest, "the wheel still resolves a version from a lockfile it does not ship"
+    assert not UNRESOLVED_PIN.search(manifest), "the wheel still resolves a version from a lockfile it does not ship"
 
     # Frozen for the artifact only: freezing the source tree in place would put
     # the versions back out of Dependabot's reach.
-    assert "version_from" in (root / "sbomify_action" / "tools.toml").read_text()
+    assert UNRESOLVED_PIN.search((root / "sbomify_action" / "tools.toml").read_text())
 
 
 @pytest.mark.slow
@@ -152,14 +160,14 @@ def test_a_built_sdist_carries_resolved_versions(tmp_path):
         member = sdist.extractfile(f"{prefix}/sbomify_action/tools.toml")
         assert member is not None
         manifest = member.read().decode()
-    assert "version_from" not in manifest, "the sdist still resolves a version from a lockfile it does not ship"
+    assert not UNRESOLVED_PIN.search(manifest), "the sdist still resolves a version from a lockfile it does not ship"
 
     assert f"{prefix}/hatch_build.py" in names
     assert f"{prefix}/scripts/freeze_tool_versions.py" in names
 
     # Same as the wheel: frozen for the artifact only, so the versions stay
     # where Dependabot can reach them.
-    assert "version_from" in (root / "sbomify_action" / "tools.toml").read_text()
+    assert UNRESOLVED_PIN.search((root / "sbomify_action" / "tools.toml").read_text())
 
 
 def test_lockfiles_are_the_ones_dependabot_watches():
