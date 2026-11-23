@@ -8,6 +8,8 @@ that module (or ``logging_config``, which imports it) at module scope. The Rich
 console is fetched lazily inside method bodies instead.
 """
 
+import os
+import uuid
 from typing import Any
 
 
@@ -21,6 +23,11 @@ def _rich_console() -> Any:
     return console
 
 
+def _escape(text: str) -> str:
+    """Escape workflow-command data the way the GitHub runner unescapes it."""
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
 class PlainFormatter:
     """Rich-styled output for local terminals and CI systems without annotations.
 
@@ -31,6 +38,13 @@ class PlainFormatter:
     name: str = "plain"
     force_terminal: bool | None = None
     show_log_time: bool = True
+    annotates_warnings: bool = False
+
+    def job_summary(self, markdown: str) -> None:
+        """No-op -- this platform has no summary page."""
+
+    def set_output(self, name: str, value: str) -> None:
+        """No-op -- this platform has no step outputs."""
 
     def group_start(self, title: str) -> None:
         """No-op -- this platform has no collapsible sections."""
@@ -97,6 +111,25 @@ class GitHubActionsFormatter:
     force_terminal: bool | None = True
     # The runner already timestamps every line.
     show_log_time: bool = False
+    annotates_warnings: bool = True
+
+    def job_summary(self, markdown: str) -> None:
+        """Append to the job summary file (container actions are handed one too)."""
+        if path := os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(markdown)
+
+    def set_output(self, name: str, value: str) -> None:
+        """Append a step output.
+
+        Always in the heredoc form, under a delimiter the value cannot know,
+        so a newline in a value (an SBOM id is whatever the server returned)
+        cannot close it early and forge another output.
+        """
+        if path := os.environ.get("GITHUB_OUTPUT"):
+            delimiter = f"ghadelimiter_{uuid.uuid4()}"
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
 
     def group_start(self, title: str) -> None:
         """Open a collapsible job-log group."""
@@ -115,26 +148,30 @@ class GitHubActionsFormatter:
         """Close the step's group."""
         self.group_end()
 
+    def _annotate(self, kind: str, message: str, title: str | None) -> None:
+        """Print one annotation, escaped as the runner unescapes it.
+
+        Annotations carry logged text, which can span lines: unescaped, a
+        newline would end the annotation and leave the rest as a raw log line
+        the runner might read as a command of its own.
+        """
+        if title:
+            title = _escape(title).replace(":", "%3A").replace(",", "%2C")
+            print(f"::{kind} title={title}::{_escape(message)}")
+        else:
+            print(f"::{kind}::{_escape(message)}")
+
     def warning(self, message: str, title: str | None = None) -> None:
         """Emit a warning annotation."""
-        if title:
-            print(f"::warning title={title}::{message}")
-        else:
-            print(f"::warning::{message}")
+        self._annotate("warning", message, title)
 
     def error(self, message: str, title: str | None = None) -> None:
         """Emit an error annotation."""
-        if title:
-            print(f"::error title={title}::{message}")
-        else:
-            print(f"::error::{message}")
+        self._annotate("error", message, title)
 
     def notice(self, message: str, title: str | None = None) -> None:
         """Emit a notice annotation."""
-        if title:
-            print(f"::notice title={title}::{message}")
-        else:
-            print(f"::notice::{message}")
+        self._annotate("notice", message, title)
 
     def final_success(self) -> None:
         """Print a one-line success message (rules waste space in a job log)."""
