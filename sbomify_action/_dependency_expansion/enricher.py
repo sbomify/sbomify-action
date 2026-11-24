@@ -9,8 +9,9 @@ from cyclonedx.model.component import Component, ComponentType
 from packageurl import PackageURL
 
 from ..console import get_audit_trail
+from ..exceptions import SBOMValidationError
 from ..logging_config import logger
-from ..serialization import load_cyclonedx_bom, serialize_cyclonedx_bom
+from ..serialization import load_cyclonedx_bom, load_sbom_json, serialize_cyclonedx_bom
 from ..spdx3 import is_spdx3
 from .expanders.pipdeptree import PipdeptreeExpander
 from .models import DiscoveredDependency, ExpansionResult, normalize_python_package_name
@@ -69,8 +70,7 @@ class DependencyEnricher:
         # Load SBOM early so we can report accurate original_count
         # even when no transitive dependencies are discovered or
         # expansion is skipped entirely.
-        with sbom_path.open("r", encoding="utf-8") as f:
-            sbom_data = json.load(f)
+        sbom_data = load_sbom_json(sbom_file)
 
         # Find applicable expander
         expander = self._registry.get_expander_for(lock_path)
@@ -146,7 +146,13 @@ class DependencyEnricher:
         source: str,
     ) -> ExpansionResult:
         """Add discovered dependencies to CycloneDX SBOM."""
-        bom = load_cyclonedx_bom(sbom_data)
+        # The deserializer reports a malformed document as whatever it tripped
+        # on, AttributeError included, so name it a parse error here, as the
+        # other callers do.
+        try:
+            bom = load_cyclonedx_bom(sbom_data)
+        except Exception as e:
+            raise SBOMValidationError(f"Failed to parse CycloneDX SBOM: {e}") from e
         original_count = len(bom.components) if bom.components else 0
 
         # No components-is-None guard: the property returns a SortedSet that

@@ -600,6 +600,35 @@ class GeneratorRegistry:
         # entitled to exactly that, and refusing it would be worse than
         # reporting it -- so hand it back, saying clearly what it contains.
         if empty is not None:
+            # Except from a lock file with something in it (#384). A non-empty
+            # lock file usually lists dependencies, so an empty SBOM from one
+            # usually means they were not read -- and the document would say
+            # "this project has no dependencies", a false statement that passes
+            # schema validation, uploads cleanly, and is never looked at again.
+            # Usually, not always: a Cargo.lock or uv.lock holding only the
+            # root package, or a stdlib-only go.mod, is not empty and has
+            # nothing to list. Those projects set ALLOW_EMPTY_SBOM.
+            lock_file = input.lock_file
+            if (
+                lock_file
+                and not input.allow_empty_sbom
+                and records_a_resolution(lock_file)
+                and os.path.isfile(lock_file)
+                and os.path.getsize(lock_file) > 0
+            ):
+                name = os.path.basename(lock_file)
+                return GenerationResult.failure_result(
+                    error_message=(
+                        f"No generator found a component in '{name}', although it is a lock file and not "
+                        f"empty ({'; '.join(errors)}). An SBOM with no components would say this project has "
+                        f"no dependencies, so none was written. Check that LOCK_FILE points at the project "
+                        f"you mean, and that '{name}' lists its dependencies. If this project really has no "
+                        f"dependencies, set ALLOW_EMPTY_SBOM=true."
+                    ),
+                    sbom_format=input.output_format,
+                    spec_version=input.spec_version or "default",
+                    generator_name=empty_from or "none",
+                )
             logger.warning(
                 f"No generator found any components for this input; returning the empty "
                 f"SBOM from '{empty_from}'. If this project does have dependencies, they "

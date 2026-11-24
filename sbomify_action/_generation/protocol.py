@@ -115,6 +115,9 @@ class GenerationInput:
     output_file: str = "sbom.json"
     output_format: SBOMFormat = "cyclonedx"
     spec_version: Optional[str] = None
+    #: ALLOW_EMPTY_SBOM: accept an SBOM with no components from a lock file
+    #: that is not empty, which the registry otherwise refuses (#384).
+    allow_empty_sbom: bool = False
 
     def __post_init__(self) -> None:
         """Validate input parameters.

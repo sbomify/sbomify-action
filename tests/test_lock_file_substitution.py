@@ -9,6 +9,9 @@ Substituting is only safe when it is unambiguous and announced. These tests
 are mostly about the cases where it must refuse.
 """
 
+from importlib import import_module
+from unittest.mock import Mock
+
 import pytest
 
 from sbomify_action.cli.main import _expand_lock_file_or_substitute
@@ -64,12 +67,47 @@ def test_an_unrecognised_name_is_not_second_guessed(project):
         _expand_lock_file_or_substitute("something-of-my-own.txt")
 
 
-def test_the_substitution_is_announced(project, caplog):
+@pytest.fixture
+def annotations(monkeypatch):
+    """Every warning annotation the substitution emits."""
+    warn = Mock()
+    monkeypatch.setattr(import_module("sbomify_action.cli.main"), "log_warning", warn)
+    return warn
+
+
+def test_the_substitution_is_announced(project, annotations):
+    """As a platform annotation, so it reaches the run page and not only a log
+    nobody opens on a green run. It names both files."""
     (project / "pnpm-lock.yaml").write_text("{}")
-    with caplog.at_level("WARNING"):
-        _expand_lock_file_or_substitute("package-lock.json")
-    assert "USING A DIFFERENT INPUT THAN THE ONE YOU CONFIGURED" in caplog.text
-    assert "pnpm-lock.yaml" in caplog.text
+    _expand_lock_file_or_substitute("package-lock.json")
+
+    annotations.assert_called_once()
+    message = annotations.call_args.args[0]
+    assert "package-lock.json" in message
+    assert "pnpm-lock.yaml" in message
+
+
+def test_the_announcement_is_one_line_on_github(project, monkeypatch, capsys):
+    """A GitHub annotation ends at the newline; a boxed message is cut to its
+    first line and the rest lands in the log as plain text."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    (project / "pnpm-lock.yaml").write_text("{}")
+    _expand_lock_file_or_substitute("package-lock.json")
+
+    [line] = [line for line in capsys.readouterr().out.splitlines() if line.startswith("::warning")]
+    assert "package-lock.json" in line
+    assert "pnpm-lock.yaml" in line
+
+
+def test_a_project_file_name_cannot_start_a_workflow_command(project, monkeypatch, capsys):
+    """A .csproj is named by whoever wrote the repository. A newline in that
+    name must not end the annotation and put a command of its own on a line."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    (project / "x\n::error::injected.csproj").write_text("<Project />")
+    _expand_lock_file_or_substitute("packages.lock.json")
+
+    lines = capsys.readouterr().out.splitlines()
+    assert not [line for line in lines if line.startswith("::error")]
 
 
 def test_a_lock_file_is_preferred_over_a_manifest(project):
@@ -83,17 +121,16 @@ def test_a_lock_file_is_preferred_over_a_manifest(project):
     assert _expand_lock_file_or_substitute("package-lock.json").endswith("pnpm-lock.yaml")
 
 
-def test_falling_back_to_a_manifest_says_it_is_a_downgrade(project, caplog):
+def test_falling_back_to_a_manifest_says_it_is_a_downgrade(project, annotations):
     """When the manifest is all there is, substituting is still better than
     failing -- but the reader has to be told the versions stopped being a
     record."""
     (project / "package.json").write_text("{}")
 
-    with caplog.at_level("WARNING"):
-        result = _expand_lock_file_or_substitute("package-lock.json")
+    result = _expand_lock_file_or_substitute("package-lock.json")
 
     assert result.endswith("package.json")
-    assert "manifest rather than a lock file" in caplog.text
+    assert "manifest rather than a lock file" in annotations.call_args.args[0]
 
 
 def test_two_manifests_are_still_ambiguous(project):

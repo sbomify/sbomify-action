@@ -14,6 +14,7 @@ from sbomify_action._augmentation import (
     create_default_registry,
 )
 from sbomify_action._augmentation.providers import JsonConfigProvider, SbomifyApiProvider
+from sbomify_action.exceptions import ConfigurationError
 
 
 class TestAugmentationMetadata:
@@ -366,17 +367,25 @@ class TestJsonConfigProvider:
             finally:
                 os.chdir(original_cwd)
 
-    def test_fetch_invalid_json(self):
-        """Test returns None for invalid JSON."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_file = Path(tmpdir) / "sbomify.json"
-            with open(config_file, "w") as f:
-                f.write("{invalid json")
+    @pytest.mark.parametrize("body", ["{invalid json", "[]", '"supplier"'])
+    def test_fetch_unreadable_config_fails(self, tmp_path, body):
+        """The provider runs only with AUGMENT=true, so a config it cannot read
+        means the metadata the user asked for is missing. That used to be a
+        warning and exit 0; now it stops the run."""
+        config_file = tmp_path / "sbomify.json"
+        config_file.write_text(body)
 
-            provider = JsonConfigProvider()
-            result = provider.fetch(config_path=str(config_file))
+        with pytest.raises(ConfigurationError, match="sbomify.json"):
+            JsonConfigProvider().fetch(config_path=str(config_file))
 
-            assert result is None
+    def test_registry_lets_a_config_error_through(self, tmp_path):
+        """The registry swallows provider errors so one flaky source cannot
+        sink the rest. A broken config file is not a flaky source."""
+        config_file = tmp_path / "sbomify.json"
+        config_file.write_text("{invalid json")
+
+        with pytest.raises(ConfigurationError):
+            create_default_registry().fetch_metadata(config_path=str(config_file))
 
     def test_fetch_empty_config(self):
         """Test returns None for empty config (no meaningful data)."""
