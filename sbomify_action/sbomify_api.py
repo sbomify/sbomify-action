@@ -954,6 +954,27 @@ class SbomifyApiClient:
             err_msg += f" - {body['detail']}"
         raise APIError(err_msg)
 
+    def link_release(self, release_id: str, product_id: str, version: str) -> None:
+        """Link another product's release, by product and version, into ``release_id``.
+
+        Idempotent: an existing link (409 CONFLICT) is not an error.
+        """
+        response = self._request(
+            "POST",
+            f"/api/v1/releases/{release_id}/links",
+            json_body={"product_id": product_id, "version": version},
+        )
+        if response.ok:
+            return
+        body = self._safe_json_dict(response)
+        if response.status_code == 409 and body is not None and body.get("error_code") == "CONFLICT":
+            logger.info(f"Release {release_id} already includes {product_id}:{version}")
+            return
+        err_msg = f"Failed to include {product_id}:{version} in release. [{response.status_code}]"
+        if body is not None and "detail" in body:
+            err_msg += f" - {body['detail']}"
+        raise APIError(err_msg)
+
     # ------------------------------------------------------------------
     # OIDC trusted publishing
 
