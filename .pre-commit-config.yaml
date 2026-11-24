@@ -1,29 +1,27 @@
 ---
+# Each hook runs the tool pinned in uv.lock, in the project's own venv, so the
+# hooks and CI's Sanity Checks run the same versions against the same
+# installed packages. Mirror hooks carried their own pins, which drifted from
+# the lock, and mypy's isolated env lacked runtime deps such as
+# packageurl-python, so it failed on a clean checkout.
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Ruff version.
-    rev: v0.12.0
+  - repo: local
     hooks:
-      # Run the linter.
       - id: ruff
-        args: [--fix]
-      # Run the formatter.
+        name: ruff
+        entry: uv run --frozen ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
       - id: ruff-format
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.19.1
-    hooks:
+        name: ruff format
+        entry: uv run --frozen ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
       - id: mypy
-        args: [--config-file=pyproject.toml, sbomify_action]
+        name: mypy
+        entry: uv run --frozen mypy sbomify_action
+        language: system
+        types: [python]
         pass_filenames: false
-        additional_dependencies:
-          - types-requests
-          - types-PyYAML
-          - types-toml
-          - click
-          # The wizard subpackage subclasses Textual's App/Screen/widgets.
-          # Without Textual in the hook's isolated env, mypy treats those base
-          # classes as ``Any`` and emits spurious "Class cannot subclass value
-          # of type Any" / "Returning Any" errors. Pinned to the version in
-          # uv.lock so the hook's type view is reproducible and matches the
-          # runtime; bump together with the textual dep in pyproject/uv.lock.
-          - textual==8.2.7

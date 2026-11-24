@@ -50,6 +50,7 @@ INTENDED = [
 ]
 
 
+@pytest.mark.usefixtures("linux_host")
 @pytest.mark.parametrize(("project", "lock_file", "expected"), INTENDED)
 def test_intended_generator_is_first_in_the_chain(project, lock_file, expected, monkeypatch):
     """The best tool for the ecosystem must be the one that gets asked first."""
@@ -165,6 +166,7 @@ def test_cdxgen_still_leads_for_lock_files(monkeypatch):
     assert CdxgenFsGenerator().priority < SyftFsGenerator().priority
 
 
+@pytest.mark.usefixtures("linux_host")
 def test_a_bare_go_module_falls_to_syft(monkeypatch, tmp_path):
     """No Go source means cyclonedx-gomod must decline rather than panic.
 
@@ -190,6 +192,7 @@ def test_a_bare_go_module_falls_to_syft(monkeypatch, tmp_path):
     assert chain[0] == "syft-fs"
 
 
+@pytest.mark.usefixtures("linux_host")
 @pytest.mark.parametrize(
     ("project", "lock_file", "expected"),
     [
