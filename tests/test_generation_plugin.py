@@ -1,6 +1,7 @@
 """Tests for the SBOM generation plugin architecture."""
 
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -16,7 +17,11 @@ from sbomify_action._generation import (
 from sbomify_action._generation.generators import (
     CdxgenFsGenerator,
     CdxgenImageGenerator,
+    CycloneDXGomodGenerator,
+    CycloneDXGradleGenerator,
+    CycloneDXMavenGenerator,
     CycloneDXPyGenerator,
+    CycloneDXSbtGenerator,
     SyftFsGenerator,
     SyftImageGenerator,
     TrivyFsGenerator,
@@ -782,6 +787,83 @@ class TestSyftFsGenerator(unittest.TestCase):
         self.assertIn("2.2", spdx.versions)
 
 
+def _write_cyclonedx(cmd, name, timeout=None, cwd=None):
+    """Stand in for cyclonedx-gomod: write a document where -output points."""
+    Path(cmd[cmd.index("-output") + 1]).write_text('{"bomFormat": "CycloneDX"}')
+    return MagicMock(returncode=0)
+
+
+@patch("sbomify_action._generation.generators.cyclonedx_gomod.ensure_runtime", lambda *a, **k: None)
+class TestCycloneDXGomodGenerator(unittest.TestCase):
+    """Tests for CycloneDXGomodGenerator."""
+
+    @patch("sbomify_action._generation.generators.cyclonedx_gomod.run_command", side_effect=_write_cyclonedx)
+    def test_requested_cyclonedx_version_reaches_the_tool(self, mock_run):
+        """Without -output-version gomod writes its own default (1.6) whatever
+        was asked for, while the result reports the requested version."""
+        with tempfile.TemporaryDirectory() as tmp:
+            gen_input = GenerationInput(
+                lock_file=str(Path(tmp) / "go.mod"), output_file=str(Path(tmp) / "sbom.json"), spec_version="1.4"
+            )
+            result = CycloneDXGomodGenerator().generate(gen_input)
+
+        self.assertTrue(result.success)
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("-output-version") + 1], "1.4")
+
+    @patch("sbomify_action._generation.generators.cyclonedx_gomod.convert_to_spdx")
+    @patch("sbomify_action._generation.generators.cyclonedx_gomod.run_command", side_effect=_write_cyclonedx)
+    def test_spdx_without_a_version_reports_2_3(self, mock_run, mock_convert):
+        """The internal "SPDX-2.3" marker is not a version. Reported as one, it
+        matched no schema and validation was skipped. The tool itself runs at
+        CycloneDX 1.6, the document the conversion reads."""
+        mock_convert.side_effect = lambda src, dst, cwd: Path(dst).write_text("{}")
+        with tempfile.TemporaryDirectory() as tmp:
+            gen_input = GenerationInput(
+                lock_file=str(Path(tmp) / "go.mod"), output_file=str(Path(tmp) / "sbom.json"), output_format="spdx"
+            )
+            result = CycloneDXGomodGenerator().generate(gen_input)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.spec_version, "2.3")
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("-output-version") + 1], "1.6")
+
+
+@patch("sbomify_action._generation.generators.cyclonedx_jvm.ensure_runtime", lambda *a, **k: None)
+class TestCycloneDXJvmGenerators(unittest.TestCase):
+    """Tests for the Maven, Gradle and sbt generators."""
+
+    @patch("sbomify_action._generation.generators.cyclonedx_jvm.convert_to_spdx")
+    def test_spdx_without_a_version_reports_2_3(self, mock_convert):
+        """The internal "SPDX-2.3" marker is not a version. Reported as one, it
+        matched no schema and validation was skipped."""
+        mock_convert.side_effect = lambda src, dst, cwd: Path(dst).write_text("{}")
+
+        def _plugin_wrote_cyclonedx(_self, _project_dir, output):
+            output.write_text('{"bomFormat": "CycloneDX"}')
+
+        for generator, build_file in (
+            (CycloneDXMavenGenerator, "pom.xml"),
+            (CycloneDXGradleGenerator, "build.gradle"),
+            (CycloneDXSbtGenerator, "build.sbt"),
+        ):
+            with (
+                self.subTest(generator=generator.__name__),
+                patch.object(generator, "_run", _plugin_wrote_cyclonedx),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                gen_input = GenerationInput(
+                    lock_file=str(Path(tmp) / build_file),
+                    output_file=str(Path(tmp) / "sbom.json"),
+                    output_format="spdx",
+                )
+                result = generator().generate(gen_input)
+
+                self.assertTrue(result.success, result.error_message)
+                self.assertEqual(result.spec_version, "2.3")
+
+
 class TestCreateDefaultRegistry(unittest.TestCase):
     """Tests for create_default_registry factory."""
 
@@ -807,6 +889,21 @@ class TestCreateDefaultRegistry(unittest.TestCase):
 
         priorities = [g["priority"] for g in generators]
         self.assertEqual(priorities, sorted(priorities))
+
+    def test_every_default_version_is_one_a_user_can_set(self):
+        """A generator's default is the version it reports and validates as.
+
+        The internal "SPDX-2.3" marker was the default for the converting
+        generators, so an SPDX run with no SPEC_VERSION reported "SPDX-2.3",
+        matched no schema and skipped validation.
+        """
+        from sbomify_action._generation.protocol import CYCLONEDX_VERSIONS, SPDX_VERSIONS
+
+        settable = {"cyclonedx": CYCLONEDX_VERSIONS, "spdx": SPDX_VERSIONS}
+        for generator in create_default_registry().list_generators():
+            for fmt in generator["formats"]:
+                with self.subTest(generator=generator["name"], format=fmt["format"]):
+                    self.assertIn(fmt["default"], settable.get(fmt["format"], ()))
 
 
 class TestGeneratorOrchestrator(unittest.TestCase):
