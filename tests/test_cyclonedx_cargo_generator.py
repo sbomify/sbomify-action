@@ -187,7 +187,7 @@ class TestCycloneDXCargoGenerator(unittest.TestCase):
             project.mkdir()
             (project / "Cargo.lock").write_text("")
 
-            def _run(cmd, name, timeout=None, cwd=None):
+            def _run(cmd, name, timeout=None, cwd=None, **_):
                 stem = cmd[cmd.index("--override-filename") + 1]
                 (Path(cwd) / f"{stem}.json").write_text('{"bomFormat": "CycloneDX"}')
                 return MagicMock(returncode=0)
