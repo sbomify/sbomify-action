@@ -256,6 +256,63 @@ In this repository:
 
 **Pinning.** Examples here use `@master` so they stay correct as the action moves. Do not ship that: pin to a release tag, or for production to a full 40-character commit SHA — see [SECURITY.md](https://github.com/sbomify/sbomify-action/blob/master/SECURITY.md). The wizard does this automatically for the workflows it generates.
 
+## Telemetry
+
+Error reporting is on by default. When the action fails it sends a report to the Sentry server at
+`sentry.vikpire.com`, so the failure reaches the people who can fix it, and every run with it on
+says so in its log. If your security review has to account for each outbound data flow from CI,
+this is what that one carries.
+
+**When a report is sent.** Only on an error: an exception the action did not handle, or a line it
+logged at `ERROR` or above. A run that logs no errors sends nothing. Errors that are yours to fix
+are filtered out: invalid configuration, an SBOM that fails validation, a lock file, directory or
+image that is not there, a generator that is not installed, a rejected token (401/403), OIDC setup
+problems, and publishing a version that already exists.
+
+**What a report contains.**
+
+- The error message, and for an exception its type and stack trace: file paths, function names,
+  line numbers and the surrounding source lines of sbomify-action and its libraries. When a
+  generator such as cdxgen fails, the message includes that tool's own output.
+- Up to 100 breadcrumbs from before the error: log lines at `INFO` and above, the command lines of
+  the programs the action ran, and its HTTP requests (method, URL with query string, status code;
+  credentials embedded in a URL are masked).
+- The sbomify-action version, the Python version, and the installed Python packages and versions.
+- The CI platform and, where the platform says, whether the repository is public. For a public
+  repository on GitHub Actions or GitLab CI, also the repository, workflow or job, ref, commit SHA
+  and run or pipeline identifiers. Private repositories send none of these.
+
+**What it leaves out.**
+
+- Your SBOM, lock files and source code. Log lines quoted in a report can still name files,
+  packages and your component ID.
+- Your machine's hostname, IP address and user details: the SDK attaches none of them
+  (`send_default_pii` is off). The Sentry server still sees the address the request comes from, as
+  any server does.
+- Your home directory and checkout path, which are replaced with `<home>` and `<workspace>` in
+  messages, stack traces and breadcrumbs.
+- Bearer tokens and JWTs: a Bearer token is replaced with `Bearer [REDACTED]` and any other JWT
+  with `[REDACTED-JWT]`. Other secret formats are not recognised, so do not print secrets into
+  the action's log.
+- The command line (and with it a `--token` passed on it), local variable values, and environment
+  variables other than the public-repository details above.
+
+No performance traces or profiles are sent. The SDK is configured to sample them (10% of
+transactions, and 10% of those profiled), but the action records none.
+
+**Turning it off.** Set `TELEMETRY: false`, or pass `--no-telemetry` to the CLI. Nothing is sent
+and no notice is printed.
+
+```yaml
+env:
+  TELEMETRY: false
+```
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `TELEMETRY` | `true` | `false` turns error reporting off. CLI: `--telemetry` / `--no-telemetry` |
+| `SENTRY_DSN` | the project on `sentry.vikpire.com` | Send reports to your own Sentry project instead |
+
 ## Security
 
 Report vulnerabilities to <security@sbomify.com>. See [SECURITY.md](https://github.com/sbomify/sbomify-action/blob/master/SECURITY.md) for scope, response targets and hardening guidance.
