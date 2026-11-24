@@ -88,6 +88,13 @@ class EcosystemsSource:
             metadata = None
             if response.status_code == 200:
                 data = response.json()
+                if purl.type == "github" and isinstance(data, list):
+                    # A pkg:github purl names a repository. ecosyste.ms also
+                    # answers with any registry package published from it --
+                    # typically a Go module proxy entry for a C++ library --
+                    # whose licence and registry URL are not this component's.
+                    # Only a GitHub Action is the repository itself.
+                    data = [entry for entry in data if isinstance(entry, dict) and entry.get("ecosystem") == "actions"]
                 # API returns an array, take first result
                 if isinstance(data, list) and len(data) > 0:
                     metadata = self._normalize_response(purl.type, data[0])

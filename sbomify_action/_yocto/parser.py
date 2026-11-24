@@ -107,7 +107,7 @@ def discover_packages(extract_dir: str) -> list[YoctoPackage]:
 
     for spdx_file in spdx_files:
         try:
-            with open(spdx_file, "r") as f:
+            with open(spdx_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"Skipping {spdx_file.name}: {e}")

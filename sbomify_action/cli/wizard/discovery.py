@@ -90,6 +90,8 @@ _LOCKFILE_PRIORITY: dict[str, int] = {
     "build.gradle.kts": 51,
     "build.gradle": 52,
     "pom.xml": 53,
+    # PlatformIO
+    "platformio.ini": 58,
     # Rust
     "Cargo.lock": 55,
     "Cargo.toml": 56,

@@ -38,7 +38,7 @@ class PubspecLockParser:
         Returns:
             List of PackageHash objects for all packages with hashes.
         """
-        with lock_file_path.open("r") as f:
+        with lock_file_path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         hashes: list[PackageHash] = []

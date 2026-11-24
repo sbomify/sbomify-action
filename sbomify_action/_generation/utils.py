@@ -5,11 +5,13 @@ import re
 import shutil
 import subprocess
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
 from sbomify_action._runtime.git import git_safe_directory_env
-from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
+from sbomify_action.exceptions import DockerImageNotFoundError, ProjectResolutionError, SBOMGenerationError
+from sbomify_action.logging_config import ESCAPE_RE as _ANSI_RE
 from sbomify_action.logging_config import logger
 from sbomify_action.release_version import normalize_release_version, tag_from_ci
 from sbomify_action.runtimes import ensure_runtime, fetching_is_enabled
@@ -133,6 +135,11 @@ SCALA_LOCK_FILES = ["build.sbt"]
 
 TERRAFORM_LOCK_FILES = [".terraform.lock.hcl"]
 
+# PlatformIO (Arduino, ESP32 and other embedded targets). Not a lock file:
+# the generator reads what `pio pkg install` recorded under .pio/libdeps --
+# see sbomify_action._platformio.
+PLATFORMIO_LOCK_FILES = ["platformio.ini"]
+
 # All supported lock files
 ALL_LOCK_FILES = (
     PYTHON_LOCK_FILES
@@ -152,6 +159,7 @@ ALL_LOCK_FILES = (
     + HASKELL_LOCK_FILES
     + ERLANG_LOCK_FILES
     + CLOJURE_LOCK_FILES
+    + PLATFORMIO_LOCK_FILES
 )
 
 # =============================================================================
@@ -252,17 +260,17 @@ def convert_to_spdx(cyclonedx: Path, output: Path, cwd: Path) -> None:
     because the bundles that carry a native generator carry syft too.
     """
     ensure_runtime("syft")
+    # Absolute, because syft runs in the project directory and the caller's
+    # paths are relative to wherever sbomify-action was started. With
+    # LOCK_FILE in a subdirectory and a relative OUTPUT_FILE, syft looked
+    # for the staged document inside the project and failed.
     run_command(
-        ["syft", "convert", str(cyclonedx), "-o", f"spdx-json={output}"],
+        ["syft", "convert", str(cyclonedx.resolve()), "-o", f"spdx-json={output.resolve()}"],
         "syft",
         timeout=600,
         cwd=str(cwd),
     )
 
-
-# ANSI SGR sequences. cdxgen colours its diagnostics, and the escape bytes end
-# up inside the log message (and therefore inside the Sentry issue title).
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 # Volatile fragments that differ between runs of the *same* failure: absolute
 # paths, hex ids, line/column numbers, durations.
@@ -473,7 +481,9 @@ def extract_error_summary(output: str | None, max_chars: int = 500) -> str:
     if not output:
         return ""
 
-    output = output.strip()
+    # The summary ends up in the SBOMGenerationError message, which the
+    # registry logs when it falls back to the next generator.
+    output = _ANSI_RE.sub("", output).strip()
 
     # Try to find error-specific lines
     error_lines = []
@@ -509,6 +519,7 @@ def run_command(
     docker_image: str | None = None,
     log_errors: bool = True,
     env: dict[str, str] | None = None,
+    project_unresolvable: Callable[[str], bool] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """
     Run a command and handle common error cases.
@@ -538,12 +549,18 @@ def run_command(
             child also gets ``safe.directory`` via git's environment
             configuration (see ``git_safe_directory_env``), since generators
             routinely shell out to tools that ask git about the workspace.
+        project_unresolvable: Given the failed command's combined output,
+            whether the tool rejected the user's project rather than failed
+            itself. When it returns True the failure is logged as a warning
+            and raised as ``ProjectResolutionError``, which stays out of
+            error telemetry.
 
     Returns:
         CompletedProcess result
 
     Raises:
         DockerImageNotFoundError: If the Docker image doesn't exist in the registry
+        ProjectResolutionError: If ``project_unresolvable`` recognises the failure
         SBOMGenerationError: If command fails or times out for other reasons
     """
     import threading
@@ -608,6 +625,17 @@ def run_command(
                 returncode=e.returncode,
             )
 
+        # The tool ran and told us what is wrong with the user's project: a
+        # manifest that does not parse, a registry it cannot reach. Theirs to
+        # fix, so a warning that carries the tool's words, not an error event.
+        output = combined_output(stderr, stdout)
+        if project_unresolvable and project_unresolvable(output):
+            log_command_error(command_name, stderr, stdout, level="warning")
+            message = f"{command_name} could not resolve this project"
+            if error_summary := extract_error_summary(output):
+                message += f": {error_summary}"
+            raise ProjectResolutionError(message, stderr=stderr, stdout=stdout, returncode=e.returncode)
+
         # Other errors normally log at ERROR (potential bugs or system issues).
         # When the caller is a priority-chain generator that fails gracefully
         # (log_errors=False), drop to DEBUG so an expected fallback doesn't
@@ -615,14 +643,20 @@ def run_command(
         # still raised, and the orchestrator logs ERROR only if all generators
         # fail.
         if log_errors:
-            logger.error(f"{command_name} command failed with error: {e}")
+            # The exit status alone says nothing about the cause, and as an
+            # ERROR it became one Sentry issue per tool holding every failure
+            # that tool ever had. When there is output, log_command_error
+            # reports it under a fingerprint of the actual cause; the status
+            # line only needs to be an error when it is all we have.
+            status_log = logger.warning if output else logger.error
+            status_log(f"{command_name} command failed with error: {e}")
             log_command_error(command_name, stderr, stdout)
         else:
             logger.debug(f"{command_name} command failed (trying next generator): {e}")
             log_command_error(command_name, stderr, stdout, level="debug")
 
         # Include error summary in the exception message for better diagnostics
-        error_summary = extract_error_summary(combined_output(stderr, stdout))
+        error_summary = extract_error_summary(output)
         message = f"{command_name} command failed with return code {e.returncode}"
         if error_summary:
             message += f": {error_summary}"

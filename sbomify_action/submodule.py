@@ -35,8 +35,11 @@ _REMOTE_TIMEOUT = 30
 
 # Version-shaped tags, mirroring the tag patterns wizard-emitted
 # workflows trigger on (``v*`` + ``[0-9]*``): v-prefixed or bare-numeric
-# SemVer / CalVer.
-_VERSION_TAG_RE = re.compile(r"^v?\d")
+# SemVer / CalVer. Tags come from the submodule remote's ref advertisement
+# and become the logged and uploaded component version, so only the
+# characters a version uses are accepted: git allows escape bytes and
+# markup brackets in ref names.
+_VERSION_TAG_RE = re.compile(r"^v?\d[0-9A-Za-z.+_-]*$")
 
 _SHORT_SHA_LEN = 7
 

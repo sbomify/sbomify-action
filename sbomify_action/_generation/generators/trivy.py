@@ -141,7 +141,7 @@ class TrivyFsGenerator:
             # Trivy outputs to stdout, save to file
             try:
                 json_data = json.loads(result.stdout)
-                with Path(input.output_file).open("w") as f:
+                with Path(input.output_file).open("w", encoding="utf-8") as f:
                     json.dump(json_data, f, indent=4)
 
                 return GenerationResult.success_result(
@@ -275,7 +275,7 @@ class TrivyImageGenerator:
             # Trivy outputs to stdout, save to file
             try:
                 json_data = json.loads(result.stdout)
-                with Path(input.output_file).open("w") as f:
+                with Path(input.output_file).open("w", encoding="utf-8") as f:
                     json.dump(json_data, f, indent=4)
 
                 return GenerationResult.success_result(

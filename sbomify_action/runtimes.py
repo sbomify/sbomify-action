@@ -49,7 +49,7 @@ import time
 import tomllib
 import zipfile
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -88,6 +88,21 @@ _T = TypeVar("_T")
 # prefix that exists but lacks this file is from an older/partial layout and
 # is re-fetched rather than trusted.
 _READY = ".sbomify-runtime-ready"
+
+# Every pinned artifact is a Linux binary. tools.toml names linux-amd64 and
+# linux-arm64 assets, and the bundles from sbomify/sbom-tools follow the same
+# slugs, so on any other kernel there is nothing here that can be executed.
+_RUNTIME_OS = "Linux"
+
+# What to look for on PATH when a runtime id is not itself a command. A runtime
+# is a thing we fetch, which is not always a thing you can run: the jvm bundle's
+# "maven" installs `mvn`, and "rust" is a toolchain -- cargo-cyclonedx shells out
+# to both `cargo` and `rustc`, and there is no `rust` binary to find. Anything
+# absent here is its own command name.
+_COMMANDS: dict[str, tuple[str, ...]] = {
+    "maven": ("mvn",),
+    "rust": ("cargo", "rustc"),
+}
 
 
 @dataclass(frozen=True)
@@ -190,7 +205,41 @@ def can_provide(tool: str) -> bool:
     asked `name in RUNTIMES` reported itself unavailable and the whole chain
     quietly fell through to syft.
     """
-    return (bundle_for(tool) is not None or tool in RUNTIMES) and fetching_is_enabled()
+    return (bundle_for(tool) is not None or tool in RUNTIMES) and fetching_is_enabled() and host_runs_runtimes()
+
+
+def host_runs_runtimes() -> bool:
+    """Whether the pinned runtimes could run on this host at all.
+
+    Separate from :func:`fetching_is_enabled`, which is about whether we may
+    reach the network. This is about whether the bytes on the other end are
+    executable here. Downloading a Linux binary onto macOS is not a slower
+    success: it ends in ``[Errno 8] Exec format error``, after the download,
+    naming a cache path the user never asked for.
+    """
+    return platform.system() == _RUNTIME_OS
+
+
+def _installed_instead(name: str) -> Path:
+    """Fall back to an installed copy of ``name`` on a host we have no runtime for.
+
+    A pip install on macOS is a supported way to run this -- the package is
+    published OS Independent -- and such a host already has the real tool, or
+    can install it. What it must not do is run ours.
+    """
+    commands = _COMMANDS.get(name, (name,))
+    resolved = {command: shutil.which(command) for command in commands}
+
+    if missing := [command for command, path in resolved.items() if not path]:
+        raise SBOMGenerationError(
+            f"The pinned {name} runtime is a {_RUNTIME_OS} build and cannot run on {platform.system()}. "
+            f"Install {' and '.join(missing)} and put it on PATH, "
+            f"or run sbomify-action from its container image."
+        )
+
+    found = [path for path in resolved.values() if path]
+    logger.info(f"No pinned {name} runtime for {platform.system()}; using the {commands[0]} on PATH ({found[0]})")
+    return Path(found[0]).parent
 
 
 def current_arch() -> str:
@@ -555,7 +604,7 @@ def _prefix_matches(prefix: Path, expected: str) -> bool:
     """Whether an existing prefix was built from the digests we now expect."""
     marker = prefix / _READY
     try:
-        return marker.read_text().strip() == expected
+        return marker.read_text(encoding="utf-8").strip() == expected
     except OSError:
         return False
 
@@ -636,7 +685,7 @@ def _materialize(spec: RuntimeSpec, arch: str, prefix: Path) -> None:
             if spec.member:
                 (bin_dir / spec.member).chmod(0o755)
 
-        (staging / _READY).write_text(_digest_line(spec, arch) + "\n")
+        (staging / _READY).write_text(_digest_line(spec, arch) + "\n", encoding="utf-8")
         # Atomic when it wins; another process getting there first is fine,
         # since both prefixes were built from the same pinned digest.
         try:
@@ -777,7 +826,7 @@ def _apply_bundle_manifest(prefix: Path) -> Path:
     manifest = prefix / "bundle.toml"
     if not manifest.exists():
         raise SBOMGenerationError(f"{prefix.name} has no bundle.toml; it is not a bundle we can use")
-    declared = tomllib.loads(manifest.read_text())
+    declared = tomllib.loads(manifest.read_text(encoding="utf-8"))
     body = declared.get("bundle") or {}
     bin_dirs = [str(d) for d in (body.get("bin_dirs") or ["bin"])]
 
@@ -800,8 +849,133 @@ def _apply_bundle_manifest(prefix: Path) -> Path:
     return first
 
 
+#: Where to look for an earlier sbom-tools release when the pinned one lacks a bundle.
+_BUNDLE_RELEASES_API = "https://api.github.com/repos/sbomify/sbom-tools/releases"
+#: How far back to look. Far enough to skip a release that failed to build,
+#: close enough that the fallback is still a recent toolchain.
+_FALLBACK_RELEASES_TO_CHECK = 10
+
+
+def _is_missing(exc: BaseException) -> bool:
+    """Whether a failed fetch was a 404, rather than a network or verification failure.
+
+    Only absence earns a fallback. A bundle that downloaded but failed its
+    attestation must stop the run: trying an older release then would turn a
+    rejected artifact into a quiet downgrade.
+    """
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, requests.HTTPError):
+            response = current.response
+            return response is not None and response.status_code == 404
+        current = current.__cause__
+    return False
+
+
+def _github_auth_headers() -> dict[str, str]:
+    """An Authorization header when a token is available, for the 5000/hour API limit."""
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def _fallback_release(bundle: Bundle, arch: str) -> str | None:
+    """The newest release before the pinned one that has this bundle in full.
+
+    sbom-tools publishes a release before its build job has uploaded the
+    bundles, so for a few minutes the pinned tag exists and its archives 404.
+    An action pinned to it in that window -- the PR bumping the pin, in
+    practice -- would otherwise fail every generator. Both the archive and its
+    attestation have to be there: one without the other cannot be used.
+
+    Returns None when nothing suitable is found or the API cannot be reached,
+    so the caller reports the original 404 rather than this lookup's failure.
+    """
+    archive = bundle.archive_url(arch).rsplit("/", 1)[-1]
+    wanted = {archive, archive + ".sigstore.json"}
+    try:
+        response = requests.get(
+            _BUNDLE_RELEASES_API,
+            params={"per_page": _FALLBACK_RELEASES_TO_CHECK},
+            headers={"Accept": "application/vnd.github+json", **_github_auth_headers()},
+            timeout=(_CONNECT_TIMEOUT, _CONNECT_TIMEOUT),
+        )
+        response.raise_for_status()
+        releases = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning(f"Could not list sbom-tools releases to find a fallback for {bundle.name}: {exc}")
+        return None
+
+    # Newest first. Only releases older than the pin are candidates: falling
+    # forward would run a toolchain this action was never tested against. The
+    # rolling pre-release is not in the cut sequence, so with it pinned every
+    # cut release is older.
+    tags = [r.get("tag_name") for r in releases]
+    candidates = releases[tags.index(bundle.release) + 1 :] if bundle.release in tags else releases
+    for release in candidates:
+        if release.get("draft") or release.get("prerelease"):
+            continue
+        uploaded = {a.get("name") for a in release.get("assets") or [] if a.get("state", "uploaded") == "uploaded"}
+        if wanted <= uploaded:
+            return str(release["tag_name"])
+    return None
+
+
+def _materialize_bundle(bundle: Bundle, arch: str) -> Path:
+    """Fetch, verify and unpack one bundle into its prefix, unless it is already there."""
+    prefix = cache_root() / f"bundle-{bundle.name}-{bundle.release}-{arch}"
+    marker = prefix / _READY
+    # Re-read under the file lock. Another process may have finished this
+    # bundle while we waited for it, in which case there is nothing to do
+    # -- and, more to the point, the rmtree below would otherwise delete a
+    # prefix that process is about to use.
+    if marker.exists():
+        return prefix
+    if prefix.exists():
+        shutil.rmtree(prefix, ignore_errors=True)
+    logger.info(f"Fetching the {bundle.name} bundle ({bundle.release}, {arch})")
+    staging = prefix.with_name(prefix.name + ".staging")
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    try:
+        archive = staging / "bundle.tar.gz"
+        _download_verified(
+            Asset(
+                url=bundle.archive_url(arch),
+                algorithm="none",
+                digest="",
+                attestation=bundle.attestation_url(arch),
+            ),
+            archive,
+        )
+        unpacked = staging / "prefix"
+        unpacked.mkdir()
+        with tarfile.open(archive) as tar:
+            for member in tar.getmembers():
+                _reject_traversal(member.name)
+            tar.extractall(unpacked)  # noqa: S202 - every member checked above
+        archive.unlink()
+        (unpacked / _READY).write_text(f"{bundle.name} {bundle.release} {arch}\n", encoding="utf-8")
+        # Belt and braces behind the file lock, for the cache that
+        # could not take one. Losing this race is not an error: both
+        # prefixes were unpacked from the same pinned, attested
+        # archive, so the winner's is as good as ours.
+        try:
+            unpacked.rename(prefix)
+        except OSError:
+            if not marker.exists():
+                raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    logger.info(f"  ✓ {bundle.name} bundle ready")
+    return prefix
+
+
 def ensure_bundle(bundle: Bundle) -> Path:
-    """Fetch, verify and unpack an ecosystem bundle; return its main bin dir."""
+    """Fetch, verify and unpack an ecosystem bundle; return its main bin dir.
+
+    If the pinned release does not have the bundle (yet), the newest earlier
+    release that does is used instead -- see :func:`_fallback_release`.
+    """
     if cached := _bundles_ready.get(bundle.name):
         return cached
 
@@ -810,50 +984,16 @@ def ensure_bundle(bundle: Bundle) -> Path:
             return cached
 
         arch = current_arch()
-        prefix = cache_root() / f"bundle-{bundle.name}-{bundle.release}-{arch}"
-        marker = prefix / _READY
-        # Re-read under the file lock. Another process may have finished this
-        # bundle while we waited for it, in which case there is nothing to do
-        # -- and, more to the point, the rmtree below would otherwise delete a
-        # prefix that process is about to use.
-        if not marker.exists():
-            if prefix.exists():
-                shutil.rmtree(prefix, ignore_errors=True)
-            logger.info(f"Fetching the {bundle.name} bundle ({bundle.release}, {arch})")
-            staging = prefix.with_name(prefix.name + ".staging")
-            shutil.rmtree(staging, ignore_errors=True)
-            staging.mkdir(parents=True)
-            try:
-                archive = staging / "bundle.tar.gz"
-                _download_verified(
-                    Asset(
-                        url=bundle.archive_url(arch),
-                        algorithm="none",
-                        digest="",
-                        attestation=bundle.attestation_url(arch),
-                    ),
-                    archive,
-                )
-                unpacked = staging / "prefix"
-                unpacked.mkdir()
-                with tarfile.open(archive) as tar:
-                    for member in tar.getmembers():
-                        _reject_traversal(member.name)
-                    tar.extractall(unpacked)  # noqa: S202 - every member checked above
-                archive.unlink()
-                (unpacked / _READY).write_text(f"{bundle.name} {bundle.release} {arch}\n")
-                # Belt and braces behind the file lock, for the cache that
-                # could not take one. Losing this race is not an error: both
-                # prefixes were unpacked from the same pinned, attested
-                # archive, so the winner's is as good as ours.
-                try:
-                    unpacked.rename(prefix)
-                except OSError:
-                    if not marker.exists():
-                        raise
-            finally:
-                shutil.rmtree(staging, ignore_errors=True)
-            logger.info(f"  ✓ {bundle.name} bundle ready")
+        try:
+            prefix = _materialize_bundle(bundle, arch)
+        except SBOMGenerationError as exc:
+            if not _is_missing(exc) or not (fallback := _fallback_release(bundle, arch)):
+                raise
+            logger.warning(
+                f"The {bundle.name} bundle is not in sbom-tools {bundle.release}; "
+                f"falling back to {fallback}, the newest earlier release that has it"
+            )
+            prefix = _materialize_bundle(replace(bundle, release=fallback), arch)
 
         bin_dir = _apply_bundle_manifest(prefix)
         _bundles_ready[bundle.name] = bin_dir
@@ -877,7 +1017,7 @@ def bundle_plugin_version(tool: str, plugin: str) -> str:
     manifest = prefix / "bundle.toml"
     if not manifest.exists():
         raise SBOMGenerationError(f"{prefix.name} has no bundle.toml; it cannot say which {plugin} to apply")
-    plugins = tomllib.loads(manifest.read_text()).get("plugins") or {}
+    plugins = tomllib.loads(manifest.read_text(encoding="utf-8")).get("plugins") or {}
     version = plugins.get(plugin)
     if not version:
         raise SBOMGenerationError(
@@ -908,7 +1048,7 @@ def bundle_wrappers(tool: str) -> dict[str, dict[str, str]]:
     manifest = prefix / "bundle.toml"
     if not manifest.exists():
         return {}
-    declared = tomllib.loads(manifest.read_text()).get("wrappers") or {}
+    declared = tomllib.loads(manifest.read_text(encoding="utf-8")).get("wrappers") or {}
     return {
         str(name): {str(key): str(value) for key, value in body.items()}
         for name, body in declared.items()
@@ -923,14 +1063,26 @@ def ensure_runtime(name: str) -> Path:
     keep working unchanged. Repeat calls are cheap: the result is memoised in
     process and the on-disk prefix is reused across processes.
 
+    On a host the pinned runtimes cannot run on, this returns the directory of
+    an installed copy instead and prepends nothing -- see
+    :func:`_installed_instead`.
+
     Raises:
         SBOMGenerationError: if the runtime is unknown, unavailable for this
-            architecture, cannot be downloaded, or fails its checksum.
+            architecture or operating system, cannot be downloaded, or fails
+            its checksum.
     """
     # Most tools now arrive inside an ecosystem bundle from sbomify/sbom-tools.
     # cosign is the exception and stays vendor-pinned below: it is what
     # verifies every bundle's attestation, and trust in a verifier cannot be
     # bootstrapped from an artifact only that verifier can check.
+    # Before the bundle lookup: a bundle is just as Linux-only as a pinned
+    # asset, and on a host that cannot run either, what matters is that the
+    # tool the user installed keeps working rather than being shadowed by
+    # ours on PATH.
+    if not host_runs_runtimes():
+        return _installed_instead(name)
+
     if bundle := bundle_for(name):
         return ensure_bundle(bundle)
 

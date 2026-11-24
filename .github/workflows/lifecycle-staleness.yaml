@@ -37,7 +37,7 @@ jobs:
           echo "UV_VERSION=$UV_VERSION" >> "$GITHUB_ENV"
 
       - name: Install UV
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "${{ env.UV_VERSION }}"
           enable-cache: true

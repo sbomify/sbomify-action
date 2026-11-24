@@ -114,6 +114,7 @@ This tool wraps generation in three more steps — inject, augment, enrich — a
 | Haskell     | `stack.yaml.lock`, `stack.yaml`, `cabal.project.freeze`                        |
 | Erlang      | `rebar.lock` (rebar3 projects; erlang.mk has no equivalent)                     |
 | Clojure     | `deps.edn`, `project.clj`                                                      |
+| PlatformIO  | `platformio.ini` (after `pio pkg install`; libraries plus the platform and framework, e.g. Arduino-ESP32 / ESP-IDF) |
 
 Naming a *manifest* that sits beside its lock file reads the lock file instead: `package.json` defers to `package-lock.json`, `pyproject.toml` to `poetry.lock`.
 

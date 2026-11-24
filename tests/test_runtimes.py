@@ -796,3 +796,275 @@ class TestDownloadRetries:
 
         assert len(attempts) == 2
         assert (bin_dir / "faketool").read_bytes() == payload
+
+
+class TestHostsTheRuntimesCannotRunOn:
+    """A pinned runtime is a Linux binary, so a Mac must not be given one.
+
+    sbomify-action is published OS Independent and people pip install it on
+    macOS. There, ``ensure_runtime`` downloaded ``syft-linux-arm64.tar.gz``,
+    verified it with a ``cosign-linux-arm64`` it had also just downloaded, and
+    both ended the same way:
+
+        Could not run cosign to verify syft-linux-arm64.tar.gz:
+        [Errno 8] Exec format error: '/Users/.../cosign-3.1.3-arm64/cosign'
+
+    The second failure was worse than the first. ``ensure_runtime`` is called
+    unconditionally, before the tool is run, and it prepends its own prefix to
+    PATH -- so on a host that had a working syft installed, ours shadowed it
+    and the run failed as ``Exec format error: 'syft'``. Installing the tool,
+    which is the documented remedy, did not help.
+    """
+
+    def test_an_installed_tool_is_used_instead_of_a_download(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+
+        installed = tmp_path / "homebrew" / "bin"
+        installed.mkdir(parents=True)
+        (installed / "syft").touch(mode=0o755)
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name))
+
+        def _no_network(*args, **kwargs):
+            raise AssertionError("a Linux artifact must not be downloaded onto a Darwin host")
+
+        monkeypatch.setattr(runtimes.requests, "get", _no_network)
+
+        assert ensure_runtime("syft") == installed
+
+    def test_the_installed_tool_is_not_shadowed_on_path(self, monkeypatch, tmp_path):
+        """The PATH prepend is what broke a host that had the tool already."""
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        installed = tmp_path / "bin"
+        installed.mkdir()
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name))
+
+        before = os.environ.get("PATH", "")
+        ensure_runtime("syft")
+        assert os.environ.get("PATH", "") == before
+
+    def test_without_an_installed_tool_the_error_says_what_to_do(self, monkeypatch):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: None)
+
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            ensure_runtime("syft")
+
+        message = str(excinfo.value)
+        assert "Darwin" in message
+        assert "Install syft" in message
+        assert "Exec format" not in message
+
+    def test_a_generator_does_not_claim_an_input_it_cannot_serve(self, monkeypatch):
+        """can_provide is what a generator asks before claiming an input.
+
+        Answering yes off Linux routes the input to a generator whose only
+        possible outcome is a failed exec, instead of to one that works.
+        """
+        monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Linux")
+        assert runtimes.can_provide("syft") is True
+
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+        assert runtimes.can_provide("syft") is False
+
+    @pytest.mark.parametrize("system,expected", [("Linux", True), ("Darwin", False), ("Windows", False)])
+    def test_host_runs_runtimes(self, monkeypatch, system, expected):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: system)
+        assert runtimes.host_runs_runtimes() is expected
+
+    def test_an_installed_go_toolchain_still_claims_go_mod(self, monkeypatch):
+        """The Go generator gates on fetching, so it needs the check directly.
+
+        Declining every go.mod off Linux would be too much: unlike the JVM
+        generators, this one needs nothing from the bundle but the two
+        commands, and ensure_runtime hands it an installed pair. Declining
+        anyway drops the project to syft, or to no SBOM at all.
+        """
+        from sbomify_action._generation.generators.cyclonedx_gomod import CycloneDXGomodGenerator
+        from sbomify_action._generation.protocol import GenerationInput
+
+        monkeypatch.delenv("SBOMIFY_FETCH_RUNTIMES", raising=False)
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+
+        go_mod = Path(__file__).parent / "test-data" / "projects" / "go" / "go.mod"
+        assert go_mod.exists(), f"fixture missing: {go_mod}"
+        input = GenerationInput(lock_file=str(go_mod), output_format="cyclonedx")
+        generator = CycloneDXGomodGenerator()
+
+        installed = {"cyclonedx-gomod", "go"}
+        monkeypatch.setattr(
+            "sbomify_action._generation.generators.cyclonedx_gomod.shutil.which",
+            lambda name: f"/opt/homebrew/bin/{name}" if name in installed else None,
+        )
+        assert generator.supports(input) is True
+
+        installed.discard("cyclonedx-gomod")
+        assert generator.supports(input) is False, "nothing to run and nothing to fetch"
+
+
+class TestRuntimeIdsThatAreNotCommandNames:
+    """A runtime is a thing we fetch, not always a thing you can run.
+
+    The jvm bundle's "maven" installs `mvn`; "rust" is a toolchain and there is
+    no `rust` binary anywhere. Looking the runtime id up on PATH verbatim would
+    report a fully installed native toolchain as missing, which is the one
+    outcome the fallback exists to avoid.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _off_linux(self, monkeypatch):
+        monkeypatch.setattr(runtimes.platform, "system", lambda: "Darwin")
+
+    def test_maven_is_found_as_mvn(self, monkeypatch, tmp_path):
+        installed = tmp_path / "bin"
+        installed.mkdir()
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name) if name == "mvn" else None)
+
+        assert ensure_runtime("maven") == installed
+
+    def test_rust_needs_cargo_and_rustc(self, monkeypatch, tmp_path):
+        """cargo-cyclonedx shells out to both, so finding one is not enough."""
+        installed = tmp_path / "cargo" / "bin"
+        installed.mkdir(parents=True)
+        toolchain = {"cargo", "rustc"}
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name) if name in toolchain else None)
+
+        assert ensure_runtime("rust") == installed
+
+        toolchain.discard("rustc")
+        runtimes.reset_runtime_cache()
+        with pytest.raises(SBOMGenerationError) as excinfo:
+            ensure_runtime("rust")
+
+        assert "rustc" in str(excinfo.value)
+        assert "cargo" not in str(excinfo.value), "cargo is installed; do not ask for it"
+
+    def test_an_id_that_is_its_own_command_is_unaffected(self, monkeypatch, tmp_path):
+        installed = tmp_path / "bin"
+        installed.mkdir()
+        monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name))
+
+        assert ensure_runtime("cdxgen") == installed
+
+
+class TestBundleReleaseFallback:
+    """sbom-tools publishes a release before its build has uploaded the bundles."""
+
+    PINNED = "v26.11.0"
+
+    @staticmethod
+    def _names() -> list[str]:
+        archive = f"syft-linux-{current_arch()}.tar.gz"
+        return [archive, archive + ".sigstore.json"]
+
+    @staticmethod
+    def _archive() -> bytes:
+        buffer = io.BytesIO()
+        manifest = b'[bundle]\nname = "syft"\nbin_dirs = ["bin"]\n'
+        with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+            directory = tarfile.TarInfo("bin")
+            directory.type = tarfile.DIRTYPE
+            tar.addfile(directory)
+            info = tarfile.TarInfo("bundle.toml")
+            info.size = len(manifest)
+            tar.addfile(info, io.BytesIO(manifest))
+        return buffer.getvalue()
+
+    @staticmethod
+    def _release(tag: str, names: list[str], **extra) -> dict:
+        return {"tag_name": tag, "assets": [{"name": n, "state": "uploaded"} for n in names], **extra}
+
+    def _setup(self, monkeypatch, releases: list[dict], missing: tuple[str, ...] = ("/v26.11.0/",), fail: bool = False):
+        bundle = runtimes.Bundle(name="syft", release=self.PINNED, provides=("syft",), purl="pkg:x@{release}")
+        archive = self._archive()
+        fetched: list[str] = []
+
+        class _Missing(_FakeResponse):
+            def raise_for_status(self):
+                response = runtimes.requests.Response()
+                response.status_code = 404
+                raise runtimes.requests.HTTPError("404 Client Error: Not Found", response=response)
+
+        class _Listing(_FakeResponse):
+            def json(self):
+                return releases
+
+        def fake_get(url, *a, **k):
+            fetched.append(url)
+            if url == runtimes._BUNDLE_RELEASES_API:
+                return _Listing(b"")
+            if any(m in url for m in missing):
+                return _Missing(b"")
+            return _FakeResponse(archive if url.endswith(".tar.gz") else b"{}")
+
+        monkeypatch.setattr(runtimes.requests, "get", fake_get)
+        monkeypatch.setattr(runtimes, "_bundles_ready", {})
+        monkeypatch.setattr(runtimes.shutil, "which", lambda n: "/usr/bin/cosign" if n == "cosign" else None)
+        monkeypatch.setattr(
+            runtimes.subprocess,
+            "run",
+            lambda cmd, *a, **k: runtimes.subprocess.CompletedProcess(cmd, 1 if fail else 0, "", "bad signature"),
+        )
+        return bundle, fetched
+
+    def test_a_missing_bundle_falls_back_to_the_newest_earlier_release(self, monkeypatch):
+        names = self._names()
+        releases = [
+            self._release("v26.12.0", names),  # newer than the pin: never a fallback
+            self._release(self.PINNED, []),
+            self._release("rolling", names, prerelease=True),
+            self._release("v26.10.4", names[:1]),  # attestation not uploaded
+            self._release("v26.10.3", names),
+            self._release("v26.10.2", names),
+        ]
+        bundle, fetched = self._setup(monkeypatch, releases)
+
+        bin_dir = runtimes.ensure_bundle(bundle)
+
+        assert bin_dir.parent.name == f"bundle-syft-v26.10.3-{current_arch()}"
+        assert any("/v26.10.3/" in url for url in fetched)
+
+    def test_the_pinned_release_is_used_when_it_has_the_bundle(self, monkeypatch):
+        bundle, fetched = self._setup(monkeypatch, [], missing=())
+
+        bin_dir = runtimes.ensure_bundle(bundle)
+
+        assert bin_dir.parent.name == f"bundle-syft-{self.PINNED}-{current_arch()}"
+        assert runtimes._BUNDLE_RELEASES_API not in fetched
+
+    def test_a_missing_attestation_also_falls_back(self, monkeypatch):
+        names = self._names()
+        releases = [self._release(self.PINNED, names[:1]), self._release("v26.10.3", names)]
+        bundle, _ = self._setup(monkeypatch, releases, missing=(f"/{self.PINNED}/{names[1]}",))
+
+        assert runtimes.ensure_bundle(bundle).parent.name == f"bundle-syft-v26.10.3-{current_arch()}"
+
+    def test_the_original_404_is_raised_when_no_release_has_the_bundle(self, monkeypatch):
+        bundle, _ = self._setup(monkeypatch, [self._release(self.PINNED, [])])
+
+        with pytest.raises(SBOMGenerationError, match="404"):
+            runtimes.ensure_bundle(bundle)
+
+    def test_an_unreachable_api_reports_the_original_404(self, monkeypatch):
+        bundle, _ = self._setup(monkeypatch, [])
+
+        def broken(url, *a, **k):
+            if url == runtimes._BUNDLE_RELEASES_API:
+                raise runtimes.requests.ConnectionError("rate limited")
+            response = runtimes.requests.Response()
+            response.status_code = 404
+            raise runtimes.requests.HTTPError("404 Client Error: Not Found", response=response)
+
+        monkeypatch.setattr(runtimes.requests, "get", broken)
+
+        with pytest.raises(SBOMGenerationError, match="404"):
+            runtimes.ensure_bundle(bundle)
+
+    def test_a_failed_attestation_never_falls_back(self, monkeypatch):
+        """A rejected artifact must stop the run, not quietly become an older one."""
+        bundle, fetched = self._setup(monkeypatch, [], missing=(), fail=True)
+
+        with pytest.raises(SBOMGenerationError, match="Attestation verification failed"):
+            runtimes.ensure_bundle(bundle)
+        assert runtimes._BUNDLE_RELEASES_API not in fetched

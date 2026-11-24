@@ -1528,6 +1528,17 @@ class TestApplyMetadata:
         assert package.homepage == "https://www.djangoproject.com/"
         assert "description" in added_fields
 
+    def test_registry_url_is_a_valid_spdx_reference(self):
+        """SPDX allows only purl, maven-central, npm, nuget and bower as PACKAGE-MANAGER types."""
+        from spdx_tools.spdx.model import ExternalPackageRefCategory
+
+        package = Package(spdx_id="SPDXRef-x", name="x", download_location="NOASSERTION")
+        _apply_metadata_to_spdx_package(package, NormalizedMetadata(registry_url="https://pkg.example/x"))
+
+        (reference,) = [r for r in package.external_references if r.locator == "https://pkg.example/x"]
+        assert reference.category == ExternalPackageRefCategory.OTHER
+        assert reference.reference_type == "url"
+
     def test_apply_empty_metadata(self):
         """Test applying empty metadata does nothing."""
         component = Component(name="django", version="5.1", type=ComponentType.LIBRARY)
@@ -2737,6 +2748,38 @@ class TestEcosystemsSource:
         source = EcosystemsSource()
         purl = PackageURL.from_string("pkg:deb/debian/bash@5.2")
         assert source.supports(purl) is False
+
+    def test_a_github_repository_is_not_a_go_module_published_from_it(self, mock_session):
+        """ecosyste.ms answers pkg:github with the Go proxy entry; that is a different package."""
+        from sbomify_action._enrichment.sources.ecosystems import clear_cache
+
+        clear_cache()
+        response = Mock(status_code=200)
+        response.json.return_value = [
+            {
+                "ecosystem": "go",
+                "name": "github.com/makuna/NeoPixelBus",
+                "registry_url": "https://pkg.go.dev/github.com/makuna/NeoPixelBus",
+                "licenses": "lgpl-3.0",
+            }
+        ]
+        mock_session.get.return_value = response
+        purl = PackageURL.from_string("pkg:github/makuna/neopixelbus@1d7ff38f14d04a976f9c6e365c83a232bcba04fc")
+        assert EcosystemsSource().fetch(purl, mock_session) is None
+
+    def test_a_github_action_is_the_repository(self, mock_session):
+        from sbomify_action._enrichment.sources.ecosystems import clear_cache
+
+        clear_cache()
+        response = Mock(status_code=200)
+        response.json.return_value = [
+            {"ecosystem": "go", "registry_url": "https://pkg.go.dev/github.com/actions/checkout"},
+            {"ecosystem": "actions", "registry_url": "https://github.com/actions/checkout", "description": "Checkout"},
+        ]
+        mock_session.get.return_value = response
+        metadata = EcosystemsSource().fetch(PackageURL.from_string("pkg:github/actions/checkout@v4"), mock_session)
+        assert metadata is not None
+        assert metadata.registry_url == "https://github.com/actions/checkout"
 
 
 # =============================================================================

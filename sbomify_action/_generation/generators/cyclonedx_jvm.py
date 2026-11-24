@@ -33,7 +33,13 @@ from pathlib import Path
 
 from sbomify_action.exceptions import SBOMGenerationError
 from sbomify_action.logging_config import logger
-from sbomify_action.runtimes import bundle_plugin_version, bundle_wrappers, ensure_runtime, fetching_is_enabled
+from sbomify_action.runtimes import (
+    bundle_plugin_version,
+    bundle_wrappers,
+    ensure_runtime,
+    fetching_is_enabled,
+    host_runs_runtimes,
+)
 
 from ..protocol import FormatVersion, GenerationInput
 from ..result import GenerationResult
@@ -214,7 +220,7 @@ def _largest_bom(candidates: list[Path]) -> Path | None:
     best: tuple[int, Path] | None = None
     for path in candidates:
         try:
-            count = len(json.loads(path.read_text()).get("components") or [])
+            count = len(json.loads(path.read_text(encoding="utf-8")).get("components") or [])
         except (OSError, json.JSONDecodeError):
             continue
         if best is None or count > best[0]:
@@ -261,10 +267,17 @@ class _JvmGenerator:
         ]
 
     def supports(self, input: GenerationInput) -> bool:
-        if not fetching_is_enabled():
+        if not fetching_is_enabled() or not host_runs_runtimes():
             # Outside our image the user's toolchain decides. Fetching a JDK
             # they did not install would change which generator wins, and so
             # change the SBOM they get, without them asking.
+            #
+            # Off Linux there is no bundle to fetch, and unlike the Go
+            # generator an installed toolchain does not rescue this one: every
+            # _run below applies a plugin whose version comes from the fetched
+            # bundle's bundle.toml (see bundle_plugin_version), and a native
+            # mvn/gradle/sbt has no such file to read. Claiming a build file
+            # here would only take it from a generator that could have read it.
             return False
         if not input.is_lock_file or input.output_format not in ("cyclonedx", "spdx"):
             return False
@@ -384,7 +397,7 @@ class CycloneDXGradleGenerator(_JvmGenerator):
 
     def _run(self, project_dir: Path, output: Path) -> None:
         init_script = project_dir / ".sbomify-cyclonedx.init.gradle"
-        init_script.write_text(gradle_init_script())
+        init_script.write_text(gradle_init_script(), encoding="utf-8")
         wrapper = _wrapper_spec("gradle", self.runtime)
         gradle = _wrapper_or(project_dir, wrapper)
         try:
@@ -417,7 +430,9 @@ class CycloneDXSbtGenerator(_JvmGenerator):
         plugin_dir = project_dir / "project"
         plugin_dir.mkdir(exist_ok=True)
         injected = plugin_dir / "sbomify-sbom.sbt"
-        injected.write_text(f'addSbtPlugin("com.github.sbt" % "sbt-sbom" % "{sbt_plugin_version()}")\n')
+        injected.write_text(
+            f'addSbtPlugin("com.github.sbt" % "sbt-sbom" % "{sbt_plugin_version()}")\n', encoding="utf-8"
+        )
         try:
             logger.info(f"Running the sbt-sbom plugin in {project_dir.name}")
             run_command(["sbt", "-batch", "makeBom"], "cyclonedx-sbt", timeout=2400, cwd=str(project_dir))

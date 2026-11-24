@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import sys
 from typing import Any, Dict
 
@@ -9,6 +10,60 @@ from rich.logging import RichHandler
 
 from ._runtime import get_platform
 from .console import console
+
+# Terminal escape sequences and other control characters. cdxgen colours its
+# diagnostics, and the escape bytes end up inside the log message (and
+# therefore inside the Sentry issue title). Colour codes are not the only
+# thing that arrives here, though: a generator that fetches over git relays
+# whatever the remote sent on the sideband (CVE-2024-52005,
+# CVE-2018-1000021), so a malicious server can put OSC, DCS or bare carriage
+# returns in a failing generator's stderr to retitle, hide or spoof lines in
+# a terminal reading the log. Strip every escape sequence (7-bit and C1) and
+# every control character except tab and newline.
+ESCAPE_RE = re.compile(
+    r"""
+      \x1b\[[0-?]*[\x20-/]*[@-~]                    # CSI, e.g. colours
+    | \x1b[\]PX^_][^\x07\x1b]*(?:\x07|\x1b\\)?      # OSC, DCS, SOS, PM, APC
+    | \x1b[\x20-/]*[0-~]                            # other two-byte escapes
+    | [\x00-\x08\x0b-\x1f\x7f-\x9f]                 # remaining C0/C1, incl. CR
+    """,
+    re.VERBOSE,
+)
+
+# The GitHub Actions runner treats any output line starting with ``::`` as a
+# workflow command (``::add-mask::``, ``::error::``, ``::stop-commands::``).
+# Logged text from a tool or a remote can span lines, so a line it controls
+# could issue one. A zero-width space after the first colon keeps the line
+# readable but stops the runner from parsing it.
+_WORKFLOW_COMMAND_RE = re.compile(r"^(\s*):(?=:)", re.MULTILINE)
+
+
+def sanitize_log_text(text: str) -> str:
+    """Make text safe to write to a terminal or CI log.
+
+    Strips escape sequences and control characters (keeping tab and
+    newline) and defuses lines that a CI runner would read as a workflow
+    command.
+    """
+    return _WORKFLOW_COMMAND_RE.sub("\\1:\u200b", ESCAPE_RE.sub("", text))
+
+
+class SanitizingFilter(logging.Filter):
+    """Apply :func:`sanitize_log_text` to every record a handler emits.
+
+    Log messages interpolate text the action does not control: generator
+    stderr, git ref names from a submodule remote, server error bodies.
+    Sanitizing at the handler covers every call site, including ones added
+    later.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        clean = sanitize_log_text(message)
+        if clean != message:
+            record.msg = clean
+            record.args = None
+        return True
 
 
 def setup_logging(level: str = "INFO", structured: bool = False, use_rich: bool = True) -> logging.Logger:
@@ -55,7 +110,9 @@ def setup_logging(level: str = "INFO", structured: bool = False, use_rich: bool 
             # secrets. Asked of the platform rather than an import-time
             # snapshot, so every CI system we recognise is covered.
             tracebacks_show_locals=not platform.is_ci,
-            markup=True,
+            # Messages carry text from tools and remotes, so Rich must not
+            # parse it: ``[link=...]`` would become a terminal hyperlink.
+            markup=False,
         )
         handler.setLevel(getattr(logging, level.upper()))
     else:
@@ -67,6 +124,7 @@ def setup_logging(level: str = "INFO", structured: bool = False, use_rich: bool 
         )
         handler.setFormatter(formatter)
 
+    handler.addFilter(SanitizingFilter())
     logger.addHandler(handler)
 
     return logger
