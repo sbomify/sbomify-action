@@ -585,6 +585,8 @@ class TestNTIAAugmentation:
             CreationInfo,
             Document,
             Package,
+            Relationship,
+            RelationshipType,
         )
 
         from sbomify_action.augmentation import augment_spdx_sbom
@@ -608,7 +610,7 @@ class TestNTIAAugmentation:
                     version="1.0.0",
                 ),
             ],
-            relationships=[],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-main")],
         )
 
         # Augment with backend metadata
@@ -832,7 +834,14 @@ class TestNTIAAugmentation:
         """Test that augmentation adds security_contact to SPDX."""
         from datetime import datetime
 
-        from spdx_tools.spdx.model import CreationInfo, Document, ExternalPackageRefCategory, Package
+        from spdx_tools.spdx.model import (
+            CreationInfo,
+            Document,
+            ExternalPackageRefCategory,
+            Package,
+            Relationship,
+            RelationshipType,
+        )
 
         from sbomify_action.augmentation import augment_spdx_sbom
 
@@ -859,7 +868,7 @@ class TestNTIAAugmentation:
                     version="1.0.0",
                 ),
             ],
-            relationships=[],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-main")],
         )
 
         # Augment with security contact
@@ -951,7 +960,7 @@ class TestNTIAAugmentation:
         """Test that augmentation adds support_period_end to SPDX."""
         from datetime import datetime
 
-        from spdx_tools.spdx.model import CreationInfo, Document, Package
+        from spdx_tools.spdx.model import CreationInfo, Document, Package, Relationship, RelationshipType
 
         from sbomify_action.augmentation import augment_spdx_sbom
 
@@ -978,7 +987,7 @@ class TestNTIAAugmentation:
                     version="1.0.0",
                 ),
             ],
-            relationships=[],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-main")],
         )
 
         # Augment with support period
@@ -1105,7 +1114,7 @@ class TestNTIAAugmentation:
         """Test that augmentation adds release_date to SPDX."""
         from datetime import datetime
 
-        from spdx_tools.spdx.model import CreationInfo, Document, Package
+        from spdx_tools.spdx.model import CreationInfo, Document, Package, Relationship, RelationshipType
 
         from sbomify_action.augmentation import augment_spdx_sbom
 
@@ -1132,7 +1141,7 @@ class TestNTIAAugmentation:
                     version="1.0.0",
                 ),
             ],
-            relationships=[],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-main")],
         )
 
         # Augment with release date
@@ -1151,7 +1160,7 @@ class TestNTIAAugmentation:
         """Test that augmentation adds end_of_life to SPDX."""
         from datetime import datetime
 
-        from spdx_tools.spdx.model import CreationInfo, Document, Package
+        from spdx_tools.spdx.model import CreationInfo, Document, Package, Relationship, RelationshipType
 
         from sbomify_action.augmentation import augment_spdx_sbom
 
@@ -1178,7 +1187,7 @@ class TestNTIAAugmentation:
                     version="1.0.0",
                 ),
             ],
-            relationships=[],
+            relationships=[Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, "SPDXRef-main")],
         )
 
         # Augment with end of life

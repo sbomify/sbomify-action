@@ -946,3 +946,125 @@ class TestRuntimeIdsThatAreNotCommandNames:
         monkeypatch.setattr(runtimes.shutil, "which", lambda name: str(installed / name))
 
         assert ensure_runtime("cdxgen") == installed
+
+
+class TestBundleReleaseFallback:
+    """sbom-tools publishes a release before its build has uploaded the bundles."""
+
+    PINNED = "v26.11.0"
+
+    @staticmethod
+    def _names() -> list[str]:
+        archive = f"syft-linux-{current_arch()}.tar.gz"
+        return [archive, archive + ".sigstore.json"]
+
+    @staticmethod
+    def _archive() -> bytes:
+        buffer = io.BytesIO()
+        manifest = b'[bundle]\nname = "syft"\nbin_dirs = ["bin"]\n'
+        with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+            directory = tarfile.TarInfo("bin")
+            directory.type = tarfile.DIRTYPE
+            tar.addfile(directory)
+            info = tarfile.TarInfo("bundle.toml")
+            info.size = len(manifest)
+            tar.addfile(info, io.BytesIO(manifest))
+        return buffer.getvalue()
+
+    @staticmethod
+    def _release(tag: str, names: list[str], **extra) -> dict:
+        return {"tag_name": tag, "assets": [{"name": n, "state": "uploaded"} for n in names], **extra}
+
+    def _setup(self, monkeypatch, releases: list[dict], missing: tuple[str, ...] = ("/v26.11.0/",), fail: bool = False):
+        bundle = runtimes.Bundle(name="syft", release=self.PINNED, provides=("syft",), purl="pkg:x@{release}")
+        archive = self._archive()
+        fetched: list[str] = []
+
+        class _Missing(_FakeResponse):
+            def raise_for_status(self):
+                response = runtimes.requests.Response()
+                response.status_code = 404
+                raise runtimes.requests.HTTPError("404 Client Error: Not Found", response=response)
+
+        class _Listing(_FakeResponse):
+            def json(self):
+                return releases
+
+        def fake_get(url, *a, **k):
+            fetched.append(url)
+            if url == runtimes._BUNDLE_RELEASES_API:
+                return _Listing(b"")
+            if any(m in url for m in missing):
+                return _Missing(b"")
+            return _FakeResponse(archive if url.endswith(".tar.gz") else b"{}")
+
+        monkeypatch.setattr(runtimes.requests, "get", fake_get)
+        monkeypatch.setattr(runtimes, "_bundles_ready", {})
+        monkeypatch.setattr(runtimes.shutil, "which", lambda n: "/usr/bin/cosign" if n == "cosign" else None)
+        monkeypatch.setattr(
+            runtimes.subprocess,
+            "run",
+            lambda cmd, *a, **k: runtimes.subprocess.CompletedProcess(cmd, 1 if fail else 0, "", "bad signature"),
+        )
+        return bundle, fetched
+
+    def test_a_missing_bundle_falls_back_to_the_newest_earlier_release(self, monkeypatch):
+        names = self._names()
+        releases = [
+            self._release("v26.12.0", names),  # newer than the pin: never a fallback
+            self._release(self.PINNED, []),
+            self._release("rolling", names, prerelease=True),
+            self._release("v26.10.4", names[:1]),  # attestation not uploaded
+            self._release("v26.10.3", names),
+            self._release("v26.10.2", names),
+        ]
+        bundle, fetched = self._setup(monkeypatch, releases)
+
+        bin_dir = runtimes.ensure_bundle(bundle)
+
+        assert bin_dir.parent.name == f"bundle-syft-v26.10.3-{current_arch()}"
+        assert any("/v26.10.3/" in url for url in fetched)
+
+    def test_the_pinned_release_is_used_when_it_has_the_bundle(self, monkeypatch):
+        bundle, fetched = self._setup(monkeypatch, [], missing=())
+
+        bin_dir = runtimes.ensure_bundle(bundle)
+
+        assert bin_dir.parent.name == f"bundle-syft-{self.PINNED}-{current_arch()}"
+        assert runtimes._BUNDLE_RELEASES_API not in fetched
+
+    def test_a_missing_attestation_also_falls_back(self, monkeypatch):
+        names = self._names()
+        releases = [self._release(self.PINNED, names[:1]), self._release("v26.10.3", names)]
+        bundle, _ = self._setup(monkeypatch, releases, missing=(f"/{self.PINNED}/{names[1]}",))
+
+        assert runtimes.ensure_bundle(bundle).parent.name == f"bundle-syft-v26.10.3-{current_arch()}"
+
+    def test_the_original_404_is_raised_when_no_release_has_the_bundle(self, monkeypatch):
+        bundle, _ = self._setup(monkeypatch, [self._release(self.PINNED, [])])
+
+        with pytest.raises(SBOMGenerationError, match="404"):
+            runtimes.ensure_bundle(bundle)
+
+    def test_an_unreachable_api_reports_the_original_404(self, monkeypatch):
+        bundle, _ = self._setup(monkeypatch, [])
+
+        def broken(url, *a, **k):
+            if url == runtimes._BUNDLE_RELEASES_API:
+                raise runtimes.requests.ConnectionError("rate limited")
+            response = runtimes.requests.Response()
+            response.status_code = 404
+            raise runtimes.requests.HTTPError("404 Client Error: Not Found", response=response)
+
+        monkeypatch.setattr(runtimes.requests, "get", broken)
+
+        with pytest.raises(SBOMGenerationError, match="404"):
+            runtimes.ensure_bundle(bundle)
+
+    def test_a_failed_attestation_never_falls_back(self, monkeypatch):
+        """A rejected artifact must stop the run, not quietly become an older one."""
+        bundle, fetched = self._setup(monkeypatch, [], missing=(), fail=True)
+
+        with pytest.raises(SBOMGenerationError, match="Attestation verification failed"):
+            runtimes.ensure_bundle(bundle)
+        assert runtimes._BUNDLE_RELEASES_API not in fetched
