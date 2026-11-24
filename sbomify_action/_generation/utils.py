@@ -5,11 +5,12 @@ import re
 import shutil
 import subprocess
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
 from sbomify_action._runtime.git import git_safe_directory_env
-from sbomify_action.exceptions import DockerImageNotFoundError, SBOMGenerationError
+from sbomify_action.exceptions import DockerImageNotFoundError, ProjectResolutionError, SBOMGenerationError
 from sbomify_action.logging_config import ESCAPE_RE as _ANSI_RE
 from sbomify_action.logging_config import logger
 from sbomify_action.release_version import normalize_release_version, tag_from_ci
@@ -518,6 +519,7 @@ def run_command(
     docker_image: str | None = None,
     log_errors: bool = True,
     env: dict[str, str] | None = None,
+    project_unresolvable: Callable[[str], bool] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """
     Run a command and handle common error cases.
@@ -547,12 +549,18 @@ def run_command(
             child also gets ``safe.directory`` via git's environment
             configuration (see ``git_safe_directory_env``), since generators
             routinely shell out to tools that ask git about the workspace.
+        project_unresolvable: Given the failed command's combined output,
+            whether the tool rejected the user's project rather than failed
+            itself. When it returns True the failure is logged as a warning
+            and raised as ``ProjectResolutionError``, which stays out of
+            error telemetry.
 
     Returns:
         CompletedProcess result
 
     Raises:
         DockerImageNotFoundError: If the Docker image doesn't exist in the registry
+        ProjectResolutionError: If ``project_unresolvable`` recognises the failure
         SBOMGenerationError: If command fails or times out for other reasons
     """
     import threading
@@ -617,6 +625,17 @@ def run_command(
                 returncode=e.returncode,
             )
 
+        # The tool ran and told us what is wrong with the user's project: a
+        # manifest that does not parse, a registry it cannot reach. Theirs to
+        # fix, so a warning that carries the tool's words, not an error event.
+        output = combined_output(stderr, stdout)
+        if project_unresolvable and project_unresolvable(output):
+            log_command_error(command_name, stderr, stdout, level="warning")
+            message = f"{command_name} could not resolve this project"
+            if error_summary := extract_error_summary(output):
+                message += f": {error_summary}"
+            raise ProjectResolutionError(message, stderr=stderr, stdout=stdout, returncode=e.returncode)
+
         # Other errors normally log at ERROR (potential bugs or system issues).
         # When the caller is a priority-chain generator that fails gracefully
         # (log_errors=False), drop to DEBUG so an expected fallback doesn't
@@ -624,14 +643,20 @@ def run_command(
         # still raised, and the orchestrator logs ERROR only if all generators
         # fail.
         if log_errors:
-            logger.error(f"{command_name} command failed with error: {e}")
+            # The exit status alone says nothing about the cause, and as an
+            # ERROR it became one Sentry issue per tool holding every failure
+            # that tool ever had. When there is output, log_command_error
+            # reports it under a fingerprint of the actual cause; the status
+            # line only needs to be an error when it is all we have.
+            status_log = logger.warning if output else logger.error
+            status_log(f"{command_name} command failed with error: {e}")
             log_command_error(command_name, stderr, stdout)
         else:
             logger.debug(f"{command_name} command failed (trying next generator): {e}")
             log_command_error(command_name, stderr, stdout, level="debug")
 
         # Include error summary in the exception message for better diagnostics
-        error_summary = extract_error_summary(combined_output(stderr, stdout))
+        error_summary = extract_error_summary(output)
         message = f"{command_name} command failed with return code {e.returncode}"
         if error_summary:
             message += f": {error_summary}"

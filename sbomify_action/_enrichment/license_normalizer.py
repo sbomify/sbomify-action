@@ -7,7 +7,7 @@ CONSERVATIVE APPROACH: We only return licenses we're 100% certain about.
 It's better to return None than to return an incorrect license.
 
 This module is used by:
-- The license database generator (sbomify_action/_enrichment/license_db_generator.py)
+- The license database generator in sbomify/sbom-tools (licensedb/generate.py)
 - The enrichment pipeline (sbomify_action/_enrichment/)
 """
 

@@ -7,6 +7,8 @@ payloads are the ones from the real events, not invented equivalents.
 
 from __future__ import annotations
 
+import importlib
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -15,8 +17,10 @@ import sentry_sdk
 
 from sbomify_action._generation.utils import error_signature, log_command_error
 from sbomify_action.cli.main import (
+    USER_ERROR,
     _format_search_locations,
     _is_auth_failure,
+    build_config,
     directory_expansion,
     path_expansion,
 )
@@ -27,6 +31,7 @@ from sbomify_action.exceptions import (
     FileProcessingError,
     InputPathNotFoundError,
 )
+from sbomify_action.logging_config import logger
 from sbomify_action.serialization import (
     _canonical_spdx_license_id,
     _is_valid_spdx_license_id,
@@ -610,3 +615,88 @@ class TestSpdxConversionPaths:
         assert cwd == str(project)
         assert cmd[2] == str(tmp_path / ".step_1.json.cdx.json")
         assert cmd[-1] == f"spdx-json={tmp_path / 'step_1.json'}"
+
+
+class TestUserErrorsLoggedRatherThanRaised:
+    """GITHUB-ACTION-EG / NN / PR / T7 — user-side failures reached Sentry as log records.
+
+    ``before_send`` drops ``OIDCError``, ``SBOMValidationError`` and friends by
+    type, but the CLI catches those and logs them before exiting. What Sentry
+    receives is then a log record with no exception attached, so the type check
+    never applied: a missing OIDC binding, an invalid SBOM_FILE and a lock file
+    whose name matches no ecosystem were all reported as defects.
+    """
+
+    @staticmethod
+    def _emit(message: str, extra: dict[str, object] | None) -> logging.LogRecord:
+        captured: list[logging.LogRecord] = []
+
+        class _Grab(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(record)
+
+        handler = _Grab()
+        logger.addHandler(handler)
+        try:
+            logger.error(message, extra=extra)
+        finally:
+            logger.removeHandler(handler)
+        return captured[0]
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "sbomify rejected the OIDC token (403): no binding found for component 'abc' and this repository.",
+            "OIDC trusted publishing failed: sbomify OIDC exchange failed with HTTP 503.",
+            "Step 1 failed: /workspace/conan_main.lock is not a recognized lock file type",
+            "Please ensure the file is a valid CycloneDX or SPDX JSON document.",
+        ],
+    )
+    def test_a_marked_record_is_filtered(self, monkeypatch: pytest.MonkeyPatch, message: str) -> None:
+        before_send = _capture_before_send(monkeypatch)
+        record = self._emit(message, USER_ERROR)
+
+        event: dict[str, object] = {"logentry": {"formatted": message}}
+        assert before_send(event, {"log_record": record}) is None
+
+    def test_an_unmarked_record_still_reaches_sentry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        before_send = _capture_before_send(monkeypatch)
+        message = "Step 1 failed: cdxgen command failed with return code 1"
+        record = self._emit(message, None)
+
+        event: dict[str, object] = {"logentry": {"formatted": message}}
+        assert before_send(event, {"log_record": record}) is event
+
+    def test_the_marker_does_not_change_what_the_user_reads(self) -> None:
+        message = "Step 1 failed: /workspace/lockfile is not a recognized lock file type"
+        assert self._emit(message, USER_ERROR).getMessage() == message
+
+    def test_an_unrecognised_lock_file_is_logged_as_a_user_error(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Through the real step-1 handler, not just the filter."""
+        cli_main = importlib.import_module("sbomify_action.cli.main")
+
+        def boom(*args: object, **kwargs: object) -> None:
+            raise FileProcessingError(f"{tmp_path / 'at_c-conan.lock'} is not a recognized lock file type")
+
+        records: list[logging.LogRecord] = []
+
+        class _Grab(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record)
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "requirements.txt").write_text("requests==2.32.3\n")
+        monkeypatch.setattr(cli_main, "process_lock_file", boom)
+        config = build_config(lock_file="requirements.txt", upload=False, augment=False, enrich=False)
+        handler = _Grab(level=logging.ERROR)
+        logger.addHandler(handler)
+        try:
+            with pytest.raises(SystemExit):
+                cli_main.run_pipeline(config)
+        finally:
+            logger.removeHandler(handler)
+
+        failed = [r for r in records if r.getMessage().startswith("Step 1 failed:")]
+        assert failed and all(getattr(r, "sbomify_user_error", False) for r in failed)
