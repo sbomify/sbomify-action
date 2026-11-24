@@ -23,6 +23,11 @@ from ..releases_api import (
 )
 from ..result import ProcessorResult
 
+#: The release sbomify keeps for each product on its own. It always holds the
+#: newest SBOM of every component in the product, and the API refuses to have
+#: artifacts added to it by hand, so tagging it can only fail.
+LATEST_RELEASE_NAME = "latest"
+
 
 class SbomifyReleasesProcessor:
     """
@@ -94,6 +99,13 @@ class SbomifyReleasesProcessor:
         for release_spec in input.product_releases:
             try:
                 product_id, version = release_spec.split(":", 1)
+                if version.strip() == LATEST_RELEASE_NAME:
+                    logger.warning(
+                        f"Skipping {release_spec}: sbomify maintains the '{LATEST_RELEASE_NAME}' release itself "
+                        f"and adds this component's newest SBOM to it automatically. Remove it from "
+                        f"PRODUCT_RELEASE, or name a real release version instead."
+                    )
+                    continue
                 logger.info(f"Processing release {version} for product {product_id}")
 
                 release_id = self._process_single_release(

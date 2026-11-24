@@ -145,3 +145,40 @@ class TestClient:
         client, _ = _client(_Response(404, {"error_code": "RELEASE_NOT_FOUND", "detail": "Release to link not found"}))
         with pytest.raises(APIError, match="Release to link not found"):
             client.link_release("rel-app", "tools", "tools-9")
+
+
+class TestLatestRelease:
+    """sbomify keeps a product's 'latest' release itself and refuses artifacts added to it by hand."""
+
+    def _input(self, releases: list[str]) -> ProcessorInput:
+        return ProcessorInput(
+            sbom_id="sbom-1",
+            product_releases=releases,
+            api_base_url="https://api.test",
+            token="tok",
+        )
+
+    @patch("sbomify_action._processors.releases_api._client")
+    def test_latest_is_skipped_not_failed(self, factory, caplog):
+        client = Mock()
+        factory.return_value = client
+
+        result = SbomifyReleasesProcessor().process(self._input(["app:latest"]))
+
+        assert result.success
+        client.check_release_exists.assert_not_called()
+        client.tag_artifact_with_release.assert_not_called()
+        assert "maintains the 'latest' release itself" in caplog.text
+
+    @patch("sbomify_action._processors.releases_api._client")
+    def test_other_releases_still_tagged(self, factory):
+        client = Mock()
+        client.check_release_exists.return_value = True
+        client.get_release_details.return_value = {"id": "rel-app", "version": "v2.0.0"}
+        factory.return_value = client
+
+        result = SbomifyReleasesProcessor().process(self._input(["app:latest", "app:v2.0.0"]))
+
+        assert result.success
+        assert result.processed_items == 1
+        client.check_release_exists.assert_called_once_with("app", "v2.0.0")
