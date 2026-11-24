@@ -100,7 +100,7 @@ def run_on_uv_lock(tmp_path: Path, monkeypatch, generated: dict, *, augment: boo
     monkeypatch.chdir(tmp_path)
     (tmp_path / "uv.lock").write_text(UV_LOCK)
 
-    def syft(file_path, output_file, output_format, spec_version):
+    def syft(file_path, output_file, output_format, spec_version, **_):
         Path(output_file).write_text(json.dumps(generated))
         return GenerationResult.success_result(
             output_file=output_file,
