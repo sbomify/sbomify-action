@@ -75,6 +75,17 @@ class ToolNotAvailableError(SBOMGenerationError):
         super().__init__(message or f"No SBOM generation tools available for {input_type}")
 
 
+class ProjectResolutionError(SBOMGenerationError):
+    """Raised when the ecosystem's own tooling cannot resolve the user's project.
+
+    The generator ran correctly; the project it was pointed at could not be
+    read by its package manager -- a manifest that does not parse, a workspace
+    member that is missing, a private registry or git dependency the runner
+    cannot reach. Only the user can fix that, so it is reported to them with
+    the tool's own explanation and kept out of error telemetry.
+    """
+
+
 class SBOMValidationError(SbomifyError):
     """Raised when SBOM validation fails."""
 

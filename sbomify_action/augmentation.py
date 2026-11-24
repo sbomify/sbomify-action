@@ -71,6 +71,7 @@ from .console import get_audit_trail
 from .exceptions import SBOMValidationError
 from .logging_config import logger
 from .serialization import (
+    get_spdx_root_package,
     link_root_dependencies,
     load_cyclonedx_bom,
     restore_spdx_document_describes,
@@ -1154,6 +1155,15 @@ def augment_spdx_sbom(
     Returns:
         Augmented Document object
     """
+    # Everything below that describes the component belongs on the package the
+    # document describes. Never packages[0]: generators list dependencies first.
+    main_package = get_spdx_root_package(document)
+    if main_package is None and document.packages:
+        logger.warning(
+            "The SPDX document describes no package, so component metadata is added to the document "
+            "only and no package is changed"
+        )
+
     # Add sbomify tool to creators
     sbomify_tool_creator = Actor(ActorType.TOOL, f"{SBOMIFY_TOOL_NAME}-{SBOMIFY_VERSION}")
     if sbomify_tool_creator not in document.creation_info.creators:
@@ -1172,11 +1182,9 @@ def augment_spdx_sbom(
             if supplier_creator not in document.creation_info.creators:
                 document.creation_info.creators.append(supplier_creator)
 
-        # Apply supplier to main package only (first package represents the described component)
+        # Apply supplier to the described package only
         # Dependencies in the SBOM have their own suppliers, not the backend's supplier
-        if document.packages:
-            main_package = document.packages[0]
-
+        if main_package is not None:
             if supplier_name and (not main_package.supplier or override_sbom_metadata):
                 main_package.supplier = Actor(ActorType.ORGANIZATION, supplier_name)
 
@@ -1225,8 +1233,7 @@ def augment_spdx_sbom(
                 document.creation_info.creators.append(manufacturer_creator)
 
         # Apply manufacturer as originator on main package (manufacturer takes precedence)
-        if document.packages and manufacturer_name:
-            main_package = document.packages[0]
+        if main_package is not None and manufacturer_name:
             if not main_package.originator or override_sbom_metadata:
                 main_package.originator = Actor(ActorType.ORGANIZATION, manufacturer_name)
                 manufacturer_set_originator = True
@@ -1267,13 +1274,12 @@ def augment_spdx_sbom(
         # Add first author as originator for main package only
         # Dependencies have their own originators, not the backend's authors
         # Note: manufacturer takes precedence over authors for originator
-        if authors_data and document.packages:
+        if authors_data and main_package is not None:
             first_author = authors_data[0]
             author_name = first_author.get("name")
             author_email = first_author.get("email", "")
 
             if author_name:
-                main_package = document.packages[0]
                 # Skip if manufacturer already set originator (manufacturer takes precedence)
                 if manufacturer_set_originator:
                     logger.debug("Skipping author as originator: manufacturer takes precedence")
@@ -1300,9 +1306,7 @@ def augment_spdx_sbom(
             )
 
         # Apply to main package only (dependencies have their own licenses)
-        if document.packages:
-            main_package = document.packages[0]
-
+        if main_package is not None:
             # Set license_declared with the SPDX expression
             # Use license_declared as this represents what the package declares in its metadata
             if not main_package.license_declared or override_sbom_metadata:
@@ -1336,16 +1340,14 @@ def augment_spdx_sbom(
             logger.info(f"Overriding SPDX document name: '{existing_name}' -> '{component_name}'")
 
         # Also update main package name independently (may differ from document name)
-        if document.packages:
-            main_package = document.packages[0]  # Typically the first package is the main one
+        if main_package is not None:
             if main_package.name != component_name:
                 old_pkg_name = main_package.name
                 main_package.name = component_name
                 logger.info(f"Overriding SPDX main package name: '{old_pkg_name}' -> '{component_name}'")
 
     # Apply component version override
-    if component_version and document.packages:
-        main_package = document.packages[0]
+    if component_version and main_package is not None:
         existing_version = main_package.version
         if existing_version != component_version:
             main_package.version = component_version
@@ -1378,9 +1380,7 @@ def augment_spdx_sbom(
     if "security_contact" in augmentation_data and augmentation_data["security_contact"]:
         contact_url = augmentation_data["security_contact"]
 
-        if document.packages:
-            main_package = document.packages[0]
-
+        if main_package is not None:
             # Check if security contact already exists
             existing = [ref for ref in main_package.external_references if ref.reference_type == "security-contact"]
             if not existing:
@@ -1403,9 +1403,7 @@ def augment_spdx_sbom(
     if "support_period_end" in augmentation_data and augmentation_data["support_period_end"]:
         end_date = augmentation_data["support_period_end"]
 
-        if document.packages:
-            main_package = document.packages[0]
-
+        if main_package is not None:
             # Primary: Use validUntilDate (native SPDX 2.3 field)
             # Note: SPDX requires datetime object, not string
             if hasattr(main_package, "valid_until_date") and not main_package.valid_until_date:
@@ -1443,9 +1441,7 @@ def augment_spdx_sbom(
     if "release_date" in augmentation_data and augmentation_data["release_date"]:
         release_date = augmentation_data["release_date"]
 
-        if document.packages:
-            main_package = document.packages[0]
-
+        if main_package is not None:
             # Check if release-date already exists
             existing = [ref for ref in main_package.external_references if ref.reference_type == "release-date"]
             if not existing:
@@ -1467,9 +1463,7 @@ def augment_spdx_sbom(
     if "end_of_life" in augmentation_data and augmentation_data["end_of_life"]:
         eol_date = augmentation_data["end_of_life"]
 
-        if document.packages:
-            main_package = document.packages[0]
-
+        if main_package is not None:
             # Check if end-of-life-date already exists
             existing = [ref for ref in main_package.external_references if ref.reference_type == "end-of-life-date"]
             if not existing:
@@ -1515,11 +1509,10 @@ def _add_vcs_info_to_spdx(document: Document, augmentation_data: Dict[str, Any])
     if not vcs_url:
         return
 
-    if not document.packages:
-        logger.debug("No packages in SPDX document, cannot add VCS info")
+    main_package = get_spdx_root_package(document)
+    if main_package is None:
+        logger.debug("SPDX document describes no package, cannot add VCS info")
         return
-
-    main_package = document.packages[0]
 
     # Build VCS URL with commit pinning (git+https://...@sha format)
     vcs_url_with_commit = build_vcs_url_with_commit(vcs_url, vcs_commit_sha)
@@ -1662,11 +1655,10 @@ def _ensure_spdx_main_package_purl(document: Document, augmentation_data: dict[s
         document: The SPDX Document to check/augment
         augmentation_data: Metadata containing VCS fields and other info
     """
-    if not document.packages:
-        logger.debug("No packages in SPDX document, cannot add PURL")
+    main_package = get_spdx_root_package(document)
+    if main_package is None:
+        logger.debug("SPDX document describes no package, cannot add PURL")
         return
-
-    main_package = document.packages[0]
 
     # Check if PURL already exists
     existing_purl = None
