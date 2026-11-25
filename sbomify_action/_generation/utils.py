@@ -510,6 +510,23 @@ def extract_error_summary(output: str | None, max_chars: int = 500) -> str:
     return summary
 
 
+def resolve_windows_executable(cmd: list[str], path: str | None = None) -> list[str]:
+    """Give Windows the full path of ``cmd[0]``, so npm's ``.cmd`` shims run.
+
+    Without a shell, Windows looks up a bare command name as ``name.exe`` only;
+    it does not try the other ``PATHEXT`` extensions. npm installs cdxgen as
+    ``cdxgen.cmd``, so ``subprocess.run(["cdxgen", ...])`` raised
+    FileNotFoundError on a host where the tool was installed and had just been
+    found on PATH. ``shutil.which`` honours ``PATHEXT``, and a full path to a
+    ``.cmd`` file is something Windows can start. Elsewhere the command is
+    returned unchanged.
+    """
+    if os.name != "nt" or not cmd:
+        return cmd
+    resolved = shutil.which(cmd[0], path=path)
+    return [resolved, *cmd[1:]] if resolved else cmd
+
+
 def run_command(
     cmd: list[str],
     command_name: str,
@@ -586,6 +603,10 @@ def run_command(
     progress_thread = threading.Thread(target=log_progress, daemon=True)
     progress_thread.start()
 
+    # The caller's own overrides win over the safe.directory default,
+    # so a generator that deliberately configures git keeps control.
+    child_env = {**os.environ, **git_safe_directory_env(), **(env or {})}
+
     try:
         # Safe by invariant: the executable (cmd[0]) is always an internal generator
         # constant ("syft", "cdxgen", "trivy", ...), never user-controlled. Untrusted
@@ -593,16 +614,14 @@ def run_command(
         # no shell parsing — so neither command nor shell injection is reachable.
         # nosemgrep: dangerous-subprocess-use-audit
         result = subprocess.run(
-            cmd,
+            resolve_windows_executable(cmd, child_env.get("PATH")),
             capture_output=capture_output,
             check=True,
             text=True,
             shell=False,
             timeout=timeout,
             cwd=cwd,
-            # The caller's own overrides win over the safe.directory default,
-            # so a generator that deliberately configures git keeps control.
-            env={**os.environ, **git_safe_directory_env(), **(env or {})},
+            env=child_env,
         )
         return result
     except subprocess.CalledProcessError as e:
