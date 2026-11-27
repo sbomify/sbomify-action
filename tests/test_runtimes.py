@@ -1068,3 +1068,58 @@ class TestBundleReleaseFallback:
         with pytest.raises(SBOMGenerationError, match="Attestation verification failed"):
             runtimes.ensure_bundle(bundle)
         assert runtimes._BUNDLE_RELEASES_API not in fetched
+
+
+class TestRollingRepublishRace:
+    """A rolling fetch that straddles an sbom-tools master build.
+
+    The rolling pre-release replaces each archive and its Sigstore bundle one
+    after the other, so a fetch can land between the two uploads and get an
+    archive from one build with the attestation from another. cosign reports
+    the digests do not match. On rolling that is a race with the publisher and
+    is fetched again; on a cut release, which is immutable, it is never retried.
+    """
+
+    MISMATCH = "Error: failed to verify signature: provided artifact digests do not match digests in statement"
+
+    @staticmethod
+    def _bundle(release: str) -> runtimes.Bundle:
+        return runtimes.Bundle(name="cdxgen", release=release, provides=("cdxgen",), purl="pkg:x@{release}")
+
+    def _run(self, monkeypatch, tmp_path, release: str, outcomes: list[str]):
+        """Drive _download_bundle_archive with cosign answering from ``outcomes``."""
+        monkeypatch.setattr(runtimes.shutil, "which", lambda n: "/usr/bin/cosign" if n == "cosign" else None)
+        monkeypatch.setattr(runtimes.requests, "get", lambda url, *a, **k: _FakeResponse(b"archive-or-bundle"))
+        sleeps: list[float] = []
+        monkeypatch.setattr(runtimes.time, "sleep", sleeps.append)
+        answers = iter(outcomes)
+
+        def fake_run(cmd, *a, **k):
+            stderr = next(answers)
+            return runtimes.subprocess.CompletedProcess(cmd, 0 if stderr == "ok" else 1, "", stderr)
+
+        monkeypatch.setattr(runtimes.subprocess, "run", fake_run)
+        archive = tmp_path / "bundle.tar.gz"
+        runtimes._download_bundle_archive(self._bundle(release), "amd64", archive)
+        return archive, sleeps
+
+    def test_a_rolling_mismatch_is_fetched_again(self, monkeypatch, tmp_path):
+        archive, sleeps = self._run(monkeypatch, tmp_path, runtimes.TOOLS_RELEASE, [self.MISMATCH, "ok"])
+
+        assert archive.read_bytes() == b"archive-or-bundle"
+        assert sleeps == [runtimes._ROLLING_MISMATCH_DELAYS[0]]
+
+    def test_a_rolling_mismatch_that_persists_still_fails(self, monkeypatch, tmp_path):
+        outcomes = [self.MISMATCH] * (len(runtimes._ROLLING_MISMATCH_DELAYS) + 1)
+        with pytest.raises(runtimes.AttestationDigestMismatch, match="Attestation verification failed"):
+            self._run(monkeypatch, tmp_path, runtimes.TOOLS_RELEASE, outcomes)
+        assert not (tmp_path / "bundle.tar.gz").exists()
+
+    def test_a_cut_release_mismatch_is_never_retried(self, monkeypatch, tmp_path):
+        with pytest.raises(runtimes.AttestationDigestMismatch):
+            self._run(monkeypatch, tmp_path, "v26.11.1", [self.MISMATCH, "ok"])
+
+    def test_any_other_rolling_failure_is_not_retried(self, monkeypatch, tmp_path):
+        with pytest.raises(SBOMGenerationError, match="no matching signatures") as raised:
+            self._run(monkeypatch, tmp_path, runtimes.TOOLS_RELEASE, ["no matching signatures", "ok"])
+        assert not isinstance(raised.value, runtimes.AttestationDigestMismatch)
