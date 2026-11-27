@@ -57,7 +57,7 @@ import requests
 
 from .exceptions import SBOMGenerationError
 from .logging_config import logger
-from .tool_manifest import STAGE_RUNTIME, Bundle, bundle_for, tools_for_stage
+from .tool_manifest import STAGE_RUNTIME, TOOLS_RELEASE, Bundle, bundle_for, tools_for_stage
 
 # POSIX only, and this package is published as OS Independent -- importing it
 # at the top would make `import sbomify_action.runtimes` raise on Windows and
@@ -81,7 +81,23 @@ _CHUNK = 1024 * 1024
 _DOWNLOAD_ATTEMPTS = 3
 _RETRY_BACKOFF = 2.0
 
+# The rolling pre-release is replaced in place on every sbom-tools master
+# build: each archive and its Sigstore bundle are clobbered one after the
+# other, and overlapping builds interleave their uploads. A fetch that lands
+# in that window gets an archive from one build and a bundle from another,
+# and cosign rightly reports that the digests do not match. That is a race
+# with the publisher, not a forged artifact, so a rolling fetch starts over
+# from nothing a few times before giving up. A cut release is immutable, so
+# there a mismatch is never retried.
+_ROLLING_MISMATCH_DELAYS = (15.0, 60.0)
+_DIGEST_MISMATCH_MARKER = "do not match digests"
+
 _T = TypeVar("_T")
+
+
+class AttestationDigestMismatch(SBOMGenerationError):
+    """The archive's digest is not the one the attestation was signed over."""
+
 
 # Marker written into a runtime prefix once it is fully unpacked. Extraction
 # happens in a scratch directory and is moved into place atomically, so a
@@ -475,7 +491,8 @@ def _verify_attestation(artifact: Path, bundle_url: str, label: str) -> None:
 
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "no output"
-        raise SBOMGenerationError(
+        error = AttestationDigestMismatch if _DIGEST_MISMATCH_MARKER in detail else SBOMGenerationError
+        raise error(
             f"Attestation verification failed for {label}: cosign exited {result.returncode}: {detail}. "
             "Refusing to use a binary that does not prove it came from our build."
         )
@@ -920,6 +937,30 @@ def _fallback_release(bundle: Bundle, arch: str) -> str | None:
     return None
 
 
+def _download_bundle_archive(bundle: Bundle, arch: str, archive: Path) -> None:
+    """Download and verify one bundle archive, riding out a rolling re-publish."""
+    asset = Asset(
+        url=bundle.archive_url(arch),
+        algorithm="none",
+        digest="",
+        attestation=bundle.attestation_url(arch),
+    )
+    delays = _ROLLING_MISMATCH_DELAYS if bundle.release == TOOLS_RELEASE else ()
+    for attempt, delay in enumerate((*delays, None), start=1):
+        try:
+            _download_verified(asset, archive)
+            return
+        except AttestationDigestMismatch:
+            if delay is None:
+                raise
+            logger.warning(
+                f"  the {bundle.name} bundle and its attestation are from different {TOOLS_RELEASE} builds "
+                f"(it is being re-published); fetching both again in {delay:.0f}s "
+                f"[attempt {attempt + 1}/{len(delays) + 1}]"
+            )
+            time.sleep(delay)
+
+
 def _materialize_bundle(bundle: Bundle, arch: str) -> Path:
     """Fetch, verify and unpack one bundle into its prefix, unless it is already there."""
     prefix = cache_root() / f"bundle-{bundle.name}-{bundle.release}-{arch}"
@@ -938,15 +979,7 @@ def _materialize_bundle(bundle: Bundle, arch: str) -> Path:
     staging.mkdir(parents=True)
     try:
         archive = staging / "bundle.tar.gz"
-        _download_verified(
-            Asset(
-                url=bundle.archive_url(arch),
-                algorithm="none",
-                digest="",
-                attestation=bundle.attestation_url(arch),
-            ),
-            archive,
-        )
+        _download_bundle_archive(bundle, arch, archive)
         unpacked = staging / "prefix"
         unpacked.mkdir()
         with tarfile.open(archive) as tar:
